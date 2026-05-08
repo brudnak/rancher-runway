@@ -33,6 +33,8 @@ type renderConfig struct {
 	RancherDistro     string
 	PreloadImages     bool
 	AutoApprove       bool
+	OwnerFirstName    string
+	OwnerLastName     string
 	AWSRegion         string
 	AWSPrefix         string
 	AWSVPC            string
@@ -59,6 +61,8 @@ func main() {
 	flag.StringVar(&cfg.RancherDistro, "rancher-distro", envOrDefault("RANCHER_DISTRO", "auto"), "Rancher distro")
 	flag.StringVar(&preloadImages, "preload-images", envOrDefault("RKE2_PRELOAD_IMAGES", "true"), "whether to preload RKE2 images")
 	flag.StringVar(&autoApprove, "auto-approve", envOrDefault("RANCHER_AUTO_APPROVE", "true"), "whether Rancher plan approval is automatic")
+	flag.StringVar(&cfg.OwnerFirstName, "owner-first-name", envFirst("OWNER_FIRST_NAME", "USER_FIRST_NAME"), "owner first name for AWS tags and run metadata")
+	flag.StringVar(&cfg.OwnerLastName, "owner-last-name", envFirst("OWNER_LAST_NAME", "USER_LAST_NAME"), "owner last name for AWS tags and run metadata")
 	flag.StringVar(&cfg.AWSRegion, "aws-region", envOrDefault("AWS_REGION", "us-east-2"), "AWS region")
 	flag.StringVar(&cfg.AWSPrefix, "aws-prefix", envOrDefault("AWS_PREFIX", ""), "AWS resource prefix override")
 	flag.StringVar(&cfg.AWSVPC, "aws-vpc", envOrDefault("AWS_VPC", ""), "AWS VPC ID")
@@ -138,6 +142,8 @@ func (cfg renderConfig) validate(lane signoffLane) error {
 	required := map[string]string{
 		"bootstrap password":    cfg.BootstrapPassword,
 		"lane install_rancher":  lane.InstallRancher,
+		"owner first name":      cfg.OwnerFirstName,
+		"owner last name":       cfg.OwnerLastName,
 		"aws region":            cfg.AWSRegion,
 		"aws prefix":            cfg.AWSPrefix,
 		"aws vpc":               cfg.AWSVPC,
@@ -175,6 +181,10 @@ rke2:
 
 total_has: 1
 
+user:
+  first_name: %s
+  last_name: %s
+
 tf_vars:
   aws_region: %s
   aws_prefix: %s
@@ -193,6 +203,8 @@ tf_vars:
 		yamlQuote(cfg.BootstrapPassword),
 		cfg.AutoApprove,
 		cfg.PreloadImages,
+		yamlQuote(cfg.OwnerFirstName),
+		yamlQuote(cfg.OwnerLastName),
 		yamlQuote(cfg.AWSRegion),
 		yamlQuote(cfg.AWSPrefix),
 		yamlQuote(cfg.AWSVPC),
@@ -249,6 +261,15 @@ func envOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envFirst(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func fatalf(format string, args ...interface{}) {

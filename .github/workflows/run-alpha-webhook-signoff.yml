@@ -88,6 +88,8 @@ jobs:
       DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
       RANCHER_TESTS_REF: ${{ vars.RANCHER_TESTS_REF }}
       RANCHER_TEST_SUITE_SETTLE_SECONDS: ${{ vars.RANCHER_TEST_SUITE_SETTLE_SECONDS }}
+      OWNER_FIRST_NAME: ${{ vars.OWNER_FIRST_NAME }}
+      OWNER_LAST_NAME: ${{ vars.OWNER_LAST_NAME }}
       SIGNOFF_LANE: ${{ inputs.lane }}
     steps:
       - name: Checkout repository
@@ -237,6 +239,34 @@ jobs:
           test -n "${TF_STATE_KEY:-}"
           echo "TF state key: ${TF_STATE_KEY}"
           echo "Rancher upgrade version: ${RANCHER_UPGRADE_VERSION:-none}"
+
+      - name: Prepare isolated run workspace
+        run: |
+          set -euo pipefail
+
+          run_id="${{ github.run_id }}"
+          safe_run_id="$(printf '%s' "$run_id" | tr -c 'A-Za-z0-9_.-' '_' | tr '[:upper:]' '[:lower:]')"
+          run_root="$GITHUB_WORKSPACE/automation-output/runs/$safe_run_id"
+          module_dir="$run_root/terraform/module"
+
+          rm -rf "$module_dir"
+          mkdir -p "$module_dir" "$run_root/ha" "$run_root/terraform"
+          cp -R modules/aws/. "$module_dir/"
+          rm -rf \
+            "$module_dir/.terraform" \
+            "$module_dir/.terraform.lock.hcl" \
+            "$module_dir/backend.tf" \
+            "$module_dir/terraform.tfvars" \
+            "$module_dir/terraform.tfstate" \
+            "$module_dir/terraform.tfstate.backup"
+          find "$module_dir" \( -name '*.tfstate' -o -name '.terraform.*' \) -type f -delete
+
+          {
+            echo "HA_RANCHER_RUN_ID=$safe_run_id"
+            echo "HA_RANCHER_HA_OUTPUT_ROOT=$run_root/ha"
+            echo "HA_RANCHER_TF_MODULE_DIR=$module_dir"
+            echo "HA_RANCHER_TF_DATA_DIR=$run_root/terraform/.terraform"
+          } >> "$GITHUB_ENV"
 
       - name: Run lane setup
         id: setup

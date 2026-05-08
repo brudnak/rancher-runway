@@ -13,6 +13,8 @@ func TestRenderToolConfigForFreshLane(t *testing.T) {
 		RancherDistro:     "auto",
 		PreloadImages:     true,
 		AutoApprove:       true,
+		OwnerFirstName:    "Ada",
+		OwnerLastName:     "Lovelace",
 		AWSRegion:         "us-east-2",
 		AWSPrefix:         "gha-23456789-fa",
 		AWSVPC:            "vpc-123",
@@ -35,6 +37,8 @@ func TestRenderToolConfigForFreshLane(t *testing.T) {
 	assertContains(t, rendered, `version: "2.14.1-alpha6"`)
 	assertContains(t, rendered, `bootstrap_password: "secret-password"`)
 	assertContains(t, rendered, `auto_approve: true`)
+	assertContains(t, rendered, `first_name: "Ada"`)
+	assertContains(t, rendered, `last_name: "Lovelace"`)
 	assertContains(t, rendered, `aws_prefix: "gha-23456789-fa"`)
 	assertContains(t, rendered, `total_has: 1`)
 }
@@ -70,6 +74,8 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 		RancherDistro:     "auto",
 		PreloadImages:     true,
 		AutoApprove:       true,
+		OwnerFirstName:    "Ada",
+		OwnerLastName:     "Lovelace",
 		AWSRegion:         "us-east-2",
 		AWSVPC:            "vpc-123",
 		AWSSubnetA:        "subnet-a",
@@ -112,6 +118,8 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertContains(t, string(output), `aws_prefix: "gha-23456789-fa"`)
+	assertContains(t, string(output), `first_name: "Ada"`)
+	assertContains(t, string(output), `last_name: "Lovelace"`)
 
 	envOutput, err := os.ReadFile(envPath)
 	if err != nil {
@@ -149,6 +157,48 @@ func TestRenderEnvOutputPrefersLaneWebhookOverride(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertContains(t, env, "RANCHER_WEBHOOK_IMAGE=registry.rancher.com/rancher/rancher-webhook:v0.10.1-rc.5")
+}
+
+func TestRenderConfigRequiresOwnerName(t *testing.T) {
+	cfg := renderConfig{
+		BootstrapPassword: "secret-password",
+		RancherDistro:     "auto",
+		PreloadImages:     true,
+		AutoApprove:       true,
+		AWSRegion:         "us-east-2",
+		AWSPrefix:         "gha-23456789-fa",
+		AWSVPC:            "vpc-123",
+		AWSSubnetA:        "subnet-a",
+		AWSSubnetB:        "subnet-b",
+		AWSSubnetC:        "subnet-c",
+		AWSAMI:            "ami-123",
+		AWSSubnetID:       "subnet-main",
+		AWSSecurityGroup:  "sg-123",
+		AWSPemKeyName:     "key-name",
+		AWSRoute53FQDN:    "example.com",
+	}
+	lane := signoffLane{
+		Name:           "fresh-alpha",
+		InstallRancher: "v2.14.1-alpha6",
+		AWSPrefix:      "gha-23456789-fa",
+	}
+	err := cfg.validate(lane)
+	if err == nil {
+		t.Fatal("expected missing owner name to be rejected")
+	}
+	assertContains(t, err.Error(), "owner first name")
+	assertContains(t, err.Error(), "owner last name")
+}
+
+func TestEnvFirstUsesFirstConfiguredValue(t *testing.T) {
+	t.Setenv("USER_FIRST_NAME", "Fallback")
+	if got := envFirst("OWNER_FIRST_NAME", "USER_FIRST_NAME"); got != "Fallback" {
+		t.Fatalf("expected fallback env value, got %q", got)
+	}
+	t.Setenv("OWNER_FIRST_NAME", "Primary")
+	if got := envFirst("OWNER_FIRST_NAME", "USER_FIRST_NAME"); got != "Primary" {
+		t.Fatalf("expected primary env value, got %q", got)
+	}
 }
 
 func assertContains(t *testing.T, haystack, needle string) {

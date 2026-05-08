@@ -217,6 +217,9 @@ func currentTerraformRunID() string {
 
 func terraformAWSPrefixForRun(basePrefix string, runIDValue string) string {
 	basePrefix = strings.ToLower(strings.TrimSpace(basePrefix))
+	if settings.IsAutomationAWSPrefix(basePrefix) {
+		return basePrefix
+	}
 	runID := safeRunPathSegment(runIDValue)
 	if runID == "" || runID == "unknown" {
 		return basePrefix
