@@ -1,5 +1,7 @@
 {
-  "release_lines": {},
+  "release_lines": {
+    "v2.15": "webhook"
+  },
   "versions": {
     "v2.14.1-alpha11": "webhook issue",
     "v2.14.1-alpha13 ": "webhook issue"
