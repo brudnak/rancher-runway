@@ -25,6 +25,10 @@ rancher:
 
 total_has: 2
 
+user:
+  first_name: ""
+  last_name: ""
+
 k8s:
   versions:
     - "v1.33.7+rke2r1"

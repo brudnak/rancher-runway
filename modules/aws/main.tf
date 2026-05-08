@@ -8,10 +8,6 @@ terraform {
   }
 }
 
-provider "aws" {
-  region = var.aws_region
-}
-
 # Variables
 variable "total_has" {
   type        = number
@@ -81,9 +77,40 @@ variable "custom_hostname_prefix" {
   default     = ""
 }
 
+variable "owner_first_name" {
+  type        = string
+  description = "First name of the person responsible for this run."
+}
+
+variable "owner_last_name" {
+  type        = string
+  description = "Last name of the person responsible for this run."
+}
+
+variable "run_id" {
+  type        = string
+  description = "Control panel run id used to find and audit resources."
+  default     = ""
+}
+
 # Module configuration
 locals {
-  ha_instances = { for i in range(1, var.total_has + 1) : i => "${var.aws_prefix}-${i}" }
+  ha_instances = { for i in range(1, var.total_has + 1) : i => "${var.aws_prefix}-h${i}" }
+  owner_name   = trimspace("${trimspace(var.owner_first_name)} ${trimspace(var.owner_last_name)}")
+  common_tags = {
+    NamePrefix             = var.aws_prefix
+    Owner                  = local.owner_name
+    ManagedBy              = "ha-rancher-rke2"
+    HA_Rancher_RKE2_Run_ID = trimspace(var.run_id) != "" ? trimspace(var.run_id) : var.aws_prefix
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = local.common_tags
+  }
 }
 
 module "ha" {
@@ -101,6 +128,7 @@ module "ha" {
   aws_pem_key_name       = var.aws_pem_key_name
   aws_route53_fqdn       = var.aws_route53_fqdn
   custom_hostname_prefix = trimspace(var.custom_hostname_prefix)
+  common_tags            = local.common_tags
 }
 
 # Outputs

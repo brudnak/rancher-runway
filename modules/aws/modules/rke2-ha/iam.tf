@@ -13,9 +13,9 @@ resource "aws_iam_role" "ssm_role" {
     }]
   })
 
-  tags = {
+  tags = merge(var.common_tags, {
     Name = "${var.aws_prefix}-ssm-role"
-  }
+  })
 }
 
 # Attach AWS managed SSM policy
@@ -29,7 +29,7 @@ resource "aws_iam_instance_profile" "ssm_profile" {
   name = "${var.aws_prefix}-ssm-profile"
   role = aws_iam_role.ssm_role.name
 
-  tags = {
+  tags = merge(var.common_tags, {
     Name = "${var.aws_prefix}-ssm-profile"
-  }
+  })
 }

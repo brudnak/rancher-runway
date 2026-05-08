@@ -109,13 +109,12 @@ func TestHAUpgradeRancher(t *testing.T) {
 
 func upgradeHAInstanceRancher(instanceNum int, outputs map[string]string, plan *RancherResolvedPlan) error {
 	haOutputs := getHAOutputs(instanceNum, outputs)
-	haDir := fmt.Sprintf("high-availability-%d", instanceNum)
-	currentDir, err := os.Getwd()
+	haDir := haInstanceDir(instanceNum)
+	absHADir, err := absoluteFromWorkingDir(haDir)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
 
-	absHADir := filepath.Join(currentDir, haDir)
 	absKubeConfigPath := filepath.Join(absHADir, "kube_config.yaml")
 	if _, err := os.Stat(absKubeConfigPath); err != nil {
 		return fmt.Errorf("kubeconfig not available for HA %d at %s: %w", instanceNum, absKubeConfigPath, err)

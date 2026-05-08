@@ -10,13 +10,46 @@ import (
 	"strings"
 )
 
+const haOutputRootEnv = "HA_RANCHER_HA_OUTPUT_ROOT"
+const runIDEnv = "HA_RANCHER_RUN_ID"
+const panelNonInteractiveEnv = "HA_RANCHER_PANEL_NONINTERACTIVE"
+const terraformStatePathEnv = "HA_RANCHER_TF_STATE_PATH"
+const terraformDataDirEnv = "HA_RANCHER_TF_DATA_DIR"
+const terraformModuleDirEnv = "HA_RANCHER_TF_MODULE_DIR"
+
+func haInstanceDir(instanceNum int) string {
+	name := fmt.Sprintf("high-availability-%d", instanceNum)
+	if root := strings.TrimSpace(os.Getenv(haOutputRootEnv)); root != "" {
+		return filepath.Join(root, name)
+	}
+	return name
+}
+
+func absoluteFromWorkingDir(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+	return filepath.Join(currentDir, path), nil
+}
+
+func terraformModuleDir() string {
+	if dir := strings.TrimSpace(os.Getenv(terraformModuleDirEnv)); dir != "" {
+		return dir
+	}
+	return "../modules/aws"
+}
+
 func cleanupHAInstance(instanceNum int) {
-	haDir := fmt.Sprintf("high-availability-%d", instanceNum)
+	haDir := haInstanceDir(instanceNum)
 
 	filesToRemove := []string{
-		fmt.Sprintf("%s/install.sh", haDir),
-		fmt.Sprintf("%s/kube_config.yaml", haDir),
-		fmt.Sprintf("%s/kube_config_lb.yaml", haDir),
+		filepath.Join(haDir, "install.sh"),
+		filepath.Join(haDir, "kube_config.yaml"),
+		filepath.Join(haDir, "kube_config_lb.yaml"),
 	}
 
 	for _, file := range filesToRemove {
@@ -42,7 +75,42 @@ func cleanupTerraformFiles() {
 	RemoveFolder("../modules/aws/.terraform")
 }
 
+func cleanupTerraformNonStateFiles() {
+	files := []string{
+		"../modules/aws/.terraform.lock.hcl",
+		"../modules/aws/backend.tf",
+		"../modules/aws/terraform.tfvars",
+	}
+
+	for _, file := range files {
+		RemoveFile(file)
+	}
+
+	RemoveFolder("../modules/aws/.terraform")
+}
+
+func cleanupBootstrapTerraformLocalFiles() {
+	files := []string{
+		"../bootstrap/terraform-state/.terraform.lock.hcl",
+		"../bootstrap/terraform-state/terraform.tfstate",
+		"../bootstrap/terraform-state/terraform.tfstate.backup",
+		"../bootstrap/terraform-state/terraform.tfvars",
+		"../bootstrap/terraform-state/tfplan",
+		"../bootstrap/terraform-state/backend.env",
+	}
+
+	for _, file := range files {
+		RemoveFile(file)
+	}
+
+	RemoveFolder("../bootstrap/terraform-state/.terraform")
+}
+
 func cleanupAutomationOutput() {
+	if runID := safeRunPathSegment(os.Getenv(runIDEnv)); runID != "" && runID != "unknown" {
+		RemoveFolder(filepath.Join(automationOutputDir(), "runs", runID))
+		return
+	}
 	RemoveFolder(automationOutputDir())
 }
 
@@ -88,13 +156,11 @@ echo "Installing Rancher..."
 
 echo "Rancher installation complete!"`, helmCommand)
 
-	currentDir, err := os.Getwd()
+	absHADir, err := absoluteFromWorkingDir(haDir)
 	if err != nil {
-		log.Printf("Failed to get current directory: %v", err)
+		log.Printf("%v", err)
 		return
 	}
-
-	absHADir := filepath.Join(currentDir, haDir)
 	if _, err := os.Stat(absHADir); os.IsNotExist(err) {
 		if mkdirErr := os.MkdirAll(absHADir, os.ModePerm); mkdirErr != nil {
 			log.Printf("Failed to create directory %s: %v", absHADir, mkdirErr)

@@ -57,24 +57,13 @@ variable "custom_hostname_prefix" {
   default     = ""
 }
 
-# Resources
-resource "random_pet" "name" {
-  keepers = {
-    aws_prefix = var.aws_prefix
-  }
-  length    = 1
-  separator = "-"
-}
-
-resource "random_id" "unique" {
-  byte_length = 2
-  keepers = {
-    aws_prefix = var.aws_prefix
-  }
+variable "common_tags" {
+  type        = map(string)
+  description = "Common ownership and run tags applied to taggable AWS resources."
 }
 
 locals {
-  resource_name_prefix = "${var.aws_prefix}-${random_pet.name.id}-${random_id.unique.hex}"
+  resource_name_prefix = var.aws_prefix
   dns_label            = trimspace(var.custom_hostname_prefix) != "" ? trimspace(var.custom_hostname_prefix) : local.resource_name_prefix
   target_group_prefix  = substr(local.resource_name_prefix, 0, 28)
   domain_name          = "${local.dns_label}.${var.aws_route53_fqdn}"
@@ -91,16 +80,14 @@ resource "aws_instance" "aws_instance" {
 
   root_block_device {
     volume_size = 200
-    tags = {
-      Name  = "${local.resource_name_prefix}-${count.index + 1}"
-      Owner = "${var.aws_prefix}-terraform"
-    }
+    tags = merge(var.common_tags, {
+      Name = "${local.resource_name_prefix}-${count.index + 1}"
+    })
   }
 
-  tags = {
-    Name  = "${local.resource_name_prefix}-${count.index + 1}"
-    Owner = "${var.aws_prefix}-terraform"
-  }
+  tags = merge(var.common_tags, {
+    Name = "${local.resource_name_prefix}-${count.index + 1}"
+  })
 }
 
 # Application Load Balancer for Rancher UI. Public TLS terminates at the ALB,
@@ -111,6 +98,8 @@ resource "aws_lb_target_group" "aws_lb_target_group_80" {
   protocol    = "HTTP"
   target_type = "instance"
   vpc_id      = var.aws_vpc
+  tags        = merge(var.common_tags, { Name = "${local.resource_name_prefix}-80" })
+
   health_check {
     protocol          = "HTTP"
     port              = "traffic-port"
@@ -132,12 +121,14 @@ resource "aws_lb" "aws_lb" {
   internal           = false
   ip_address_type    = "ipv4"
   subnets            = [var.aws_subnet_a, var.aws_subnet_b, var.aws_subnet_c]
+  tags               = merge(var.common_tags, { Name = local.resource_name_prefix })
 }
 
 resource "aws_lb_listener" "aws_lb_listener_80" {
   load_balancer_arn = aws_lb.aws_lb.arn
   port              = "80"
   protocol          = "HTTP"
+  tags              = merge(var.common_tags, { Name = "${local.resource_name_prefix}-80-listener" })
 
   default_action {
     type = "redirect"
@@ -165,6 +156,7 @@ resource "aws_route53_record" "aws_route53_record" {
 resource "aws_acm_certificate" "cert" {
   domain_name       = local.domain_name
   validation_method = "DNS"
+  tags              = merge(var.common_tags, { Name = local.domain_name })
 
   lifecycle {
     create_before_destroy = true
@@ -192,6 +184,7 @@ resource "aws_lb_listener" "aws_lb_listener_443" {
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-2016-08"
   certificate_arn   = aws_acm_certificate_validation.cert.certificate_arn
+  tags              = merge(var.common_tags, { Name = "${local.resource_name_prefix}-443-listener" })
 
   default_action {
     type             = "forward"

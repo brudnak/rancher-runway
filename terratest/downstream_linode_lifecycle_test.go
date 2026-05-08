@@ -27,7 +27,6 @@ const (
 	defaultLinodeRegion       = "us-ord"
 	defaultLinodeInstanceType = "g6-standard-2"
 	defaultLinodeImage        = "linode/ubuntu22.04"
-	defaultLinodeNamespace    = "fleet-default"
 )
 
 type downstreamProvisioningConfig struct {
@@ -122,7 +121,7 @@ func TestHAProvisionLinodeDownstream(t *testing.T) {
 }
 
 func provisionLinodeDownstreamForHA(instanceNum int, haOutputs TerraformOutputs, linodeToken, namePrefix, runID string, timeout time.Duration) error {
-	kubeconfigPath := filepath.Join(fmt.Sprintf("high-availability-%d", instanceNum), "kube_config.yaml")
+	kubeconfigPath := filepath.Join(haInstanceDir(instanceNum), "kube_config.yaml")
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		return fmt.Errorf("kubeconfig not available for HA %d at %s: %w", instanceNum, kubeconfigPath, err)
 	}
@@ -289,50 +288,8 @@ func TestHADeleteLinodeDownstream(t *testing.T) {
 	}
 }
 
-type downstreamOutputRecord struct {
-	HAIndex             int    `json:"ha_index"`
-	RancherHost         string `json:"rancher_host"`
-	ClusterName         string `json:"cluster_name"`
-	ManagementClusterID string `json:"management_cluster_id"`
-	KubeconfigPath      string `json:"kubeconfig_path"`
-	K3SVersion          string `json:"k3s_version"`
-	LinodeRegion        string `json:"linode_region"`
-	LinodeType          string `json:"linode_type"`
-	LinodeImage         string `json:"linode_image"`
-	MachineConfig       string `json:"machine_config"`
-	SecretName          string `json:"secret_name"`
-	Namespace           string `json:"namespace"`
-}
-
-func readDownstreamOutputRecords() ([]downstreamOutputRecord, error) {
-	paths, err := filepath.Glob(automationOutputPath("downstream-ha-*.json"))
-	if err != nil {
-		return nil, err
-	}
-
-	records := make([]downstreamOutputRecord, 0, len(paths))
-	for _, path := range paths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		var record downstreamOutputRecord
-		if err := json.Unmarshal(data, &record); err != nil {
-			return nil, fmt.Errorf("failed to parse %s: %w", path, err)
-		}
-		if record.ClusterName == "" || record.HAIndex < 1 {
-			return nil, fmt.Errorf("invalid downstream output record %s", path)
-		}
-		if record.Namespace == "" {
-			record.Namespace = defaultLinodeNamespace
-		}
-		records = append(records, record)
-	}
-	return records, nil
-}
-
 func deleteLinodeDownstream(record downstreamOutputRecord, timeout time.Duration) error {
-	kubeconfigPath := filepath.Join(fmt.Sprintf("high-availability-%d", record.HAIndex), "kube_config.yaml")
+	kubeconfigPath := filepath.Join(haInstanceDir(record.HAIndex), "kube_config.yaml")
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		return fmt.Errorf("kubeconfig not available for HA %d at %s: %w", record.HAIndex, kubeconfigPath, err)
 	}

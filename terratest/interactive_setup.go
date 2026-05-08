@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,14 @@ type interactiveEvent struct {
 	Error string           `json:"error,omitempty"`
 }
 
+type interactiveSetupSnapshot struct {
+	Phase     interactivePhase `json:"phase"`
+	Logs      []string         `json:"logs"`
+	Plan      string           `json:"plan,omitempty"`
+	Error     string           `json:"error,omitempty"`
+	Submitted bool             `json:"submitted"`
+}
+
 type interactiveResult struct {
 	plans []*RancherResolvedPlan
 	err   error
@@ -44,11 +53,21 @@ type interactiveResult struct {
 
 type interactiveSetupState struct {
 	Token                 string                           `json:"token"`
+	BasePath              string                           `json:"basePath,omitempty"`
 	ConfigPath            string                           `json:"configPath"`
 	Versions              []string                         `json:"versions"`
 	Config                settings.EditablePreflightConfig `json:"config"`
 	CustomHostnameEnabled bool                             `json:"customHostnameEnabled"`
 	CustomHostname        string                           `json:"customHostname"`
+	Embedded              bool                             `json:"embedded,omitempty"`
+}
+
+type interactiveSetupTemplateData struct {
+	Token            string
+	BasePath         string
+	ConfigPath       string
+	Embedded         bool
+	InitialStateJSON template.JS
 }
 
 type interactiveServer struct {
@@ -64,12 +83,13 @@ type interactiveServer struct {
 	subscribers []chan interactiveEvent
 	submitted   bool
 
-	resultCh chan interactiveResult
+	resultCh        chan interactiveResult
+	responseHandler func(action string, plans []*RancherResolvedPlan) error
 }
 
 func resolveRancherSetup() ([]*RancherResolvedPlan, error) {
 	mode := rancherMode()
-	autoApprove := viper.GetBool("rancher.auto_approve")
+	autoApprove := viper.GetBool("rancher.auto_approve") || panelNonInteractiveMode()
 
 	if mode == "auto" && !autoApprove {
 		return runInteractiveAutoModeSetup()
@@ -94,6 +114,11 @@ func resolveRancherSetup() ([]*RancherResolvedPlan, error) {
 		}
 	}
 	return plans, nil
+}
+
+func panelNonInteractiveMode() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(panelNonInteractiveEnv)))
+	return value == "1" || value == "true" || value == "yes"
 }
 
 func runInteractiveAutoModeSetup() ([]*RancherResolvedPlan, error) {
@@ -158,20 +183,15 @@ func runInteractiveAutoModeSetup() ([]*RancherResolvedPlan, error) {
 }
 
 func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions []string) {
-	initialCustomHostname := settings.CurrentCustomHostnamePrefix()
-	initialCustomHostnameEnabled := initialCustomHostname != ""
-	initialStateJSON, _ := json.Marshal(interactiveSetupState{
-		Token:                 s.token,
-		ConfigPath:            s.configPath,
-		Versions:              initialVersions,
-		Config:                settings.CurrentEditablePreflightConfig(),
-		CustomHostnameEnabled: initialCustomHostnameEnabled,
-		CustomHostname:        initialCustomHostname,
-	})
+	s.registerHandlersAt(mux, initialVersions, "")
+}
 
+func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersions []string, basePath string) {
+	basePath = normalizeInteractiveBasePath(basePath)
+	templateData := interactiveSetupTemplateDataFor(s.token, s.configPath, initialVersions, basePath, false)
 	pageTemplate := template.Must(template.New("interactive-setup").Parse(ui.InteractiveSetupHTML))
 
-	mux.HandleFunc("/static/interactive_setup.js", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(interactiveSetupPath(basePath, "/static/interactive_setup.js"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
 			return
@@ -185,7 +205,7 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 		_, _ = w.Write([]byte(ui.InteractiveSetupJS))
 	})
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	handlePage := func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
 			return
@@ -197,18 +217,14 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = pageTemplate.Execute(w, struct {
-			Token            string
-			ConfigPath       string
-			InitialStateJSON template.JS
-		}{
-			Token:            s.token,
-			ConfigPath:       s.configPath,
-			InitialStateJSON: template.JS(string(initialStateJSON)),
-		})
-	})
+		_ = pageTemplate.Execute(w, templateData)
+	}
+	mux.HandleFunc(interactiveSetupPath(basePath, "/"), handlePage)
+	if basePath != "" {
+		mux.HandleFunc(basePath, handlePage)
+	}
 
-	mux.HandleFunc("/api/readiness", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(interactiveSetupPath(basePath, "/api/readiness"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
 			return
@@ -221,7 +237,7 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 		writeJSON(w, collectSystemReadiness(s.configPath))
 	})
 
-	mux.HandleFunc("/submit", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(interactiveSetupPath(basePath, "/submit"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
 			return
@@ -264,6 +280,9 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 		s.submitted = true
 		s.phase = phaseResolving
 		s.logs = nil
+		s.planText = ""
+		s.resolveErr = ""
+		s.plans = nil
 		s.mu.Unlock()
 
 		s.broadcast(interactiveEvent{Type: "phase", Phase: phaseResolving})
@@ -272,7 +291,30 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 		go s.runResolution()
 	})
 
-	mux.HandleFunc("/respond", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(interactiveSetupPath(basePath, "/state"), func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		s.mu.Lock()
+		snapshot := interactiveSetupSnapshot{
+			Phase:     s.phase,
+			Logs:      append([]string(nil), s.logs...),
+			Plan:      s.planText,
+			Error:     s.resolveErr,
+			Submitted: s.submitted,
+		}
+		s.mu.Unlock()
+
+		writeJSON(w, snapshot)
+	})
+
+	mux.HandleFunc(interactiveSetupPath(basePath, "/respond"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
 			return
@@ -290,6 +332,31 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 		shouldContinue := action == "continue"
 		s.mu.Lock()
 		plans := s.plans
+		s.mu.Unlock()
+
+		if s.responseHandler != nil {
+			if err := s.responseHandler(action, plans); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+
+			s.mu.Lock()
+			s.phase = phaseEditor
+			s.logs = nil
+			s.planText = ""
+			s.resolveErr = ""
+			s.plans = nil
+			s.submitted = false
+			s.mu.Unlock()
+
+			s.broadcast(interactiveEvent{Type: "phase", Phase: phaseEditor})
+			writeJSON(w, map[string]string{
+				"status": action,
+			})
+			return
+		}
+
+		s.mu.Lock()
 		s.phase = phaseDone
 		s.mu.Unlock()
 
@@ -299,18 +366,20 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 			"status": action,
 		})
 
-		select {
-		case s.resultCh <- func() interactiveResult {
-			if shouldContinue {
-				return interactiveResult{plans: plans, err: nil}
+		if s.resultCh != nil {
+			select {
+			case s.resultCh <- func() interactiveResult {
+				if shouldContinue {
+					return interactiveResult{plans: plans, err: nil}
+				}
+				return interactiveResult{plans: nil, err: fmt.Errorf("user canceled interactive Rancher setup")}
+			}():
+			default:
 			}
-			return interactiveResult{plans: nil, err: fmt.Errorf("user canceled interactive Rancher setup")}
-		}():
-		default:
 		}
 	})
 
-	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(interactiveSetupPath(basePath, "/events"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
 			return
@@ -372,6 +441,46 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 	})
 }
 
+func interactiveSetupTemplateDataFor(token string, configPath string, initialVersions []string, basePath string, embedded bool) interactiveSetupTemplateData {
+	initialCustomHostname := settings.CurrentCustomHostnamePrefix()
+	initialStateJSON, _ := json.Marshal(interactiveSetupState{
+		Token:                 token,
+		BasePath:              normalizeInteractiveBasePath(basePath),
+		ConfigPath:            configPath,
+		Versions:              initialVersions,
+		Config:                settings.CurrentEditablePreflightConfig(),
+		CustomHostnameEnabled: initialCustomHostname != "",
+		CustomHostname:        initialCustomHostname,
+		Embedded:              embedded,
+	})
+
+	return interactiveSetupTemplateData{
+		Token:            token,
+		BasePath:         normalizeInteractiveBasePath(basePath),
+		ConfigPath:       configPath,
+		Embedded:         embedded,
+		InitialStateJSON: template.JS(string(initialStateJSON)),
+	}
+}
+
+func normalizeInteractiveBasePath(basePath string) string {
+	basePath = "/" + strings.Trim(strings.TrimSpace(basePath), "/")
+	if basePath == "/" {
+		return ""
+	}
+	return basePath
+}
+
+func interactiveSetupPath(basePath string, path string) string {
+	if basePath == "" {
+		return path
+	}
+	if path == "/" {
+		return basePath + "/"
+	}
+	return basePath + path
+}
+
 func (s *interactiveServer) authorized(r *http.Request) bool {
 	if strings.TrimSpace(r.URL.Query().Get("token")) == s.token {
 		return true
@@ -405,6 +514,8 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 		Distro:                r.FormValue("distro"),
 		BootstrapPassword:     r.FormValue("bootstrapPassword"),
 		PreloadImages:         parseHTMLBool(r.FormValue("preloadImages")),
+		UserFirstName:         r.FormValue("userFirstName"),
+		UserLastName:          r.FormValue("userLastName"),
 		TFVars:                tfVars,
 		CustomHostnameEnabled: parseHTMLBool(r.FormValue("customHostnameEnabled")),
 		CustomHostnameInput:   r.FormValue("customHostname"),

@@ -16,6 +16,7 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
+node_modules/
 
 # Go workspace file
 go.work
@@ -59,6 +60,7 @@ high-availability-*/
 # Generated script files
 **/cluster.yml
 **/install.sh
+!scripts/install.sh
 **/cert-manager.sh
 **/cacert.sh
 **/aws_lb*.txt
@@ -116,6 +118,15 @@ tramp
 # cask packages
 .cask/
 dist/
+desktop/wails/build/bin/
+desktop/wails/build/appicon.png
+packaging/macos/AppIcon-preview.png
+!desktop/wails/frontend/dist/
+desktop/wails/frontend/dist/*
+!desktop/wails/frontend/dist/placeholder.txt
+desktop/wails/frontend/package.json.md5
+desktop/wails/frontend/wailsjs/
+desktop/wails/repo_hint.txt
 
 # Flycheck
 flycheck_*.el
@@ -501,6 +512,9 @@ out
 # Nuxt.js build / generate output
 .nuxt
 dist
+!desktop/wails/frontend/dist/
+desktop/wails/frontend/dist/*
+!desktop/wails/frontend/dist/placeholder.txt
 
 # Gatsby files
 .cache/

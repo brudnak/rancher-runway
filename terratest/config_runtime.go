@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,14 +17,35 @@ import (
 )
 
 func setupConfig(t *testing.T) {
+	t.Helper()
+	if err := setupConfigE(""); err != nil {
+		t.Fatalf("Failed to read config: %v", err)
+	}
+}
+
+func setupConfigE(repoRoot string) error {
 	viper.Reset()
-	viper.AddConfigPath("../")
-	viper.SetConfigName("tool-config")
+
+	if strings.TrimSpace(repoRoot) == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("failed to determine working directory: %w", err)
+		}
+		resolvedRoot, _, err := resolveControlPanelPaths(cwd)
+		if err != nil {
+			return err
+		}
+		repoRoot = resolvedRoot
+	}
+
+	configPath := filepath.Join(repoRoot, "tool-config.yml")
+	viper.SetConfigFile(configPath)
 	viper.SetConfigType("yml")
 
 	if err := viper.ReadInConfig(); err != nil {
-		t.Fatalf("Failed to read config: %v", err)
+		return err
 	}
+	return nil
 }
 
 func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
@@ -32,6 +54,9 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 	}
 	if err := settings.ValidateAWSPemKeyNameConfig(); err != nil {
 		t.Fatalf("AWS PEM key preflight failed: %v", err)
+	}
+	if err := settings.ValidateOwnerConfig(); err != nil {
+		t.Fatalf("Owner preflight failed: %v", err)
 	}
 	generateAwsVars()
 	customHostnamePrefix, err := settings.ConfiguredCustomHostnamePrefix()
@@ -48,14 +73,15 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 	}
 
 	options := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
-		TerraformDir:  "../modules/aws",
+		TerraformDir:  terraformModuleDir(),
 		NoColor:       true,
 		Lock:          true,
 		LockTimeout:   "5m",
+		EnvVars:       terraformEnvVarsFromEnv(),
 		BackendConfig: backendConfig,
 		Vars: map[string]interface{}{
 			"total_has":              totalHAs,
-			"aws_prefix":             viper.GetString("tf_vars.aws_prefix"),
+			"aws_prefix":             terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
 			"aws_vpc":                viper.GetString("tf_vars.aws_vpc"),
 			"aws_subnet_a":           viper.GetString("tf_vars.aws_subnet_a"),
 			"aws_subnet_b":           viper.GetString("tf_vars.aws_subnet_b"),
@@ -66,6 +92,9 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 			"aws_pem_key_name":       viper.GetString("tf_vars.aws_pem_key_name"),
 			"aws_route53_fqdn":       viper.GetString("tf_vars.aws_route53_fqdn"),
 			"custom_hostname_prefix": customHostnamePrefix,
+			"owner_first_name":       settings.OwnerFirstName(),
+			"owner_last_name":        settings.OwnerLastName(),
+			"run_id":                 currentTerraformRunID(),
 		},
 	})
 
@@ -79,6 +108,39 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 }
 
 func terraformBackendConfigFromEnv() (map[string]interface{}, error) {
+	return terraformBackendConfigFromEnvForRun(
+		strings.TrimSpace(os.Getenv(runIDEnv)),
+		strings.TrimSpace(os.Getenv(terraformStatePathEnv)),
+	)
+}
+
+func validateScopedCleanupTarget() error {
+	runID := currentTerraformRunID()
+	if runID == "" {
+		return fmt.Errorf("%s must be set; cleanup is allowed only for a recorded isolated run", runIDEnv)
+	}
+	if strings.TrimSpace(os.Getenv(terraformModuleDirEnv)) == "" {
+		return fmt.Errorf("%s must be set; cleanup must run from the recorded per-run Terraform module", terraformModuleDirEnv)
+	}
+	if strings.TrimSpace(os.Getenv(terraformStatePathEnv)) != "" {
+		return nil
+	}
+
+	values := []string{
+		"TF_STATE_BUCKET",
+		"TF_STATE_LOCK_TABLE",
+		"TF_STATE_REGION",
+		"TF_STATE_KEY",
+	}
+	for _, key := range values {
+		if strings.TrimSpace(os.Getenv(key)) == "" {
+			return fmt.Errorf("%s must be set unless remote Terraform backend env vars are fully configured", terraformStatePathEnv)
+		}
+	}
+	return nil
+}
+
+func terraformBackendConfigFromEnvForRun(runID string, localStatePath string) (map[string]interface{}, error) {
 	values := map[string]string{
 		"TF_STATE_BUCKET":     strings.TrimSpace(os.Getenv("TF_STATE_BUCKET")),
 		"TF_STATE_LOCK_TABLE": strings.TrimSpace(os.Getenv("TF_STATE_LOCK_TABLE")),
@@ -97,6 +159,9 @@ func terraformBackendConfigFromEnv() (map[string]interface{}, error) {
 	}
 
 	if !anySet {
+		if localStatePath != "" {
+			return map[string]interface{}{"path": localStatePath}, nil
+		}
 		return nil, nil
 	}
 	if len(missing) > 0 {
@@ -105,20 +170,77 @@ func terraformBackendConfigFromEnv() (map[string]interface{}, error) {
 
 	return map[string]interface{}{
 		"bucket":         values["TF_STATE_BUCKET"],
-		"key":            values["TF_STATE_KEY"],
+		"key":            terraformStateKeyForRun(values["TF_STATE_KEY"], runID),
 		"region":         values["TF_STATE_REGION"],
 		"dynamodb_table": values["TF_STATE_LOCK_TABLE"],
 		"encrypt":        true,
 	}, nil
 }
 
+func terraformStateKeyForRun(baseKey string, runID string) string {
+	baseKey = strings.Trim(strings.TrimSpace(baseKey), "/")
+	runID = safeRunPathSegment(runID)
+	if baseKey == "" || runID == "" || runID == "unknown" {
+		return baseKey
+	}
+
+	dir := strings.Trim(strings.TrimSuffix(filepath.Dir(baseKey), "."), "/")
+	file := filepath.Base(baseKey)
+	if file == "." || file == "/" || file == "" {
+		file = "terraform.tfstate"
+	}
+	if dir == "" {
+		return filepath.ToSlash(filepath.Join("runs", runID, file))
+	}
+	return filepath.ToSlash(filepath.Join(dir, "runs", runID, file))
+}
+
+func terraformEnvVarsFromEnv() map[string]string {
+	envVars := map[string]string{}
+	if dataDir := strings.TrimSpace(os.Getenv(terraformDataDirEnv)); dataDir != "" {
+		envVars["TF_DATA_DIR"] = dataDir
+	}
+	return envVars
+}
+
+func terraformAWSPrefix(basePrefix string) string {
+	return terraformAWSPrefixForRun(basePrefix, os.Getenv(runIDEnv))
+}
+
+func currentTerraformRunID() string {
+	runID := safeRunPathSegment(os.Getenv(runIDEnv))
+	if runID == "" || runID == "unknown" {
+		return ""
+	}
+	return runID
+}
+
+func terraformAWSPrefixForRun(basePrefix string, runIDValue string) string {
+	basePrefix = strings.ToLower(strings.TrimSpace(basePrefix))
+	runID := safeRunPathSegment(runIDValue)
+	if runID == "" || runID == "unknown" {
+		return basePrefix
+	}
+	if len(runID) > 8 {
+		runID = runID[:8]
+	}
+	return fmt.Sprintf("%s-r%s", basePrefix, runID)
+}
+
 func syncTerraformBackendFile(backendConfig map[string]interface{}) error {
-	path := "../modules/aws/backend.tf"
+	path := filepath.Join(terraformModuleDir(), "backend.tf")
 	if backendConfig == nil {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		return nil
+	}
+
+	if _, ok := backendConfig["path"]; ok {
+		return os.WriteFile(path, []byte(`terraform {
+  backend "local" {}
+}
+`), 0644)
 	}
 
 	return os.WriteFile(path, []byte(`terraform {
@@ -128,8 +250,9 @@ func syncTerraformBackendFile(backendConfig map[string]interface{}) error {
 }
 
 func generateAwsVars() {
-	hcl.GenAwsVar(
-		viper.GetString("tf_vars.aws_prefix"),
+	hcl.GenAwsVarFile(
+		filepath.Join(terraformModuleDir(), "terraform.tfvars"),
+		terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
 		viper.GetString("tf_vars.aws_vpc"),
 		viper.GetString("tf_vars.aws_subnet_a"),
 		viper.GetString("tf_vars.aws_subnet_b"),
@@ -140,6 +263,9 @@ func generateAwsVars() {
 		viper.GetString("tf_vars.aws_pem_key_name"),
 		viper.GetString("tf_vars.aws_route53_fqdn"),
 		settings.CurrentCustomHostnamePrefix(),
+		settings.OwnerFirstName(),
+		settings.OwnerLastName(),
+		currentTerraformRunID(),
 	)
 }
 

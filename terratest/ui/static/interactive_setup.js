@@ -1,5 +1,13 @@
-const setupData = JSON.parse(document.getElementById('setup-data').textContent || '{}')
+(() => {
+const setupRootEl = document.getElementById('interactiveSetupRoot') || document.body
+const byId = id => setupRootEl.querySelector(`#${id}`)
+const setupQuery = selector => setupRootEl.querySelector(selector)
+const setupQueryAll = selector => Array.from(setupRootEl.querySelectorAll(selector))
+const setupData = JSON.parse(byId('setup-data').textContent || '{}')
 const token = setupData.token || ''
+const embeddedSetup = Boolean(setupData.embedded)
+const basePath = String(setupData.basePath || '').replace(/\/+$/, '')
+const setupEndpoint = path => `${basePath}${path.startsWith('/') ? path : `/${path}`}`
 
 let versions = Array.isArray(setupData.versions) ? setupData.versions : ['']
 let config = setupData.config || {
@@ -14,6 +22,10 @@ let submitting = false
 let responseSubmitting = false
 let pendingCompletionShouldContinue = true
 let systemReadiness = null
+let setupStatePollTimer = null
+let panelBooting = embeddedSetup
+let panelLifecycleBusy = false
+let panelLifecycleMessage = ''
 
 const rowClass = 'grid gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center'
 const inputClass = 'w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100'
@@ -21,55 +33,59 @@ const removeButtonClass = 'rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 p
 const lockIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>'
 const unlockIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>'
 
-const setupFormEl = document.getElementById('setupForm')
-const rowsEl = document.getElementById('rows')
-const totalInstancesValueEl = document.getElementById('totalInstancesValue')
-const editorErrorBoxEl = document.getElementById('editorErrorBox')
-const editorStatusBoxEl = document.getElementById('editorStatusBox')
-const themeToggleEl = document.getElementById('themeToggle')
-const themeSunIconEl = document.getElementById('themeSunIcon')
-const themeMoonIconEl = document.getElementById('themeMoonIcon')
-const themeToggleLabelEl = document.getElementById('themeToggleLabel')
-const addBtnEl = document.getElementById('addBtn')
-const continueBtnEl = document.getElementById('continueBtn')
-const editorCancelBtnEl = document.getElementById('editorCancelBtn')
-const customHostnameBoxEl = document.getElementById('customHostnameBox')
-const customHostnameToggleEl = document.getElementById('customHostnameToggle')
-const customHostnameInputEl = document.getElementById('customHostnameInput')
-const distroSelectEl = document.getElementById('distroSelect')
-const bootstrapPasswordInputEl = document.getElementById('bootstrapPasswordInput')
-const bootstrapPasswordToggleEl = document.getElementById('bootstrapPasswordToggle')
-const preloadImagesToggleEl = document.getElementById('preloadImagesToggle')
-const systemReadinessDetailsEl = document.getElementById('systemReadinessDetails')
-const systemReadinessBadgeEl = document.getElementById('systemReadinessBadge')
-const systemReadinessSummaryEl = document.getElementById('systemReadinessSummary')
-const systemReadinessItemsEl = document.getElementById('systemReadinessItems')
-const tfVarInputEls = Array.from(document.querySelectorAll('input[data-tf-var]'))
-const lockedFieldInputEls = Array.from(document.querySelectorAll('input[data-locked-field]'))
-const lockToggleEls = Array.from(document.querySelectorAll('button[data-lock-toggle]'))
-const secretToggleEls = Array.from(document.querySelectorAll('button[data-secret-toggle]'))
-const logPanelEl = document.getElementById('logPanel')
-const resolvingErrorBoxEl = document.getElementById('resolvingErrorBox')
-const planPanelEl = document.getElementById('planPanel')
-const reviewErrorBoxEl = document.getElementById('reviewErrorBox')
-const respondActionsEl = document.getElementById('respondActions')
-const doneAccentEl = document.getElementById('doneAccent')
-const doneIconEl = document.getElementById('doneIcon')
-const doneTitleEl = document.getElementById('doneTitle')
-const doneBodyEl = document.getElementById('doneBody')
-const doneDetailEl = document.getElementById('doneDetail')
-const confirmModalEl = document.getElementById('confirmModal')
-const confirmModalTitleEl = document.getElementById('confirmModalTitle')
-const confirmModalBodyEl = document.getElementById('confirmModalBody')
-const confirmModalConfirmEl = document.getElementById('confirmModalConfirm')
-const confirmModalCancelEl = document.getElementById('confirmModalCancel')
+const setupFormEl = byId('setupForm')
+const rowsEl = byId('rows')
+const totalInstancesValueEl = byId('totalInstancesValue')
+const editorErrorBoxEl = byId('editorErrorBox')
+const editorStatusBoxEl = byId('editorStatusBox')
+const themeToggleEl = byId('themeToggle')
+const themeSunIconEl = byId('themeSunIcon')
+const themeMoonIconEl = byId('themeMoonIcon')
+const themeToggleLabelEl = byId('themeToggleLabel')
+const addBtnEl = byId('addBtn')
+const continueBtnEl = byId('continueBtn')
+const editorCancelBtnEl = byId('editorCancelBtn')
+const customHostnameBoxEl = byId('customHostnameBox')
+const customHostnameToggleEl = byId('customHostnameToggle')
+const customHostnameInputEl = byId('customHostnameInput')
+const distroSelectEl = byId('distroSelect')
+const bootstrapPasswordInputEl = byId('bootstrapPasswordInput')
+const bootstrapPasswordToggleEl = byId('bootstrapPasswordToggle')
+const preloadImagesToggleEl = byId('preloadImagesToggle')
+const userFirstNameInputEl = byId('userFirstNameInput')
+const userLastNameInputEl = byId('userLastNameInput')
+const systemReadinessDetailsEl = byId('systemReadinessDetails')
+const systemReadinessBadgeEl = byId('systemReadinessBadge')
+const systemReadinessSummaryEl = byId('systemReadinessSummary')
+const systemReadinessItemsEl = byId('systemReadinessItems')
+const tfVarInputEls = setupQueryAll('input[data-tf-var]')
+const lockedFieldInputEls = setupQueryAll('input[data-locked-field]')
+const lockToggleEls = setupQueryAll('button[data-lock-toggle]')
+const secretToggleEls = setupQueryAll('button[data-secret-toggle]')
+const logPanelEl = byId('logPanel')
+const reviewLogPanelEl = byId('reviewLogPanel')
+const resolvingErrorBoxEl = byId('resolvingErrorBox')
+const planCardsEl = byId('planCards')
+const planFallbackEl = byId('planFallback')
+const reviewErrorBoxEl = byId('reviewErrorBox')
+const respondActionsEl = byId('respondActions')
+const doneAccentEl = byId('doneAccent')
+const doneIconEl = byId('doneIcon')
+const doneTitleEl = byId('doneTitle')
+const doneBodyEl = byId('doneBody')
+const doneDetailEl = byId('doneDetail')
+const confirmModalEl = byId('confirmModal')
+const confirmModalTitleEl = byId('confirmModalTitle')
+const confirmModalBodyEl = byId('confirmModalBody')
+const confirmModalConfirmEl = byId('confirmModalConfirm')
+const confirmModalCancelEl = byId('confirmModalCancel')
 
 const setPhase = phase => {
   if (phase === 'done') {
     renderCompletion(pendingCompletionShouldContinue)
   }
 
-  document.body.dataset.phase = phase
+  setupRootEl.dataset.phase = phase
 }
 
 const currentTheme = () => document.documentElement.classList.contains('dark') ? 'dark' : 'light'
@@ -99,6 +115,156 @@ const escapeHtml = value => String(value)
   .replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
+
+const parseResolvedPlanText = planText => {
+  const lines = String(planText || '').split(/\r?\n/)
+  const cards = []
+  let current = null
+  let activeCommand = null
+
+  const finishCurrent = () => {
+    if (!current) {
+      return
+    }
+
+    current.commands = current.commands
+      .map(command => ({
+        ...command,
+        text: command.lines.join('\n').trim()
+      }))
+      .filter(command => command.text)
+    delete current.lines
+    cards.push(current)
+  }
+
+  lines.forEach(rawLine => {
+    const line = String(rawLine || '').replace(/\s+$/, '')
+    const trimmed = line.trim()
+    const haMatch = trimmed.match(/^HA\s+(\d+)$/)
+
+    if (haMatch) {
+      finishCurrent()
+      current = {
+        title: `HA ${haMatch[1]}`,
+        details: [],
+        commands: []
+      }
+      activeCommand = null
+      return
+    }
+
+    if (!current || trimmed === 'Continue with this Rancher plan?') {
+      return
+    }
+
+    const commandMatch = trimmed.match(/^Helm command\s+(\d+):$/)
+    if (commandMatch) {
+      activeCommand = {
+        label: `Helm command ${commandMatch[1]}`,
+        lines: []
+      }
+      current.commands.push(activeCommand)
+      return
+    }
+
+    if (activeCommand) {
+      activeCommand.lines.push(line)
+      return
+    }
+
+    const detailMatch = line.match(/^([^:]+):\s*(.*)$/)
+    if (detailMatch) {
+      current.details.push({
+        label: detailMatch[1].trim(),
+        value: detailMatch[2].trim()
+      })
+    }
+  })
+
+  finishCurrent()
+  return cards
+}
+
+const renderPlanCards = planText => {
+  if (!planCardsEl || !planFallbackEl) {
+    return
+  }
+
+  const text = String(planText || '').trim()
+  const cards = parseResolvedPlanText(text)
+
+  if (!text) {
+    planCardsEl.innerHTML = ''
+    planFallbackEl.classList.add('hidden')
+    planFallbackEl.textContent = ''
+    return
+  }
+
+  if (!cards.length) {
+    planCardsEl.innerHTML = ''
+    planFallbackEl.classList.remove('hidden')
+    planFallbackEl.textContent = text
+    return
+  }
+
+  planFallbackEl.classList.add('hidden')
+  planFallbackEl.textContent = ''
+  const renderCodeLines = commandText => String(commandText || '').split('\n').map((line, index) => `
+    <div class="setup-code-line">
+      <span class="setup-code-line-number">${index + 1}</span>
+      <code class="setup-code-line-code">${escapeHtml(line || ' ')}</code>
+    </div>
+  `).join('')
+
+  planCardsEl.innerHTML = cards.map(card => {
+    const details = card.details.length
+      ? card.details.map(detail => `
+        <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-3 dark:border-white/10 dark:bg-zinc-950/30">
+          <div class="text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">${escapeHtml(detail.label)}</div>
+          <div class="mt-1 break-words text-sm font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(detail.value || '-')}</div>
+        </div>
+      `).join('')
+      : '<div class="text-sm text-zinc-500 dark:text-zinc-400">No resolved metadata was emitted for this HA.</div>'
+
+    const commands = card.commands.length
+      ? card.commands.map(command => `
+        <div class="setup-code-editor">
+          <div class="setup-code-editor-header">
+            <div class="setup-code-editor-title">${escapeHtml(command.label)}</div>
+            <div class="setup-code-editor-lang">shell</div>
+          </div>
+          <div class="setup-code-lines" role="region" aria-label="${escapeHtml(command.label)} shell command">
+            ${renderCodeLines(command.text)}
+          </div>
+        </div>
+      `).join('')
+      : '<div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">No Helm command was emitted for this HA.</div>'
+
+    return `
+      <details class="setup-ha-card" open>
+        <summary class="setup-ha-summary">
+          <div>
+            <div class="flex flex-wrap items-center gap-3">
+              <h3 class="text-lg font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(card.title)}</h3>
+              <span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700 dark:bg-white/[0.06] dark:text-zinc-200">Ready for approval</span>
+            </div>
+            <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Resolved install details for review before AWS setup starts.</p>
+          </div>
+          <span class="inline-flex shrink-0 items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200">
+            Details
+            <svg xmlns="http://www.w3.org/2000/svg" class="setup-disclosure-icon h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6"></path>
+            </svg>
+          </span>
+        </summary>
+        <div class="setup-ha-card-body">
+          <div class="grid gap-3 lg:grid-cols-3">${details}</div>
+          <div class="mt-4 grid gap-3">${commands}</div>
+        </div>
+      </details>
+    `
+  }).join('')
+}
 
 const sanitizeDisplayValue = value => {
   let next = String(value || '').trim()
@@ -267,7 +433,7 @@ const loadSystemReadiness = async () => {
   })
 
   try {
-    const response = await fetch(`/api/readiness?token=${encodeURIComponent(token)}`, {
+    const response = await fetch(setupEndpoint(`/api/readiness?token=${encodeURIComponent(token)}`), {
       cache: 'no-store',
       headers: { 'Accept': 'application/json' }
     })
@@ -292,6 +458,8 @@ const renderEditableConfig = () => {
   distroSelectEl.value = config.distro || 'auto'
   bootstrapPasswordInputEl.value = config.bootstrapPassword || ''
   preloadImagesToggleEl.checked = Boolean(config.preloadImages)
+  userFirstNameInputEl.value = config.userFirstName || ''
+  userLastNameInputEl.value = config.userLastName || ''
 
   tfVarInputEls.forEach(input => {
     const key = input.getAttribute('data-tf-var')
@@ -355,7 +523,7 @@ const normalizeVersion = value => String(value || '').trim().replace(/^[vV]/, ''
 const normalizedVersions = () => versions.map(version => normalizeVersion(version))
 
 const normalizedAWSPrefix = () => {
-  const input = document.querySelector('input[data-tf-var="aws_prefix"]')
+  const input = setupQuery('input[data-tf-var="aws_prefix"]')
   return String((input && input.value) || '').trim().toLowerCase()
 }
 
@@ -369,7 +537,7 @@ const collectTFVars = () => {
 
   tfVars.aws_prefix = normalizedAWSPrefix()
 
-  const prefixInput = document.querySelector('input[data-tf-var="aws_prefix"]')
+  const prefixInput = setupQuery('input[data-tf-var="aws_prefix"]')
   if (prefixInput) {
     prefixInput.value = tfVars.aws_prefix
   }
@@ -403,8 +571,22 @@ const validateSetup = () => {
     }
   }
 
-  const prefixInput = document.querySelector('input[data-tf-var="aws_prefix"]')
+  const prefixInput = setupQuery('input[data-tf-var="aws_prefix"]')
   const prefix = normalizedAWSPrefix()
+
+  if (!String(userFirstNameInputEl.value || '').trim()) {
+    return {
+      message: 'First name is required for AWS Owner tags.',
+      target: userFirstNameInputEl
+    }
+  }
+
+  if (!String(userLastNameInputEl.value || '').trim()) {
+    return {
+      message: 'Last name is required for AWS Owner tags.',
+      target: userLastNameInputEl
+    }
+  }
 
   if (!/^[a-z]{2,3}$/.test(prefix)) {
     return {
@@ -413,7 +595,7 @@ const validateSetup = () => {
     }
   }
 
-  const pemKeyInput = document.querySelector('input[data-tf-var="aws_pem_key_name"]')
+  const pemKeyInput = setupQuery('input[data-tf-var="aws_pem_key_name"]')
 
   if (!String((pemKeyInput && pemKeyInput.value) || '').trim()) {
     return {
@@ -434,8 +616,8 @@ const validateSetup = () => {
 }
 
 const setFieldLocked = (key, locked) => {
-  const input = document.querySelector(`input[data-tf-var="${key}"]`)
-  const button = document.querySelector(`button[data-lock-toggle="${key}"]`)
+  const input = setupQuery(`input[data-tf-var="${key}"]`)
+  const button = setupQuery(`button[data-lock-toggle="${key}"]`)
 
   if (!input || !button) {
     return
@@ -474,8 +656,8 @@ const toggleBootstrapPasswordVisibility = () => {
 }
 
 const toggleSecretFieldVisibility = key => {
-  const input = document.querySelector(`input[data-tf-var="${key}"]`)
-  const button = document.querySelector(`button[data-secret-toggle="${key}"]`)
+  const input = setupQuery(`input[data-tf-var="${key}"]`)
+  const button = setupQuery(`button[data-secret-toggle="${key}"]`)
 
   if (!input || !button) {
     return
@@ -488,9 +670,9 @@ const toggleSecretFieldVisibility = key => {
 
 const completionCopy = shouldContinue => shouldContinue
   ? {
-      title: 'Response recorded',
-      body: 'You can close this tab. The test run is continuing in your terminal.',
-      detail: 'Setup approval has been handed back to the local run.',
+      title: 'AWS setup started',
+      body: 'The isolated run has been handed to the Lifecycle tab.',
+      detail: 'Terraform state and run records are being tracked under a dedicated run slot.',
       accentClass: 'flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
       icon: '<path d="M20 6 9 17l-5-5"></path>'
     }
@@ -512,17 +694,56 @@ const renderCompletion = shouldContinue => {
   doneDetailEl.textContent = copy.detail
 }
 
+const resetEmbeddedSetupFlow = () => {
+  pendingCompletionShouldContinue = true
+  responseSubmitting = false
+  setResponseButtonsDisabled(false)
+  setResponseActionPending('')
+  setSubmittingState(false)
+  stopSetupStatePolling()
+  renderResolverLogs([])
+  renderPlanCards('')
+  resolvingErrorBoxEl.textContent = ''
+  reviewErrorBoxEl.textContent = ''
+  editorErrorBoxEl.textContent = ''
+  editorStatusBoxEl.textContent = ''
+  setPhase('editor')
+}
+
 const setSubmittingState = nextSubmitting => {
   submitting = nextSubmitting
-  addBtnEl.disabled = nextSubmitting
-  continueBtnEl.disabled = nextSubmitting
-  editorCancelBtnEl.disabled = nextSubmitting
+  const actionDisabled = nextSubmitting || panelBooting || panelLifecycleBusy
+  addBtnEl.disabled = actionDisabled
+  continueBtnEl.disabled = actionDisabled
+  editorCancelBtnEl.disabled = actionDisabled
+  const disabledTitle = panelBooting
+    ? 'Startup safety check is still loading panel state.'
+    : panelLifecycleBusy
+      ? panelLifecycleMessage || 'A lifecycle operation is running.'
+      : ''
+  addBtnEl.title = disabledTitle
+  continueBtnEl.title = disabledTitle
+  editorCancelBtnEl.title = disabledTitle
+  continueBtnEl.innerHTML = panelBooting
+    ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Checking state'
+    : panelLifecycleBusy
+      ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Lifecycle running'
+      : nextSubmitting
+        ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Resolving plan'
+        : 'Resolve Plan'
+  ;[addBtnEl, continueBtnEl, editorCancelBtnEl].forEach(button => {
+    button.classList.toggle('cursor-not-allowed', actionDisabled)
+    button.classList.toggle('opacity-60', actionDisabled)
+    button.classList.toggle('grayscale', actionDisabled)
+  })
   customHostnameToggleEl.disabled = nextSubmitting
   customHostnameInputEl.disabled = nextSubmitting
   distroSelectEl.disabled = nextSubmitting
   bootstrapPasswordInputEl.disabled = nextSubmitting
   bootstrapPasswordToggleEl.disabled = nextSubmitting
   preloadImagesToggleEl.disabled = nextSubmitting
+  userFirstNameInputEl.disabled = nextSubmitting
+  userLastNameInputEl.disabled = nextSubmitting
 
   tfVarInputEls.forEach(input => {
     input.disabled = nextSubmitting
@@ -537,9 +758,70 @@ const setSubmittingState = nextSubmitting => {
   })
 
   rowsEl.querySelectorAll('input, button[data-remove-index]').forEach(element => {
-    element.disabled = nextSubmitting ||
+    element.disabled = nextSubmitting || (panelBooting && element.hasAttribute('data-remove-index')) ||
       (element.hasAttribute('data-remove-index') && (customHostnameEnabled || versions.length <= 1))
   })
+}
+
+const setPanelBootingState = booting => {
+  panelBooting = Boolean(booting)
+  if (panelBooting && editorStatusBoxEl && !submitting) {
+    editorStatusBoxEl.textContent = 'Checking local state before setup actions are enabled...'
+  } else if (!panelBooting && editorStatusBoxEl.textContent === 'Checking local state before setup actions are enabled...' && !panelLifecycleBusy) {
+    editorStatusBoxEl.textContent = ''
+  }
+  setSubmittingState(submitting)
+  setResponseButtonsDisabled(responseSubmitting)
+}
+
+const setPanelLifecycleState = (busy, message = '') => {
+  const previousMessage = panelLifecycleMessage
+  panelLifecycleBusy = Boolean(busy)
+  panelLifecycleMessage = panelLifecycleBusy
+    ? message || 'A lifecycle operation is running. New setup actions are locked until it finishes.'
+    : ''
+  if (panelLifecycleBusy && editorStatusBoxEl && !submitting) {
+    editorStatusBoxEl.textContent = panelLifecycleMessage
+  } else if (!panelLifecycleBusy && editorStatusBoxEl.textContent === previousMessage) {
+    editorStatusBoxEl.textContent = ''
+  }
+  if (panelLifecycleBusy && setupRootEl.dataset.phase === 'review') {
+    reviewErrorBoxEl.textContent = panelLifecycleMessage
+  } else if (!panelLifecycleBusy && reviewErrorBoxEl.textContent === previousMessage) {
+    reviewErrorBoxEl.textContent = ''
+  }
+  setSubmittingState(submitting)
+  setResponseButtonsDisabled(responseSubmitting)
+}
+
+const submitSetupFormWithoutHTMX = async formData => {
+  const response = await fetch(setupFormEl.action, {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+    },
+    body: new URLSearchParams(formData).toString()
+  })
+
+  if (!response.ok) {
+    throw new Error(await response.text() || 'Setup submit failed.')
+  }
+}
+
+const beginResolutionUI = () => {
+  logPanelEl.innerHTML = '<span class="text-zinc-400 dark:text-zinc-500">Waiting for resolver output...</span>'
+  if (reviewLogPanelEl) {
+    reviewLogPanelEl.innerHTML = '<span class="text-zinc-400 dark:text-zinc-500">Waiting for resolver output...</span>'
+  }
+  renderPlanCards('')
+  resolvingErrorBoxEl.textContent = ''
+  reviewErrorBoxEl.textContent = ''
+  setPhase('resolving')
+  setSubmittingState(true)
+  startSetupStatePolling()
 }
 
 const prepareSetupSubmit = async event => {
@@ -549,6 +831,16 @@ const prepareSetupSubmit = async event => {
   }
 
   if (submitting) {
+    return
+  }
+
+  if (panelBooting) {
+    editorStatusBoxEl.textContent = 'Still checking local state. Setup actions will unlock after the panel reads the first state snapshot.'
+    return
+  }
+
+  if (panelLifecycleBusy) {
+    editorStatusBoxEl.textContent = panelLifecycleMessage || 'A lifecycle operation is running. Setup actions will unlock after it finishes.'
     return
   }
 
@@ -604,15 +896,18 @@ const prepareSetupSubmit = async event => {
     return
   }
 
+  const formData = new FormData(setupFormEl)
   editorStatusBoxEl.textContent = 'Saving config and kicking off plan resolution...'
+  beginResolutionUI()
 
-  if (window.htmx) {
-    window.htmx.trigger(setupFormEl, 'confirmed-submit')
-  } else {
-    setupFormEl.submit()
+  try {
+    await submitSetupFormWithoutHTMX(formData)
+  } catch (error) {
+    setPhase('editor')
+    showValidationError(error instanceof Error ? error.message : 'Setup submit failed.')
+    setSubmittingState(false)
+    stopSetupStatePolling()
   }
-
-  window.setTimeout(() => setSubmittingState(true), 0)
 }
 
 const cancelEditor = () => {
@@ -623,15 +918,44 @@ const cancelEditor = () => {
   sendResponse('cancel')
 }
 
-const responseErrorBox = () => document.body.dataset.phase === 'review' ? reviewErrorBoxEl : editorErrorBoxEl
+const responseErrorBox = () => setupRootEl.dataset.phase === 'review' ? reviewErrorBoxEl : editorErrorBoxEl
 
 const setResponseButtonsDisabled = disabled => {
   if (!respondActionsEl) {
     return
   }
 
+  const actionDisabled = disabled || panelBooting || panelLifecycleBusy
+  const disabledTitle = panelBooting
+    ? 'Startup safety check is still loading panel state.'
+    : panelLifecycleBusy
+      ? panelLifecycleMessage || 'A lifecycle operation is running.'
+      : ''
   respondActionsEl.querySelectorAll('button[data-response-action]').forEach(button => {
-    button.disabled = disabled
+    button.disabled = actionDisabled
+    if (disabledTitle) {
+      button.title = disabledTitle
+    } else {
+      button.removeAttribute('title')
+    }
+    button.classList.toggle('cursor-not-allowed', actionDisabled)
+    button.classList.toggle('opacity-60', actionDisabled)
+    button.classList.toggle('grayscale', actionDisabled)
+  })
+}
+
+const setResponseActionPending = action => {
+  if (!respondActionsEl) {
+    return
+  }
+
+  respondActionsEl.querySelectorAll('button[data-response-action]').forEach(button => {
+    const buttonAction = button.getAttribute('data-response-action')
+    if (action && buttonAction === action) {
+      button.innerHTML = `<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>${action === 'continue' ? 'Starting AWS setup...' : 'Canceling...'}`
+    } else if (!action) {
+      button.textContent = buttonAction === 'continue' ? 'Start AWS setup' : 'Cancel'
+    }
   })
 }
 
@@ -640,19 +964,29 @@ const sendResponse = async action => {
     return
   }
 
-  responseSubmitting = true
   const shouldContinue = action === 'continue'
+  if (shouldContinue && panelBooting) {
+    responseErrorBox().textContent = 'Still checking local state. AWS setup actions will unlock after the panel reads the first state snapshot.'
+    return
+  }
+  if (shouldContinue && panelLifecycleBusy) {
+    responseErrorBox().textContent = panelLifecycleMessage || 'A lifecycle operation is running. AWS setup actions will unlock after it finishes.'
+    return
+  }
+
+  responseSubmitting = true
   pendingCompletionShouldContinue = shouldContinue
   const body = new URLSearchParams()
   body.set('token', token)
   body.set('action', action)
 
   setResponseButtonsDisabled(true)
+  setResponseActionPending(action)
   reviewErrorBoxEl.textContent = ''
   editorErrorBoxEl.textContent = ''
 
   try {
-    const response = await fetch('/respond', {
+    const response = await fetch(setupEndpoint('/respond'), {
       method: 'POST',
       cache: 'no-store',
       credentials: 'same-origin',
@@ -667,34 +1001,123 @@ const sendResponse = async action => {
       responseErrorBox().textContent = await response.text()
       responseSubmitting = false
       setResponseButtonsDisabled(false)
+      setResponseActionPending('')
       return
     }
 
+    if (embeddedSetup) {
+      resetEmbeddedSetupFlow()
+      if (shouldContinue) {
+        window.dispatchEvent(new CustomEvent('rancher-setup-started'))
+      }
+      return
+    }
     renderCompletion(shouldContinue)
     setPhase('done')
   } catch (error) {
     responseErrorBox().textContent = error instanceof Error ? error.message : 'Failed to send setup response.'
     responseSubmitting = false
     setResponseButtonsDisabled(false)
+    setResponseActionPending('')
   }
 }
 
 const appendLogLine = line => {
-  const empty = logPanelEl.querySelector('span')
+  const appendToPanel = panel => {
+    if (!panel) {
+      return
+    }
+    const empty = panel.querySelector('span')
 
-  if (empty && empty.textContent.includes('Waiting for resolver output')) {
-    empty.remove()
+    if (empty && (empty.textContent.includes('Waiting for resolver output') || empty.textContent.includes('Resolver output will appear'))) {
+      empty.remove()
+    }
+
+    const span = document.createElement('span')
+    span.className = 'block'
+    span.textContent = line
+    panel.appendChild(span)
+    panel.scrollTop = panel.scrollHeight
   }
 
-  const span = document.createElement('span')
-  span.className = 'block'
-  span.textContent = line
-  logPanelEl.appendChild(span)
-  logPanelEl.scrollTop = logPanelEl.scrollHeight
+  appendToPanel(logPanelEl)
+  appendToPanel(reviewLogPanelEl)
+}
+
+const renderResolverLogs = logs => {
+  const lines = Array.isArray(logs) ? logs : []
+  const renderPanel = (panel, emptyText) => {
+    if (!panel) {
+      return
+    }
+    if (!lines.length) {
+      panel.innerHTML = `<span class="text-zinc-400 dark:text-zinc-500">${escapeHtml(emptyText)}</span>`
+      return
+    }
+    panel.textContent = lines.join('\n')
+    panel.scrollTop = panel.scrollHeight
+  }
+
+  renderPanel(logPanelEl, 'Waiting for resolver output...')
+  renderPanel(reviewLogPanelEl, 'Resolver output will appear here.')
+}
+
+const applySetupSnapshot = snapshot => {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return
+  }
+
+  renderResolverLogs(snapshot.logs)
+  if (typeof snapshot.plan === 'string' && snapshot.plan) {
+    renderPlanCards(snapshot.plan)
+  }
+  const error = typeof snapshot.error === 'string' ? snapshot.error : ''
+  resolvingErrorBoxEl.textContent = error
+  reviewErrorBoxEl.textContent = error
+
+  if (snapshot.phase && snapshot.phase !== setupRootEl.dataset.phase) {
+    setPhase(snapshot.phase)
+  }
+  if (snapshot.phase === 'review' || snapshot.phase === 'done') {
+    setSubmittingState(false)
+  }
+}
+
+const pollSetupState = async () => {
+  try {
+    const response = await fetch(setupEndpoint(`/state?token=${encodeURIComponent(token)}`), {
+      cache: 'no-store',
+      headers: { 'Accept': 'application/json' }
+    })
+    if (!response.ok) {
+      return
+    }
+    const snapshot = await response.json()
+    applySetupSnapshot(snapshot)
+    if (snapshot.phase === 'review' || snapshot.phase === 'done') {
+      stopSetupStatePolling()
+    }
+  } catch (_) {}
+}
+
+const startSetupStatePolling = () => {
+  if (setupStatePollTimer) {
+    return
+  }
+  pollSetupState()
+  setupStatePollTimer = window.setInterval(pollSetupState, 1000)
+}
+
+const stopSetupStatePolling = () => {
+  if (!setupStatePollTimer) {
+    return
+  }
+  window.clearInterval(setupStatePollTimer)
+  setupStatePollTimer = null
 }
 
 const connectEventStream = () => {
-  const source = new EventSource(`/events?token=${encodeURIComponent(token)}`)
+  const source = new EventSource(setupEndpoint(`/events?token=${encodeURIComponent(token)}`))
 
   source.onmessage = event => {
     let payload
@@ -708,7 +1131,12 @@ const connectEventStream = () => {
     switch (payload.type) {
       case 'phase':
         setPhase(payload.phase)
+        if (payload.phase === 'review') {
+          setSubmittingState(false)
+          stopSetupStatePolling()
+        }
         if (payload.phase === 'done') {
+          stopSetupStatePolling()
           source.close()
         }
         break
@@ -716,7 +1144,7 @@ const connectEventStream = () => {
         appendLogLine(payload.line)
         break
       case 'plan':
-        planPanelEl.textContent = payload.plan
+        renderPlanCards(payload.plan)
         break
       case 'error':
         resolvingErrorBoxEl.textContent = payload.error
@@ -748,7 +1176,7 @@ addBtnEl.addEventListener('click', () => {
 
 bootstrapPasswordToggleEl.addEventListener('click', toggleBootstrapPasswordVisibility)
 
-themeToggleEl.addEventListener('click', () => {
+themeToggleEl?.addEventListener('click', () => {
   setTheme(currentTheme() === 'dark' ? 'light' : 'dark')
 })
 
@@ -763,7 +1191,7 @@ lockToggleEls.forEach(button => {
     }
 
     const key = button.getAttribute('data-lock-toggle')
-    const input = document.querySelector(`input[data-tf-var="${key}"]`)
+    const input = setupQuery(`input[data-tf-var="${key}"]`)
 
     if (!input) {
       return
@@ -826,7 +1254,7 @@ if (respondActionsEl) {
   })
 }
 
-document.body.addEventListener('htmx:afterRequest', event => {
+setupRootEl.addEventListener('htmx:afterRequest', event => {
   const requestEl = event.detail.elt
 
   if (requestEl !== setupFormEl && !setupFormEl.contains(requestEl)) {
@@ -839,10 +1267,22 @@ document.body.addEventListener('htmx:afterRequest', event => {
 
   showValidationError(event.detail.xhr.responseText || 'Setup submit failed.')
   setSubmittingState(false)
+  stopSetupStatePolling()
+})
+
+setupRootEl.addEventListener('rancher-control-panel-booting', event => {
+  setPanelBootingState(Boolean(event.detail?.booting))
+})
+
+setupRootEl.addEventListener('rancher-control-panel-lifecycle', event => {
+  setPanelLifecycleState(Boolean(event.detail?.busy), event.detail?.message || '')
 })
 
 renderCustomHostname()
 renderEditableConfig()
+setPanelBootingState(panelBooting)
 setTheme(currentTheme(), false)
 loadSystemReadiness()
 connectEventStream()
+
+})()

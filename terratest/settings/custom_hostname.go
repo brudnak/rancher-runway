@@ -19,6 +19,8 @@ type PreflightConfigUpdate struct {
 	Distro                string            `json:"distro"`
 	BootstrapPassword     string            `json:"bootstrapPassword"`
 	PreloadImages         bool              `json:"preloadImages"`
+	UserFirstName         string            `json:"userFirstName"`
+	UserLastName          string            `json:"userLastName"`
 	TFVars                map[string]string `json:"tfVars"`
 	CustomHostnameEnabled bool              `json:"customHostnameEnabled"`
 	CustomHostnameInput   string            `json:"customHostname"`

@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "build:panel-css": "BROWSERSLIST_IGNORE_OLD_DATA=1 tailwindcss -c tailwind.config.cjs -i terratest/ui/static/control_panel.tailwind.css -o terratest/ui/static/control_panel.css --minify",
+    "build:wails": "scripts/build-wails-app.sh",
+    "install:wails": "scripts/install.sh"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

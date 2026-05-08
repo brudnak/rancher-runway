@@ -16,7 +16,7 @@ import (
 )
 
 func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, resolvedPlan *RancherResolvedPlan) error {
-	haDir := fmt.Sprintf("high-availability-%d", instanceNum)
+	haDir := haInstanceDir(instanceNum)
 	haOutputs := getHAOutputs(instanceNum, outputs)
 
 	ips := []string{
@@ -29,12 +29,11 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 		}
 	}
 
-	currentDir, err := os.Getwd()
+	absHADir, err := absoluteFromWorkingDir(haDir)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
 
-	absHADir := filepath.Join(currentDir, haDir)
 	if _, err := os.Stat(absHADir); os.IsNotExist(err) {
 		if mkdirErr := os.MkdirAll(absHADir, os.ModePerm); mkdirErr != nil {
 			return fmt.Errorf("failed to create directory %s: %w", absHADir, mkdirErr)
@@ -94,15 +93,14 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 		t.Logf("Warning: Failed to save kubeconfig: %v", err)
 	}
 
-	installScriptPath := fmt.Sprintf("%s/install.sh", haDir)
+	installScriptPath := filepath.Join(haDir, "install.sh")
 	log.Printf("Executing install script at %s", installScriptPath)
 
-	currentDir, dirErr := os.Getwd()
+	absHADirForScript, dirErr := absoluteFromWorkingDir(haDir)
 	if dirErr != nil {
-		return fmt.Errorf("failed to get current directory: %w", dirErr)
+		return dirErr
 	}
 
-	absHADirForScript := filepath.Join(currentDir, haDir)
 	if _, err := os.Stat(absHADirForScript); os.IsNotExist(err) {
 		if mkdirErr := os.MkdirAll(absHADirForScript, os.ModePerm); mkdirErr != nil {
 			return fmt.Errorf("failed to create directory %s: %w", absHADirForScript, mkdirErr)
@@ -567,12 +565,11 @@ func getAndSaveKubeconfig(serverIP string, haDir string) error {
 	configIP := fmt.Sprintf("https://%s:6443", serverIP)
 	modifiedKubeconfig := strings.Replace(rawKubeconfig, "https://127.0.0.1:6443", configIP, -1)
 
-	currentDir, err := os.Getwd()
+	absHADir, err := absoluteFromWorkingDir(haDir)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
 
-	absHADir := filepath.Join(currentDir, haDir)
 	if _, err := os.Stat(absHADir); os.IsNotExist(err) {
 		if mkdirErr := os.MkdirAll(absHADir, os.ModePerm); mkdirErr != nil {
 			return fmt.Errorf("failed to create directory %s: %w", absHADir, mkdirErr)

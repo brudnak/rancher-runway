@@ -12,6 +12,10 @@ rke2:
 
 total_has: 2
 
+user:
+  first_name: ""
+  last_name: ""
+
 tf_vars:
   aws_region: "us-east-2"
   aws_prefix: "xyz" # 2 or 3 letters, usually your initials

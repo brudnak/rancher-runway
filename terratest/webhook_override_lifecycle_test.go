@@ -182,7 +182,7 @@ func TestHAWaitWebhookChartVersion(t *testing.T) {
 	errCh := make(chan error, totalHAs+len(records))
 	for i := 1; i <= totalHAs; i++ {
 		instanceNum := i
-		kubeconfigPath := filepath.Join(fmt.Sprintf("high-availability-%d", instanceNum), "kube_config.yaml")
+		kubeconfigPath := filepath.Join(haInstanceDir(instanceNum), "kube_config.yaml")
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -220,13 +220,13 @@ func TestHAWaitWebhookChartVersion(t *testing.T) {
 }
 
 func overrideLocalWebhook(instanceNum int, webhookImage string) error {
-	haDir := fmt.Sprintf("high-availability-%d", instanceNum)
-	currentDir, err := os.Getwd()
+	haDir := haInstanceDir(instanceNum)
+	absHADir, err := absoluteFromWorkingDir(haDir)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return err
 	}
 
-	kubeconfigPath := filepath.Join(currentDir, haDir, "kube_config.yaml")
+	kubeconfigPath := filepath.Join(absHADir, "kube_config.yaml")
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		return fmt.Errorf("kubeconfig not available for HA %d at %s: %w", instanceNum, kubeconfigPath, err)
 	}

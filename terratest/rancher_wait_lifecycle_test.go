@@ -63,7 +63,7 @@ func TestHAWaitReady(t *testing.T) {
 func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initialDelay, settleDelay time.Duration) error {
 	haOutputs := getHAOutputs(instanceNum, outputs)
 	rancherURL := clickableURL(haOutputs.RancherURL)
-	kubeconfigPath := filepath.Join(fmt.Sprintf("high-availability-%d", instanceNum), "kube_config.yaml")
+	kubeconfigPath := filepath.Join(haInstanceDir(instanceNum), "kube_config.yaml")
 
 	log.Printf("[ready][ha-%d] Waiting for Rancher to become ready at %s", instanceNum, rancherURL)
 	log.Printf("[ready][ha-%d] Kubeconfig: %s", instanceNum, kubeconfigPath)

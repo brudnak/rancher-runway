@@ -181,6 +181,8 @@ tf_vars:
 		Distro:            "community",
 		BootstrapPassword: "new-password",
 		PreloadImages:     true,
+		UserFirstName:     "Ada",
+		UserLastName:      "Lovelace",
 		TFVars:            tfVars,
 	}); err != nil {
 		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
@@ -194,6 +196,7 @@ tf_vars:
 	var parsed struct {
 		Rancher map[string]interface{} `yaml:"rancher"`
 		RKE2    map[string]interface{} `yaml:"rke2"`
+		User    map[string]interface{} `yaml:"user"`
 		TFVars  map[string]interface{} `yaml:"tf_vars"`
 	}
 	if err := yaml.Unmarshal(content, &parsed); err != nil {
@@ -205,6 +208,9 @@ tf_vars:
 	}
 	if parsed.RKE2["preload_images"] != true {
 		t.Fatalf("expected rke2.preload_images=true, got %#v", parsed.RKE2["preload_images"])
+	}
+	if parsed.User["first_name"] != "Ada" || parsed.User["last_name"] != "Lovelace" {
+		t.Fatalf("expected user owner fields to be updated, got %#v", parsed.User)
 	}
 	if parsed.TFVars["aws_prefix"] != "atb" || parsed.TFVars["aws_region"] != "us-west-2" {
 		t.Fatalf("expected tf_vars to be updated and prefix lowercased, got %#v", parsed.TFVars)
@@ -271,7 +277,7 @@ func TestNormalizeAWSPrefixRequiresTwoOrThreeLetters(t *testing.T) {
 }
 
 func TestDecodePreflightConfigUpdateRequestFromHTMXForm(t *testing.T) {
-	body := strings.NewReader("versions=head&versions=v2.14-head&distro=community&bootstrapPassword=secret&preloadImages=true&customHostnameEnabled=true&customHostname=demo&tfVars.aws_prefix=ATB&tfVars.aws_pem_key_name=qa-key&tfVars.aws_route53_fqdn=qa.rancher.space")
+	body := strings.NewReader("versions=head&versions=v2.14-head&distro=community&bootstrapPassword=secret&preloadImages=true&userFirstName=Ada&userLastName=Lovelace&customHostnameEnabled=true&customHostname=demo&tfVars.aws_prefix=ATB&tfVars.aws_pem_key_name=qa-key&tfVars.aws_route53_fqdn=qa.rancher.space")
 	req := httptest.NewRequest("POST", "/submit", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
@@ -284,6 +290,9 @@ func TestDecodePreflightConfigUpdateRequestFromHTMXForm(t *testing.T) {
 	}
 	if update.Distro != "community" || update.BootstrapPassword != "secret" || !update.PreloadImages || !update.CustomHostnameEnabled {
 		t.Fatalf("unexpected decoded update: %#v", update)
+	}
+	if update.UserFirstName != "Ada" || update.UserLastName != "Lovelace" {
+		t.Fatalf("unexpected decoded owner: %#v", update)
 	}
 	if update.TFVars["aws_prefix"] != "ATB" || update.TFVars["aws_pem_key_name"] != "qa-key" || update.TFVars["aws_route53_fqdn"] != "qa.rancher.space" {
 		t.Fatalf("unexpected tf vars: %#v", update.TFVars)

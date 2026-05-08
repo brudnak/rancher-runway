@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -24,37 +26,92 @@ import (
 )
 
 type localControlPanel struct {
-	token    string
-	totalHAs int
-	repoRoot string
-	testDir  string
-	listener net.Listener
-	server   *http.Server
-	baseURL  string
-	doneCh   chan error
+	token                string
+	sessionID            string
+	startedAt            time.Time
+	totalHAs             int
+	repoRoot             string
+	testDir              string
+	configPath           string
+	starterConfigCreated bool
+	trustedLocalOrigin   bool
+	listener             net.Listener
+	server               *http.Server
+	baseURL              string
+	doneCh               chan error
 
-	mu                sync.Mutex
-	cleanupRunning    bool
-	cleanupOutput     []string
-	cleanupStartedAt  *time.Time
-	cleanupFinishedAt *time.Time
-	cleanupError      string
+	mu          sync.Mutex
+	operations  map[panelOperationName]*panelOperationState
+	awsMu       sync.Mutex
+	awsCache    panelAWSInventoryState
+	awsCacheKey string
+	setupEditor *interactiveServer
 
 	rancherTokens             map[int]string
 	downstreamKubeconfigCache map[string]string
 }
 
+type ControlPanelServerOptions struct {
+	OpenBrowser   bool
+	ReuseExisting bool
+}
+
+type ControlPanelServer struct {
+	panel       *localControlPanel
+	baseURL     string
+	reused      bool
+	originalDir string
+	cleanupOnce sync.Once
+}
+
 type panelState struct {
-	Clusters panelClusterState `json:"clusters"`
-	Cleanup  cleanupState      `json:"cleanup"`
+	Panel     panelSessionState      `json:"panel"`
+	Workspace panelWorkspaceState    `json:"workspace"`
+	Setup     panelOperationSnapshot `json:"setup"`
+	Readiness panelOperationSnapshot `json:"readiness"`
+	Clusters  panelClusterState      `json:"clusters"`
+	AWS       panelAWSInventoryState `json:"aws"`
+	Cleanup   panelOperationSnapshot `json:"cleanup"`
+	Costs     panelCostHistoryState  `json:"costs"`
+}
+
+type panelSessionState struct {
+	SessionID            string    `json:"sessionId"`
+	StartedAt            time.Time `json:"startedAt"`
+	RepoRoot             string    `json:"repoRoot"`
+	ConfigPath           string    `json:"configPath"`
+	StarterConfigCreated bool      `json:"starterConfigCreated"`
 }
 
 type panelClusterState struct {
 	Items []clusterView `json:"items"`
 }
 
+type panelAWSInventoryState struct {
+	UpdatedAt time.Time         `json:"updatedAt"`
+	Region    string            `json:"region"`
+	Owner     string            `json:"owner,omitempty"`
+	Queries   []string          `json:"queries"`
+	Items     []awsResourceView `json:"items"`
+	Error     string            `json:"error,omitempty"`
+}
+
+type awsResourceView struct {
+	Type    string            `json:"type"`
+	ID      string            `json:"id"`
+	Name    string            `json:"name,omitempty"`
+	Region  string            `json:"region,omitempty"`
+	Status  string            `json:"status,omitempty"`
+	RunID   string            `json:"runId,omitempty"`
+	Owner   string            `json:"owner,omitempty"`
+	Source  string            `json:"source"`
+	Details string            `json:"details,omitempty"`
+	Tags    map[string]string `json:"tags,omitempty"`
+}
+
 type clusterView struct {
 	ID                  string    `json:"id"`
+	RunID               string    `json:"runId,omitempty"`
 	Type                string    `json:"type"`
 	HAIndex             int       `json:"haIndex"`
 	Name                string    `json:"name"`
@@ -86,12 +143,48 @@ type podView struct {
 	LeaderLabel string `json:"leaderLabel,omitempty"`
 }
 
-type cleanupState struct {
+type panelOperationSnapshot struct {
 	Running    bool       `json:"running"`
+	PID        int        `json:"pid,omitempty"`
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	Error      string     `json:"error,omitempty"`
 	Output     []string   `json:"output"`
+	RunID      string     `json:"runId,omitempty"`
+	Command    string     `json:"command,omitempty"`
+	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
+}
+
+type panelOperationName string
+
+const (
+	panelOperationSetup     panelOperationName = "setup"
+	panelOperationReadiness panelOperationName = "readiness"
+	panelOperationCleanup   panelOperationName = "cleanup"
+)
+
+type panelOperationState struct {
+	Running    bool
+	PID        int
+	StartedAt  *time.Time
+	FinishedAt *time.Time
+	Error      string
+	Output     []string
+	RunID      string
+	Command    string
+	UpdatedAt  *time.Time
+}
+
+type panelCommandSpec struct {
+	Operation      panelOperationName
+	DisplayName    string
+	TestName       string
+	Timeout        string
+	RunID          string
+	StartLine      string
+	SuccessLine    string
+	AfterSuccess   func()
+	AllowWhileDone bool
 }
 
 type kubectlPodList struct {
@@ -179,9 +272,21 @@ type discoveredDownstreamCluster struct {
 }
 
 func newLocalControlPanel(totalHAs int) (*localControlPanel, error) {
+	return newLocalControlPanelWithNetwork(totalHAs, true)
+}
+
+func newEmbeddedLocalControlPanel(totalHAs int) (*localControlPanel, error) {
+	return newLocalControlPanelWithNetwork(totalHAs, false)
+}
+
+func newLocalControlPanelWithNetwork(totalHAs int, bindNetwork bool) (*localControlPanel, error) {
 	token, err := randomConfirmationToken()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create control panel token: %w", err)
+	}
+	sessionID, err := randomConfirmationToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create control panel session id: %w", err)
 	}
 
 	cwd, err := os.Getwd()
@@ -193,40 +298,299 @@ func newLocalControlPanel(totalHAs int) (*localControlPanel, error) {
 		return nil, err
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("failed to start control panel listener: %w", err)
+	var listener net.Listener
+	baseURL := "/"
+	if bindNetwork {
+		listener, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, fmt.Errorf("failed to start control panel listener: %w", err)
+		}
+		baseURL = fmt.Sprintf("http://%s/?token=%s", listener.Addr().String(), token)
 	}
 
 	panel := &localControlPanel{
 		token:                     token,
+		sessionID:                 sessionID[:8],
+		startedAt:                 time.Now(),
 		totalHAs:                  totalHAs,
 		repoRoot:                  repoRoot,
 		testDir:                   testDir,
+		configPath:                filepath.Join(repoRoot, "tool-config.yml"),
+		trustedLocalOrigin:        !bindNetwork,
 		listener:                  listener,
-		baseURL:                   fmt.Sprintf("http://%s/?token=%s", listener.Addr().String(), token),
+		baseURL:                   baseURL,
 		doneCh:                    make(chan error, 1),
+		operations:                newPanelOperations(),
 		rancherTokens:             map[int]string{},
 		downstreamKubeconfigCache: map[string]string{},
 	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", panel.handleIndex)
-	mux.HandleFunc("/static/control_panel.js", panel.handleControlPanelJS)
-	mux.HandleFunc("/static/control_panel_theme.js", panel.handleControlPanelThemeJS)
-	mux.HandleFunc("/api/state", panel.handleState)
-	mux.HandleFunc("/api/logs", panel.handleLogs)
-	mux.HandleFunc("/api/logs/stream", panel.handleLogStream)
-	mux.HandleFunc("/api/kubeconfig", panel.handleKubeconfigDownload)
-	mux.HandleFunc("/api/cleanup", panel.handleCleanup)
-	mux.HandleFunc("/api/shutdown", panel.handleShutdown)
-
-	panel.server = &http.Server{Handler: mux}
+	panel.setupEditor = panel.newSetupEditor()
+	panel.loadPersistedOperations(true)
+	panel.server = &http.Server{Handler: panel.handler()}
 	return panel, nil
+}
+
+func (p *localControlPanel) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", p.handleIndex)
+	p.registerSetupEditorHandlers(mux)
+	mux.HandleFunc("/static/control_panel.js", p.handleControlPanelJS)
+	mux.HandleFunc("/static/control_panel.css", p.handleControlPanelCSS)
+	mux.HandleFunc("/api/preflight", p.handlePreflight)
+	mux.HandleFunc("/api/state", p.handleState)
+	mux.HandleFunc("/api/logs", p.handleLogs)
+	mux.HandleFunc("/api/logs/stream", p.handleLogStream)
+	mux.HandleFunc("/api/kubeconfig", p.handleKubeconfigDownload)
+	mux.HandleFunc("/api/kubeconfig/save", p.handleKubeconfigSave)
+	mux.HandleFunc("/api/open-url", p.handleOpenURL)
+	mux.HandleFunc("/api/setup", p.handleSetup)
+	mux.HandleFunc("/api/run-slots/start", p.handleRunSlotStart)
+	mux.HandleFunc("/api/operations/abort", p.handleAbortOperation)
+	mux.HandleFunc("/api/readiness", p.handleReadiness)
+	mux.HandleFunc("/api/cleanup", p.handleCleanup)
+	mux.HandleFunc("/api/costs/reset", p.handleCostLedgerReset)
+	mux.HandleFunc("/api/shutdown", p.handleShutdown)
+	return mux
+}
+
+func StartHAControlPanelServer(repoRoot string, opts ControlPanelServerOptions) (*ControlPanelServer, error) {
+	resolvedRoot := strings.TrimSpace(repoRoot)
+	var testDir string
+	var err error
+	if resolvedRoot == "" {
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return nil, fmt.Errorf("failed to determine working directory: %w", cwdErr)
+		}
+		resolvedRoot, testDir, err = resolveControlPanelPaths(cwd)
+	} else {
+		resolvedRoot, testDir, err = resolveControlPanelPaths(resolvedRoot)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	starterConfigCreated := false
+	if configPath, created, err := ensureStarterToolConfigForPanel(resolvedRoot); err != nil {
+		return nil, err
+	} else if created {
+		starterConfigCreated = true
+		log.Printf("[control-panel] Created starter local config at %s", configPath)
+	}
+
+	if err := setupConfigE(resolvedRoot); err != nil {
+		return nil, fmt.Errorf("failed to read config: %w", err)
+	}
+
+	totalHAs := viper.GetInt("total_has")
+	if totalHAs < 1 {
+		return nil, fmt.Errorf("total_has must be at least 1")
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine working directory: %w", err)
+	}
+	if err := os.Chdir(testDir); err != nil {
+		return nil, fmt.Errorf("failed to enter terratest directory: %w", err)
+	}
+
+	server := &ControlPanelServer{originalDir: originalDir}
+	if opts.ReuseExisting {
+		existingURL, ok, err := existingControlPanelURL(resolvedRoot)
+		if err != nil {
+			log.Printf("[control-panel] Existing panel reuse failed: %v", err)
+		}
+		if ok {
+			server.baseURL = existingURL
+			server.reused = true
+			server.cleanup()
+			log.Printf("[control-panel] Reusing existing local control panel %s", existingURL)
+			if opts.OpenBrowser {
+				if err := openBrowser(existingURL); err != nil {
+					return nil, fmt.Errorf("failed to open existing control panel: %w", err)
+				}
+			}
+			return server, nil
+		}
+	}
+
+	panel, err := newLocalControlPanel(totalHAs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start local control panel: %w", err)
+	}
+	panel.starterConfigCreated = starterConfigCreated
+	server.panel = panel
+	server.baseURL = panel.baseURL
+
+	panel.start()
+	if err := panel.persistPanelSession(); err != nil {
+		log.Printf("[control-panel] Failed to persist panel session: %v", err)
+	}
+
+	log.Printf("[control-panel] Local control panel available at %s", panel.baseURL)
+
+	if opts.OpenBrowser {
+		if err := openBrowser(panel.baseURL); err != nil {
+			log.Printf("[control-panel] Failed to open browser automatically: %v", err)
+		}
+	}
+
+	return server, nil
+}
+
+func StartHAControlPanelHandler(repoRoot string) (*ControlPanelServer, http.Handler, error) {
+	server, err := startHAControlPanel(repoRoot, ControlPanelServerOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	return server, server.panel.handler(), nil
+}
+
+func startHAControlPanel(repoRoot string, opts ControlPanelServerOptions) (*ControlPanelServer, error) {
+	resolvedRoot := strings.TrimSpace(repoRoot)
+	var testDir string
+	var err error
+	if resolvedRoot == "" {
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return nil, fmt.Errorf("failed to determine working directory: %w", cwdErr)
+		}
+		resolvedRoot, testDir, err = resolveControlPanelPaths(cwd)
+	} else {
+		resolvedRoot, testDir, err = resolveControlPanelPaths(resolvedRoot)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	starterConfigCreated := false
+	if configPath, created, err := ensureStarterToolConfigForPanel(resolvedRoot); err != nil {
+		return nil, err
+	} else if created {
+		starterConfigCreated = true
+		log.Printf("[control-panel] Created starter local config at %s", configPath)
+	}
+
+	if err := setupConfigE(resolvedRoot); err != nil {
+		return nil, fmt.Errorf("failed to read config: %w", err)
+	}
+
+	totalHAs := viper.GetInt("total_has")
+	if totalHAs < 1 {
+		return nil, fmt.Errorf("total_has must be at least 1")
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine working directory: %w", err)
+	}
+	if err := os.Chdir(testDir); err != nil {
+		return nil, fmt.Errorf("failed to enter terratest directory: %w", err)
+	}
+
+	panel, err := newEmbeddedLocalControlPanel(totalHAs)
+	if err != nil {
+		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
+			log.Printf("[control-panel] Failed to restore working directory %s: %v", originalDir, restoreErr)
+		}
+		return nil, fmt.Errorf("failed to start local control panel: %w", err)
+	}
+	panel.starterConfigCreated = starterConfigCreated
+	server := &ControlPanelServer{
+		panel:       panel,
+		baseURL:     panel.baseURL,
+		originalDir: originalDir,
+	}
+	return server, nil
+}
+
+func RunHAControlPanel(repoRoot string) error {
+	server, err := StartHAControlPanelServer(repoRoot, ControlPanelServerOptions{
+		OpenBrowser:   true,
+		ReuseExisting: true,
+	})
+	if err != nil {
+		return err
+	}
+	if server.Reused() {
+		return nil
+	}
+	defer server.cleanup()
+
+	if err := server.Wait(); err != nil {
+		return fmt.Errorf("local control panel exited with error: %w", err)
+	}
+	return nil
+}
+
+func (s *ControlPanelServer) URL() string {
+	if s == nil {
+		return ""
+	}
+	return s.baseURL
+}
+
+func (s *ControlPanelServer) Reused() bool {
+	return s != nil && s.reused
+}
+
+func (s *ControlPanelServer) LifecycleRunning() bool {
+	return s != nil && s.panel != nil && s.panel.anyOperationRunning()
+}
+
+func (s *ControlPanelServer) RunningOperation() string {
+	if s == nil || s.panel == nil {
+		return ""
+	}
+	s.panel.mu.Lock()
+	defer s.panel.mu.Unlock()
+	if !s.panel.anyOperationRunningLocked() {
+		return ""
+	}
+	return s.panel.runningOperationNameLocked()
+}
+
+func (s *ControlPanelServer) Wait() error {
+	if s == nil || s.panel == nil {
+		return nil
+	}
+	err := s.panel.wait()
+	s.cleanup()
+	return err
+}
+
+func (s *ControlPanelServer) Shutdown(ctx context.Context) error {
+	if s == nil || s.panel == nil {
+		return nil
+	}
+	err := s.panel.server.Shutdown(ctx)
+	s.cleanup()
+	return err
+}
+
+func (s *ControlPanelServer) cleanup() {
+	if s == nil {
+		return
+	}
+	s.cleanupOnce.Do(func() {
+		if s.panel != nil {
+			s.panel.removePanelSession()
+		}
+		if strings.TrimSpace(s.originalDir) != "" {
+			if restoreErr := os.Chdir(s.originalDir); restoreErr != nil {
+				log.Printf("[control-panel] Failed to restore working directory %s: %v", s.originalDir, restoreErr)
+			}
+		}
+	})
 }
 
 func (p *localControlPanel) start() {
 	go func() {
+		if p.listener == nil {
+			p.doneCh <- nil
+			return
+		}
 		err := p.server.Serve(p.listener)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			p.doneCh <- err
@@ -250,13 +614,21 @@ func (p *localControlPanel) handleIndex(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	setupEditorHTML, err := p.renderSetupEditorHTML()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to render setup editor: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	page := template.Must(template.New("control-panel").Parse(ui.ControlPanelHTML))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = page.Execute(w, struct {
-		Token string
+		Token           string
+		SetupEditorHTML template.HTML
 	}{
-		Token: p.token,
+		Token:           p.token,
+		SetupEditorHTML: setupEditorHTML,
 	})
 }
 
@@ -275,7 +647,7 @@ func (p *localControlPanel) handleControlPanelJS(w http.ResponseWriter, r *http.
 	_, _ = w.Write([]byte(ui.ControlPanelJS))
 }
 
-func (p *localControlPanel) handleControlPanelThemeJS(w http.ResponseWriter, r *http.Request) {
+func (p *localControlPanel) handleControlPanelCSS(w http.ResponseWriter, r *http.Request) {
 	if !p.authorizedLocalBrowserRead(r) {
 		http.Error(w, "invalid control panel token", http.StatusForbidden)
 		return
@@ -285,9 +657,9 @@ func (p *localControlPanel) handleControlPanelThemeJS(w http.ResponseWriter, r *
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(ui.ControlPanelThemeJS))
+	_, _ = w.Write([]byte(ui.ControlPanelCSS))
 }
 
 func (p *localControlPanel) handleState(w http.ResponseWriter, r *http.Request) {
@@ -302,6 +674,19 @@ func (p *localControlPanel) handleState(w http.ResponseWriter, r *http.Request) 
 
 	state := p.buildState()
 	writeJSON(w, state)
+}
+
+func (p *localControlPanel) handlePreflight(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedReadOnly(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	writeJSON(w, p.collectPanelPreflight())
 }
 
 func (p *localControlPanel) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -442,6 +827,165 @@ func (p *localControlPanel) handleKubeconfigDownload(w http.ResponseWriter, r *h
 	_, _ = w.Write(content)
 }
 
+func (p *localControlPanel) handleKubeconfigSave(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Cluster string `json:"cluster"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	clusterID := strings.TrimSpace(req.Cluster)
+	if clusterID == "" {
+		http.Error(w, "cluster is required", http.StatusBadRequest)
+		return
+	}
+
+	cluster, err := p.clusterByID(clusterID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	content, filename, err := p.kubeconfigContentForDownload(cluster)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	path, err := saveDownloadFile(filename, content, 0o600)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]string{
+		"filename": filepath.Base(path),
+		"path":     path,
+	})
+}
+
+func (p *localControlPanel) handleOpenURL(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	rawURL := strings.TrimSpace(req.URL)
+	if err := openExternalURL(rawURL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, map[string]string{"status": "opened"})
+}
+
+func (p *localControlPanel) handleSetup(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	http.Error(w, "direct setup start is disabled; use Start isolated run so the run gets a dedicated slot and state", http.StatusGone)
+}
+
+func (p *localControlPanel) handleRunSlotStart(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	http.Error(w, "direct isolated run start is disabled; open the Setup tab, resolve the plan, then press Continue", http.StatusGone)
+}
+
+func (p *localControlPanel) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := p.startReadiness(); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	writeJSON(w, map[string]string{"status": "readiness started"})
+}
+
+func (p *localControlPanel) handleAbortOperation(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Operation string `json:"operation"`
+		RunID     string `json:"runId"`
+		Confirm   string `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "stop" {
+		http.Error(w, "typed confirmation must equal stop", http.StatusBadRequest)
+		return
+	}
+
+	operation := panelOperationName(strings.TrimSpace(strings.ToLower(req.Operation)))
+	switch operation {
+	case panelOperationSetup, panelOperationReadiness, panelOperationCleanup:
+	default:
+		http.Error(w, "operation must be setup, readiness, or cleanup", http.StatusBadRequest)
+		return
+	}
+
+	if err := p.abortOperation(operation, req.RunID); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	writeJSON(w, map[string]string{"status": "stop requested"})
+}
+
 func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	if !p.authorizedLocalAction(r) {
 		http.Error(w, "invalid control panel token", http.StatusForbidden)
@@ -454,13 +998,24 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 
 	var req struct {
 		Confirm string `json:"confirm"`
+		RunID   string `json:"runId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "cleanup" {
-		http.Error(w, "typed confirmation must equal cleanup", http.StatusBadRequest)
+	confirm := strings.TrimSpace(strings.ToLower(req.Confirm))
+	if confirm != "cleanup" && confirm != "destroy" {
+		http.Error(w, "typed confirmation must equal destroy", http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(req.RunID) != "" {
+		if err := p.startCleanupForRun(req.RunID); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, map[string]string{"status": "cleanup started"})
 		return
 	}
 
@@ -472,6 +1027,43 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 	writeJSON(w, map[string]string{"status": "cleanup started"})
 }
 
+func (p *localControlPanel) handleCostLedgerReset(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if p.anyOperationRunning() {
+		http.Error(w, fmt.Sprintf("cannot reset cost ledger while %s is running", p.runningOperationName()), http.StatusConflict)
+		return
+	}
+
+	var req struct {
+		Confirm string `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "reset costs" {
+		http.Error(w, "typed confirmation must equal reset costs", http.StatusBadRequest)
+		return
+	}
+
+	if err := resetCostLedger(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"status": "cost ledger reset",
+		"costs":  discoverCostHistory(),
+	})
+}
+
 func (p *localControlPanel) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if !p.authorizedLocalAction(r) {
 		http.Error(w, "invalid control panel token", http.StatusForbidden)
@@ -479,6 +1071,10 @@ func (p *localControlPanel) handleShutdown(w http.ResponseWriter, r *http.Reques
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if p.anyOperationRunning() {
+		http.Error(w, fmt.Sprintf("cannot stop panel while %s is running", p.runningOperationName()), http.StatusConflict)
 		return
 	}
 
@@ -493,56 +1089,147 @@ func (p *localControlPanel) handleShutdown(w http.ResponseWriter, r *http.Reques
 }
 
 func (p *localControlPanel) buildState() panelState {
+	workspace := p.workspaceState()
+	activeRunIDs := map[string]bool{}
+	for _, record := range workspace.Runs {
+		activeRunIDs[safeRunPathSegment(record.RunID)] = true
+	}
+	clusters := p.discoverClusters()
 	return panelState{
-		Clusters: panelClusterState{
-			Items: p.discoverClusters(),
+		Panel: panelSessionState{
+			SessionID:            p.sessionID,
+			StartedAt:            p.startedAt,
+			RepoRoot:             p.repoRoot,
+			ConfigPath:           p.configPath,
+			StarterConfigCreated: p.starterConfigCreated,
 		},
-		Cleanup: p.snapshotCleanupState(),
+		Workspace: workspace,
+		Setup:     p.snapshotOperationForRuns(panelOperationSetup, activeRunIDs),
+		Readiness: p.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs),
+		Clusters: panelClusterState{
+			Items: clusters,
+		},
+		AWS:     p.discoverAWSInventory(workspace.Runs),
+		Cleanup: p.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs),
+		Costs:   discoverCostHistory(),
 	}
 }
 
-func (p *localControlPanel) snapshotCleanupState() cleanupState {
+func (p *localControlPanel) snapshotOperation(name panelOperationName) panelOperationSnapshot {
+	return p.snapshotOperationForRuns(name, nil)
+}
+
+func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, activeRunIDs map[string]bool) panelOperationSnapshot {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	outputCopy := append([]string(nil), p.cleanupOutput...)
+	op := p.operationLocked(name)
+	if op.Running && op.PID > 0 && !processAlive(op.PID) {
+		now := time.Now()
+		op.Running = false
+		op.FinishedAt = &now
+		op.UpdatedAt = &now
+		op.Error = "operation process exited before reporting completion"
+		op.Output = append(op.Output, "[control-panel] Operation process exited before reporting completion; status marked stale.")
+		p.persistOperationsLocked()
+	}
+	recentCleanup := name == panelOperationCleanup && op.FinishedAt != nil && time.Since(*op.FinishedAt) < time.Hour
+	if activeRunIDs != nil && !op.Running && op.RunID != "" && !activeRunIDs[safeRunPathSegment(op.RunID)] && !recentCleanup {
+		return panelOperationSnapshot{Output: []string{}}
+	}
+	outputCopy := append([]string(nil), op.Output...)
 	if outputCopy == nil {
 		outputCopy = []string{}
 	}
-	return cleanupState{
-		Running:    p.cleanupRunning,
-		StartedAt:  p.cleanupStartedAt,
-		FinishedAt: p.cleanupFinishedAt,
-		Error:      p.cleanupError,
+	return panelOperationSnapshot{
+		Running:    op.Running,
+		PID:        op.PID,
+		StartedAt:  op.StartedAt,
+		FinishedAt: op.FinishedAt,
+		Error:      op.Error,
 		Output:     outputCopy,
+		RunID:      op.RunID,
+		Command:    op.Command,
+		UpdatedAt:  op.UpdatedAt,
 	}
 }
 
 func (p *localControlPanel) discoverClusters() []clusterView {
-	outputs, _ := readTerraformFlatOutputs(p.repoRoot)
-	versions := readRequestedRancherVersionsForPanel(p.totalHAs)
+	runRecords := p.listRunRecords()
+	if len(runRecords) == 0 {
+		if record, ok := p.readCurrentRunRecord(); ok {
+			runRecords = []panelRunRecord{record}
+		}
+	}
+	if len(runRecords) == 0 {
+		return p.discoverClustersForRun(panelRunRecord{
+			RunID:           "",
+			TotalHAs:        p.totalHAs,
+			RancherVersions: readRequestedRancherVersionsForPanel(p.totalHAs),
+			HAOutputRoot:    p.currentHAOutputRoot(),
+		})
+	}
+
+	clusters := make([]clusterView, 0)
+	for _, record := range runRecords {
+		clusters = append(clusters, p.discoverClustersForRun(record)...)
+	}
+	return clusters
+}
+
+func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clusterView {
+	outputs, _ := readTerraformFlatOutputsWithModule(p.repoRoot, record.TerraformStatePath, record.TerraformDataDir, record.TerraformModuleDir)
+	versions := record.RancherVersions
+	if len(versions) == 0 {
+		versions = readRequestedRancherVersionsForPanel(p.totalHAs)
+	}
 	downstreamRecords, _ := readDownstreamOutputRecords()
 	recordsByHA := downstreamRecordsByHA(downstreamRecords)
+	setupRunning := p.operationRunning(panelOperationSetup)
+	readinessRunning := p.operationRunning(panelOperationReadiness)
+	runID := safeRunPathSegment(record.RunID)
+	totalHAs := record.TotalHAs
+	if totalHAs < 1 {
+		totalHAs = p.totalHAs
+	}
 
-	clusters := make([]clusterView, 0, p.totalHAs)
-	for i := 1; i <= p.totalHAs; i++ {
+	clusters := make([]clusterView, 0, totalHAs)
+	for i := 1; i <= totalHAs; i++ {
+		haDir := p.haInstanceDirForRun(record, i)
+		kubeconfigPath := filepath.Join(haDir, "kube_config.yaml")
+		kubeconfigExists := pathExists(kubeconfigPath)
+		hasRunSignal := kubeconfigExists ||
+			pathExists(haDir) ||
+			hasHAFlatOutput(outputs, i) ||
+			len(recordsByHA[i]) > 0 ||
+			setupRunning ||
+			readinessRunning
+		if !hasRunSignal {
+			continue
+		}
+
 		cluster := clusterView{
-			ID:           localClusterID(i),
+			ID:           localClusterIDForRun(runID, i),
+			RunID:        runID,
 			Type:         "local",
 			HAIndex:      i,
-			Name:         fmt.Sprintf("HA %d Local", i),
-			DownloadName: fmt.Sprintf("local-ha-%d.yaml", i),
+			Name:         runScopedClusterName(runID, fmt.Sprintf("HA %d Local", i)),
+			DownloadName: runScopedDownloadName(runID, fmt.Sprintf("local-ha-%d.yaml", i)),
 		}
 		if len(versions) >= i {
 			cluster.Version = versions[i-1]
 		}
-		cluster.KubeconfigPath = filepath.Join(p.testDir, fmt.Sprintf("high-availability-%d", i), "kube_config.yaml")
+		cluster.KubeconfigPath = kubeconfigPath
 		if outputs != nil {
 			cluster.RancherURL = clickableURL(outputs[fmt.Sprintf("ha_%d_rancher_url", i)])
 			cluster.LoadBalancer = outputs[fmt.Sprintf("ha_%d_aws_lb", i)]
 		}
 
-		if _, err := os.Stat(cluster.KubeconfigPath); err != nil {
+		if !kubeconfigExists {
+			if setupRunning {
+				cluster.Provisioning = true
+				cluster.ProvisioningMessage = "Setup is running. Kubeconfig will appear after Terraform and RKE2 bootstrap complete."
+			}
 			cluster.Error = "kubeconfig not found"
 			clusters = append(clusters, cluster)
 			continue
@@ -566,6 +1253,31 @@ func (p *localControlPanel) discoverClusters() []clusterView {
 	return clusters
 }
 
+func (p *localControlPanel) operationRunning(name panelOperationName) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.operationLocked(name).Running
+}
+
+func hasHAFlatOutput(outputs map[string]string, instanceNum int) bool {
+	if outputs == nil {
+		return false
+	}
+
+	prefix := fmt.Sprintf("ha_%d_", instanceNum)
+	for key, value := range outputs {
+		if strings.HasPrefix(key, prefix) && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func pathExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func (p *localControlPanel) discoverDownstreamClusters(local clusterView, records []downstreamOutputRecord) []clusterView {
 	if !local.Available {
 		return nil
@@ -582,10 +1294,11 @@ func (p *localControlPanel) discoverDownstreamClusters(local clusterView, record
 	for _, item := range provisioningClusters {
 		key := provisioningClusterRecordKey(item.Namespace, item.Name)
 		record := recordByName[key]
-		clusterID := downstreamClusterID(local.HAIndex, item.Namespace, item.Name)
+		clusterID := downstreamClusterIDForRun(local.RunID, local.HAIndex, item.Namespace, item.Name)
 		activeIDs[clusterID] = true
 		cluster := clusterView{
 			ID:                  clusterID,
+			RunID:               local.RunID,
 			Type:                "downstream",
 			HAIndex:             local.HAIndex,
 			Name:                item.Name,
@@ -626,7 +1339,7 @@ func (p *localControlPanel) discoverDownstreamClusters(local clusterView, record
 		cluster.Pods = pods
 		clusters = append(clusters, cluster)
 	}
-	p.pruneStaleDownstreamKubeconfigs(local.HAIndex, activeIDs)
+	p.pruneStaleDownstreamKubeconfigs(local.RunID, local.HAIndex, activeIDs)
 
 	return clusters
 }
@@ -635,7 +1348,8 @@ func downstreamClustersFromRecords(local clusterView, records []downstreamOutput
 	clusters := make([]clusterView, 0, len(records))
 	for _, record := range records {
 		cluster := clusterView{
-			ID:                  downstreamClusterID(local.HAIndex, record.Namespace, record.ClusterName),
+			ID:                  downstreamClusterIDForRun(local.RunID, local.HAIndex, record.Namespace, record.ClusterName),
+			RunID:               local.RunID,
 			Type:                "downstream",
 			HAIndex:             local.HAIndex,
 			Name:                record.ClusterName,
@@ -757,16 +1471,33 @@ func provisioningClusterRecordKey(namespace, name string) string {
 }
 
 func localClusterID(instanceNum int) string {
+	return localClusterIDForRun("", instanceNum)
+}
+
+func localClusterIDForRun(runID string, instanceNum int) string {
+	runID = safeRunPathSegment(runID)
+	if runID != "" && runID != "unknown" {
+		return fmt.Sprintf("run-%s-ha-%d-local", runID, instanceNum)
+	}
 	return fmt.Sprintf("ha-%d-local", instanceNum)
 }
 
 func downstreamClusterID(instanceNum int, namespace, name string) string {
+	return downstreamClusterIDForRun("", instanceNum, namespace, name)
+}
+
+func downstreamClusterIDForRun(runID string, instanceNum int, namespace, name string) string {
 	namespacePart := sanitizeIDPart(namespace)
 	namePart := sanitizeIDPart(name)
-	if namespacePart == "" {
-		return fmt.Sprintf("ha-%d-downstream-%s", instanceNum, namePart)
+	prefix := fmt.Sprintf("ha-%d", instanceNum)
+	runID = safeRunPathSegment(runID)
+	if runID != "" && runID != "unknown" {
+		prefix = fmt.Sprintf("run-%s-ha-%d", runID, instanceNum)
 	}
-	return fmt.Sprintf("ha-%d-downstream-%s-%s", instanceNum, namespacePart, namePart)
+	if namespacePart == "" {
+		return fmt.Sprintf("%s-downstream-%s", prefix, namePart)
+	}
+	return fmt.Sprintf("%s-downstream-%s-%s", prefix, namespacePart, namePart)
 }
 
 func sanitizeIDPart(value string) string {
@@ -795,8 +1526,12 @@ func safeKubeconfigDownloadName(clusterName string) string {
 	return name + ".yaml"
 }
 
-func (p *localControlPanel) pruneStaleDownstreamKubeconfigs(haIndex int, activeIDs map[string]bool) {
+func (p *localControlPanel) pruneStaleDownstreamKubeconfigs(runID string, haIndex int, activeIDs map[string]bool) {
 	prefix := fmt.Sprintf("ha-%d-downstream-", haIndex)
+	runID = safeRunPathSegment(runID)
+	if runID != "" && runID != "unknown" {
+		prefix = fmt.Sprintf("run-%s-ha-%d-downstream-", runID, haIndex)
+	}
 
 	p.mu.Lock()
 	for clusterID, path := range p.downstreamKubeconfigCache {
@@ -980,8 +1715,35 @@ func runKubectl(kubeconfigPath string, args ...string) (string, error) {
 }
 
 func readTerraformFlatOutputs(repoRoot string) (map[string]string, error) {
-	cmd := exec.Command("terraform", "output", "-no-color", "-json", "flat_outputs")
-	cmd.Dir = filepath.Join(repoRoot, "modules", "aws")
+	return readTerraformFlatOutputsWithState(repoRoot, "", "")
+}
+
+func (p *localControlPanel) readTerraformFlatOutputs() (map[string]string, error) {
+	record, ok := p.readCurrentRunRecord()
+	if !ok {
+		return readTerraformFlatOutputs(p.repoRoot)
+	}
+	return readTerraformFlatOutputsWithModule(p.repoRoot, record.TerraformStatePath, record.TerraformDataDir, record.TerraformModuleDir)
+}
+
+func readTerraformFlatOutputsWithState(repoRoot string, statePath string, dataDir string) (map[string]string, error) {
+	return readTerraformFlatOutputsWithModule(repoRoot, statePath, dataDir, "")
+}
+
+func readTerraformFlatOutputsWithModule(repoRoot string, statePath string, dataDir string, moduleDir string) (map[string]string, error) {
+	args := []string{"output", "-no-color", "-json"}
+	if strings.TrimSpace(statePath) != "" && pathExists(statePath) {
+		args = append(args, "-state="+statePath)
+	}
+	args = append(args, "flat_outputs")
+	cmd := exec.Command("terraform", args...)
+	cmd.Dir = strings.TrimSpace(moduleDir)
+	if cmd.Dir == "" {
+		cmd.Dir = filepath.Join(repoRoot, "modules", "aws")
+	}
+	if strings.TrimSpace(dataDir) != "" {
+		cmd.Env = append(os.Environ(), "TF_DATA_DIR="+dataDir)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("terraform output failed: %w (%s)", err, strings.TrimSpace(string(output)))
@@ -1017,89 +1779,6 @@ func readRequestedRancherVersionsForPanel(totalHAs int) []string {
 		out[i] = version
 	}
 	return out
-}
-
-func (p *localControlPanel) startCleanup() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.cleanupRunning {
-		return fmt.Errorf("cleanup is already running")
-	}
-
-	now := time.Now()
-	p.cleanupRunning = true
-	p.cleanupStartedAt = &now
-	p.cleanupFinishedAt = nil
-	p.cleanupError = ""
-	p.cleanupOutput = []string{"[control-panel] Starting canonical cleanup via go test -run TestHACleanup"}
-
-	go p.runCleanupCommand()
-	return nil
-}
-
-func (p *localControlPanel) runCleanupCommand() {
-	cmd := exec.Command("go", "test", "-v", "-run", "TestHACleanup", "-timeout", "20m", "./terratest")
-	cmd.Dir = p.repoRoot
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		p.finishCleanup(fmt.Errorf("failed to capture cleanup output: %w", err))
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		p.finishCleanup(fmt.Errorf("failed to capture cleanup output: %w", err))
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		p.finishCleanup(fmt.Errorf("failed to start cleanup command: %w", err))
-		return
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go p.captureCleanupStream(&wg, stdout)
-	go p.captureCleanupStream(&wg, stderr)
-	wg.Wait()
-
-	p.finishCleanup(cmd.Wait())
-}
-
-func (p *localControlPanel) captureCleanupStream(wg *sync.WaitGroup, reader io.Reader) {
-	defer wg.Done()
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		p.appendCleanupOutput(scanner.Text())
-	}
-}
-
-func (p *localControlPanel) appendCleanupOutput(line string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.cleanupOutput = append(p.cleanupOutput, line)
-	if len(p.cleanupOutput) > 500 {
-		p.cleanupOutput = append([]string(nil), p.cleanupOutput[len(p.cleanupOutput)-500:]...)
-	}
-}
-
-func (p *localControlPanel) finishCleanup(err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	p.cleanupRunning = false
-	finishedAt := time.Now()
-	p.cleanupFinishedAt = &finishedAt
-	if err != nil {
-		p.cleanupError = err.Error()
-		p.cleanupOutput = append(p.cleanupOutput, "[control-panel] Cleanup finished with error: "+err.Error())
-		return
-	}
-
-	p.cleanupError = ""
-	p.cleanupOutput = append(p.cleanupOutput, "[control-panel] Cleanup completed successfully")
 }
 
 func (p *localControlPanel) logRequest(r *http.Request) (clusterView, string, string, string, error) {
@@ -1172,6 +1851,74 @@ func (p *localControlPanel) kubeconfigContentForDownload(cluster clusterView) ([
 	}
 }
 
+func saveDownloadFile(filename string, content []byte, perm os.FileMode) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to find home directory: %w", err)
+	}
+
+	downloadsDir := filepath.Join(home, "Downloads")
+	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create Downloads directory: %w", err)
+	}
+
+	path := uniqueDownloadPath(downloadsDir, filename)
+	if err := os.WriteFile(path, content, perm); err != nil {
+		return "", fmt.Errorf("failed to save kubeconfig to Downloads: %w", err)
+	}
+	return path, nil
+}
+
+func uniqueDownloadPath(dir, filename string) string {
+	filename = safeDownloadFilename(filename)
+	candidate := filepath.Join(dir, filename)
+	if _, err := os.Stat(candidate); os.IsNotExist(err) {
+		return candidate
+	}
+
+	ext := filepath.Ext(filename)
+	base := strings.TrimSuffix(filename, ext)
+	for i := 1; ; i++ {
+		candidate = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, i, ext))
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
+}
+
+func safeDownloadFilename(filename string) string {
+	filename = filepath.Base(strings.TrimSpace(filename))
+	filename = strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(filename)
+	if filename == "." || filename == string(filepath.Separator) || filename == "" {
+		return "kubeconfig.yaml"
+	}
+	return filename
+}
+
+func openExternalURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u == nil || u.Host == "" {
+		return fmt.Errorf("invalid URL")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("only http and https URLs can be opened")
+	}
+
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", rawURL)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL)
+	default:
+		cmd = exec.Command("xdg-open", rawURL)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to open browser: %w", err)
+	}
+	return nil
+}
+
 func (p *localControlPanel) ensureDownstreamKubeconfig(haIndex int, rancherURL, clusterKey, managementClusterID, existingPath string) (string, error) {
 	if existingPath != "" {
 		if _, err := os.Stat(existingPath); err == nil {
@@ -1232,6 +1979,9 @@ func (p *localControlPanel) rancherToken(haIndex int, rancherURL string) (string
 }
 
 func (p *localControlPanel) authorized(r *http.Request) bool {
+	if p.trustedLocalOrigin {
+		return true
+	}
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {
 		token = strings.TrimSpace(r.Header.Get("X-Control-Panel-Token"))

@@ -22,7 +22,7 @@ func maybeEditAutoModePreflight() error {
 	if mode != "auto" {
 		return nil
 	}
-	if viper.GetBool("rancher.auto_approve") {
+	if viper.GetBool("rancher.auto_approve") || panelNonInteractiveMode() {
 		return nil
 	}
 
@@ -754,6 +754,9 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		setStringValue(rancherNode, "mode", "auto")
 		setStringValue(rancherNode, "distro", update.Distro)
 		setStringValue(rancherNode, "bootstrap_password", update.BootstrapPassword)
+		userNode := ensureMappingValue(root, "user")
+		setStringValue(userNode, "first_name", update.UserFirstName)
+		setStringValue(userNode, "last_name", update.UserLastName)
 		rke2Node := ensureMappingValue(root, "rke2")
 		setBoolValue(rke2Node, "preload_images", update.PreloadImages)
 	}
@@ -796,6 +799,8 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("rancher.mode", "auto")
 		viper.Set("rancher.distro", update.Distro)
 		viper.Set("rancher.bootstrap_password", update.BootstrapPassword)
+		viper.Set("user.first_name", update.UserFirstName)
+		viper.Set("user.last_name", update.UserLastName)
 		viper.Set("rke2.preload_images", update.PreloadImages)
 		for _, key := range settings.EditableTFVarKeys {
 			viper.Set("tf_vars."+key, update.TFVars[key])

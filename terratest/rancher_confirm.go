@@ -31,7 +31,7 @@ func confirmResolvedPlans(plans []*RancherResolvedPlan) error {
 
 	logResolvedPlans(plans)
 
-	if viper.GetBool("rancher.auto_approve") {
+	if viper.GetBool("rancher.auto_approve") || panelNonInteractiveMode() {
 		log.Printf("[resolver] Auto-approve enabled, continuing without prompt")
 		return nil
 	}

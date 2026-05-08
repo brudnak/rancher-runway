@@ -30,6 +30,9 @@ func TestHaSetup(t *testing.T) {
 	if err := settings.ValidateAWSPemKeyNameConfig(); err != nil {
 		t.Fatalf("AWS PEM key preflight failed: %v", err)
 	}
+	if err := settings.ValidateOwnerConfig(); err != nil {
+		t.Fatalf("Owner preflight failed: %v", err)
+	}
 	if err := settings.ValidateCustomHostnameConfig(totalHAs); err != nil {
 		t.Fatalf("Custom Rancher URL preflight failed: %v", err)
 	}
@@ -113,12 +116,20 @@ func TestHaSetup(t *testing.T) {
 func TestHACleanup(t *testing.T) {
 	requireExplicitLifecycleTest(t, "TestHACleanup")
 	setupConfig(t)
+	if err := validateScopedCleanupTarget(); err != nil {
+		t.Fatalf("Cleanup target preflight failed: %v", err)
+	}
+	defer cleanupBootstrapTerraformLocalFiles()
+	defer cleanupTerraformNonStateFiles()
+
 	totalHAs := viper.GetInt("total_has")
 	if err := validateSecretEnvironment(); err != nil {
 		t.Fatalf("Secret environment preflight failed before cleanup: %v", err)
 	}
 
 	terraformOptions := getTerraformOptions(t, totalHAs)
+	terraform.Init(t, terraformOptions)
+
 	var costEstimate *cleanupCostEstimate
 	outputs, outputsErr := getTerraformOutputsE(t, terraformOptions)
 	if outputsErr != nil {
@@ -130,7 +141,9 @@ func TestHACleanup(t *testing.T) {
 			log.Printf("[cleanup] Could not estimate EC2/EBS cost before destroy: %v", estimateErr)
 		}
 	}
-	terraform.Destroy(t, terraformOptions)
+	if _, err := terraform.DestroyE(t, terraformOptions); err != nil {
+		t.Fatalf("Terraform destroy failed: %v", err)
+	}
 
 	for i := 1; i <= totalHAs; i++ {
 		cleanupHAInstance(i)
@@ -140,6 +153,7 @@ func TestHACleanup(t *testing.T) {
 
 	if costEstimate != nil {
 		logCleanupCostEstimate(costEstimate)
+		logPersistCleanupCostEstimate(costEstimate)
 	}
 }
 

@@ -2,9 +2,11 @@ package hcl
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+
 	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/zclconf/go-cty/cty"
-	"os"
 )
 
 func GenAwsVar(
@@ -18,15 +20,59 @@ func GenAwsVar(
 	securityGroupId,
 	pemKeyName,
 	route53Fqdn,
-	customHostnamePrefix string) {
+	customHostnamePrefix,
+	ownerFirstName,
+	ownerLastName,
+	runID string) {
+	GenAwsVarFile(
+		"../modules/aws/terraform.tfvars",
+		awsPrefix,
+		awsVpc,
+		subnetA,
+		subnetB,
+		subnetC,
+		awsAmi,
+		subnetId,
+		securityGroupId,
+		pemKeyName,
+		route53Fqdn,
+		customHostnamePrefix,
+		ownerFirstName,
+		ownerLastName,
+		runID,
+	)
+}
+
+func GenAwsVarFile(
+	path,
+	awsPrefix,
+	awsVpc,
+	subnetA,
+	subnetB,
+	subnetC,
+	awsAmi,
+	subnetId,
+	securityGroupId,
+	pemKeyName,
+	route53Fqdn,
+	customHostnamePrefix,
+	ownerFirstName,
+	ownerLastName,
+	runID string) {
 
 	f := hclwrite.NewEmptyFile()
 
-	tfVarsFile, err := os.Create("../modules/aws/terraform.tfvars")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	tfVarsFile, err := os.Create(path)
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
+	defer tfVarsFile.Close()
 
 	rootBody := f.Body()
 
@@ -41,6 +87,9 @@ func GenAwsVar(
 	rootBody.SetAttributeValue("aws_pem_key_name", cty.StringVal(pemKeyName))
 	rootBody.SetAttributeValue("aws_route53_fqdn", cty.StringVal(route53Fqdn))
 	rootBody.SetAttributeValue("custom_hostname_prefix", cty.StringVal(customHostnamePrefix))
+	rootBody.SetAttributeValue("owner_first_name", cty.StringVal(ownerFirstName))
+	rootBody.SetAttributeValue("owner_last_name", cty.StringVal(ownerLastName))
+	rootBody.SetAttributeValue("run_id", cty.StringVal(runID))
 
 	_, err = tfVarsFile.Write(f.Bytes())
 	if err != nil {
