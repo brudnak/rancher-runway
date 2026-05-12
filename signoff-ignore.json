@@ -2,7 +2,8 @@
   "release_lines": {
     "v2.15": "webhook",
     "v2.14": "webhook",
-    "v2.13": "webhook"
+    "v2.13": "webhook",
+    "v2.12": "webhook"
   },
   "versions": {
     "v2.14.1-alpha11": "webhook issue",
