@@ -29,9 +29,9 @@ func (p *localControlPanel) discoverAWSInventory(records []panelRunRecord) panel
 	if region == "" {
 		region = "us-east-2"
 	}
-	owner := strings.TrimSpace(viper.GetString("user.first_name") + " " + viper.GetString("user.last_name"))
-	prefixes, runByPrefix := p.awsInventoryPrefixes(records)
-	cacheKey := strings.Join(append([]string{region, strings.Join(strings.Fields(owner), " ")}, prefixes...), "\x00")
+	owner := normalizeAWSOwner(viper.GetString("user.first_name") + " " + viper.GetString("user.last_name"))
+	prefixes, runByPrefix := p.awsInventoryPrefixes(records, owner)
+	cacheKey := strings.Join(append([]string{region, owner}, prefixes...), "\x00")
 
 	p.awsMu.Lock()
 	if p.awsCacheKey == cacheKey && !p.awsCache.UpdatedAt.IsZero() && time.Since(p.awsCache.UpdatedAt) < 30*time.Second {
@@ -44,7 +44,7 @@ func (p *localControlPanel) discoverAWSInventory(records []panelRunRecord) panel
 	state := panelAWSInventoryState{
 		UpdatedAt: time.Now(),
 		Region:    region,
-		Owner:     strings.Join(strings.Fields(owner), " "),
+		Owner:     owner,
 		Queries:   awsInventoryQueryLabels(prefixes, owner),
 		Items:     []awsResourceView{},
 	}
@@ -68,7 +68,7 @@ func (p *localControlPanel) discoverAWSInventory(records []panelRunRecord) panel
 	collector := &awsInventoryCollector{
 		state:       &state,
 		region:      region,
-		owner:       strings.Join(strings.Fields(owner), " "),
+		owner:       owner,
 		prefixes:    prefixes,
 		runByPrefix: runByPrefix,
 		seen:        map[string]bool{},
@@ -103,7 +103,7 @@ func (p *localControlPanel) cacheAWSInventory(cacheKey string, state panelAWSInv
 	p.awsCache = state
 }
 
-func (p *localControlPanel) awsInventoryPrefixes(records []panelRunRecord) ([]string, map[string]string) {
+func (p *localControlPanel) awsInventoryPrefixes(records []panelRunRecord, owner string) ([]string, map[string]string) {
 	runByPrefix := map[string]string{}
 	add := func(prefix, runID string) {
 		prefix = strings.TrimSpace(prefix)
@@ -113,6 +113,9 @@ func (p *localControlPanel) awsInventoryPrefixes(records []panelRunRecord) ([]st
 		runByPrefix[prefix] = safeRunPathSegment(runID)
 	}
 	for _, record := range records {
+		if !awsInventoryRecordMatchesOwner(record, owner) {
+			continue
+		}
 		add(record.AWSPrefix, record.RunID)
 	}
 
@@ -136,6 +139,15 @@ func (p *localControlPanel) awsInventoryPrefixes(records []panelRunRecord) ([]st
 	return prefixes, runByPrefix
 }
 
+func awsInventoryRecordMatchesOwner(record panelRunRecord, owner string) bool {
+	owner = normalizeAWSOwner(owner)
+	if owner == "" {
+		return true
+	}
+	recordOwner := normalizeAWSOwner(record.Owner)
+	return recordOwner == "" || recordOwner == owner
+}
+
 func awsInventoryQueryLabels(prefixes []string, owner string) []string {
 	labels := make([]string, 0, len(prefixes)+1)
 	for _, prefix := range prefixes {
@@ -145,6 +157,10 @@ func awsInventoryQueryLabels(prefixes []string, owner string) []string {
 		labels = append(labels, "Owner tag "+strings.Join(strings.Fields(owner), " "))
 	}
 	return labels
+}
+
+func normalizeAWSOwner(owner string) string {
+	return strings.Join(strings.Fields(owner), " ")
 }
 
 func awsConfig(ctx context.Context, region string) (aws.Config, error) {
@@ -326,10 +342,14 @@ func (c *awsInventoryCollector) collectELBListeners(ctx context.Context, client 
 			if len(tags) == 0 {
 				tags = inheritedTags
 			}
+			name := fmt.Sprintf("%s:%d", lbName, aws.ToInt32(listener.Port))
+			if !c.matches(name, tags) {
+				continue
+			}
 			c.add(awsResourceView{
 				Type:    "ALB listener",
 				ID:      arn,
-				Name:    fmt.Sprintf("%s:%d", lbName, aws.ToInt32(listener.Port)),
+				Name:    name,
 				Region:  c.region,
 				Status:  string(listener.Protocol),
 				RunID:   c.runID(lbName, tags),
@@ -525,7 +545,18 @@ func (c *awsInventoryCollector) matchFilters(tagName string) []ec2Types.Filter {
 }
 
 func (c *awsInventoryCollector) matches(name string, tags map[string]string) bool {
+	if !c.ownerAllows(tags) {
+		return false
+	}
 	return c.nameHasPrefix(name) || c.tagsMatch(tags)
+}
+
+func (c *awsInventoryCollector) ownerAllows(tags map[string]string) bool {
+	if c.owner == "" || len(tags) == 0 {
+		return true
+	}
+	resourceOwner := normalizeAWSOwner(tags["Owner"])
+	return resourceOwner == "" || resourceOwner == c.owner
 }
 
 func (c *awsInventoryCollector) nameHasPrefix(name string) bool {
@@ -541,8 +572,8 @@ func (c *awsInventoryCollector) tagsMatch(tags map[string]string) bool {
 	if len(tags) == 0 {
 		return false
 	}
-	if c.owner != "" && tags["Owner"] == c.owner {
-		return true
+	if c.owner != "" {
+		return normalizeAWSOwner(tags["Owner"]) == c.owner
 	}
 	return tags["ManagedBy"] == awsManagedByTagValue
 }
