@@ -471,6 +471,70 @@
         "completed_at": "2026-04-29T08:32:46Z"
       }
     },
+    "v2.12.10-alpha1": {
+      "fresh-alpha-local-suites": {
+        "status": "success",
+        "coverage_policy": "alpha-webhook-signoff-v2",
+        "run_id": "25743943159",
+        "run_url": "https://github.com/brudnak/ha-rancher-rke2/actions/runs/25743943159",
+        "workflow": "Run Alpha/Webhook Sign-Off",
+        "lane": "fresh-alpha-local-suites",
+        "release_line": "v2.12",
+        "target_version": "v2.12.10-alpha1",
+        "previous_version": "v2.12.9",
+        "install_rancher": "v2.12.10-alpha1",
+        "webhook_changed": false,
+        "webhook_image": "registry.suse.com/rancher/rancher-webhook:v0.8.6",
+        "previous_webhook_build": "107.0.6+up0.8.6",
+        "previous_webhook_tag": "v0.8.6",
+        "target_webhook_build": "107.0.6+up0.8.6",
+        "target_webhook_tag": "v0.8.6",
+        "signing_policy": "report-only",
+        "signing_registry": "registry.suse.com",
+        "signing_verification": {
+          "target_version": "v2.12.10-alpha1",
+          "webhook_image": "registry.suse.com/rancher/rancher-webhook:v0.8.6",
+          "signing_policy": "report-only",
+          "tool": "slsactl",
+          "enforced": false,
+          "signature_verified": true,
+          "provenance_verified": true,
+          "sbom_verified": true,
+          "claim_types": [
+            "https://sigstore.dev/cosign/sign/v1",
+            "https://slsa.dev/provenance/v1"
+          ],
+          "verified_at": "2026-05-12T15:19:12Z"
+        },
+        "rancher_install_resolution": {
+          "phase": "install",
+          "ha_index": 1,
+          "requested_version": "2.12.10-alpha1",
+          "requested_distro": "auto",
+          "build_type": "alpha",
+          "resolved_distro": "community-staging",
+          "chart_repo_alias": "optimus-rancher-alpha",
+          "chart_version": "2.12.10-alpha1",
+          "chart_source": "optimus-rancher-alpha/rancher@2.12.10-alpha1",
+          "rancher_image": "stgregistry.suse.com/rancher/rancher",
+          "rancher_image_tag": "v2.12.10-alpha1",
+          "agent_image": "stgregistry.suse.com/rancher/rancher-agent:v2.12.10-alpha1",
+          "compatibility_baseline": "2.12.9",
+          "recommended_rke2_version": "v1.33.11+rke2r1",
+          "resolution_notes": [
+            "Alpha build requested in auto mode, favoring Prime/staging chart sources before community charts",
+            "Using exact chart match optimus-rancher-alpha/rancher@2.12.10-alpha1 with explicit staging Rancher image overrides",
+            "Using staging Rancher images because the requested version is not a standard released community build",
+            "Using 2.12.9 as the latest released compatibility baseline for the 2.12 release line",
+            "Using current image.registry/image.repository/image.tag chart values for optimus-rancher-alpha/rancher@2.12.10-alpha1",
+            "Support matrix certifies RKE2 from v1.31 through v1.33",
+            "Selected v1.33.11+rke2r1 as the latest available RKE2 patch in the supported v1.33 line"
+          ]
+        },
+        "commit_sha": "a23b1360b7ee18073ab29d30863f44f16b8f39b4",
+        "completed_at": "2026-05-12T15:48:32Z"
+      }
+    },
     "v2.12.9-alpha6": {
       "fresh-alpha": {
         "status": "success",
