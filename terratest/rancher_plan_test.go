@@ -162,6 +162,71 @@ func TestRancherModeKeepsManualDefaultForHelmCommands(t *testing.T) {
 	}
 }
 
+func TestManualHelmCommandParserAllowsQuotedSetString(t *testing.T) {
+	command := `helm install rancher rancher-latest/rancher \
+  --namespace cattle-system \
+  --version 2.14.1 \
+  --set-string 'bootstrapPassword=abc'\''def\,ghi' \
+  --set tls=external`
+
+	fields, err := parseHelmCommandFields(command)
+	if err != nil {
+		t.Fatalf("parseHelmCommandFields returned error: %v", err)
+	}
+	if len(fields) < 8 {
+		t.Fatalf("expected parsed fields, got %#v", fields)
+	}
+	invocation, err := manualHelmInvocationFromFields(fields)
+	if err != nil {
+		t.Fatalf("manualHelmInvocationFromFields returned error: %v", err)
+	}
+	if invocation.releaseName != "rancher" || invocation.chartRef != "rancher-latest/rancher" {
+		t.Fatalf("unexpected invocation: %#v", invocation)
+	}
+	if err := validateManualHelmCommandStructure(command); err != nil {
+		t.Fatalf("expected manual command structure to validate, got %v", err)
+	}
+}
+
+func TestManualHelmCommandParserRejectsShellControlOperators(t *testing.T) {
+	command := `helm install rancher rancher-latest/rancher --set tls=external && rm -rf /`
+	if err := validateManualHelmCommandStructure(command); err == nil {
+		t.Fatal("expected shell control operator to be rejected")
+	}
+}
+
+func TestHelmKubeVersionFromRKE2VersionStripsRKE2BuildMetadata(t *testing.T) {
+	got := helmKubeVersionFromRKE2Version("v1.34.6+rke2r1")
+	if got != "1.34.6" {
+		t.Fatalf("expected Helm kube version 1.34.6, got %q", got)
+	}
+}
+
+func TestNormalizeRKE2VersionInputAddsLeadingV(t *testing.T) {
+	got, err := normalizeRKE2VersionInput("1.34.6+rke2r1")
+	if err != nil {
+		t.Fatalf("normalizeRKE2VersionInput returned error: %v", err)
+	}
+	if got != "v1.34.6+rke2r1" {
+		t.Fatalf("expected normalized RKE2 version, got %q", got)
+	}
+}
+
+func TestNormalizeRKE2VersionInputRejectsBadValue(t *testing.T) {
+	if _, err := normalizeRKE2VersionInput("banana"); err == nil {
+		t.Fatal("expected invalid RKE2 version to be rejected")
+	}
+}
+
+func TestHelmFlagValueReadsEqualsAndSeparateForms(t *testing.T) {
+	if got := helmFlagValue([]string{"helm", "install", "rancher", "rancher-latest/rancher", "--version=2.14.0"}, "--version"); got != "2.14.0" {
+		t.Fatalf("expected equals flag value, got %q", got)
+	}
+	if got := helmFlagValue([]string{"helm", "install", "rancher", "rancher-latest/rancher", "--version", "2.13.3"}, "--version"); got != "2.13.3" {
+		t.Fatalf("expected separate flag value, got %q", got)
+	}
+}
+
 func TestRecordResolvedChartMatchPrefersExactTargetOverFallbackBaseline(t *testing.T) {
 	var best *resolvedChartMatch
 	recordResolvedChartMatch(&best, "rancher-prime", "2.14.0", "2.14.0", 1)

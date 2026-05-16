@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/buildinfo"
 	harancher "github.com/brudnak/ha-rancher-rke2/terratest"
 )
 
@@ -25,9 +26,10 @@ type App struct {
 }
 
 type DesktopPanelStatus struct {
-	URL      string `json:"url"`
-	RepoRoot string `json:"repoRoot"`
-	Error    string `json:"error,omitempty"`
+	URL      string         `json:"url"`
+	RepoRoot string         `json:"repoRoot"`
+	Build    buildinfo.Info `json:"build"`
+	Error    string         `json:"error,omitempty"`
 }
 
 var bundledRepoRoot string
@@ -70,13 +72,13 @@ func (a *App) PanelStatus() DesktopPanelStatus {
 	hydrateDesktopEnvironment()
 
 	if a.url != "" || a.err != "" {
-		return DesktopPanelStatus{URL: a.url, RepoRoot: currentRepoHint(), Error: a.err}
+		return DesktopPanelStatus{URL: a.url, RepoRoot: currentRepoHint(), Build: buildinfo.Current(), Error: a.err}
 	}
 
 	repoRoot, err := resolveDesktopRepoRoot()
 	if err != nil {
 		a.err = err.Error()
-		return DesktopPanelStatus{RepoRoot: currentRepoHint(), Error: a.err}
+		return DesktopPanelStatus{RepoRoot: currentRepoHint(), Build: buildinfo.Current(), Error: a.err}
 	}
 
 	server, err := harancher.StartHAControlPanelServer(repoRoot, harancher.ControlPanelServerOptions{
@@ -85,12 +87,12 @@ func (a *App) PanelStatus() DesktopPanelStatus {
 	})
 	if err != nil {
 		a.err = err.Error()
-		return DesktopPanelStatus{RepoRoot: repoRoot, Error: a.err}
+		return DesktopPanelStatus{RepoRoot: repoRoot, Build: buildinfo.Current(), Error: a.err}
 	}
 
 	a.server = server
 	a.url = server.URL()
-	return DesktopPanelStatus{URL: a.url, RepoRoot: repoRoot}
+	return DesktopPanelStatus{URL: a.url, RepoRoot: repoRoot, Build: buildinfo.Current()}
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {

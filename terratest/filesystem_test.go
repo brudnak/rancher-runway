@@ -182,6 +182,11 @@ func TestCreateInstallScriptFailsFastAndCreatesNamespaceIdempotently(t *testing.
 	if err != nil {
 		t.Fatalf("failed to read generated install script: %v", err)
 	}
+	if info, err := os.Stat(scriptPath); err != nil {
+		t.Fatalf("failed to stat generated install script: %v", err)
+	} else if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("expected install script mode 0700, got %v", got)
+	}
 	script := string(data)
 
 	for _, want := range []string{

@@ -9,7 +9,12 @@ const embeddedSetup = Boolean(setupData.embedded)
 const basePath = String(setupData.basePath || '').replace(/\/+$/, '')
 const setupEndpoint = path => `${basePath}${path.startsWith('/') ? path : `/${path}`}`
 
+let setupMode = setupData.mode === 'manual' ? 'manual' : 'auto'
 let versions = Array.isArray(setupData.versions) ? setupData.versions : ['']
+let manualCommands = Array.isArray(setupData.helmCommands) ? setupData.helmCommands : []
+let k8sVersions = Array.isArray(setupData.k8sVersions) ? setupData.k8sVersions : []
+let installerSHA256s = Array.isArray(setupData.installerSHA256s) ? setupData.installerSHA256s : []
+let resolveInstallerSHA = setupData.resolveInstallerSHA !== false
 let config = setupData.config || {
   distro: 'auto',
   bootstrapPassword: '',
@@ -26,6 +31,9 @@ let setupStatePollTimer = null
 let panelBooting = embeddedSetup
 let panelLifecycleBusy = false
 let panelLifecycleMessage = ''
+let manualValidationResults = []
+let manualRKE2Recommendations = []
+let planCommandCopies = []
 
 const rowClass = 'grid gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center'
 const inputClass = 'w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100'
@@ -34,7 +42,23 @@ const lockIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBo
 const unlockIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></svg>'
 
 const setupFormEl = byId('setupForm')
+const modeInputEl = byId('modeInput')
+const autoModeBtnEl = byId('autoModeBtn')
+const manualModeBtnEl = byId('manualModeBtn')
+const autoModePanelEl = byId('autoModePanel')
+const manualModePanelEl = byId('manualModePanel')
+const modeSummaryEl = byId('modeSummary')
+const modeValueEl = byId('modeValue')
 const rowsEl = byId('rows')
+const manualRowsEl = byId('manualRows')
+const manualAddBtnEl = byId('manualAddBtn')
+const validateHelmBtnEl = byId('validateHelmBtn')
+const recommendRKE2BtnEl = byId('recommendRKE2Btn')
+const manualChecksumBoxEl = byId('manualChecksumBox')
+const resolveInstallerSHAToggleEl = byId('resolveInstallerSHAToggle')
+const manualSHAListEl = byId('manualSHAList')
+const manualValidationBoxEl = byId('manualValidationBox')
+const manualRKE2RecommendationBoxEl = byId('manualRKE2RecommendationBox')
 const totalInstancesValueEl = byId('totalInstancesValue')
 const editorErrorBoxEl = byId('editorErrorBox')
 const editorStatusBoxEl = byId('editorStatusBox')
@@ -79,6 +103,12 @@ const confirmModalTitleEl = byId('confirmModalTitle')
 const confirmModalBodyEl = byId('confirmModalBody')
 const confirmModalConfirmEl = byId('confirmModalConfirm')
 const confirmModalCancelEl = byId('confirmModalCancel')
+const helmValidationModalEl = byId('helmValidationModal')
+const helmValidationModalBadgeEl = byId('helmValidationModalBadge')
+const helmValidationModalTitleEl = byId('helmValidationModalTitle')
+const helmValidationModalSummaryEl = byId('helmValidationModalSummary')
+const helmValidationModalBodyEl = byId('helmValidationModalBody')
+const helmValidationModalCloseEl = byId('helmValidationModalClose')
 
 const setPhase = phase => {
   if (phase === 'done') {
@@ -115,6 +145,13 @@ const escapeHtml = value => String(value)
   .replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;')
+
+const copyTextToClipboard = async text => {
+  if (!navigator.clipboard) {
+    throw new Error('Clipboard access is unavailable in this browser.')
+  }
+  await navigator.clipboard.writeText(text)
+}
 
 const parseResolvedPlanText = planText => {
   const lines = String(planText || '').split(/\r?\n/)
@@ -209,6 +246,7 @@ const renderPlanCards = planText => {
 
   planFallbackEl.classList.add('hidden')
   planFallbackEl.textContent = ''
+  planCommandCopies = []
   const renderCodeLines = commandText => String(commandText || '').split('\n').map((line, index) => `
     <div class="setup-code-line">
       <span class="setup-code-line-number">${index + 1}</span>
@@ -227,17 +265,23 @@ const renderPlanCards = planText => {
       : '<div class="text-sm text-zinc-500 dark:text-zinc-400">No resolved metadata was emitted for this HA.</div>'
 
     const commands = card.commands.length
-      ? card.commands.map(command => `
+      ? card.commands.map(command => {
+        const copyIndex = planCommandCopies.push(command.text) - 1
+        return `
         <div class="setup-code-editor">
           <div class="setup-code-editor-header">
             <div class="setup-code-editor-title">${escapeHtml(command.label)}</div>
-            <div class="setup-code-editor-lang">shell</div>
+            <div class="setup-code-editor-actions">
+              <div class="setup-code-editor-lang">shell</div>
+              <button type="button" data-copy-plan-command="${copyIndex}" class="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">Copy Helm install command</button>
+            </div>
           </div>
           <div class="setup-code-lines" role="region" aria-label="${escapeHtml(command.label)} shell command">
             ${renderCodeLines(command.text)}
           </div>
         </div>
-      `).join('')
+      `
+      }).join('')
       : '<div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">No Helm command was emitted for this HA.</div>'
 
     return `
@@ -511,16 +555,324 @@ const renderRows = () => {
   })
 }
 
+const renderMode = () => {
+  setupMode = setupMode === 'manual' ? 'manual' : 'auto'
+  if (modeInputEl) {
+    modeInputEl.value = setupMode
+  }
+  autoModeBtnEl?.setAttribute('aria-pressed', setupMode === 'auto' ? 'true' : 'false')
+  manualModeBtnEl?.setAttribute('aria-pressed', setupMode === 'manual' ? 'true' : 'false')
+  autoModePanelEl?.classList.toggle('hidden', setupMode !== 'auto')
+  manualModePanelEl?.classList.toggle('hidden', setupMode !== 'manual')
+  if (modeValueEl) {
+    modeValueEl.textContent = setupMode
+  }
+  if (modeSummaryEl) {
+    modeSummaryEl.textContent = setupMode === 'manual'
+      ? 'Manual mode saves one editable Helm command and one RKE2 version per HA, then validates the Helm render before AWS starts.'
+      : 'Auto mode resolves Rancher chart, image, RKE2 version, and installer SHA256 from the requested Rancher versions.'
+  }
+  if (setupMode === 'manual') {
+    ensureManualRows()
+    renderManualRows()
+  } else {
+    renderRows()
+  }
+  if (manualAddBtnEl) {
+    manualAddBtnEl.disabled = submitting || customHostnameEnabled
+    manualAddBtnEl.classList.toggle('cursor-not-allowed', customHostnameEnabled)
+    manualAddBtnEl.classList.toggle('opacity-50', customHostnameEnabled)
+  }
+  totalInstancesValueEl.textContent = String(activeHACount())
+  setSubmittingState(submitting)
+}
+
+const manualValidationResultsHTML = ({ modal = false } = {}) => {
+  if (!manualValidationResults.length) {
+    return '<div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-3 text-sm text-zinc-500 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400">Helm validation has not run for these commands yet.</div>'
+  }
+
+  return manualValidationResults.map(result => {
+    const ok = Boolean(result.ok)
+    const tone = ok
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200'
+      : 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200'
+    const detailClass = modal
+      ? 'mt-3 max-h-[56vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-white/55 p-3 font-mono text-xs leading-5 opacity-90 dark:bg-black/20'
+      : 'mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 opacity-90'
+    return `
+      <div class="rounded-lg border px-3.5 py-3 text-sm ${tone}">
+        <div class="font-semibold">HA ${Number(result.index || 0) + 1}: ${escapeHtml(result.summary || (ok ? 'OK' : 'Validation failed'))}</div>
+        ${result.detail ? `<pre class="${detailClass}">${escapeHtml(result.detail)}</pre>` : ''}
+      </div>
+    `
+  }).join('')
+}
+
+const renderManualValidation = () => {
+  if (!manualValidationBoxEl) {
+    return
+  }
+  manualValidationBoxEl.innerHTML = manualValidationResultsHTML()
+}
+
+const renderManualRKE2Recommendations = () => {
+  if (!manualRKE2RecommendationBoxEl) {
+    return
+  }
+  if (!manualRKE2Recommendations.length) {
+    manualRKE2RecommendationBoxEl.innerHTML = ''
+    return
+  }
+  const okResults = manualRKE2Recommendations.filter(result => result.ok && result.recommendedRKE2Version)
+  const applyButton = okResults.length
+    ? '<button type="button" data-apply-rke2-recommendations class="w-fit rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400">Apply recommendations</button>'
+    : ''
+  manualRKE2RecommendationBoxEl.innerHTML = `
+    <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+      <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h3 class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">RKE2 recommendation</h3>
+          <p class="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-400">Uses the Rancher chart version in each Helm command to select the latest RKE2 patch from the supported Kubernetes line.</p>
+        </div>
+        ${applyButton}
+      </div>
+      <div class="mt-3 grid gap-2">
+        ${manualRKE2Recommendations.map(result => {
+          const ok = Boolean(result.ok)
+          const tone = ok
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200'
+            : 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200'
+          const pieces = []
+          if (result.rancherVersion) pieces.push(`Rancher ${result.rancherVersion}`)
+          if (result.compatibilityBaseline && result.compatibilityBaseline !== result.rancherVersion) pieces.push(`baseline ${result.compatibilityBaseline}`)
+          if (result.kubernetesVersion) pieces.push(`Kubernetes ${result.kubernetesVersion}`)
+          return `
+            <div class="rounded-lg border px-3.5 py-3 text-sm ${tone}">
+              <div class="font-semibold">HA ${Number(result.index || 0) + 1}: ${escapeHtml(ok ? result.recommendedRKE2Version : result.summary || 'Recommendation failed')}</div>
+              ${pieces.length ? `<div class="mt-1 opacity-85">${escapeHtml(pieces.join(' • '))}</div>` : ''}
+              ${result.detail ? `<div class="mt-1 opacity-85">${escapeHtml(result.detail)}</div>` : ''}
+            </div>
+          `
+        }).join('')}
+      </div>
+    </div>
+  `
+}
+
+const closeHelmValidationModal = () => {
+  if (!helmValidationModalEl) {
+    return
+  }
+  helmValidationModalEl.classList.add('hidden')
+  helmValidationModalEl.classList.remove('flex')
+  document.body.classList.remove('overflow-hidden')
+}
+
+const openHelmValidationModal = () => {
+  if (!helmValidationModalEl || !helmValidationModalBodyEl) {
+    return
+  }
+  const failedCount = manualValidationResults.filter(result => !result.ok).length
+  const totalCount = manualValidationResults.length
+  const ok = totalCount > 0 && failedCount === 0
+  helmValidationModalTitleEl.textContent = ok ? 'Helm validation passed' : 'Helm validation needs attention'
+  helmValidationModalSummaryEl.textContent = ok
+    ? `${totalCount} Helm command${totalCount === 1 ? '' : 's'} rendered successfully.`
+    : `${failedCount} of ${totalCount} Helm command${totalCount === 1 ? '' : 's'} failed validation.`
+  helmValidationModalBadgeEl.className = ok
+    ? 'mb-2 inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+    : 'mb-2 inline-flex rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
+  helmValidationModalBadgeEl.textContent = ok ? 'Rendered successfully' : 'Validation failed'
+  helmValidationModalBodyEl.innerHTML = manualValidationResultsHTML({ modal: true })
+  helmValidationModalEl.classList.remove('hidden')
+  helmValidationModalEl.classList.add('flex')
+  helmValidationModalEl.scrollTop = 0
+  document.body.classList.add('overflow-hidden')
+  helmValidationModalCloseEl?.focus()
+}
+
+const renderManualRows = () => {
+  ensureManualRows()
+  manualRowsEl.innerHTML = manualCommands.map((command, index) => {
+    const removeDisabled = customHostnameEnabled || manualCommands.length <= 1 ? ' disabled' : ''
+    return `
+      <div class="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none">
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">HA ${index + 1}</div>
+          <div class="flex flex-wrap gap-2">
+            <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" type="button" data-seed-index="${index}">Rebuild base</button>
+            <button class="${removeButtonClass}" type="button" data-manual-remove-index="${index}"${removeDisabled}>Remove</button>
+          </div>
+        </div>
+        <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_16rem]">
+          <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+            Helm command
+            <textarea class="manual-code-area w-full rounded-lg border border-slate-300 bg-slate-50 px-3.5 py-3 font-mono text-xs leading-6 text-slate-950 outline-none focus:border-emerald-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100" name="helmCommands" data-manual-command-index="${index}" spellcheck="false">${escapeHtml(command)}</textarea>
+          </label>
+          <div class="grid content-start gap-3">
+            <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+              RKE2 version
+              <input class="${inputClass}" type="text" name="k8sVersions" value="${escapeHtml(k8sVersions[index] || '')}" data-k8s-index="${index}" placeholder="v1.34.6+rke2r1" />
+            </label>
+            <label class="manual-sha-field grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+              Installer SHA256
+              <input class="${inputClass}" type="text" name="installerSHA256s" value="${escapeHtml(installerSHA256s[index] || '')}" data-sha-index="${index}" placeholder="64-character hex checksum" />
+            </label>
+          </div>
+        </div>
+      </div>
+    `
+  }).join('')
+
+  resolveInstallerSHAToggleEl.checked = resolveInstallerSHA
+  manualChecksumBoxEl.dataset.autoSha = resolveInstallerSHA ? 'true' : 'false'
+  manualSHAListEl.innerHTML = ''
+  manualRowsEl.querySelectorAll('.manual-sha-field').forEach(field => {
+    field.classList.toggle('hidden', resolveInstallerSHA)
+  })
+  manualRowsEl.querySelectorAll('textarea[data-manual-command-index]').forEach(textarea => {
+    textarea.addEventListener('input', event => {
+      manualCommands[Number(event.target.getAttribute('data-manual-command-index'))] = event.target.value
+      manualValidationResults = []
+      manualRKE2Recommendations = []
+      renderManualValidation()
+      renderManualRKE2Recommendations()
+      clearValidationError()
+    })
+  })
+  manualRowsEl.querySelectorAll('input[data-k8s-index]').forEach(input => {
+    input.addEventListener('input', event => {
+      k8sVersions[Number(event.target.getAttribute('data-k8s-index'))] = event.target.value
+      manualValidationResults = []
+      renderManualValidation()
+      clearValidationError()
+    })
+  })
+  manualRowsEl.querySelectorAll('input[data-sha-index]').forEach(input => {
+    input.addEventListener('input', event => {
+      const index = Number(event.target.getAttribute('data-sha-index'))
+      installerSHA256s[index] = event.target.value
+      clearValidationError()
+    })
+  })
+  manualRowsEl.querySelectorAll('button[data-seed-index]').forEach(button => {
+    button.addEventListener('click', () => {
+      if (submitting) {
+        return
+      }
+      const index = Number(button.getAttribute('data-seed-index'))
+      manualCommands[index] = buildSeedHelmCommand(index)
+      manualValidationResults = []
+      manualRKE2Recommendations = []
+      renderManualRows()
+      renderManualValidation()
+      renderManualRKE2Recommendations()
+    })
+  })
+  manualRowsEl.querySelectorAll('button[data-manual-remove-index]').forEach(button => {
+    button.addEventListener('click', () => {
+      if (manualCommands.length <= 1 || submitting || customHostnameEnabled) {
+        return
+      }
+      const index = Number(button.getAttribute('data-manual-remove-index'))
+      manualCommands.splice(index, 1)
+      k8sVersions.splice(index, 1)
+      installerSHA256s.splice(index, 1)
+      manualValidationResults = []
+      manualRKE2Recommendations = []
+      renderManualRows()
+      renderManualValidation()
+      renderManualRKE2Recommendations()
+      totalInstancesValueEl.textContent = String(activeHACount())
+    })
+  })
+  renderManualValidation()
+  renderManualRKE2Recommendations()
+}
+
 const renderCustomHostname = () => {
   customHostnameBoxEl.dataset.enabled = customHostnameEnabled ? 'true' : 'false'
   customHostnameToggleEl.checked = customHostnameEnabled
   customHostnameInputEl.value = customHostname
-  renderRows()
+  renderMode()
 }
 
 const normalizeVersion = value => String(value || '').trim().replace(/^[vV]/, '')
 
 const normalizedVersions = () => versions.map(version => normalizeVersion(version))
+
+const activeHACount = () => setupMode === 'manual' ? manualCommands.length : versions.length
+
+const defaultK8SVersion = index => k8sVersions[index] || k8sVersions[0] || 'v1.34.6+rke2r1'
+
+const manualChartAliasForVersion = version => {
+  const distro = String(distroSelectEl?.value || config.distro || 'auto').toLowerCase()
+  if (distro === 'prime') {
+    return 'rancher-prime'
+  }
+  if (String(version || '').includes('alpha')) {
+    return 'rancher-alpha'
+  }
+  return 'rancher-latest'
+}
+
+const manualImageTagForVersion = version => {
+  const normalized = normalizeVersion(version)
+  if (!normalized) {
+    return 'v2.14.0'
+  }
+  return normalized === 'head' ? 'head' : `v${normalized}`
+}
+
+const buildSeedHelmCommand = index => {
+  const version = normalizeVersion(versions[index] || versions[0] || '2.14.0')
+  const chartAlias = manualChartAliasForVersion(version)
+  const chartVersion = version && version !== 'head' ? version : '2.14.0'
+  const password = String(bootstrapPasswordInputEl?.value || config.bootstrapPassword || 'change-me').replaceAll('\\', '\\\\').replaceAll("'", "'\\''")
+  const imageTag = manualImageTagForVersion(version)
+  const lines = [
+    `helm install rancher ${chartAlias}/rancher \\`,
+    '  --namespace cattle-system \\',
+    `  --version ${chartVersion} \\`,
+    '  --set hostname=placeholder \\',
+    `  --set-string 'bootstrapPassword=${password}' \\`,
+    '  --set tls=external \\',
+    '  --set global.cattle.psp.enabled=false \\',
+    `  --set image.tag=${imageTag} \\`,
+    '  --set agentTLSMode=system-store'
+  ]
+  return lines.join('\n')
+}
+
+const ensureManualRows = () => {
+  if (!manualCommands.length) {
+    manualCommands = [buildSeedHelmCommand(0)]
+  }
+  if (customHostnameEnabled && manualCommands.length !== 1) {
+    manualCommands = [manualCommands[0] || buildSeedHelmCommand(0)]
+    k8sVersions = [k8sVersions[0] || defaultK8SVersion(0)]
+    installerSHA256s = [installerSHA256s[0] || '']
+  }
+  while (k8sVersions.length < manualCommands.length) {
+    k8sVersions.push(defaultK8SVersion(k8sVersions.length))
+  }
+  while (installerSHA256s.length < manualCommands.length) {
+    installerSHA256s.push('')
+  }
+  if (k8sVersions.length > manualCommands.length) {
+    k8sVersions = k8sVersions.slice(0, manualCommands.length)
+  }
+  if (installerSHA256s.length > manualCommands.length) {
+    installerSHA256s = installerSHA256s.slice(0, manualCommands.length)
+  }
+}
+
+const normalizedManualCommands = () => manualCommands.map(command => String(command || '').trim())
+
+const normalizedK8SVersions = () => k8sVersions.map(version => String(version || '').trim())
+
+const validRKE2Version = value => /^v?1\.\d+\.\d+\+rke2r\d+$/.test(String(value || '').trim())
 
 const normalizedAWSPrefix = () => {
   const input = setupQuery('input[data-tf-var="aws_prefix"]')
@@ -547,22 +899,45 @@ const collectTFVars = () => {
 
 const validateSetup = () => {
   const trimmed = normalizedVersions()
+  const manualTrimmed = normalizedManualCommands()
 
-  if (trimmed.length < 1) {
+  if (setupMode === 'auto' && trimmed.length < 1) {
     return { message: 'At least one HA version is required.', target: rowsEl.querySelector('input[data-index]') }
   }
 
-  for (let i = 0; i < trimmed.length; i += 1) {
-    if (!trimmed[i]) {
-      return {
-        message: `Version for HA ${i + 1} cannot be empty.`,
-        target: rowsEl.querySelector(`input[data-index="${i}"]`)
+  if (setupMode === 'auto') {
+    for (let i = 0; i < trimmed.length; i += 1) {
+      if (!trimmed[i]) {
+        return {
+          message: `Version for HA ${i + 1} cannot be empty.`,
+          target: rowsEl.querySelector(`input[data-index="${i}"]`)
+        }
+      }
+    }
+  }
+
+  if (setupMode === 'manual') {
+    if (manualTrimmed.length < 1) {
+      return { message: 'At least one manual Helm command is required.', target: manualRowsEl }
+    }
+    for (let i = 0; i < manualTrimmed.length; i += 1) {
+      if (!manualTrimmed[i]) {
+        return { message: `Helm command for HA ${i + 1} cannot be empty.`, target: manualRowsEl.querySelector(`textarea[data-manual-command-index="${i}"]`) }
+      }
+      if (!String(k8sVersions[i] || '').trim()) {
+        return { message: `RKE2 version for HA ${i + 1} cannot be empty.`, target: manualRowsEl.querySelector(`input[data-k8s-index="${i}"]`) }
+      }
+      if (!validRKE2Version(k8sVersions[i])) {
+        return { message: `RKE2 version for HA ${i + 1} must look like v1.34.6+rke2r1.`, target: manualRowsEl.querySelector(`input[data-k8s-index="${i}"]`) }
+      }
+      if (!resolveInstallerSHA && !/^[a-fA-F0-9]{64}$/.test(String(installerSHA256s[i] || '').trim())) {
+        return { message: `Installer SHA256 for HA ${i + 1} must be a 64-character hex checksum.`, target: manualRowsEl.querySelector(`input[data-sha-index="${i}"]`) }
       }
     }
   }
 
   if (customHostnameEnabled) {
-    if (trimmed.length !== 1) {
+    if (activeHACount() !== 1) {
       return { message: 'Custom Rancher URL can only be used with one HA.', target: customHostnameToggleEl }
     }
 
@@ -732,12 +1107,25 @@ const setSubmittingState = nextSubmitting => {
         ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Resolving plan'
         : 'Resolve Plan'
   ;[addBtnEl, continueBtnEl, editorCancelBtnEl].forEach(button => {
+    if (!button) {
+      return
+    }
+    button.classList.toggle('cursor-not-allowed', actionDisabled)
+    button.classList.toggle('opacity-60', actionDisabled)
+    button.classList.toggle('grayscale', actionDisabled)
+  })
+  ;[manualAddBtnEl, validateHelmBtnEl, recommendRKE2BtnEl, autoModeBtnEl, manualModeBtnEl].forEach(button => {
+    if (!button) {
+      return
+    }
+    button.disabled = actionDisabled || (button === manualAddBtnEl && customHostnameEnabled)
     button.classList.toggle('cursor-not-allowed', actionDisabled)
     button.classList.toggle('opacity-60', actionDisabled)
     button.classList.toggle('grayscale', actionDisabled)
   })
   customHostnameToggleEl.disabled = nextSubmitting
   customHostnameInputEl.disabled = nextSubmitting
+  resolveInstallerSHAToggleEl.disabled = nextSubmitting
   distroSelectEl.disabled = nextSubmitting
   bootstrapPasswordInputEl.disabled = nextSubmitting
   bootstrapPasswordToggleEl.disabled = nextSubmitting
@@ -760,6 +1148,10 @@ const setSubmittingState = nextSubmitting => {
   rowsEl.querySelectorAll('input, button[data-remove-index]').forEach(element => {
     element.disabled = nextSubmitting || (panelBooting && element.hasAttribute('data-remove-index')) ||
       (element.hasAttribute('data-remove-index') && (customHostnameEnabled || versions.length <= 1))
+  })
+  manualRowsEl.querySelectorAll('textarea, input, button').forEach(element => {
+    element.disabled = nextSubmitting || panelBooting || panelLifecycleBusy ||
+      (element.hasAttribute('data-manual-remove-index') && manualCommands.length <= 1)
   })
 }
 
@@ -809,6 +1201,68 @@ const submitSetupFormWithoutHTMX = async formData => {
   if (!response.ok) {
     throw new Error(await response.text() || 'Setup submit failed.')
   }
+}
+
+const validateManualHelmCommands = async ({ showModal = false } = {}) => {
+  manualValidationResults = []
+  renderManualValidation()
+  editorStatusBoxEl.textContent = 'Validating Helm commands with helm template...'
+  const response = await fetch(setupEndpoint(`/api/validate-helm?token=${encodeURIComponent(token)}`), {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      helmCommands: normalizedManualCommands(),
+      k8sVersions: normalizedK8SVersions()
+    })
+  })
+  if (!response.ok) {
+    throw new Error(await response.text() || 'Helm validation failed.')
+  }
+  const payload = await response.json()
+  manualValidationResults = Array.isArray(payload.results) ? payload.results : []
+  renderManualValidation()
+  const failed = manualValidationResults.find(result => !result.ok)
+  if (showModal) {
+    openHelmValidationModal()
+  }
+  if (failed) {
+    throw new Error(`HA ${Number(failed.index || 0) + 1}: ${failed.summary || 'Helm validation failed'}`)
+  }
+  editorStatusBoxEl.textContent = 'Helm commands rendered successfully.'
+}
+
+const recommendManualRKE2Versions = async () => {
+  manualRKE2Recommendations = []
+  renderManualRKE2Recommendations()
+  editorStatusBoxEl.textContent = 'Finding supported RKE2 versions for the manual Helm commands...'
+  const response = await fetch(setupEndpoint(`/api/recommend-rke2?token=${encodeURIComponent(token)}`), {
+    method: 'POST',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      helmCommands: normalizedManualCommands()
+    })
+  })
+  if (!response.ok) {
+    throw new Error(await response.text() || 'RKE2 recommendation failed.')
+  }
+  const payload = await response.json()
+  manualRKE2Recommendations = Array.isArray(payload.results) ? payload.results : []
+  renderManualRKE2Recommendations()
+  const failed = manualRKE2Recommendations.find(result => !result.ok)
+  if (failed) {
+    throw new Error(`HA ${Number(failed.index || 0) + 1}: ${failed.summary || 'RKE2 recommendation failed'}`)
+  }
+  editorStatusBoxEl.textContent = 'RKE2 recommendations are ready.'
 }
 
 const beginResolutionUI = () => {
@@ -873,6 +1327,19 @@ const prepareSetupSubmit = async event => {
   }
 
   clearValidationError()
+
+  if (setupMode === 'manual') {
+    try {
+      await validateManualHelmCommands()
+    } catch (error) {
+      showValidationError(error instanceof Error ? error.message : 'Helm validation failed.', manualValidationBoxEl)
+      await showNoticeModal({
+        title: 'Helm validation failed',
+        body: 'Fix the manual Helm command validation errors before resolving the plan.'
+      })
+      return
+    }
+  }
 
   const tfVars = collectTFVars()
 
@@ -1174,6 +1641,114 @@ addBtnEl.addEventListener('click', () => {
   renderRows()
 })
 
+manualAddBtnEl.addEventListener('click', () => {
+  if (submitting || customHostnameEnabled) {
+    if (customHostnameEnabled) {
+      showNoticeModal({
+        title: 'Custom URL is limited to one HA',
+        body: 'A custom Rancher URL creates exactly one HA because the DNS name must be unique. Turn off "Use a custom Rancher URL" if you want to add more than one HA.',
+        confirmText: 'Got it'
+      })
+    }
+    return
+  }
+  const index = manualCommands.length
+  manualCommands.push(buildSeedHelmCommand(index))
+  k8sVersions.push(defaultK8SVersion(index))
+  installerSHA256s.push('')
+  manualValidationResults = []
+  manualRKE2Recommendations = []
+  renderManualRows()
+  renderManualRKE2Recommendations()
+  totalInstancesValueEl.textContent = String(activeHACount())
+})
+
+validateHelmBtnEl.addEventListener('click', async () => {
+  if (submitting) {
+    return
+  }
+  try {
+    await validateManualHelmCommands({ showModal: true })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Helm validation failed.'
+    if (helmValidationModalEl && !helmValidationModalEl.classList.contains('hidden')) {
+      editorErrorBoxEl.textContent = message
+      editorStatusBoxEl.textContent = ''
+      return
+    }
+    showValidationError(message, manualValidationBoxEl)
+  }
+})
+
+recommendRKE2BtnEl?.addEventListener('click', async () => {
+  if (submitting) {
+    return
+  }
+  try {
+    await recommendManualRKE2Versions()
+  } catch (error) {
+    showValidationError(error instanceof Error ? error.message : 'RKE2 recommendation failed.', manualRKE2RecommendationBoxEl)
+  }
+})
+
+manualRKE2RecommendationBoxEl?.addEventListener('click', event => {
+  const button = event.target.closest('button[data-apply-rke2-recommendations]')
+  if (!button || submitting) {
+    return
+  }
+  manualRKE2Recommendations.forEach(result => {
+    if (result.ok && result.recommendedRKE2Version) {
+      k8sVersions[Number(result.index || 0)] = result.recommendedRKE2Version
+    }
+  })
+  manualValidationResults = []
+  renderManualRows()
+  renderManualValidation()
+  renderManualRKE2Recommendations()
+  clearValidationError()
+  editorStatusBoxEl.textContent = 'Applied recommended RKE2 versions.'
+})
+
+helmValidationModalCloseEl?.addEventListener('click', closeHelmValidationModal)
+helmValidationModalEl?.addEventListener('click', event => {
+  if (event.target === helmValidationModalEl) {
+    closeHelmValidationModal()
+  }
+})
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && helmValidationModalEl && !helmValidationModalEl.classList.contains('hidden')) {
+    closeHelmValidationModal()
+  }
+})
+
+autoModeBtnEl.addEventListener('click', () => {
+  if (submitting || setupMode === 'auto') {
+    return
+  }
+  setupMode = 'auto'
+  clearValidationError()
+  renderMode()
+})
+
+manualModeBtnEl.addEventListener('click', () => {
+  if (submitting || setupMode === 'manual') {
+    return
+  }
+  setupMode = 'manual'
+  clearValidationError()
+  ensureManualRows()
+  renderMode()
+})
+
+resolveInstallerSHAToggleEl.addEventListener('change', event => {
+  if (submitting) {
+    return
+  }
+  resolveInstallerSHA = event.target.checked
+  clearValidationError()
+  renderManualRows()
+})
+
 bootstrapPasswordToggleEl.addEventListener('click', toggleBootstrapPasswordVisibility)
 
 themeToggleEl?.addEventListener('click', () => {
@@ -1253,6 +1828,30 @@ if (respondActionsEl) {
     })
   })
 }
+
+planCardsEl?.addEventListener('click', async event => {
+  const button = event.target.closest('button[data-copy-plan-command]')
+  if (!button) {
+    return
+  }
+  const index = Number(button.getAttribute('data-copy-plan-command'))
+  const command = planCommandCopies[index] || ''
+  if (!command) {
+    editorStatusBoxEl.textContent = 'No Helm command is available to copy.'
+    return
+  }
+  const originalText = button.textContent
+  try {
+    await copyTextToClipboard(command)
+    button.textContent = 'Copied'
+    editorStatusBoxEl.textContent = 'Copied Helm install command to clipboard.'
+    window.setTimeout(() => {
+      button.textContent = originalText
+    }, 1600)
+  } catch (error) {
+    editorStatusBoxEl.textContent = error instanceof Error ? error.message : 'Failed to copy Helm install command.'
+  }
+})
 
 setupRootEl.addEventListener('htmx:afterRequest', event => {
   const requestEl = event.detail.elt

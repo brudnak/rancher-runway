@@ -217,6 +217,82 @@ tf_vars:
 	}
 }
 
+func TestUpdateAutoModeConfigFileWritesManualModeCommandsAndChecksums(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "tool-config.yml")
+
+	initialConfig := `rancher:
+  mode: auto
+  versions:
+    - "2.14.1"
+rke2:
+  preload_images: true
+total_has: 1
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	checksum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	helmCommand := `helm install rancher rancher-latest/rancher \
+  --namespace cattle-system \
+  --version 2.14.1 \
+  --set hostname=placeholder \
+  --set tls=external \
+  --set agentTLSMode=system-store`
+	if err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		Mode:             "manual",
+		HelmCommands:     []string{helmCommand},
+		K8SVersions:      []string{"v1.34.6+rke2r1"},
+		InstallerSHA256s: []string{checksum},
+	}); err != nil {
+		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read updated config: %v", err)
+	}
+
+	var parsed struct {
+		Rancher  map[string]interface{} `yaml:"rancher"`
+		K8S      map[string]interface{} `yaml:"k8s"`
+		RKE2     map[string]interface{} `yaml:"rke2"`
+		TotalHAs int                    `yaml:"total_has"`
+	}
+	if err := yaml.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("failed to parse updated config: %v", err)
+	}
+
+	if parsed.TotalHAs != 1 {
+		t.Fatalf("expected total_has 1, got %d", parsed.TotalHAs)
+	}
+	if parsed.Rancher["mode"] != "manual" {
+		t.Fatalf("expected rancher.mode manual, got %#v", parsed.Rancher["mode"])
+	}
+	if _, exists := parsed.Rancher["versions"]; exists {
+		t.Fatalf("expected rancher.versions to be removed in manual mode")
+	}
+	rawCommands, ok := parsed.Rancher["helm_commands"].([]interface{})
+	if !ok || len(rawCommands) != 1 || !strings.Contains(rawCommands[0].(string), "helm install rancher") {
+		t.Fatalf("unexpected helm_commands: %#v", parsed.Rancher["helm_commands"])
+	}
+	rawVersions, ok := parsed.K8S["versions"].([]interface{})
+	if !ok || len(rawVersions) != 1 || rawVersions[0] != "v1.34.6+rke2r1" {
+		t.Fatalf("unexpected k8s versions: %#v", parsed.K8S["versions"])
+	}
+	rawChecksums, ok := parsed.RKE2["install_script_sha256s"].(map[string]interface{})
+	if !ok || rawChecksums["v1.34.6+rke2r1"] != checksum {
+		t.Fatalf("unexpected installer checksums: %#v", parsed.RKE2["install_script_sha256s"])
+	}
+	if got := viper.GetStringSlice("rancher.helm_commands"); len(got) != 1 || !strings.Contains(got[0], "helm install rancher") {
+		t.Fatalf("expected viper manual helm command, got %#v", got)
+	}
+}
+
 func TestNormalizePreflightVersionsRejectsBlankValues(t *testing.T) {
 	_, err := normalizePreflightVersions([]string{"2.14.1-alpha3", "  "})
 	if err == nil {

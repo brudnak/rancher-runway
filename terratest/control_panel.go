@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/buildinfo"
 	"github.com/brudnak/ha-rancher-rke2/terratest/ui"
 	"github.com/spf13/viper"
 )
@@ -76,11 +77,12 @@ type panelState struct {
 }
 
 type panelSessionState struct {
-	SessionID            string    `json:"sessionId"`
-	StartedAt            time.Time `json:"startedAt"`
-	RepoRoot             string    `json:"repoRoot"`
-	ConfigPath           string    `json:"configPath"`
-	StarterConfigCreated bool      `json:"starterConfigCreated"`
+	SessionID            string         `json:"sessionId"`
+	StartedAt            time.Time      `json:"startedAt"`
+	RepoRoot             string         `json:"repoRoot"`
+	ConfigPath           string         `json:"configPath"`
+	StarterConfigCreated bool           `json:"starterConfigCreated"`
+	Build                buildinfo.Info `json:"build"`
 }
 
 type panelClusterState struct {
@@ -342,13 +344,16 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/logs/stream", p.handleLogStream)
 	mux.HandleFunc("/api/kubeconfig", p.handleKubeconfigDownload)
 	mux.HandleFunc("/api/kubeconfig/save", p.handleKubeconfigSave)
+	mux.HandleFunc("/api/helm-command", p.handleHelmCommandDownload)
 	mux.HandleFunc("/api/open-url", p.handleOpenURL)
+	mux.HandleFunc("/api/open-path", p.handleOpenPath)
 	mux.HandleFunc("/api/setup", p.handleSetup)
 	mux.HandleFunc("/api/run-slots/start", p.handleRunSlotStart)
 	mux.HandleFunc("/api/operations/abort", p.handleAbortOperation)
 	mux.HandleFunc("/api/readiness", p.handleReadiness)
 	mux.HandleFunc("/api/cleanup", p.handleCleanup)
 	mux.HandleFunc("/api/costs/reset", p.handleCostLedgerReset)
+	mux.HandleFunc("/api/local-artifacts/clean", p.handleLocalArtifactsClean)
 	mux.HandleFunc("/api/shutdown", p.handleShutdown)
 	return mux
 }
@@ -875,6 +880,45 @@ func (p *localControlPanel) handleKubeconfigSave(w http.ResponseWriter, r *http.
 	})
 }
 
+func (p *localControlPanel) handleHelmCommandDownload(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalBrowserRead(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	clusterID := strings.TrimSpace(r.URL.Query().Get("cluster"))
+	if clusterID == "" {
+		http.Error(w, "cluster is required", http.StatusBadRequest)
+		return
+	}
+
+	cluster, err := p.clusterByID(clusterID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	command, err := p.helmCommandForCluster(cluster)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("mode")), "upgrade") {
+		command, err = prepareHelmUpgradeCommand(command)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte(command))
+}
+
 func (p *localControlPanel) handleOpenURL(w http.ResponseWriter, r *http.Request) {
 	if !p.authorizedLocalAction(r) {
 		http.Error(w, "invalid control panel token", http.StatusForbidden)
@@ -900,6 +944,41 @@ func (p *localControlPanel) handleOpenURL(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, map[string]string{"status": "opened"})
+}
+
+func (p *localControlPanel) handleOpenPath(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path   string `json:"path"`
+		Reveal bool   `json:"reveal"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	path, err := p.resolveAllowedLocalPath(req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := openLocalPath(path, req.Reveal); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	writeJSON(w, map[string]string{
+		"status": "opened",
+		"path":   path,
+	})
 }
 
 func (p *localControlPanel) handleSetup(w http.ResponseWriter, r *http.Request) {
@@ -1064,6 +1143,46 @@ func (p *localControlPanel) handleCostLedgerReset(w http.ResponseWriter, r *http
 	})
 }
 
+func (p *localControlPanel) handleLocalArtifactsClean(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if p.anyOperationRunning() {
+		http.Error(w, fmt.Sprintf("cannot clean local artifacts while %s is running", p.runningOperationName()), http.StatusConflict)
+		return
+	}
+
+	var req struct {
+		Confirm string `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "clean local artifacts" {
+		http.Error(w, "typed confirmation must equal clean local artifacts", http.StatusBadRequest)
+		return
+	}
+
+	result, err := p.cleanLocalArtifacts()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"status":    "local artifacts cleaned",
+		"removed":   result.Removed,
+		"workspace": p.workspaceState(),
+		"costs":     discoverCostHistory(),
+	})
+}
+
 func (p *localControlPanel) handleShutdown(w http.ResponseWriter, r *http.Request) {
 	if !p.authorizedLocalAction(r) {
 		http.Error(w, "invalid control panel token", http.StatusForbidden)
@@ -1102,6 +1221,7 @@ func (p *localControlPanel) buildState() panelState {
 			RepoRoot:             p.repoRoot,
 			ConfigPath:           p.configPath,
 			StarterConfigCreated: p.starterConfigCreated,
+			Build:                buildinfo.Current(),
 		},
 		Workspace: workspace,
 		Setup:     p.snapshotOperationForRuns(panelOperationSetup, activeRunIDs),
@@ -1851,6 +1971,102 @@ func (p *localControlPanel) kubeconfigContentForDownload(cluster clusterView) ([
 	}
 }
 
+func (p *localControlPanel) helmCommandForCluster(cluster clusterView) (string, error) {
+	if cluster.Type != "local" {
+		return "", fmt.Errorf("Helm install command is only available for local HA clusters")
+	}
+	if cluster.KubeconfigPath == "" {
+		return "", fmt.Errorf("local kubeconfig path is unavailable")
+	}
+
+	installScriptPath := filepath.Join(filepath.Dir(cluster.KubeconfigPath), "install.sh")
+	data, err := os.ReadFile(installScriptPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read install script: %w", err)
+	}
+
+	command, err := extractHelmCommandFromInstallScript(string(data))
+	if err != nil {
+		return "", fmt.Errorf("failed to extract Helm command from %s: %w", installScriptPath, err)
+	}
+	return command, nil
+}
+
+func extractHelmCommandFromInstallScript(script string) (string, error) {
+	lines := strings.Split(script, "\n")
+	var command []string
+	capturing := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !capturing {
+			if trimmed == `echo "Installing Rancher..."` {
+				capturing = true
+			}
+			continue
+		}
+		if trimmed == "" {
+			if len(command) == 0 {
+				continue
+			}
+			break
+		}
+		if strings.HasPrefix(trimmed, "echo ") {
+			break
+		}
+		command = append(command, line)
+	}
+
+	result := strings.TrimSpace(strings.Join(command, "\n"))
+	if result == "" {
+		return "", fmt.Errorf("no Helm install command found")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(result), "helm ") {
+		return "", fmt.Errorf("install command does not start with helm")
+	}
+	return result, nil
+}
+
+func prepareHelmUpgradeCommand(command string) (string, error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", fmt.Errorf("Helm command is empty")
+	}
+
+	fields, err := parseHelmCommandFields(command)
+	if err != nil {
+		return "", err
+	}
+	if len(fields) < 2 || fields[0] != "helm" {
+		return "", fmt.Errorf("command does not start with helm")
+	}
+	switch fields[1] {
+	case "install":
+		return rewriteFirstHelmOperation(command, "helm install ", "helm upgrade --install "), nil
+	case "upgrade":
+		for _, field := range fields[2:] {
+			if field == "--install" {
+				return command, nil
+			}
+		}
+		return rewriteFirstHelmOperation(command, "helm upgrade ", "helm upgrade --install "), nil
+	default:
+		return "", fmt.Errorf("command must use helm install or helm upgrade")
+	}
+}
+
+func rewriteFirstHelmOperation(command, from, to string) string {
+	lines := strings.Split(command, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, from) {
+			prefix := line[:len(line)-len(trimmed)]
+			lines[i] = prefix + strings.Replace(trimmed, from, to, 1)
+			return strings.TrimSpace(strings.Join(lines, "\n"))
+		}
+	}
+	return command
+}
+
 func saveDownloadFile(filename string, content []byte, perm os.FileMode) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -1915,6 +2131,102 @@ func openExternalURL(rawURL string) error {
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to open browser: %w", err)
+	}
+	return nil
+}
+
+func (p *localControlPanel) resolveAllowedLocalPath(rawPath string) (string, error) {
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		return "", fmt.Errorf("path is required")
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(p.repoRoot, path)
+	}
+	path = filepath.Clean(path)
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("path is unavailable")
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("symlink paths cannot be opened from the panel")
+	}
+
+	for _, root := range p.allowedLocalPathRoots() {
+		if pathWithinRoot(root, path) {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("path is outside this checkout's local run artifacts")
+}
+
+func (p *localControlPanel) allowedLocalPathRoots() []string {
+	roots := []string{p.repoRoot, p.testDir}
+	if outputRoot, err := absoluteFromWorkingDir(automationOutputDir()); err == nil {
+		roots = append(roots, outputRoot)
+	}
+
+	var result []string
+	seen := map[string]bool{}
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		absRoot = filepath.Clean(absRoot)
+		if seen[absRoot] {
+			continue
+		}
+		seen[absRoot] = true
+		result = append(result, absRoot)
+	}
+	return result
+}
+
+func pathWithinRoot(root, path string) bool {
+	root, rootErr := filepath.Abs(filepath.Clean(root))
+	path, pathErr := filepath.Abs(filepath.Clean(path))
+	if rootErr != nil || pathErr != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != "..")
+}
+
+func openLocalPath(path string, reveal bool) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		if reveal {
+			cmd = exec.Command("open", "-R", path)
+		} else {
+			cmd = exec.Command("open", path)
+		}
+	case "windows":
+		if reveal {
+			cmd = exec.Command("explorer", "/select,"+path)
+		} else {
+			cmd = exec.Command("explorer", path)
+		}
+	default:
+		openPath := path
+		if reveal {
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				openPath = filepath.Dir(path)
+			}
+		}
+		cmd = exec.Command("xdg-open", openPath)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to open local path: %w", err)
 	}
 	return nil
 }

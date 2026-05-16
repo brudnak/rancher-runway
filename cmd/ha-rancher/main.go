@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/buildinfo"
 	harancher "github.com/brudnak/ha-rancher-rke2/terratest"
 )
 
@@ -85,7 +86,7 @@ func run(args []string) error {
 		printUsage()
 		return nil
 	case "version":
-		fmt.Println("ha-rancher development build")
+		fmt.Println(buildinfo.DisplayLine())
 		return nil
 	}
 

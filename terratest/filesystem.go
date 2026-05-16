@@ -162,7 +162,7 @@ echo "Rancher installation complete!"`, helmCommand)
 		return
 	}
 	if _, err := os.Stat(absHADir); os.IsNotExist(err) {
-		if mkdirErr := os.MkdirAll(absHADir, os.ModePerm); mkdirErr != nil {
+		if mkdirErr := os.MkdirAll(absHADir, 0o700); mkdirErr != nil {
 			log.Printf("Failed to create directory %s: %v", absHADir, mkdirErr)
 			return
 		}
@@ -170,18 +170,8 @@ echo "Rancher installation complete!"`, helmCommand)
 	}
 
 	absInstallScriptPath := filepath.Join(absHADir, "install.sh")
-	writeFile(absInstallScriptPath, []byte(installScript))
-
-	err = os.Chmod(absInstallScriptPath, 0755)
-	if err != nil {
-		log.Printf("Failed to make script executable: %v", err)
-		return
-	}
-}
-
-func writeFile(path string, data []byte) {
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		log.Printf("Failed to write file %s: %v", path, err)
+	if err := os.WriteFile(absInstallScriptPath, []byte(installScript), 0o700); err != nil {
+		log.Printf("Failed to write file %s: %v", absInstallScriptPath, err)
 	}
 }
 

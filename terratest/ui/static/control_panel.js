@@ -2,6 +2,7 @@ const setupData = JSON.parse(document.getElementById('control-panel-data')?.text
 const token = setupData.token || ''
 
 const panelSessionMetaEl = document.getElementById('panelSessionMeta')
+const buildVersionBadgeEl = document.getElementById('buildVersionBadge')
 const headerSummaryEl = document.getElementById('headerSummary')
 const commandDeckEl = document.getElementById('commandDeck')
 const configNoticeEl = document.getElementById('configNotice')
@@ -56,6 +57,8 @@ const destroySlotsPaneEl = document.getElementById('destroySlotsPane')
 const destroyCostsPaneEl = document.getElementById('destroyCostsPane')
 const resetCostLedgerBtnEl = document.getElementById('resetCostLedgerBtn')
 const costResetStatusEl = document.getElementById('costResetStatus')
+const cleanLocalArtifactsBtnEl = document.getElementById('cleanLocalArtifactsBtn')
+const localArtifactsStatusEl = document.getElementById('localArtifactsStatus')
 const costHistorySummaryEl = document.getElementById('costHistorySummary')
 const costHistoryTableEl = document.getElementById('costHistoryTable')
 const awsInventorySummaryEl = document.getElementById('awsInventorySummary')
@@ -84,6 +87,8 @@ const panelNoticeEl = document.getElementById('panelNotice')
 const panelNoticeTitleEl = document.getElementById('panelNoticeTitle')
 const panelNoticeBodyEl = document.getElementById('panelNoticeBody')
 const panelNoticeCloseEl = document.getElementById('panelNoticeClose')
+const upgradeCommandModalEl = document.getElementById('upgradeCommandModal')
+const upgradeCommandModalCloseEl = document.getElementById('upgradeCommandModalClose')
 
 let stream = null
 let streamPollTimer = null
@@ -96,6 +101,12 @@ let initializedCollapseState = new Set()
 let lastState = null
 let activeDownloadClusterId = ''
 let activeCopyClusterId = ''
+let activeCopyHelmClusterId = ''
+let activeCopyHelmUpgradeClusterId = ''
+let activeOpenKubeconfigPathClusterId = ''
+let activeCopyKubeconfigPathClusterId = ''
+let kubeconfigPathActionFeedback = new Map()
+let kubeconfigPathActionTimers = new Map()
 let lastLeaderChangeMessage = ''
 let refreshInFlight = false
 let rawLogText = ''
@@ -111,6 +122,7 @@ let pendingAbortOperation = ''
 let cleanupStarting = false
 let cleanupDismissedResultKey = ''
 let costResetting = false
+let localArtifactsCleaning = false
 let setupLaunchPendingUntil = 0
 let activeClusterRunKey = ''
 let activeClusterHAKey = ''
@@ -249,6 +261,29 @@ const showPanelNotice = (title, body) => {
     panelNoticeEl.classList.add('hidden')
     panelNoticeTimer = null
   }, 9000)
+}
+
+const closeUpgradeCommandModal = () => {
+  if (!upgradeCommandModalEl) {
+    return
+  }
+  upgradeCommandModalEl.classList.add('hidden')
+  upgradeCommandModalEl.classList.remove('flex')
+  document.body.classList.remove('overflow-hidden')
+}
+
+const showUpgradeCommandModal = () => {
+  if (!upgradeCommandModalEl) {
+    showPanelNotice(
+      'Prepared upgrade copied',
+      'Edit the chart version and any image override values before running the copied command.'
+    )
+    return
+  }
+  upgradeCommandModalEl.classList.remove('hidden')
+  upgradeCommandModalEl.classList.add('flex')
+  document.body.classList.add('overflow-hidden')
+  window.setTimeout(() => upgradeCommandModalCloseEl?.focus(), 0)
 }
 
 const setTheme = theme => {
@@ -986,6 +1021,43 @@ const metaItem = (label, value) => `
   </div>
 `
 
+const pathActionKey = (action, id) => `${action}:${id}`
+
+const flashKubeconfigPathAction = (clusterId, action, status) => {
+  const key = pathActionKey(action, clusterId)
+  window.clearTimeout(kubeconfigPathActionTimers.get(key))
+  kubeconfigPathActionFeedback.set(key, status)
+  if (lastState) {
+    renderClusters(lastState)
+  }
+  kubeconfigPathActionTimers.set(key, window.setTimeout(() => {
+    if (kubeconfigPathActionFeedback.get(key) === status) {
+      kubeconfigPathActionFeedback.delete(key)
+      if (lastState) {
+        renderClusters(lastState)
+      }
+    }
+  }, 1800))
+}
+
+const kubeconfigPathActionContent = (clusterId, action, idleLabel, activeLabel, successLabel, errorLabel) => {
+  const active = action === 'open'
+    ? activeOpenKubeconfigPathClusterId === clusterId
+    : activeCopyKubeconfigPathClusterId === clusterId
+  if (active) {
+    return `<span class="spinner mr-2 !h-3 !w-3 !border-[1.5px]"></span>${activeLabel}`
+  }
+
+  const feedback = kubeconfigPathActionFeedback.get(pathActionKey(action, clusterId))
+  if (feedback === 'success') {
+    return successLabel
+  }
+  if (feedback === 'error') {
+    return errorLabel
+  }
+  return idleLabel
+}
+
 const renderKubeconfigActions = cluster => {
   if (!cluster.available) {
     return '<span class="text-sm text-zinc-500 dark:text-zinc-400">Kubeconfig unavailable</span>'
@@ -993,13 +1065,24 @@ const renderKubeconfigActions = cluster => {
 
   const downloading = activeDownloadClusterId === cluster.id
   const copying = activeCopyClusterId === cluster.id
+  const copyingHelm = activeCopyHelmClusterId === cluster.id
+  const copyingHelmUpgrade = activeCopyHelmUpgradeClusterId === cluster.id
   const downloadSpinner = downloading ? '<span class="spinner mr-2"></span>' : ''
   const copySpinner = copying ? '<span class="spinner mr-2"></span>' : ''
+  const copyHelmSpinner = copyingHelm ? '<span class="spinner mr-2"></span>' : ''
+  const copyHelmUpgradeSpinner = copyingHelmUpgrade ? '<span class="spinner mr-2"></span>' : ''
   const downloadLabel = cluster.type === 'downstream' ? 'Download downstream kubeconfig' : 'Download kubeconfig'
+  const copyHelmButtons = cluster.type === 'local'
+    ? `<div class="flex max-w-full flex-wrap gap-2 rounded-xl border border-zinc-200 bg-zinc-50 p-2 dark:border-white/10 dark:bg-white/[0.03]">
+         <button type="button" data-action="copy-helm-command" data-cluster="${escapeHtml(cluster.id)}"${copyingHelm ? ' disabled' : ''} title="Copy the Helm command used during setup." class="inline-flex min-h-11 max-w-full items-center justify-center whitespace-normal rounded-lg border border-zinc-200 bg-white px-4 py-2 text-center text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:cursor-default disabled:opacity-70 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">${copyHelmSpinner}${copyingHelm ? 'Copying' : 'Copy install command'}</button>
+         <button type="button" data-action="copy-helm-upgrade-command" data-cluster="${escapeHtml(cluster.id)}"${copyingHelmUpgrade ? ' disabled' : ''} title="Copy the setup command converted to helm upgrade --install for editing before an upgrade." class="inline-flex min-h-11 max-w-full items-center justify-center whitespace-normal rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-center text-sm font-semibold text-sky-800 hover:bg-sky-100 disabled:cursor-default disabled:opacity-70 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-200 dark:hover:bg-sky-500/15">${copyHelmUpgradeSpinner}${copyingHelmUpgrade ? 'Copying' : 'Copy upgrade draft'}</button>
+       </div>`
+    : ''
 
   return `
     <button type="button" data-action="download" data-cluster="${escapeHtml(cluster.id)}"${downloading ? ' disabled' : ''} class="inline-flex min-h-11 max-w-full items-center justify-center whitespace-normal rounded-lg bg-emerald-500 px-4 py-2 text-center text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400 disabled:cursor-default disabled:opacity-70">${downloadSpinner}${downloading ? 'Preparing kubeconfig' : downloadLabel}</button>
     <button type="button" data-action="copy-kubeconfig" data-cluster="${escapeHtml(cluster.id)}"${copying ? ' disabled' : ''} class="inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:cursor-default disabled:opacity-70 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">${copySpinner}${copying ? 'Copying' : 'Copy kubeconfig'}</button>
+    ${copyHelmButtons}
   `
 }
 
@@ -1112,7 +1195,30 @@ const renderCluster = cluster => {
     ? `<a href="${escapeHtml(cluster.rancherUrl)}" data-external-url="${escapeHtml(cluster.rancherUrl)}" class="text-emerald-600 hover:text-emerald-500 dark:text-emerald-300">${escapeHtml(cluster.rancherUrl)}</a>`
     : '<span class="text-zinc-500 dark:text-zinc-400">Unavailable</span>'
   const loadBalancer = cluster.loadBalancer ? escapeHtml(cluster.loadBalancer) : '<span class="text-zinc-500 dark:text-zinc-400">Unavailable</span>'
-  const kubeconfig = cluster.kubeconfigPath ? escapeHtml(cluster.kubeconfigPath) : '<span class="text-zinc-500 dark:text-zinc-400">Generated on download</span>'
+  const openingKubeconfigPath = activeOpenKubeconfigPathClusterId === cluster.id
+  const copyingKubeconfigPath = activeCopyKubeconfigPathClusterId === cluster.id
+  const openPathFeedback = kubeconfigPathActionFeedback.get(pathActionKey('open', cluster.id))
+  const copyPathFeedback = kubeconfigPathActionFeedback.get(pathActionKey('copy', cluster.id))
+  const pathButtonBaseClass = 'inline-flex min-h-8 items-center justify-center rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:cursor-default disabled:opacity-70'
+  const openPathToneClass = openPathFeedback === 'error'
+    ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200'
+    : openPathFeedback === 'success'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200'
+      : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]'
+  const copyPathToneClass = copyPathFeedback === 'error'
+    ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200'
+    : copyPathFeedback === 'success'
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200'
+      : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]'
+  const kubeconfig = cluster.kubeconfigPath ? `
+    <div class="space-y-2">
+      <div>${escapeHtml(cluster.kubeconfigPath)}</div>
+      <div class="flex flex-wrap gap-2">
+        <button type="button" data-action="open-kubeconfig-folder" data-cluster="${escapeHtml(cluster.id)}"${openingKubeconfigPath ? ' disabled' : ''} class="${pathButtonBaseClass} ${openPathToneClass}">${kubeconfigPathActionContent(cluster.id, 'open', 'Open folder', 'Opening', 'Opened', 'Open failed')}</button>
+        <button type="button" data-action="copy-kubeconfig-path" data-cluster="${escapeHtml(cluster.id)}"${copyingKubeconfigPath ? ' disabled' : ''} class="${pathButtonBaseClass} ${copyPathToneClass}">${kubeconfigPathActionContent(cluster.id, 'copy', 'Copy path', 'Copying', 'Copied', 'Copy failed')}</button>
+      </div>
+    </div>
+  ` : '<span class="text-zinc-500 dark:text-zinc-400">Generated on download</span>'
   const namespace = cluster.namespace ? metaItem('Namespace', escapeHtml(cluster.namespace)) : ''
   const clusterID = cluster.managementClusterId ? metaItem('Cluster ID', escapeHtml(cluster.managementClusterId)) : ''
   const leaderSummary = currentLeader
@@ -1456,10 +1562,37 @@ const updateLeaderTracking = state => {
 
 const operationOutput = operation => operation && Array.isArray(operation.output) ? operation.output : []
 
-const renderPanelSession = panel => {
-  if (!panelSessionMetaEl || !panel?.sessionId) {
+const renderBuildVersion = build => {
+  if (!buildVersionBadgeEl) {
     return
   }
+
+  const shortCommit = String(build?.commitShort || '').trim()
+  const fullCommit = String(build?.commit || '').trim()
+  const buildDate = String(build?.buildDate || '').trim()
+  const modified = Boolean(build?.modified)
+  buildVersionBadgeEl.textContent = shortCommit ? `Build ${shortCommit}${modified ? '*' : ''}` : 'Build unknown'
+
+  const titleParts = []
+  if (fullCommit) {
+    titleParts.push(`Commit: ${fullCommit}`)
+  }
+  if (buildDate) {
+    titleParts.push(`Built: ${buildDate}`)
+  }
+  if (modified) {
+    titleParts.push('Working tree had local changes when this binary was built.')
+  }
+  buildVersionBadgeEl.title = titleParts.length ? titleParts.join('\n') : 'No build commit was embedded in this binary.'
+}
+
+const renderPanelSession = panel => {
+  if (!panelSessionMetaEl || !panel?.sessionId) {
+    renderBuildVersion(panel?.build)
+    return
+  }
+
+  renderBuildVersion(panel.build)
 
   const started = panel.startedAt ? new Date(panel.startedAt).toLocaleTimeString() : ''
   const pieces = [`Panel ${panel.sessionId}`]
@@ -1520,6 +1653,20 @@ const operationBadgeHTML = operation => {
   return `<span class="inline-flex items-center rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300"><span class="spinner mr-1.5 !h-3 !w-3 !border-[1.5px]"></span>${escapeHtml(label)} running${escapeHtml(started)}</span>`
 }
 
+const runHasFailure = run => {
+  const status = String(run?.status || '').toLowerCase()
+  return status.includes('failed') || status.includes('error')
+}
+
+const readinessFailedRun = runs => {
+  const readiness = lastState?.readiness || {}
+  if (readiness.running || !readiness.error) {
+    return runs.find(run => runHasFailure(run)) || null
+  }
+  const failedRunId = readiness.runId || ''
+  return runs.find(run => sameRunKey(run.runId, failedRunId)) || runs.find(run => runHasFailure(run)) || null
+}
+
 const runClusterStats = (run, state = lastState) => {
   const runId = run?.runId || ''
   const items = clusterItems(state).filter(cluster => sameRunKey(cluster.runId, runId))
@@ -1530,11 +1677,11 @@ const runClusterStats = (run, state = lastState) => {
 }
 
 const runTone = (run, operation) => {
+  const status = String(run?.status || '').toLowerCase()
   if (operation) {
     return 'sky'
   }
-  const status = String(run?.status || '').toLowerCase()
-  if (status.includes('failed') || status.includes('error')) {
+  if (runHasFailure(run)) {
     return 'rose'
   }
   if (status === 'ready' || status.includes('complete')) {
@@ -1549,6 +1696,87 @@ const runStatusClasses = tone => ({
   rose: 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200',
   zinc: 'border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300'
 })[tone] || runStatusClasses('zinc')
+
+const runStepClass = state => ({
+  done: 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200',
+  active: 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-200',
+  failed: 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200',
+  waiting: 'border-zinc-200 bg-zinc-50 text-zinc-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400'
+})[state] || runStepClass('waiting')
+
+const runTimelineHTML = run => {
+  const status = String(run?.status || '').toLowerCase()
+  const setupRunning = lastState?.setup?.running && sameRunKey(lastState.setup.runId, run.runId)
+  const readinessRunning = lastState?.readiness?.running && sameRunKey(lastState.readiness.runId, run.runId)
+  const cleanupRunning = lastState?.cleanup?.running && sameRunKey(lastState.cleanup.runId, run.runId)
+  const setupDone = status.includes('setup_complete') || status === 'ready' || status.includes('readiness') || status.includes('cleanup')
+  const readinessDone = status === 'ready'
+
+  const steps = [
+    {
+      label: 'Setup',
+      state: setupRunning ? 'active' : status.includes('setup_failed') ? 'failed' : setupDone ? 'done' : 'waiting'
+    },
+    {
+      label: 'Readiness',
+      state: readinessRunning ? 'active' : status.includes('readiness_failed') ? 'failed' : readinessDone ? 'done' : 'waiting'
+    },
+    {
+      label: 'Destroy',
+      state: cleanupRunning ? 'active' : status.includes('cleanup_failed') ? 'failed' : 'waiting'
+    }
+  ]
+
+  return `
+    <div class="mt-4 grid gap-2 sm:grid-cols-3">
+      ${steps.map(step => `
+        <div class="rounded-lg border px-3 py-2 ${runStepClass(step.state)}">
+          <div class="flex items-center gap-2">
+            <span class="${step.state === 'active' ? 'spinner !h-3 !w-3 !border-[1.5px]' : 'h-2.5 w-2.5 rounded-full ' + (step.state === 'done' ? 'bg-emerald-500' : step.state === 'failed' ? 'bg-rose-500' : 'bg-zinc-300 dark:bg-zinc-600')}"></span>
+            <span class="text-xs font-semibold uppercase tracking-wide">${escapeHtml(step.label)}</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `
+}
+
+const trimTrailingPathSeparator = value => String(value || '').replace(/[\\/]+$/, '')
+
+const parentPath = value => {
+  const path = trimTrailingPathSeparator(value)
+  const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return index > 0 ? path.slice(0, index) : path
+}
+
+const runFolderPath = run => {
+  const terraformModule = trimTrailingPathSeparator(run?.terraformModuleDir || '')
+  if (terraformModule) {
+    return terraformModule.replace(/[\\/]terraform[\\/]module$/, '')
+  }
+  const terraformState = trimTrailingPathSeparator(run?.terraformStatePath || '')
+  if (terraformState) {
+    return terraformState.replace(/[\\/]terraform[\\/]terraform\.tfstate$/, '')
+  }
+  const haRoot = trimTrailingPathSeparator(run?.haOutputRoot || '')
+  if (haRoot) {
+    return haRoot.replace(/[\\/]ha$/, '')
+  }
+  return ''
+}
+
+const runTerraformPath = run => {
+  if (run?.terraformModuleDir) {
+    return run.terraformModuleDir
+  }
+  if (run?.terraformStatePath) {
+    return parentPath(run.terraformStatePath)
+  }
+  if (run?.terraformBackend) {
+    return run.terraformBackend
+  }
+  return ''
+}
 
 const renderRunActionButton = ({ action, runId, label, variant = 'secondary', disabled = false, title = '' }) => {
   const classes = disabled
@@ -1634,12 +1862,17 @@ const renderWorkspace = workspace => {
         </div>
       `
     } else {
+      const failedReadinessRun = readinessFailedRun(runs)
       const banner = activeOperation ? (() => {
         const [mode, label, snapshot] = activeOperation
         const started = snapshot?.startedAt ? `Started ${new Date(snapshot.startedAt).toLocaleTimeString()}` : 'Starting now'
         const runText = snapshot?.runId ? `Run ${snapshot.runId}` : 'Run state publishing'
         const logAction = mode === 'setup' ? 'open-setup-logs' : mode === 'readiness' ? 'open-readiness-logs' : 'open-cleanup-logs'
-        const stopAction = mode === 'setup' || mode === 'readiness' ? renderRunActionButton({ action: `stop-${mode}`, runId: snapshot?.runId || '', label: 'Request stop', variant: 'danger' }) : ''
+        const stopAction = mode === 'readiness'
+          ? renderRunActionButton({ action: 'stop-readiness-open-destroy', runId: snapshot?.runId || '', label: 'Stop readiness, then destroy', variant: 'danger' })
+          : mode === 'setup'
+            ? renderRunActionButton({ action: 'stop-setup-open-destroy', runId: snapshot?.runId || '', label: 'Stop setup, then destroy', variant: 'danger' })
+            : ''
         return `
           <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 dark:border-sky-500/25 dark:bg-sky-500/10">
             <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -1655,7 +1888,21 @@ const renderWorkspace = workspace => {
             </div>
           </div>
         `
-      })() : ''
+      })() : failedReadinessRun ? `
+        <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 dark:border-rose-500/25 dark:bg-rose-500/10">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div class="min-w-0">
+              <div class="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-rose-700 shadow-sm dark:bg-white/[0.08] dark:text-rose-200">Readiness failed</div>
+              <h3 class="mt-2 text-base font-semibold text-rose-950 dark:text-rose-100">Run ${escapeHtml(failedReadinessRun.runId || 'unknown')} did not become ready</h3>
+              <p class="mt-1 text-sm leading-6 text-rose-800/80 dark:text-rose-100/75">If a manual Helm command left Rancher unhealthy, destroy this slot from the recorded Terraform state and start again with a corrected command.</p>
+            </div>
+            <div class="flex shrink-0 flex-wrap gap-2">
+              ${renderRunActionButton({ action: 'open-readiness-logs', runId: failedReadinessRun.runId, label: 'Readiness logs' })}
+              ${renderRunActionButton({ action: 'open-destroy', runId: failedReadinessRun.runId, label: 'Destroy failed run', variant: 'danger' })}
+            </div>
+          </div>
+        </div>
+      ` : ''
 
       workspaceRunMetaEl.innerHTML = `
         ${banner}
@@ -1668,6 +1915,9 @@ const renderWorkspace = workspace => {
             const isCurrent = currentRunID && sameRunKey(run.runId, currentRunID)
             const lifecycleBusy = lifecycleRunning(lastState) || bootStatePending
             const readinessDisabled = lifecycleBusy || !isCurrent
+            const setupRunningForRun = lastState?.setup?.running && sameRunKey(lastState.setup.runId, run.runId)
+            const readinessRunningForRun = lastState?.readiness?.running && sameRunKey(lastState.readiness.runId, run.runId)
+            const failedRun = runHasFailure(run)
             const readinessTitle = bootStatePending
               ? 'Startup safety check is still running.'
               : lifecycleRunning(lastState)
@@ -1687,6 +1937,7 @@ const renderWorkspace = workspace => {
                       ${operationBadgeHTML(operation)}
                     </div>
                     ${updated ? `<div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Updated ${escapeHtml(updated)}</div>` : ''}
+                    ${runTimelineHTML(run)}
                     <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                       <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950/30">
                         <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Rancher</div>
@@ -1713,9 +1964,13 @@ const renderWorkspace = workspace => {
                   <div class="run-action-rail flex shrink-0 flex-wrap gap-2 xl:max-w-[26rem]">
                     ${renderRunActionButton({ action: 'view-clusters', runId: run.runId, label: 'View clusters', variant: stats.total ? 'primary' : 'secondary', disabled: !stats.total, title: stats.total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.' })}
                     ${renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled, title: readinessTitle })}
+                    ${renderRunActionButton({ action: 'open-run-folder', runId: run.runId, label: 'Open folder', disabled: !runFolderPath(run), title: runFolderPath(run) ? 'Open this run slot folder in Finder.' : 'Run folder path is not recorded yet.' })}
+                    ${renderRunActionButton({ action: 'copy-terraform-path', runId: run.runId, label: 'Copy TF path', disabled: !runTerraformPath(run), title: runTerraformPath(run) ? 'Copy the Terraform module/state path for this run.' : 'Terraform path is not recorded yet.' })}
                     ${renderRunActionButton({ action: 'open-setup-logs', runId: run.runId, label: 'Setup logs' })}
                     ${renderRunActionButton({ action: 'open-readiness-logs', runId: run.runId, label: 'Readiness logs' })}
-                    ${renderRunActionButton({ action: 'open-destroy', runId: run.runId, label: 'Destroy', variant: 'danger', disabled: lifecycleBusy, title: lifecycleBusy ? 'Wait for the active lifecycle operation to finish.' : 'Open the Destroy tab for this slot.' })}
+                    ${setupRunningForRun ? renderRunActionButton({ action: 'stop-setup-open-destroy', runId: run.runId, label: 'Stop setup, then destroy', variant: 'danger' }) : ''}
+                    ${readinessRunningForRun ? renderRunActionButton({ action: 'stop-readiness-open-destroy', runId: run.runId, label: 'Stop readiness, then destroy', variant: 'danger' }) : ''}
+                    ${renderRunActionButton({ action: 'open-destroy', runId: run.runId, label: failedRun ? 'Destroy failed run' : 'Destroy', variant: 'danger', disabled: lifecycleBusy, title: lifecycleBusy ? 'Wait for the active lifecycle operation to finish.' : 'Open the Destroy tab for this slot.' })}
                   </div>
                 </div>
               </article>
@@ -1758,9 +2013,10 @@ const renderDestroySlots = workspace => {
     return
   }
 
-  cleanupSlotsEl.innerHTML = runs.map(run => {
+  const cards = runs.map(run => {
     const pendingDestroy = cleanupStarting && selectedCleanupRunId === run.runId
     const destroying = cleanupRunning && cleanup.runId === run.runId
+    const selected = selectedCleanupRunId && sameRunKey(selectedCleanupRunId, run.runId)
     const versions = Array.isArray(run.rancherVersions) && run.rancherVersions.length
       ? run.rancherVersions.join(', ')
       : 'not recorded'
@@ -1795,6 +2051,8 @@ const renderDestroySlots = workspace => {
             : `Destroy run ${run.runId || 'slot'}`
     const cardClass = destroying || pendingDestroy
       ? 'border-sky-200 bg-sky-50/60 dark:border-sky-500/25 dark:bg-sky-500/10'
+      : selected
+        ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/25 dark:bg-emerald-500/10'
       : 'border-zinc-200 bg-white dark:border-white/10 dark:bg-white/[0.03]'
     const activityBadge = destroying
       ? '<span class="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">Destroy running</span>'
@@ -1809,6 +2067,7 @@ const renderDestroySlots = workspace => {
             <div class="flex flex-wrap items-center gap-2">
               <h3 class="text-base font-semibold text-zinc-950 dark:text-zinc-50">Run ${escapeHtml(run.runId || 'unknown')}</h3>
               <span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml((run.status || 'recorded').replaceAll('_', ' '))}</span>
+              ${selected && !destroying && !pendingDestroy ? '<span class="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">Selected for destroy</span>' : ''}
               ${activityBadge}
             </div>
             ${updated ? `<div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Updated ${escapeHtml(updated)}</div>` : ''}
@@ -1823,12 +2082,22 @@ const renderDestroySlots = workspace => {
             </div>
           </div>
           <div class="flex shrink-0 flex-wrap gap-2 lg:justify-end">
+            <button type="button" data-action="open-run-folder" data-run-id="${escapeHtml(run.runId || '')}" ${runFolderPath(run) ? '' : 'disabled'} class="${runFolderPath(run) ? 'rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]' : 'rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400'}">Open folder</button>
             <button type="button" data-action="destroy-slot" data-run-id="${escapeHtml(run.runId || '')}" title="${escapeHtml(disabledTitle)}" ${disabled ? 'disabled' : ''} class="${disabled ? 'rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400' : 'rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400'}">${buttonLabel}</button>
           </div>
         </div>
       </article>
     `
-  }).join('')
+  })
+
+  cleanupSlotsEl.innerHTML = `
+    ${selectedCleanupRunId ? `
+      <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-100">
+        Selected run ${escapeHtml(selectedCleanupRunId)}. Destroy is typed-confirmed and uses the recorded Terraform target for that slot.
+      </div>
+    ` : ''}
+    ${cards.join('')}
+  `
 }
 
 const lifecycleRunning = state => Boolean(state?.setup?.running || state?.readiness?.running || state?.cleanup?.running)
@@ -2174,6 +2443,8 @@ const renderCostHistory = costs => {
     return
   }
 
+  renderLocalArtifactCleanup(lastState?.workspace)
+
   if (resetCostLedgerBtnEl) {
     const locked = costResetting || bootStatePending || lifecycleRunning(lastState)
     resetCostLedgerBtnEl.disabled = locked
@@ -2266,6 +2537,98 @@ const renderCostHistory = costs => {
   `
 }
 
+const renderLocalArtifactCleanup = workspace => {
+  if (!cleanLocalArtifactsBtnEl || !localArtifactsStatusEl) {
+    return
+  }
+
+  const runCount = Array.isArray(workspace?.runs) ? workspace.runs.length : 0
+  const residueCount = Array.isArray(workspace?.sharedPathLabels) ? workspace.sharedPathLabels.length : 0
+  const locked = localArtifactsCleaning || bootStatePending || lifecycleRunning(lastState) || runCount > 0
+  cleanLocalArtifactsBtnEl.disabled = locked
+  cleanLocalArtifactsBtnEl.innerHTML = localArtifactsCleaning
+    ? '<span class="spinner mr-2 !h-4 !w-4 !border-2 align-[-0.15em]"></span>Cleaning'
+    : 'Clean after destroy'
+  cleanLocalArtifactsBtnEl.title = bootStatePending
+    ? 'Startup safety check is still loading panel state.'
+    : lifecycleRunning(lastState)
+      ? 'Wait for setup, readiness, or destroy to finish before cleaning local artifacts.'
+      : runCount > 0
+        ? 'Locked while recorded run slots exist so Terraform destroy targets stay available.'
+        : 'Remove ignored local run residue left after destroy. Cost history is kept.'
+
+  if (localArtifactsCleaning) {
+    localArtifactsStatusEl.textContent = 'Cleaning ignored local run residue...'
+  } else if (runCount > 0) {
+    localArtifactsStatusEl.textContent = `Locked: ${runCount} recorded run slot${runCount === 1 ? '' : 's'} still exist. Destroy slots first so Terraform targets stay intact.`
+  } else if (residueCount > 0) {
+    localArtifactsStatusEl.textContent = `Ready: no recorded run slots remain. ${residueCount} leftover local artifact${residueCount === 1 ? '' : 's'} can be cleaned.`
+  } else {
+    localArtifactsStatusEl.textContent = 'Ready: no recorded run slots remain and no shared workspace residue is blocking setup.'
+  }
+}
+
+const cleanLocalArtifacts = async () => {
+  if (localArtifactsCleaning) {
+    return
+  }
+  if (bootStatePending || lifecycleRunning(lastState)) {
+    renderLocalArtifactCleanup(lastState?.workspace)
+    return
+  }
+
+  const runCount = Array.isArray(lastState?.workspace?.runs) ? lastState.workspace.runs.length : 0
+  if (runCount > 0) {
+    renderLocalArtifactCleanup(lastState?.workspace)
+    return
+  }
+
+  const confirmed = await requestTypedConfirmation({
+    title: 'Clean artifacts after destroy?',
+    body: 'This backup cleanup removes ignored local run residue only after recorded slots are gone. It keeps cost history and will not destroy AWS resources.',
+    typedValue: 'clean local artifacts',
+    confirmText: 'Clean artifacts',
+    accentText: 'Local cleanup'
+  })
+  if (!confirmed) {
+    return false
+  }
+
+  localArtifactsCleaning = true
+  renderLocalArtifactCleanup(lastState?.workspace)
+
+  const response = await fetch('/api/local-artifacts/clean', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Control-Panel-Token': token
+    },
+    body: JSON.stringify({ confirm: 'clean local artifacts' })
+  })
+
+  localArtifactsCleaning = false
+  if (!response.ok) {
+    localArtifactsStatusEl.textContent = await response.text()
+    renderLocalArtifactCleanup(lastState?.workspace)
+    return
+  }
+
+  const payload = await response.json()
+  lastState = {
+    ...(lastState || {}),
+    workspace: payload.workspace || lastState?.workspace,
+    costs: payload.costs || lastState?.costs
+  }
+  const removed = Array.isArray(payload.removed) ? payload.removed.length : 0
+  renderWorkspace(lastState.workspace)
+  renderLocalArtifactCleanup(lastState.workspace)
+  renderCostHistory(lastState.costs)
+  localArtifactsStatusEl.textContent = removed
+    ? `Cleaned ${removed} local artifact${removed === 1 ? '' : 's'}.`
+    : 'No local artifacts needed cleaning.'
+  refresh()
+}
+
 const resetCostLedger = async () => {
   if (costResetting) {
     return
@@ -2287,7 +2650,7 @@ const resetCostLedger = async () => {
     accentText: 'Local data reset'
   })
   if (!confirmed) {
-    return
+    return false
   }
 
   costResetting = true
@@ -2640,6 +3003,86 @@ const openExternalURL = async url => {
   }
 }
 
+const openLocalPath = async (path, options = {}) => {
+  const rawPath = String(path || '').trim()
+  if (!rawPath) {
+    refreshStatusEl.textContent = 'No local path is available yet.'
+    return false
+  }
+
+  refreshStatusEl.textContent = options.reveal ? 'Revealing local path...' : 'Opening local folder...'
+  try {
+    const response = await fetch('/api/open-path', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Control-Panel-Token': token
+      },
+      body: JSON.stringify({ path: rawPath, reveal: Boolean(options.reveal) })
+    })
+    if (!response.ok) {
+      throw new Error(await response.text() || 'Failed to open local path.')
+    }
+    refreshStatusEl.textContent = options.reveal ? 'Revealed local path.' : 'Opened local folder.'
+    return true
+  } catch (error) {
+    refreshStatusEl.textContent = error instanceof Error ? error.message : 'Failed to open local path.'
+    return false
+  }
+}
+
+const copyTextToClipboard = async (text, successMessage) => {
+  if (!navigator.clipboard) {
+    refreshStatusEl.textContent = 'Clipboard access is unavailable in this browser.'
+    return false
+  }
+  const value = String(text || '').trim()
+  if (!value) {
+    refreshStatusEl.textContent = 'No value is available to copy yet.'
+    return false
+  }
+  try {
+    await navigator.clipboard.writeText(value)
+    refreshStatusEl.textContent = successMessage
+    return true
+  } catch (error) {
+    refreshStatusEl.textContent = error instanceof Error ? error.message : 'Failed to copy to clipboard.'
+    return false
+  }
+}
+
+const openKubeconfigFolder = async cluster => {
+  const clusterId = cluster?.id || ''
+  if (!clusterId || activeOpenKubeconfigPathClusterId) {
+    return
+  }
+
+  activeOpenKubeconfigPathClusterId = clusterId
+  if (lastState) {
+    renderClusters(lastState)
+  }
+
+  const opened = await openLocalPath(cluster?.kubeconfigPath || '', { reveal: true })
+  activeOpenKubeconfigPathClusterId = ''
+  flashKubeconfigPathAction(clusterId, 'open', opened ? 'success' : 'error')
+}
+
+const copyKubeconfigPath = async cluster => {
+  const clusterId = cluster?.id || ''
+  if (!clusterId || activeCopyKubeconfigPathClusterId) {
+    return
+  }
+
+  activeCopyKubeconfigPathClusterId = clusterId
+  if (lastState) {
+    renderClusters(lastState)
+  }
+
+  const copied = await copyTextToClipboard(cluster?.kubeconfigPath || '', 'Copied kubeconfig path to clipboard.')
+  activeCopyKubeconfigPathClusterId = ''
+  flashKubeconfigPathAction(clusterId, 'copy', copied ? 'success' : 'error')
+}
+
 const copyKubeconfig = async clusterId => {
   if (activeCopyClusterId) {
     return
@@ -2674,6 +3117,58 @@ const copyKubeconfig = async clusterId => {
     refreshStatusEl.textContent = error instanceof Error ? error.message : 'Failed to copy kubeconfig.'
   } finally {
     activeCopyClusterId = ''
+    if (lastState) {
+      renderClusters(lastState)
+    }
+  }
+}
+
+const copyHelmInstallCommand = async (clusterId, mode = 'install') => {
+  const upgradeMode = mode === 'upgrade'
+  if (upgradeMode ? activeCopyHelmUpgradeClusterId : activeCopyHelmClusterId) {
+    return
+  }
+
+  if (!navigator.clipboard) {
+    refreshStatusEl.textContent = 'Clipboard access is unavailable in this browser.'
+    return
+  }
+
+  if (upgradeMode) {
+    activeCopyHelmUpgradeClusterId = clusterId
+  } else {
+    activeCopyHelmClusterId = clusterId
+  }
+  if (lastState) {
+    renderClusters(lastState)
+  }
+  refreshStatusEl.textContent = upgradeMode ? 'Copying prepared Helm upgrade command...' : 'Copying Helm install command...'
+
+  try {
+    const response = await fetch(`/api/helm-command?cluster=${encodeURIComponent(clusterId)}${upgradeMode ? '&mode=upgrade' : ''}`, {
+      headers: {
+        'X-Control-Panel-Token': token
+      }
+    })
+
+    if (!response.ok) {
+      refreshStatusEl.textContent = await response.text()
+      return
+    }
+
+    await navigator.clipboard.writeText(await response.text())
+    refreshStatusEl.textContent = upgradeMode ? 'Copied prepared Helm upgrade command to clipboard.' : 'Copied Helm install command to clipboard.'
+    if (upgradeMode) {
+      showUpgradeCommandModal()
+    }
+  } catch (error) {
+    refreshStatusEl.textContent = error instanceof Error ? error.message : 'Failed to copy Helm command.'
+  } finally {
+    if (upgradeMode) {
+      activeCopyHelmUpgradeClusterId = ''
+    } else {
+      activeCopyHelmClusterId = ''
+    }
     if (lastState) {
       renderClusters(lastState)
     }
@@ -2773,11 +3268,12 @@ const abortOperation = async (operation, runId = '') => {
   if (!response.ok) {
     refreshStatusEl.textContent = await response.text()
     pendingAbortOperation = ''
-    return
+    return false
   }
 
   refreshStatusEl.textContent = `Stop requested for ${operation}.`
   refresh()
+  return true
 }
 
 const runReadiness = async () => {
@@ -2984,6 +3480,28 @@ clustersEl.addEventListener('click', event => {
     return
   }
 
+  if (action === 'open-kubeconfig-folder') {
+    const cluster = clusterItems(lastState).find(item => item.id === clusterId)
+    openKubeconfigFolder(cluster)
+    return
+  }
+
+  if (action === 'copy-kubeconfig-path') {
+    const cluster = clusterItems(lastState).find(item => item.id === clusterId)
+    copyKubeconfigPath(cluster)
+    return
+  }
+
+  if (action === 'copy-helm-command') {
+    copyHelmInstallCommand(clusterId)
+    return
+  }
+
+  if (action === 'copy-helm-upgrade-command') {
+    copyHelmInstallCommand(clusterId, 'upgrade')
+    return
+  }
+
   if (action === 'tail') {
     loadLogs(clusterId, button.dataset.namespace, button.dataset.pod)
     return
@@ -3002,6 +3520,7 @@ workspaceRunMetaEl?.addEventListener('click', event => {
 
   const action = button.dataset.runAction
   const runId = button.dataset.runId || ''
+  const run = (lastState?.workspace?.runs || []).find(candidate => sameRunKey(candidate.runId, runId))
   if (action === 'open-setup') {
     setActivePanelTab('setup')
     return
@@ -3015,6 +3534,14 @@ workspaceRunMetaEl?.addEventListener('click', event => {
   }
   if (action === 'check-readiness') {
     runReadiness()
+    return
+  }
+  if (action === 'open-run-folder') {
+    openLocalPath(runFolderPath(run))
+    return
+  }
+  if (action === 'copy-terraform-path') {
+    copyTextToClipboard(runTerraformPath(run), 'Copied Terraform path to clipboard.')
     return
   }
   if (action === 'open-setup-logs') {
@@ -3040,17 +3567,51 @@ workspaceRunMetaEl?.addEventListener('click', event => {
     abortOperation('setup', runId)
     return
   }
+  if (action === 'stop-setup-open-destroy') {
+    abortOperation('setup', runId).then(stopped => {
+      if (!stopped) {
+        return
+      }
+      selectedCleanupRunId = runId
+      setActiveDestroyTab('slots')
+      setActivePanelTab('destroy')
+      renderDestroySlots(lastState?.workspace)
+    })
+    return
+  }
   if (action === 'stop-readiness') {
     abortOperation('readiness', runId)
+    return
+  }
+  if (action === 'stop-readiness-open-destroy') {
+    abortOperation('readiness', runId).then(stopped => {
+      if (!stopped) {
+        return
+      }
+      selectedCleanupRunId = runId
+      setActiveDestroyTab('slots')
+      setActivePanelTab('destroy')
+      renderDestroySlots(lastState?.workspace)
+    })
   }
 })
 
 cleanupSlotsEl?.addEventListener('click', event => {
-  const button = event.target.closest('button[data-action="destroy-slot"]')
+  const button = event.target.closest('button[data-action]')
   if (!button) {
     return
   }
-  runCleanup(button.dataset.runId || '')
+  const runId = button.dataset.runId || ''
+  if (button.dataset.action === 'open-run-folder') {
+    const run = (lastState?.workspace?.runs || []).find(candidate => sameRunKey(candidate.runId, runId))
+    openLocalPath(runFolderPath(run))
+    return
+  }
+  if (button.dataset.action === 'destroy-slot') {
+    selectedCleanupRunId = runId
+    renderDestroySlots(lastState?.workspace)
+    runCleanup(runId)
+  }
 })
 
 ;[destroySlotsTabBtnEl, destroyCostsTabBtnEl].forEach(button => {
@@ -3058,8 +3619,20 @@ cleanupSlotsEl?.addEventListener('click', event => {
 })
 
 resetCostLedgerBtnEl?.addEventListener('click', resetCostLedger)
+cleanLocalArtifactsBtnEl?.addEventListener('click', cleanLocalArtifacts)
 
 panelNoticeCloseEl?.addEventListener('click', hidePanelNotice)
+upgradeCommandModalCloseEl?.addEventListener('click', closeUpgradeCommandModal)
+upgradeCommandModalEl?.addEventListener('click', event => {
+  if (event.target === upgradeCommandModalEl) {
+    closeUpgradeCommandModal()
+  }
+})
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && upgradeCommandModalEl && !upgradeCommandModalEl.classList.contains('hidden')) {
+    closeUpgradeCommandModal()
+  }
+})
 
 themeToggleEl.addEventListener('click', () => {
   setTheme(currentTheme() === 'dark' ? 'light' : 'dark')

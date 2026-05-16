@@ -3,10 +3,31 @@ import "./style.css";
 const frame = document.querySelector("#panelFrame");
 const loadingShell = document.querySelector("#loadingShell");
 const status = document.querySelector("#status");
+const buildBadge = document.querySelector("#buildBadge");
 
 const setStatus = (message, error = false) => {
   status.textContent = message;
   status.dataset.error = error ? "true" : "false";
+};
+
+const setBuildBadge = build => {
+  const shortCommit = String(build?.commitShort || "").trim();
+  const fullCommit = String(build?.commit || "").trim();
+  const buildDate = String(build?.buildDate || "").trim();
+  const modified = Boolean(build?.modified);
+  buildBadge.textContent = shortCommit ? `Build ${shortCommit}${modified ? "*" : ""}` : "Build unknown";
+
+  const titleParts = [];
+  if (fullCommit) {
+    titleParts.push(`Commit: ${fullCommit}`);
+  }
+  if (buildDate) {
+    titleParts.push(`Built: ${buildDate}`);
+  }
+  if (modified) {
+    titleParts.push("Working tree had local changes when this binary was built.");
+  }
+  buildBadge.title = titleParts.length ? titleParts.join("\n") : "No build commit was embedded in this binary.";
 };
 
 const waitForPanelStatus = async () => {
@@ -25,6 +46,7 @@ const attachPanel = async () => {
     const panelStatus = await waitForPanelStatus();
     setStatus("Starting the local Go panel and attaching this native window.");
     const result = await panelStatus();
+    setBuildBadge(result?.build);
 
     if (result?.error) {
       throw new Error(result.error);

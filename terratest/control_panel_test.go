@@ -22,6 +22,79 @@ func TestControlPanelKubeconfigNames(t *testing.T) {
 	}
 }
 
+func TestExtractHelmCommandFromInstallScript(t *testing.T) {
+	script := `#!/bin/bash
+set -euo pipefail
+
+echo "Installing Rancher..."
+helm install rancher rancher-latest/rancher \
+  --namespace cattle-system \
+  --version 2.14.0 \
+  --set tls=external
+
+echo "Rancher installation complete!"`
+
+	command, err := extractHelmCommandFromInstallScript(script)
+	if err != nil {
+		t.Fatalf("extractHelmCommandFromInstallScript returned error: %v", err)
+	}
+	if strings.Contains(command, "Rancher installation complete") {
+		t.Fatalf("expected only Helm command, got:\n%s", command)
+	}
+	if !strings.Contains(command, "helm install rancher rancher-latest/rancher") || !strings.Contains(command, "--set tls=external") {
+		t.Fatalf("unexpected Helm command:\n%s", command)
+	}
+}
+
+func TestPrepareHelmUpgradeCommandFromInstall(t *testing.T) {
+	command := `helm install rancher rancher-latest/rancher \
+  --namespace cattle-system \
+  --version 2.14.0 \
+  --set tls=external`
+
+	got, err := prepareHelmUpgradeCommand(command)
+	if err != nil {
+		t.Fatalf("prepareHelmUpgradeCommand returned error: %v", err)
+	}
+	if !strings.HasPrefix(got, "helm upgrade --install rancher rancher-latest/rancher") {
+		t.Fatalf("expected helm upgrade --install command, got:\n%s", got)
+	}
+	if !strings.Contains(got, "--version 2.14.0") || !strings.Contains(got, "--set tls=external") {
+		t.Fatalf("expected upgrade command to preserve flags, got:\n%s", got)
+	}
+}
+
+func TestPrepareHelmUpgradeCommandAddsInstallFlag(t *testing.T) {
+	got, err := prepareHelmUpgradeCommand("helm upgrade rancher rancher-latest/rancher --version 2.14.0")
+	if err != nil {
+		t.Fatalf("prepareHelmUpgradeCommand returned error: %v", err)
+	}
+	if !strings.HasPrefix(got, "helm upgrade --install rancher rancher-latest/rancher") {
+		t.Fatalf("expected --install to be added, got %q", got)
+	}
+}
+
+func TestResolveAllowedLocalPathBlocksOutsideCheckout(t *testing.T) {
+	workspace := t.TempDir()
+	repoRoot := filepath.Join(workspace, "repo")
+	testDir := filepath.Join(repoRoot, "terratest")
+	inside := filepath.Join(testDir, "automation-output", "runs", "abc12345")
+	outside := filepath.Join(workspace, "outside")
+	for _, dir := range []string{inside, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create dir %s: %v", dir, err)
+		}
+	}
+
+	panel := &localControlPanel{repoRoot: repoRoot, testDir: testDir}
+	if got, err := panel.resolveAllowedLocalPath(inside); err != nil || got != inside {
+		t.Fatalf("expected inside path to be allowed, got %q err=%v", got, err)
+	}
+	if _, err := panel.resolveAllowedLocalPath(outside); err == nil {
+		t.Fatal("expected outside path to be blocked")
+	}
+}
+
 func TestHandleShutdownBlocksWhileLifecycleRuns(t *testing.T) {
 	panel := &localControlPanel{
 		token:      "token",
@@ -375,6 +448,97 @@ func TestPanelPreflightBlocksGeneratedTerraformInputsOnly(t *testing.T) {
 	}
 	if !strings.Contains(item.Detail, "cleanup residue") {
 		t.Fatalf("expected cleanup residue guidance, got %q", item.Detail)
+	}
+}
+
+func TestCleanLocalArtifactsRemovesResidueButKeepsCostLedger(t *testing.T) {
+	workspace := t.TempDir()
+	repoRoot := filepath.Join(workspace, "repo")
+	testDir := filepath.Join(repoRoot, "terratest")
+	t.Setenv("GITHUB_WORKSPACE", testDir)
+
+	terraformDir := filepath.Join(repoRoot, "modules", "aws")
+	if err := os.MkdirAll(terraformDir, 0o755); err != nil {
+		t.Fatalf("failed to create terraform dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(testDir, "high-availability-1"), 0o755); err != nil {
+		t.Fatalf("failed to create HA dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(terraformDir, "terraform.tfvars"), []byte("generated"), 0o600); err != nil {
+		t.Fatalf("failed to write terraform.tfvars: %v", err)
+	}
+
+	outputDir := filepath.Join(testDir, "automation-output")
+	controlPanelDir := filepath.Join(outputDir, "control-panel")
+	for _, dir := range []string{filepath.Join(outputDir, "runs", "abc12345"), controlPanelDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create artifact dir: %v", err)
+		}
+	}
+	costLedger := filepath.Join(controlPanelDir, "cost-ledger.sqlite")
+	for path, content := range map[string]string{
+		filepath.Join(outputDir, "runs", "abc12345", "terraform.tfstate"):   "state",
+		filepath.Join(outputDir, "rancher-resolution-install-ha-1.json"):    "{}",
+		filepath.Join(controlPanelDir, "run-abc12345-ha-1-downstream.yaml"): "yaml",
+		filepath.Join(controlPanelDir, "lifecycle-state.json"):              "{}",
+		costLedger: "sqlite",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("failed to write artifact %s: %v", path, err)
+		}
+	}
+
+	panel := &localControlPanel{
+		repoRoot:   repoRoot,
+		testDir:    testDir,
+		totalHAs:   1,
+		operations: newPanelOperations(),
+	}
+
+	result, err := panel.cleanLocalArtifacts()
+	if err != nil {
+		t.Fatalf("cleanLocalArtifacts returned error: %v", err)
+	}
+	if len(result.Removed) == 0 {
+		t.Fatal("expected local artifacts to be removed")
+	}
+
+	for _, path := range []string{
+		filepath.Join(testDir, "high-availability-1"),
+		filepath.Join(terraformDir, "terraform.tfvars"),
+		filepath.Join(outputDir, "runs"),
+		filepath.Join(outputDir, "rancher-resolution-install-ha-1.json"),
+		filepath.Join(controlPanelDir, "run-abc12345-ha-1-downstream.yaml"),
+		filepath.Join(controlPanelDir, "lifecycle-state.json"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be removed, stat err=%v", path, err)
+		}
+	}
+	if _, err := os.Stat(costLedger); err != nil {
+		t.Fatalf("expected cost ledger to be preserved: %v", err)
+	}
+}
+
+func TestCleanLocalArtifactsBlocksWhenRunRecordsExist(t *testing.T) {
+	workspace := t.TempDir()
+	repoRoot := filepath.Join(workspace, "repo")
+	testDir := filepath.Join(repoRoot, "terratest")
+	t.Setenv("GITHUB_WORKSPACE", testDir)
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
+		t.Fatalf("failed to create terratest dir: %v", err)
+	}
+
+	panel := &localControlPanel{
+		repoRoot:   repoRoot,
+		testDir:    testDir,
+		totalHAs:   1,
+		operations: newPanelOperations(),
+	}
+	panel.createCurrentRunRecord("abc12345", time.Now())
+
+	if _, err := panel.cleanLocalArtifacts(); err == nil {
+		t.Fatal("expected cleanLocalArtifacts to block while a run record exists")
 	}
 }
 

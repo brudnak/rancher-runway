@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -712,7 +713,23 @@ func normalizePreflightVersions(versions []string) ([]string, error) {
 }
 
 func updateAutoModeConfigFile(configPath string, update settings.PreflightConfigUpdate) error {
-	normalizedVersions, err := normalizePreflightVersions(update.Versions)
+	mode := strings.ToLower(strings.TrimSpace(update.Mode))
+	if mode == "" {
+		mode = "auto"
+	}
+	var normalizedVersions []string
+	var normalizedHelmCommands []string
+	var normalizedK8SVersions []string
+	var installerSHA256s []string
+	var err error
+	switch mode {
+	case "auto":
+		normalizedVersions, err = normalizePreflightVersions(update.Versions)
+	case "manual":
+		normalizedHelmCommands, normalizedK8SVersions, installerSHA256s, err = normalizeManualPreflight(update)
+	default:
+		err = fmt.Errorf("rancher.mode must be auto or manual")
+	}
 	if err != nil {
 		return err
 	}
@@ -727,7 +744,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if err != nil {
 		return err
 	}
-	if customHostnamePrefix != "" && len(normalizedVersions) != 1 {
+	if customHostnamePrefix != "" && ((mode == "auto" && len(normalizedVersions) != 1) || (mode == "manual" && len(normalizedHelmCommands) != 1)) {
 		return fmt.Errorf("custom Rancher URL can only be used with one HA")
 	}
 
@@ -751,7 +768,6 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 
 	rancherNode := ensureMappingValue(root, "rancher")
 	if update.TFVars != nil {
-		setStringValue(rancherNode, "mode", "auto")
 		setStringValue(rancherNode, "distro", update.Distro)
 		setStringValue(rancherNode, "bootstrap_password", update.BootstrapPassword)
 		userNode := ensureMappingValue(root, "user")
@@ -760,9 +776,25 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		rke2Node := ensureMappingValue(root, "rke2")
 		setBoolValue(rke2Node, "preload_images", update.PreloadImages)
 	}
-	setStringSequenceValue(rancherNode, "versions", normalizedVersions)
-	deleteMappingKey(rancherNode, "version")
-	setIntValue(root, "total_has", len(normalizedVersions))
+	setStringValue(rancherNode, "mode", mode)
+	switch mode {
+	case "auto":
+		setStringSequenceValue(rancherNode, "versions", normalizedVersions)
+		deleteMappingKey(rancherNode, "version")
+		deleteMappingKey(rancherNode, "helm_commands")
+		setIntValue(root, "total_has", len(normalizedVersions))
+	case "manual":
+		setStringLiteralSequenceValue(rancherNode, "helm_commands", normalizedHelmCommands)
+		deleteMappingKey(rancherNode, "version")
+		deleteMappingKey(rancherNode, "versions")
+		setIntValue(root, "total_has", len(normalizedHelmCommands))
+		k8sNode := ensureMappingValue(root, "k8s")
+		setStringSequenceValue(k8sNode, "versions", normalizedK8SVersions)
+		deleteMappingKey(k8sNode, "version")
+		rke2Node := ensureMappingValue(root, "rke2")
+		setStringMapValue(rke2Node, "install_script_sha256s", normalizedK8SVersions, installerSHA256s)
+		deleteMappingKey(rke2Node, "install_script_sha256")
+	}
 	if update.TFVars != nil {
 		tfVarsNode := ensureMappingValue(root, "tf_vars")
 		for _, key := range settings.EditableTFVarKeys {
@@ -792,11 +824,27 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
-	viper.Set("rancher.versions", normalizedVersions)
-	viper.Set("total_has", len(normalizedVersions))
+	viper.Set("rancher.mode", mode)
 	viper.Set("rancher.version", "")
+	switch mode {
+	case "auto":
+		viper.Set("rancher.versions", normalizedVersions)
+		viper.Set("rancher.helm_commands", []string{})
+		viper.Set("total_has", len(normalizedVersions))
+	case "manual":
+		viper.Set("rancher.versions", []string{})
+		viper.Set("rancher.helm_commands", normalizedHelmCommands)
+		viper.Set("k8s.versions", normalizedK8SVersions)
+		viper.Set("k8s.version", "")
+		checksumMap := make(map[string]string, len(normalizedK8SVersions))
+		for i, version := range normalizedK8SVersions {
+			checksumMap[version] = installerSHA256s[i]
+		}
+		viper.Set("rke2.install_script_sha256s", checksumMap)
+		viper.Set("rke2.install_script_sha256", "")
+		viper.Set("total_has", len(normalizedHelmCommands))
+	}
 	if update.TFVars != nil {
-		viper.Set("rancher.mode", "auto")
 		viper.Set("rancher.distro", update.Distro)
 		viper.Set("rancher.bootstrap_password", update.BootstrapPassword)
 		viper.Set("user.first_name", update.UserFirstName)
@@ -809,6 +857,81 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	viper.Set(settings.CustomHostnameConfigKey, customHostnamePrefix)
 
 	return nil
+}
+
+var installerSHA256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
+
+func normalizeManualPreflight(update settings.PreflightConfigUpdate) ([]string, []string, []string, error) {
+	helmCommands := nonEmptyStringSlice(update.HelmCommands)
+	if len(helmCommands) == 0 {
+		return nil, nil, nil, fmt.Errorf("at least one manual Helm command is required")
+	}
+	for i, command := range helmCommands {
+		if err := validateManualHelmCommandStructure(command); err != nil {
+			return nil, nil, nil, fmt.Errorf("helm command for HA %d is invalid: %w", i+1, err)
+		}
+	}
+	if err := validateRancherHelmCommandsUseExternalTLS(helmCommands); err != nil {
+		return nil, nil, nil, err
+	}
+
+	k8sVersions, err := normalizeManualK8SVersions(update.K8SVersions, len(helmCommands))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	installerSHA256s, err := normalizeManualInstallerSHA256s(update, k8sVersions)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return helmCommands, k8sVersions, installerSHA256s, nil
+}
+
+func normalizeManualK8SVersions(versions []string, totalHAs int) ([]string, error) {
+	if len(versions) != totalHAs {
+		return nil, fmt.Errorf("k8s.versions must contain %d version(s)", totalHAs)
+	}
+	normalized := make([]string, 0, len(versions))
+	for i, version := range versions {
+		normalizedVersion, err := normalizeRKE2VersionInput(version)
+		if err != nil {
+			return nil, fmt.Errorf("RKE2 version for HA %d is invalid: %w", i+1, err)
+		}
+		normalized = append(normalized, normalizedVersion)
+	}
+	return normalized, nil
+}
+
+func normalizeManualInstallerSHA256s(update settings.PreflightConfigUpdate, k8sVersions []string) ([]string, error) {
+	if update.ResolveInstallerSHA {
+		resolved := make([]string, 0, len(k8sVersions))
+		cache := map[string]string{}
+		for _, version := range k8sVersions {
+			if checksum := cache[version]; checksum != "" {
+				resolved = append(resolved, checksum)
+				continue
+			}
+			checksum, err := resolveInstallerSHA256(version)
+			if err != nil {
+				return nil, fmt.Errorf("resolve RKE2 installer SHA256 for %s: %w", version, err)
+			}
+			cache[version] = checksum
+			resolved = append(resolved, checksum)
+		}
+		return resolved, nil
+	}
+
+	if len(update.InstallerSHA256s) != len(k8sVersions) {
+		return nil, fmt.Errorf("installer SHA256 values must contain %d checksum(s)", len(k8sVersions))
+	}
+	normalized := make([]string, 0, len(update.InstallerSHA256s))
+	for i, checksum := range update.InstallerSHA256s {
+		checksum = strings.ToLower(strings.TrimSpace(checksum))
+		if !installerSHA256Pattern.MatchString(checksum) {
+			return nil, fmt.Errorf("installer SHA256 for HA %d must be a 64-character hex checksum", i+1)
+		}
+		normalized = append(normalized, checksum)
+	}
+	return normalized, nil
 }
 
 func ensureMappingValue(mapping *yaml.Node, key string) *yaml.Node {
@@ -876,6 +999,57 @@ func setStringSequenceValue(mapping *yaml.Node, key string, values []string) {
 			Style: yaml.DoubleQuotedStyle,
 			Value: value,
 		})
+	}
+}
+
+func setStringLiteralSequenceValue(mapping *yaml.Node, key string, values []string) {
+	sequenceNode := mappingValue(mapping, key)
+	if sequenceNode == nil {
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{},
+		)
+		sequenceNode = mapping.Content[len(mapping.Content)-1]
+	}
+
+	sequenceNode.Kind = yaml.SequenceNode
+	sequenceNode.Tag = "!!seq"
+	sequenceNode.Style = 0
+	sequenceNode.Content = make([]*yaml.Node, 0, len(values))
+	for _, value := range values {
+		sequenceNode.Content = append(sequenceNode.Content, &yaml.Node{
+			Kind:  yaml.ScalarNode,
+			Tag:   "!!str",
+			Style: yaml.LiteralStyle,
+			Value: strings.TrimSpace(value),
+		})
+	}
+}
+
+func setStringMapValue(mapping *yaml.Node, key string, keys []string, values []string) {
+	mapNode := mappingValue(mapping, key)
+	if mapNode == nil {
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{},
+		)
+		mapNode = mapping.Content[len(mapping.Content)-1]
+	}
+
+	mapNode.Kind = yaml.MappingNode
+	mapNode.Tag = "!!map"
+	mapNode.Style = 0
+	mapNode.Content = nil
+	seen := map[string]bool{}
+	for i, keyValue := range keys {
+		if seen[keyValue] {
+			continue
+		}
+		seen[keyValue] = true
+		mapNode.Content = append(mapNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: keyValue},
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: values[i]},
+		)
 	}
 }
 

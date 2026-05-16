@@ -150,6 +150,12 @@ func panelManualModeConfigBlockers(totalHAs int) []string {
 	if len(k8sVersions) != totalHAs {
 		blockers = append(blockers, fmt.Sprintf("k8s.versions must contain %d version(s)", totalHAs))
 	}
+	checksums := viper.GetStringMapString("rke2.install_script_sha256s")
+	for _, version := range k8sVersions {
+		if strings.TrimSpace(checksums[version]) == "" {
+			blockers = append(blockers, fmt.Sprintf("rke2.install_script_sha256s.%s", version))
+		}
+	}
 	return blockers
 }
 

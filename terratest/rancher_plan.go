@@ -79,9 +79,13 @@ func prepareManualRKE2Plans(totalHAs int) ([]*RancherResolvedPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	helmCommands := viper.GetStringSlice("rancher.helm_commands")
+	if len(helmCommands) != totalHAs {
+		return nil, fmt.Errorf("rancher.helm_commands has %d entries but total_has is %d; please provide exactly one Helm command per HA", len(helmCommands), totalHAs)
+	}
 
 	plans := make([]*RancherResolvedPlan, 0, len(versions))
-	for _, version := range versions {
+	for i, version := range versions {
 		checksum, err := rke2ChecksumForVersion(version)
 		if err != nil {
 			return nil, err
@@ -91,6 +95,7 @@ func prepareManualRKE2Plans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			Mode:                   "manual",
 			RecommendedRKE2Version: version,
 			InstallerSHA256:        checksum,
+			HelmCommands:           []string{strings.TrimSpace(helmCommands[i])},
 		})
 	}
 
@@ -295,17 +300,17 @@ func getRequestedRKE2Versions(totalHAs int) ([]string, error) {
 
 		normalized := make([]string, 0, len(requestedVersions))
 		for i, version := range requestedVersions {
-			normalizedVersion := strings.TrimSpace(version)
-			if normalizedVersion == "" {
-				return nil, fmt.Errorf("k8s.versions[%d] must not be empty", i)
+			normalizedVersion, err := normalizeRKE2VersionInput(version)
+			if err != nil {
+				return nil, fmt.Errorf("k8s.versions[%d] is invalid: %w", i, err)
 			}
 			normalized = append(normalized, normalizedVersion)
 		}
 		return normalized, nil
 	}
 
-	requestedVersion := strings.TrimSpace(viper.GetString("k8s.version"))
-	if requestedVersion == "" {
+	requestedVersion, err := normalizeRKE2VersionInput(viper.GetString("k8s.version"))
+	if err != nil {
 		return nil, fmt.Errorf("set k8s.version for a single HA or k8s.versions with %d entries", totalHAs)
 	}
 	if totalHAs > 1 {
@@ -340,6 +345,23 @@ func normalizeVersionInput(value string) string {
 	value = strings.TrimPrefix(value, "v")
 	value = strings.TrimPrefix(value, "V")
 	return value
+}
+
+var rke2VersionPattern = regexp.MustCompile(`^v1\.\d+\.\d+\+rke2r\d+$`)
+
+func normalizeRKE2VersionInput(value string) (string, error) {
+	version := strings.TrimSpace(value)
+	if version == "" {
+		return "", fmt.Errorf("RKE2 version must not be empty")
+	}
+	version = strings.TrimPrefix(version, "V")
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+	if !rke2VersionPattern.MatchString(version) {
+		return "", fmt.Errorf("RKE2 version must look like v1.34.6+rke2r1")
+	}
+	return version, nil
 }
 
 func classifyRancherVersion(version string) (buildType string, minorLine string, err error) {
@@ -1012,6 +1034,107 @@ func resolveLatestRKE2Patch(highestMinor int) (string, error) {
 		return "", fmt.Errorf("could not find an RKE2 patch release in %s", releaseNotesURL)
 	}
 	return match, nil
+}
+
+type manualRKE2RecommendationResult struct {
+	Index                  int    `json:"index"`
+	OK                     bool   `json:"ok"`
+	Summary                string `json:"summary"`
+	Detail                 string `json:"detail,omitempty"`
+	RancherVersion         string `json:"rancherVersion,omitempty"`
+	ChartVersion           string `json:"chartVersion,omitempty"`
+	CompatibilityBaseline  string `json:"compatibilityBaseline,omitempty"`
+	RecommendedRKE2Version string `json:"recommendedRKE2Version,omitempty"`
+	KubernetesVersion      string `json:"kubernetesVersion,omitempty"`
+	SupportMatrixURL       string `json:"supportMatrixUrl,omitempty"`
+}
+
+func recommendManualRKE2Versions(helmCommands []string) []manualRKE2RecommendationResult {
+	results := make([]manualRKE2RecommendationResult, 0, len(helmCommands))
+	repoAliases := helmRepoAliasesFromCommands(helmCommands)
+	if err := ensureRancherHelmRepos(repoAliases, true); err != nil {
+		for i := range helmCommands {
+			results = append(results, manualRKE2RecommendationResult{
+				Index:   i,
+				Summary: "Helm repo setup failed",
+				Detail:  err.Error(),
+			})
+		}
+		return results
+	}
+	if err := refreshHelmRepoIndexes(); err != nil {
+		for i := range helmCommands {
+			results = append(results, manualRKE2RecommendationResult{
+				Index:   i,
+				Summary: "Helm repo update failed",
+				Detail:  err.Error(),
+			})
+		}
+		return results
+	}
+
+	for i, command := range helmCommands {
+		result := manualRKE2RecommendationResult{Index: i}
+		recommended, err := recommendManualRKE2Version(command, &result)
+		if err != nil {
+			result.Summary = "Could not recommend RKE2"
+			result.Detail = err.Error()
+			results = append(results, result)
+			continue
+		}
+		result.OK = true
+		result.Summary = "Recommended RKE2 version found"
+		result.RecommendedRKE2Version = recommended
+		result.KubernetesVersion = helmKubeVersionFromRKE2Version(recommended)
+		results = append(results, result)
+	}
+	return results
+}
+
+func recommendManualRKE2Version(helmCommand string, result *manualRKE2RecommendationResult) (string, error) {
+	fields, err := parseHelmCommandFields(helmCommand)
+	if err != nil {
+		return "", err
+	}
+	invocation, err := manualHelmInvocationFromFields(fields)
+	if err != nil {
+		return "", err
+	}
+	repoAlias := strings.TrimSuffix(invocation.chartRef, "/rancher")
+	if repoAlias == "" || repoAlias == invocation.chartRef {
+		return "", fmt.Errorf("chart reference must look like rancher-latest/rancher")
+	}
+
+	chartVersion := helmFlagValue(fields, "--version")
+	if chartVersion == "" {
+		return "", fmt.Errorf("add --version to the Rancher Helm command so the support matrix can be selected")
+	}
+	requestedVersion := normalizeVersionInput(chartVersion)
+	result.RancherVersion = requestedVersion
+	result.ChartVersion = chartVersion
+
+	buildType, minorLine, err := classifyRancherVersion(requestedVersion)
+	if err != nil {
+		return "", err
+	}
+	compatibilityBaseline := requestedVersion
+	if buildType != "release" {
+		_, resolvedChartVersion, resolvedBaseline, err := resolveChartAndBaseline([]string{repoAlias}, requestedVersion, minorLine, buildType)
+		if err != nil {
+			return "", err
+		}
+		result.ChartVersion = resolvedChartVersion
+		compatibilityBaseline = resolvedBaseline
+	}
+	result.CompatibilityBaseline = compatibilityBaseline
+	supportMatrixURL := buildSupportMatrixURL(compatibilityBaseline)
+	result.SupportMatrixURL = supportMatrixURL
+	highestRKE2Minor, supportExplanation, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
+	if err != nil {
+		return "", err
+	}
+	result.Detail = supportExplanation
+	return resolveLatestRKE2Patch(highestRKE2Minor)
 }
 
 func resolveInstallerSHA256(rke2Version string) (string, error) {

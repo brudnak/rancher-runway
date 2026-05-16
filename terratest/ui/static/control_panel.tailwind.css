@@ -76,6 +76,7 @@ details[open] > summary .setup-log-toggle-open {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.75rem;
   border-bottom: 1px solid rgb(203 213 225);
   background: rgb(241 245 249);
@@ -111,6 +112,14 @@ details[open] > summary .setup-log-toggle-open {
 .dark .setup-code-editor-lang {
   background: rgb(30 41 59);
   color: rgb(148 163 184);
+}
+
+.setup-code-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .setup-code-lines {
@@ -161,4 +170,29 @@ details[open] > summary .setup-log-toggle-open {
 
 .dark .setup-code-line-code {
   color: rgb(226 232 240);
+}
+
+.manual-checksum[data-auto-sha="true"] .manual-sha-list {
+  display: none;
+}
+
+.manual-code-area {
+  height: clamp(28rem, 50vh, 44rem) !important;
+  min-height: 28rem !important;
+  resize: vertical;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.setup-mode-btn[aria-pressed="true"] {
+  background: rgb(16 185 129);
+  color: white;
+  border-color: rgb(16 185 129);
+  box-shadow: 0 12px 28px rgb(16 185 129 / 0.22);
+}
+
+.dark .setup-mode-btn[aria-pressed="true"] {
+  background: rgb(16 185 129);
+  color: white;
+  border-color: rgb(16 185 129);
 }

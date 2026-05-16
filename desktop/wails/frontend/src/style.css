@@ -103,6 +103,18 @@ h1 {
   letter-spacing: 0;
 }
 
+.build-badge {
+  display: inline-flex;
+  margin: 0 0 14px;
+  padding: 5px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #d9dee7;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 #status {
   margin: 0;
   color: #c7ced8;

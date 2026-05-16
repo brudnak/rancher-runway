@@ -24,7 +24,8 @@
   <style>
     button:focus-visible,
     input:focus-visible,
-    select:focus-visible {
+    select:focus-visible,
+    textarea:focus-visible {
       outline: 2px solid rgb(16 185 129);
       outline-offset: 2px;
     }
@@ -73,6 +74,25 @@
     }
     .custom-hostname[data-enabled="false"] .hostname-control,
     .custom-hostname[data-enabled="false"] .hostname-help { display: none; }
+    .manual-checksum[data-auto-sha="true"] .manual-sha-list { display: none; }
+    .manual-code-area {
+      height: clamp(28rem, 50vh, 44rem);
+      min-height: 28rem;
+      resize: vertical;
+      tab-size: 2;
+      white-space: pre;
+    }
+    .setup-mode-btn[aria-pressed="true"] {
+      background: rgb(16 185 129);
+      color: white;
+      border-color: rgb(16 185 129);
+      box-shadow: 0 12px 28px rgba(16, 185, 129, 0.22);
+    }
+    .dark .setup-mode-btn[aria-pressed="true"] {
+      background: rgb(16 185 129);
+      color: white;
+      border-color: rgb(16 185 129);
+    }
     .spinner {
       width: 22px;
       height: 22px;
@@ -127,7 +147,22 @@
         </div>
 
         <form id="setupForm" method="post" action="{{.BasePath}}/submit?token={{.Token}}" hx-post="{{.BasePath}}/submit?token={{.Token}}" hx-trigger="confirmed-submit" hx-swap="none">
+          <input id="modeInput" type="hidden" name="mode" value="auto" />
           <div class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-xl shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/30 sm:p-5">
+              <div class="mb-5 rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+                <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Planning mode</h2>
+                  </div>
+                  <div class="grid grid-cols-2 gap-2 rounded-xl bg-white p-1 ring-1 ring-zinc-200 dark:bg-zinc-950/30 dark:ring-white/10" role="group" aria-label="Planning mode">
+                    <button id="autoModeBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="true">Auto</button>
+                    <button id="manualModeBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false">Manual</button>
+                  </div>
+                </div>
+                <div id="modeSummary" class="text-sm leading-6 text-zinc-600 dark:text-zinc-400"></div>
+              </div>
+
+              <div id="autoModePanel">
               <div class="mb-3 flex items-center justify-between gap-3">
                 <h2 class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">Rancher versions</h2>
                 <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="addBtn" type="button">Add HA</button>
@@ -135,6 +170,31 @@
               <div class="grid gap-2" id="rows"></div>
               <div class="mx-2 mt-3 text-sm font-normal text-zinc-500 dark:text-zinc-400">
                 Examples: 2.14-head, v2.14-head, or head. Leading v is stripped when saved.
+              </div>
+              </div>
+
+              <div id="manualModePanel" class="hidden">
+                <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <h2 class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">Manual Helm commands</h2>
+                  <div class="flex flex-wrap gap-2">
+                    <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="recommendRKE2Btn" type="button">Find RKE2 version</button>
+                    <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="validateHelmBtn" type="button">Validate Helm</button>
+                    <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="manualAddBtn" type="button">Add HA</button>
+                  </div>
+                </div>
+                <div class="grid gap-3" id="manualRows"></div>
+                <div id="manualRKE2RecommendationBox" class="mt-4 grid gap-2"></div>
+                <div class="manual-checksum mt-5 grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]" id="manualChecksumBox" data-auto-sha="true">
+                  <label class="flex cursor-pointer items-start justify-between gap-4">
+                    <span>
+                      <span class="block text-sm font-medium text-zinc-950 dark:text-zinc-100">Resolve RKE2 installer SHA256 automatically</span>
+                    </span>
+                    <input id="resolveInstallerSHAToggle" name="resolveInstallerSHA" value="true" type="checkbox" class="peer sr-only" />
+                    <span aria-hidden="true" class="mt-0.5 h-6 w-11 rounded-full bg-zinc-300 ring-1 ring-zinc-300 transition peer-checked:bg-emerald-500 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-emerald-400 after:mt-0.5 after:ml-0.5 after:block after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition peer-checked:after:translate-x-5 dark:bg-zinc-800 dark:ring-white/10"></span>
+                  </label>
+                  <div class="manual-sha-list grid gap-3" id="manualSHAList"></div>
+                </div>
+                <div id="manualValidationBox" class="mt-4 grid gap-2"></div>
               </div>
 
               <div class="custom-hostname mt-5 grid gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]" id="customHostnameBox" data-enabled="false">
@@ -316,7 +376,7 @@
               <div class="mt-5 grid gap-2 text-sm font-normal text-zinc-500 dark:text-zinc-400">
                 <div><strong class="text-zinc-950 dark:text-zinc-100">Total HAs for this run:</strong> <span id="totalInstancesValue"></span></div>
                 <div><strong class="text-zinc-950 dark:text-zinc-100">Config file:</strong> <code>{{.ConfigPath}}</code></div>
-                <div><strong class="text-zinc-950 dark:text-zinc-100">Mode:</strong> auto</div>
+                <div><strong class="text-zinc-950 dark:text-zinc-100">Mode:</strong> <span id="modeValue">auto</span></div>
                 <div>After you submit, this same page will stream resolver logs and then show the full plan for approval.</div>
               </div>
               <div class="mt-4 min-h-6 whitespace-pre-wrap text-sm font-medium text-rose-300" id="editorErrorBox"></div>
@@ -412,6 +472,20 @@
         <button id="confirmModalCancel" type="button" class="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700">Go back</button>
         <button id="confirmModalConfirm" type="button" class="rounded-lg bg-emerald-500 px-4 py-2.5 font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400"></button>
       </div>
+    </div>
+  </div>
+
+  <div id="helmValidationModal" class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto bg-zinc-950/45 p-4 py-10 backdrop-blur-sm dark:bg-zinc-950/80" role="dialog" aria-modal="true" aria-labelledby="helmValidationModalTitle">
+    <div class="flex max-h-[calc(100vh-5rem)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl shadow-zinc-900/20 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/50">
+      <div class="flex flex-wrap items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4 dark:border-white/10">
+        <div>
+          <div id="helmValidationModalBadge" class="mb-2 inline-flex rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700 dark:bg-white/[0.06] dark:text-zinc-200">Helm validation</div>
+          <h2 id="helmValidationModalTitle" class="text-xl font-semibold text-zinc-950 dark:text-zinc-100">Helm validation results</h2>
+          <p id="helmValidationModalSummary" class="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-300"></p>
+        </div>
+        <button id="helmValidationModalClose" type="button" class="rounded-lg border border-zinc-200 bg-white px-3.5 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700">Close</button>
+      </div>
+      <div id="helmValidationModalBody" class="grid gap-3 overflow-auto p-5"></div>
     </div>
   </div>
 

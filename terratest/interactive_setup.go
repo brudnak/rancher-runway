@@ -55,7 +55,12 @@ type interactiveSetupState struct {
 	Token                 string                           `json:"token"`
 	BasePath              string                           `json:"basePath,omitempty"`
 	ConfigPath            string                           `json:"configPath"`
+	Mode                  string                           `json:"mode"`
 	Versions              []string                         `json:"versions"`
+	HelmCommands          []string                         `json:"helmCommands"`
+	K8SVersions           []string                         `json:"k8sVersions"`
+	InstallerSHA256s      []string                         `json:"installerSHA256s"`
+	ResolveInstallerSHA   bool                             `json:"resolveInstallerSHA"`
 	Config                settings.EditablePreflightConfig `json:"config"`
 	CustomHostnameEnabled bool                             `json:"customHostnameEnabled"`
 	CustomHostname        string                           `json:"customHostname"`
@@ -237,6 +242,49 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 		writeJSON(w, collectSystemReadiness(s.configPath))
 	})
 
+	mux.HandleFunc(interactiveSetupPath(basePath, "/api/validate-helm"), func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed: "+r.Method, http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			HelmCommands []string `json:"helmCommands"`
+			K8SVersions  []string `json:"k8sVersions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"results": validateManualHelmCommandsForPlanning(req.HelmCommands, req.K8SVersions),
+		})
+	})
+
+	mux.HandleFunc(interactiveSetupPath(basePath, "/api/recommend-rke2"), func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed: "+r.Method, http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			HelmCommands []string `json:"helmCommands"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"results": recommendManualRKE2Versions(req.HelmCommands),
+		})
+	})
+
 	mux.HandleFunc(interactiveSetupPath(basePath, "/submit"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
@@ -259,12 +307,29 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 			return
 		}
 
-		normalizedVersions, err := normalizePreflightVersions(req.Versions)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
+		req.Mode = strings.ToLower(strings.TrimSpace(req.Mode))
+		if req.Mode == "" {
+			req.Mode = "auto"
 		}
-		req.Versions = normalizedVersions
+		if req.Mode == "auto" {
+			normalizedVersions, err := normalizePreflightVersions(req.Versions)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			req.Versions = normalizedVersions
+		} else if req.Mode == "manual" {
+			for _, result := range validateManualHelmCommandsForPlanning(req.HelmCommands, req.K8SVersions) {
+				if !result.OK {
+					message := fmt.Sprintf("Helm command for HA %d failed validation: %s", result.Index+1, result.Summary)
+					if strings.TrimSpace(result.Detail) != "" {
+						message += ": " + result.Detail
+					}
+					http.Error(w, message, http.StatusBadRequest)
+					return
+				}
+			}
+		}
 
 		if err := updateAutoModeConfigFile(s.configPath, req); err != nil {
 			http.Error(w, fmt.Sprintf("failed to update tool-config.yml: %v", err), http.StatusInternalServerError)
@@ -447,7 +512,12 @@ func interactiveSetupTemplateDataFor(token string, configPath string, initialVer
 		Token:                 token,
 		BasePath:              normalizeInteractiveBasePath(basePath),
 		ConfigPath:            configPath,
+		Mode:                  rancherMode(),
 		Versions:              initialVersions,
+		HelmCommands:          currentManualHelmCommands(),
+		K8SVersions:           currentManualK8SVersions(),
+		InstallerSHA256s:      currentManualInstallerSHA256s(),
+		ResolveInstallerSHA:   currentManualResolveInstallerSHA(),
 		Config:                settings.CurrentEditablePreflightConfig(),
 		CustomHostnameEnabled: initialCustomHostname != "",
 		CustomHostname:        initialCustomHostname,
@@ -461,6 +531,59 @@ func interactiveSetupTemplateDataFor(token string, configPath string, initialVer
 		Embedded:         embedded,
 		InitialStateJSON: template.JS(string(initialStateJSON)),
 	}
+}
+
+func currentManualHelmCommands() []string {
+	commands := viper.GetStringSlice("rancher.helm_commands")
+	if len(commands) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(commands))
+	for _, command := range commands {
+		out = append(out, strings.TrimSpace(command))
+	}
+	return out
+}
+
+func currentManualK8SVersions() []string {
+	versions := viper.GetStringSlice("k8s.versions")
+	if len(versions) > 0 {
+		out := make([]string, 0, len(versions))
+		for _, version := range versions {
+			out = append(out, strings.TrimSpace(version))
+		}
+		return out
+	}
+	if version := strings.TrimSpace(viper.GetString("k8s.version")); version != "" {
+		return []string{version}
+	}
+	return []string{}
+}
+
+func currentManualInstallerSHA256s() []string {
+	versions := currentManualK8SVersions()
+	checksums := viper.GetStringMapString("rke2.install_script_sha256s")
+	out := make([]string, 0, len(versions))
+	for _, version := range versions {
+		checksum := strings.TrimSpace(checksums[version])
+		if checksum == "" && strings.TrimSpace(viper.GetString("k8s.version")) == version {
+			checksum = strings.TrimSpace(viper.GetString("rke2.install_script_sha256"))
+		}
+		out = append(out, checksum)
+	}
+	return out
+}
+
+func currentManualResolveInstallerSHA() bool {
+	if rancherMode() != "manual" {
+		return true
+	}
+	for _, checksum := range currentManualInstallerSHA256s() {
+		if strings.TrimSpace(checksum) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeInteractiveBasePath(basePath string) string {
@@ -510,7 +633,12 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 	}
 
 	return settings.PreflightConfigUpdate{
+		Mode:                  r.FormValue("mode"),
 		Versions:              r.Form["versions"],
+		HelmCommands:          r.Form["helmCommands"],
+		K8SVersions:           r.Form["k8sVersions"],
+		InstallerSHA256s:      r.Form["installerSHA256s"],
+		ResolveInstallerSHA:   parseHTMLBool(r.FormValue("resolveInstallerSHA")),
 		Distro:                r.FormValue("distro"),
 		BootstrapPassword:     r.FormValue("bootstrapPassword"),
 		PreloadImages:         parseHTMLBool(r.FormValue("preloadImages")),

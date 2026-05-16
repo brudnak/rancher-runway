@@ -35,7 +35,7 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 	}
 
 	if _, err := os.Stat(absHADir); os.IsNotExist(err) {
-		if mkdirErr := os.MkdirAll(absHADir, os.ModePerm); mkdirErr != nil {
+		if mkdirErr := os.MkdirAll(absHADir, 0o700); mkdirErr != nil {
 			return fmt.Errorf("failed to create directory %s: %w", absHADir, mkdirErr)
 		}
 		log.Printf("Created directory %s", absHADir)
@@ -102,7 +102,7 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 	}
 
 	if _, err := os.Stat(absHADirForScript); os.IsNotExist(err) {
-		if mkdirErr := os.MkdirAll(absHADirForScript, os.ModePerm); mkdirErr != nil {
+		if mkdirErr := os.MkdirAll(absHADirForScript, 0o700); mkdirErr != nil {
 			return fmt.Errorf("failed to create directory %s: %w", absHADirForScript, mkdirErr)
 		}
 		log.Printf("Created directory %s", absHADirForScript)
@@ -571,14 +571,14 @@ func getAndSaveKubeconfig(serverIP string, haDir string) error {
 	}
 
 	if _, err := os.Stat(absHADir); os.IsNotExist(err) {
-		if mkdirErr := os.MkdirAll(absHADir, os.ModePerm); mkdirErr != nil {
+		if mkdirErr := os.MkdirAll(absHADir, 0o700); mkdirErr != nil {
 			return fmt.Errorf("failed to create directory %s: %w", absHADir, mkdirErr)
 		}
 		log.Printf("Created directory %s", absHADir)
 	}
 
 	absKubeConfigPath := filepath.Join(absHADir, "kube_config.yaml")
-	err = os.WriteFile(absKubeConfigPath, []byte(modifiedKubeconfig), 0644)
+	err = os.WriteFile(absKubeConfigPath, []byte(modifiedKubeconfig), 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to write kubeconfig file: %w", err)
 	}
