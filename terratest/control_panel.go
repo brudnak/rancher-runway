@@ -336,8 +336,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", p.handleIndex)
 	p.registerSetupEditorHandlers(mux)
-	mux.HandleFunc("/static/control_panel.js", p.handleControlPanelJS)
-	mux.HandleFunc("/static/control_panel.css", p.handleControlPanelCSS)
+	mux.HandleFunc("/static/", p.handleControlPanelStaticAsset)
 	mux.HandleFunc("/api/preflight", p.handlePreflight)
 	mux.HandleFunc("/api/state", p.handleState)
 	mux.HandleFunc("/api/logs", p.handleLogs)
@@ -637,22 +636,39 @@ func (p *localControlPanel) handleIndex(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-func (p *localControlPanel) handleControlPanelJS(w http.ResponseWriter, r *http.Request) {
-	if !p.authorizedLocalBrowserRead(r) {
-		http.Error(w, "invalid control panel token", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(ui.ControlPanelJS))
+type controlPanelStaticAsset struct {
+	ContentType string
+	Body        string
 }
 
-func (p *localControlPanel) handleControlPanelCSS(w http.ResponseWriter, r *http.Request) {
+var controlPanelStaticAssets = map[string]controlPanelStaticAsset{
+	"/static/control_panel.css": {
+		ContentType: "text/css; charset=utf-8",
+		Body:        ui.ControlPanelCSS,
+	},
+	"/static/control_panel.js": {
+		ContentType: "application/javascript; charset=utf-8",
+		Body:        ui.ControlPanelJS,
+	},
+	"/static/control_panel_clusters.js": {
+		ContentType: "application/javascript; charset=utf-8",
+		Body:        ui.ControlPanelClustersJS,
+	},
+	"/static/control_panel_modals.js": {
+		ContentType: "application/javascript; charset=utf-8",
+		Body:        ui.ControlPanelModalsJS,
+	},
+	"/static/control_panel_runs.js": {
+		ContentType: "application/javascript; charset=utf-8",
+		Body:        ui.ControlPanelRunsJS,
+	},
+	"/static/control_panel_utils.js": {
+		ContentType: "application/javascript; charset=utf-8",
+		Body:        ui.ControlPanelUtilsJS,
+	},
+}
+
+func (p *localControlPanel) handleControlPanelStaticAsset(w http.ResponseWriter, r *http.Request) {
 	if !p.authorizedLocalBrowserRead(r) {
 		http.Error(w, "invalid control panel token", http.StatusForbidden)
 		return
@@ -662,9 +678,15 @@ func (p *localControlPanel) handleControlPanelCSS(w http.ResponseWriter, r *http
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	asset, ok := controlPanelStaticAssets[r.URL.Path]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", asset.ContentType)
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(ui.ControlPanelCSS))
+	_, _ = w.Write([]byte(asset.Body))
 }
 
 func (p *localControlPanel) handleState(w http.ResponseWriter, r *http.Request) {

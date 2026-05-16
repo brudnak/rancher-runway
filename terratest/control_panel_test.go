@@ -116,6 +116,40 @@ func TestHandleShutdownBlocksWhileLifecycleRuns(t *testing.T) {
 	}
 }
 
+func TestHandleControlPanelStaticAssetServesAllowlistedModules(t *testing.T) {
+	panel := &localControlPanel{token: "token"}
+
+	request := httptest.NewRequest(http.MethodGet, "/static/control_panel_clusters.js", nil)
+	request.Header.Set("X-Control-Panel-Token", "token")
+	recorder := httptest.NewRecorder()
+
+	panel.handleControlPanelStaticAsset(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status ok, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "application/javascript") {
+		t.Fatalf("expected javascript content type, got %q", got)
+	}
+	if !strings.Contains(recorder.Body.String(), "createClusterPanel") {
+		t.Fatalf("expected cluster module body, got %q", recorder.Body.String())
+	}
+}
+
+func TestHandleControlPanelStaticAssetBlocksUnknownAssets(t *testing.T) {
+	panel := &localControlPanel{token: "token"}
+
+	request := httptest.NewRequest(http.MethodGet, "/static/not-allowed.js", nil)
+	request.Header.Set("X-Control-Panel-Token", "token")
+	recorder := httptest.NewRecorder()
+
+	panel.handleControlPanelStaticAsset(recorder, request)
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("expected status not found, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestPruneStaleDownstreamKubeconfigsRemovesMissingClusters(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", workspace)

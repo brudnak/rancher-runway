@@ -14,5 +14,17 @@ var ControlPanelHTML string
 //go:embed static/control_panel.js
 var ControlPanelJS string
 
+//go:embed static/control_panel_utils.js
+var ControlPanelUtilsJS string
+
+//go:embed static/control_panel_modals.js
+var ControlPanelModalsJS string
+
+//go:embed static/control_panel_runs.js
+var ControlPanelRunsJS string
+
+//go:embed static/control_panel_clusters.js
+var ControlPanelClustersJS string
+
 //go:embed static/control_panel.css
 var ControlPanelCSS string
