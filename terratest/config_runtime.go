@@ -62,6 +62,9 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 	if err := settings.ValidateOwnerConfig(); err != nil {
 		t.Fatalf("Owner preflight failed: %v", err)
 	}
+	if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
+		t.Fatalf("RKE2 server layout preflight failed: %v", err)
+	}
 	generateAwsVars()
 	customHostnamePrefix, err := settings.ConfiguredCustomHostnamePrefix()
 	if err != nil {
@@ -87,6 +90,7 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 		"aws_subnet_id":            viper.GetString("tf_vars.aws_subnet_id"),
 		"aws_security_group_id":    viper.GetString("tf_vars.aws_security_group_id"),
 		"aws_pem_key_name":         viper.GetString("tf_vars.aws_pem_key_name"),
+		"server_count":             settings.CurrentRKE2ServerCount(),
 		"aws_route53_fqdn":         viper.GetString("tf_vars.aws_route53_fqdn"),
 		"custom_hostname_prefix":   customHostnamePrefix,
 		"owner_first_name":         settings.OwnerFirstName(),
@@ -320,6 +324,7 @@ func generateAwsVars() {
 		settings.OwnerFirstName(),
 		settings.OwnerLastName(),
 		currentTerraformRunID(),
+		settings.CurrentRKE2ServerCount(),
 	)
 }
 
@@ -356,13 +361,20 @@ func maskTerraformOutputs(outputs map[string]string) {
 
 func getHAOutputs(instanceNum int, outputs map[string]string) TerraformOutputs {
 	prefix := fmt.Sprintf("ha_%d", instanceNum)
-	return TerraformOutputs{
+	haOutputs := TerraformOutputs{
+		ServerCount:           parseTerraformIntOutput(outputs[fmt.Sprintf("%s_server_count", prefix)]),
+		ServerIPs:             parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_ips", prefix)]),
+		ServerPrivateIPs:      parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_private_ips", prefix)]),
 		Server1IP:             outputs[fmt.Sprintf("%s_server1_ip", prefix)],
 		Server2IP:             outputs[fmt.Sprintf("%s_server2_ip", prefix)],
 		Server3IP:             outputs[fmt.Sprintf("%s_server3_ip", prefix)],
+		Server4IP:             outputs[fmt.Sprintf("%s_server4_ip", prefix)],
+		Server5IP:             outputs[fmt.Sprintf("%s_server5_ip", prefix)],
 		Server1PrivateIP:      outputs[fmt.Sprintf("%s_server1_private_ip", prefix)],
 		Server2PrivateIP:      outputs[fmt.Sprintf("%s_server2_private_ip", prefix)],
 		Server3PrivateIP:      outputs[fmt.Sprintf("%s_server3_private_ip", prefix)],
+		Server4PrivateIP:      outputs[fmt.Sprintf("%s_server4_private_ip", prefix)],
+		Server5PrivateIP:      outputs[fmt.Sprintf("%s_server5_private_ip", prefix)],
 		GPUWorkerIP:           outputs[fmt.Sprintf("%s_gpu_worker_ip", prefix)],
 		GPUWorkerPrivateIP:    outputs[fmt.Sprintf("%s_gpu_worker_private_ip", prefix)],
 		GPUWorkerInstanceType: outputs[fmt.Sprintf("%s_gpu_worker_instance_type", prefix)],
@@ -371,6 +383,45 @@ func getHAOutputs(instanceNum int, outputs map[string]string) TerraformOutputs {
 		LoadBalancerDNS:       outputs[fmt.Sprintf("%s_aws_lb", prefix)],
 		RancherURL:            outputs[fmt.Sprintf("%s_rancher_url", prefix)],
 	}
+	if len(haOutputs.ServerIPs) == 0 {
+		haOutputs.ServerIPs = nonEmptyStrings(haOutputs.Server1IP, haOutputs.Server2IP, haOutputs.Server3IP, haOutputs.Server4IP, haOutputs.Server5IP)
+	}
+	if len(haOutputs.ServerPrivateIPs) == 0 {
+		haOutputs.ServerPrivateIPs = nonEmptyStrings(haOutputs.Server1PrivateIP, haOutputs.Server2PrivateIP, haOutputs.Server3PrivateIP, haOutputs.Server4PrivateIP, haOutputs.Server5PrivateIP)
+	}
+	if haOutputs.ServerCount == 0 {
+		haOutputs.ServerCount = len(haOutputs.ServerIPs)
+	}
+	return haOutputs
+}
+
+func parseTerraformCSVOutput(value string) []string {
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
+}
+
+func parseTerraformIntOutput(value string) int {
+	var parsed int
+	if _, err := fmt.Sscanf(strings.TrimSpace(value), "%d", &parsed); err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func nonEmptyStrings(values ...string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			filtered = append(filtered, trimmed)
+		}
+	}
+	return filtered
 }
 
 func logHASummary(totalHAs int, outputs map[string]string, resolvedPlans []*RancherResolvedPlan) {

@@ -191,6 +191,8 @@ func TestCreateInstallScriptFailsFastAndCreatesNamespaceIdempotently(t *testing.
 
 	for _, want := range []string{
 		"set -euo pipefail",
+		"Waiting for RKE2 ingress admission webhook...",
+		"rke2-ingress-nginx-controller-admission",
 		"kubectl create namespace cattle-system --dry-run=client -o yaml | kubectl apply -f -",
 		"helm install rancher rancher-latest/rancher",
 	} {

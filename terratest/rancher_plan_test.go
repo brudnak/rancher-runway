@@ -354,6 +354,30 @@ func TestBuildAutoHelmCommandsUsesImageFieldsForNewOptimusAlpha(t *testing.T) {
 	}
 }
 
+func TestBuildAutoHelmCommandSetsSingleServerReplicasInPlan(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("rke2.server_count", 1)
+
+	command := buildAutoHelmCommand(
+		rancherHelmOperationInstall,
+		"rancher-latest",
+		"2.14.1",
+		"admin",
+		"",
+		"",
+		"",
+		false,
+	)
+
+	if !strings.Contains(command, "--set replicas=1") {
+		t.Fatalf("expected single-server auto plan command to include replicas=1, got:\n%s", command)
+	}
+	if strings.Index(command, "--set replicas=1") > strings.Index(command, "--set agentTLSMode=system-store") {
+		t.Fatalf("expected replicas setting before final command line, got:\n%s", command)
+	}
+}
+
 func TestBuildAutoHelmCommandsKeepsLegacyOverridesForOldOptimusAlpha(t *testing.T) {
 	commands := buildAutoHelmCommands(
 		1,

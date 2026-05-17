@@ -66,6 +66,17 @@ variable "aws_pem_key_name" {
   description = "Name of the PEM key for SSH access"
 }
 
+variable "server_count" {
+  type        = number
+  description = "Number of RKE2 server nodes per Rancher cluster. Use 1 for a single-server install, or 3/5 for odd-sized HA."
+  default     = 3
+
+  validation {
+    condition     = contains([1, 3, 5], var.server_count)
+    error_message = "server_count must be 1, 3, or 5."
+  }
+}
+
 variable "aws_route53_fqdn" {
   type        = string
   description = "Route53 FQDN for DNS records"
@@ -174,6 +185,7 @@ module "ha" {
   aws_subnet_id            = var.aws_subnet_id
   aws_security_group_id    = var.aws_security_group_id
   aws_pem_key_name         = var.aws_pem_key_name
+  server_count             = var.server_count
   aws_route53_fqdn         = var.aws_route53_fqdn
   custom_hostname_prefix   = trimspace(var.custom_hostname_prefix)
   common_tags              = local.common_tags
@@ -187,12 +199,19 @@ module "ha" {
 output "ha_details" {
   value = {
     for idx, instance in module.ha : "ha_${idx}" => {
+      server_count             = instance.server_count
+      server_ips               = instance.server_ips
+      server_private_ips       = instance.server_private_ips
       server1_ip               = instance.server1_ip
       server2_ip               = instance.server2_ip
       server3_ip               = instance.server3_ip
+      server4_ip               = instance.server4_ip
+      server5_ip               = instance.server5_ip
       server1_private_ip       = instance.server1_private_ip
       server2_private_ip       = instance.server2_private_ip
       server3_private_ip       = instance.server3_private_ip
+      server4_private_ip       = instance.server4_private_ip
+      server5_private_ip       = instance.server5_private_ip
       gpu_worker_ip            = instance.gpu_worker_ip
       gpu_worker_private_ip    = instance.gpu_worker_private_ip
       gpu_worker_instance_type = instance.gpu_worker_instance_type
@@ -208,12 +227,19 @@ output "ha_details" {
 output "flat_outputs" {
   value = merge([
     for idx, instance in module.ha : {
+      "ha_${idx}_server_count"             = tostring(instance.server_count)
+      "ha_${idx}_server_ips"               = join(",", instance.server_ips)
+      "ha_${idx}_server_private_ips"       = join(",", instance.server_private_ips)
       "ha_${idx}_server1_ip"               = instance.server1_ip
       "ha_${idx}_server2_ip"               = instance.server2_ip
       "ha_${idx}_server3_ip"               = instance.server3_ip
+      "ha_${idx}_server4_ip"               = instance.server4_ip
+      "ha_${idx}_server5_ip"               = instance.server5_ip
       "ha_${idx}_server1_private_ip"       = instance.server1_private_ip
       "ha_${idx}_server2_private_ip"       = instance.server2_private_ip
       "ha_${idx}_server3_private_ip"       = instance.server3_private_ip
+      "ha_${idx}_server4_private_ip"       = instance.server4_private_ip
+      "ha_${idx}_server5_private_ip"       = instance.server5_private_ip
       "ha_${idx}_gpu_worker_ip"            = instance.gpu_worker_ip
       "ha_${idx}_gpu_worker_private_ip"    = instance.gpu_worker_private_ip
       "ha_${idx}_gpu_worker_instance_type" = instance.gpu_worker_instance_type

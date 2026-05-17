@@ -1,6 +1,9 @@
 package test
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSummarizeRancherPodsReady(t *testing.T) {
 	ready, summary := summarizeRancherPods([]podView{
@@ -23,6 +26,19 @@ func TestSummarizeRancherPodsWaitsForWebhook(t *testing.T) {
 	}
 	if summary == "" {
 		t.Fatal("expected a useful summary")
+	}
+}
+
+func TestSummarizeRancherPodsIncludesUnreadyPodsWhenWebhookMissing(t *testing.T) {
+	ready, summary := summarizeRancherPods([]podView{
+		{Name: "rancher-7f9d8b6b6b-abcde", Ready: "0/1", Status: "Pending"},
+	})
+
+	if ready {
+		t.Fatal("expected pods not to be ready")
+	}
+	if !strings.Contains(summary, "rancher-webhook") || !strings.Contains(summary, "not ready") {
+		t.Fatalf("expected missing webhook and unready pod details, got %q", summary)
 	}
 }
 

@@ -215,7 +215,11 @@ func summarizeRancherPods(pods []podView) (bool, string) {
 
 	switch {
 	case len(missing) > 0:
-		return false, fmt.Sprintf("waiting for pods: %s (found %d relevant pods)", strings.Join(missing, ", "), interesting)
+		summary := fmt.Sprintf("waiting for pods: %s (found %d relevant pods)", strings.Join(missing, ", "), interesting)
+		if len(notReady) > 0 {
+			summary += "; not ready: " + strings.Join(notReady, "; ")
+		}
+		return false, summary
 	case len(notReady) > 0:
 		return false, strings.Join(notReady, "; ")
 	default:

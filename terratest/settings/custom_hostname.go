@@ -24,6 +24,7 @@ type PreflightConfigUpdate struct {
 	Distro                string            `json:"distro"`
 	BootstrapPassword     string            `json:"bootstrapPassword"`
 	PreloadImages         bool              `json:"preloadImages"`
+	ServerCount           int               `json:"serverCount"`
 	GPUWorkerEnabled      bool              `json:"gpuWorkerEnabled"`
 	GPUWorkerProfile      string            `json:"gpuWorkerProfile"`
 	GPUWorkerAMI          string            `json:"gpuWorkerAmi"`

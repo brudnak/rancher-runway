@@ -8,7 +8,7 @@ For repository-owned GitHub Actions automation, see [docs/README.md](docs/README
 
 ## What This Builds
 
-- One or more 3-node RKE2 HA management clusters on AWS
+- One or more RKE2 management clusters on AWS: single-server, 3-server HA, or 5-server HA
 - AWS ALB, ACM, and Route53 records in front of Rancher
 - Rancher installed with external TLS termination at the ALB
 - Optional worker-only GPU nodes for Rancher AI/Liz testing
@@ -133,6 +133,7 @@ rancher:
   auto_approve: false
 
 rke2:
+  server_count: 3
   preload_images: true
 
 gpu_worker:
@@ -165,6 +166,19 @@ tf_vars:
 
 For one HA cluster, use `rancher.version` instead of `rancher.versions`.
 
+### RKE2 Server Layout
+
+Set `rke2.server_count` to choose how many RKE2 server nodes each Rancher
+cluster gets:
+
+- `1`: single-server Rancher install. Valid for lightweight testing, but not HA.
+- `3`: default HA layout and the recommended choice for normal testing.
+- `5`: expanded HA layout for larger cluster testing, with higher cost and longer setup.
+
+RKE2 server nodes are schedulable by default, so a single-server install can run
+Rancher without separate worker nodes. Optional GPU workers remain worker-only
+agent nodes and are added on top of the selected server layout.
+
 ### Manual Mode
 
 Manual mode lets you provide full Helm commands and RKE2 pinning yourself:
@@ -191,6 +205,7 @@ k8s:
   version: "v1.33.7+rke2r1"
 
 rke2:
+  server_count: 3
   install_script_sha256: "bfbd978d603b7070f5748c934326db509bf1470c97d3f61a3aaa6e2eed6bd054"
   preload_images: true
 ```

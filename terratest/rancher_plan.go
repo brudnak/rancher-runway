@@ -1234,6 +1234,11 @@ func buildAutoHelmCommand(operation, chartRepoAlias, chartVersion, bootstrapPass
 			"  --timeout 30m \\",
 		}, baseSettings[len(baseSettings)-1:]...)...)
 	}
+	if viper.GetInt("rke2.server_count") == 1 {
+		baseSettings = append(baseSettings[:len(baseSettings)-1], append([]string{
+			"  --set replicas=1 \\",
+		}, baseSettings[len(baseSettings)-1:]...)...)
+	}
 
 	return strings.Join(baseSettings, "\n")
 }

@@ -780,6 +780,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		setStringValue(userNode, "last_name", update.UserLastName)
 		rke2Node := ensureMappingValue(root, "rke2")
 		setBoolValue(rke2Node, "preload_images", update.PreloadImages)
+		setIntValue(rke2Node, "server_count", update.ServerCount)
 		gpuWorkerNode := ensureMappingValue(root, "gpu_worker")
 		gpuProfile := settings.NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
 		setBoolValue(gpuWorkerNode, "enabled", update.GPUWorkerEnabled)
@@ -864,6 +865,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("user.first_name", update.UserFirstName)
 		viper.Set("user.last_name", update.UserLastName)
 		viper.Set("rke2.preload_images", update.PreloadImages)
+		viper.Set("rke2.server_count", update.ServerCount)
 		gpuProfile := settings.NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
 		viper.Set("gpu_worker.enabled", update.GPUWorkerEnabled)
 		viper.Set("gpu_worker.profile", gpuProfile)
@@ -890,6 +892,11 @@ func normalizeManualPreflight(update settings.PreflightConfigUpdate) ([]string, 
 		if err := validateManualHelmCommandStructure(command); err != nil {
 			return nil, nil, nil, fmt.Errorf("helm command for HA %d is invalid: %w", i+1, err)
 		}
+		normalizedCommand, err := manualHelmCommandForServerLayout(command, update.ServerCount)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("helm command for HA %d is invalid for the selected server layout: %w", i+1, err)
+		}
+		helmCommands[i] = normalizedCommand
 	}
 	if err := validateRancherHelmCommandsUseExternalTLS(helmCommands); err != nil {
 		return nil, nil, nil, err
@@ -904,6 +911,21 @@ func normalizeManualPreflight(update settings.PreflightConfigUpdate) ([]string, 
 		return nil, nil, nil, err
 	}
 	return helmCommands, k8sVersions, installerSHA256s, nil
+}
+
+func manualHelmCommandForServerLayout(command string, serverCount int) (string, error) {
+	if settings.NormalizeRKE2ServerCount(serverCount) != 1 {
+		return command, nil
+	}
+
+	if replicas, ok := helmCommandSetValue(command, "replicas"); ok {
+		if strings.Trim(replicas, `"'`) != "1" {
+			return "", fmt.Errorf("single-server layout needs Rancher replicas=1; change the replicas override or choose a 3/5 server layout")
+		}
+		return command, nil
+	}
+
+	return strings.TrimSpace(command) + " \\\n  --set replicas=1", nil
 }
 
 func normalizeManualK8SVersions(versions []string, totalHAs int) ([]string, error) {

@@ -23,7 +23,8 @@ func GenAwsVar(
 	customHostnamePrefix,
 	ownerFirstName,
 	ownerLastName,
-	runID string) {
+	runID string,
+	serverCount int) {
 	GenAwsVarFile(
 		"../modules/aws/terraform.tfvars",
 		awsPrefix,
@@ -40,6 +41,7 @@ func GenAwsVar(
 		ownerFirstName,
 		ownerLastName,
 		runID,
+		serverCount,
 	)
 }
 
@@ -58,7 +60,8 @@ func GenAwsVarFile(
 	customHostnamePrefix,
 	ownerFirstName,
 	ownerLastName,
-	runID string) {
+	runID string,
+	serverCount int) {
 
 	f := hclwrite.NewEmptyFile()
 
@@ -90,6 +93,7 @@ func GenAwsVarFile(
 	rootBody.SetAttributeValue("owner_first_name", cty.StringVal(ownerFirstName))
 	rootBody.SetAttributeValue("owner_last_name", cty.StringVal(ownerLastName))
 	rootBody.SetAttributeValue("run_id", cty.StringVal(runID))
+	rootBody.SetAttributeValue("server_count", cty.NumberIntVal(int64(serverCount)))
 
 	_, err = tfVarsFile.Write(f.Bytes())
 	if err != nil {

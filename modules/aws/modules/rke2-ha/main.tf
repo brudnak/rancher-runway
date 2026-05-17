@@ -46,6 +46,17 @@ variable "aws_pem_key_name" {
   description = "Name of the PEM key for SSH access"
 }
 
+variable "server_count" {
+  type        = number
+  description = "Number of RKE2 server nodes for this Rancher cluster. Use 1 for a single-server install, or an odd HA count such as 3 or 5."
+  default     = 3
+
+  validation {
+    condition     = contains([1, 3, 5], var.server_count)
+    error_message = "server_count must be 1, 3, or 5."
+  }
+}
+
 variable "aws_route53_fqdn" {
   type        = string
   description = "Route53 FQDN for DNS records"
@@ -94,7 +105,7 @@ locals {
 }
 
 resource "aws_instance" "aws_instance" {
-  count                  = 3
+  count                  = var.server_count
   ami                    = var.aws_ami
   instance_type          = "t3a.large"
   subnet_id              = var.aws_subnet_id
@@ -252,16 +263,36 @@ resource "aws_lb_listener" "aws_lb_listener_443" {
 }
 
 # Outputs
+output "server_ips" {
+  value = aws_instance.aws_instance[*].public_ip
+}
+
+output "server_private_ips" {
+  value = aws_instance.aws_instance[*].private_ip
+}
+
+output "server_count" {
+  value = var.server_count
+}
+
 output "server1_ip" {
   value = aws_instance.aws_instance[0].public_ip
 }
 
 output "server2_ip" {
-  value = aws_instance.aws_instance[1].public_ip
+  value = try(aws_instance.aws_instance[1].public_ip, "")
 }
 
 output "server3_ip" {
-  value = aws_instance.aws_instance[2].public_ip
+  value = try(aws_instance.aws_instance[2].public_ip, "")
+}
+
+output "server4_ip" {
+  value = try(aws_instance.aws_instance[3].public_ip, "")
+}
+
+output "server5_ip" {
+  value = try(aws_instance.aws_instance[4].public_ip, "")
 }
 
 output "server1_private_ip" {
@@ -269,11 +300,19 @@ output "server1_private_ip" {
 }
 
 output "server2_private_ip" {
-  value = aws_instance.aws_instance[1].private_ip
+  value = try(aws_instance.aws_instance[1].private_ip, "")
 }
 
 output "server3_private_ip" {
-  value = aws_instance.aws_instance[2].private_ip
+  value = try(aws_instance.aws_instance[2].private_ip, "")
+}
+
+output "server4_private_ip" {
+  value = try(aws_instance.aws_instance[3].private_ip, "")
+}
+
+output "server5_private_ip" {
+  value = try(aws_instance.aws_instance[4].private_ip, "")
 }
 
 output "gpu_worker_ip" {

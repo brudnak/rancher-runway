@@ -230,6 +230,7 @@ func TestUpdateAutoModeConfigFileWritesManualModeCommandsAndChecksums(t *testing
     - "2.14.1"
 rke2:
   preload_images: true
+  server_count: 1
 total_has: 1
 `
 	if err := os.WriteFile(configPath, []byte(initialConfig), 0o644); err != nil {
@@ -248,6 +249,7 @@ total_has: 1
 		HelmCommands:     []string{helmCommand},
 		K8SVersions:      []string{"v1.34.6+rke2r1"},
 		InstallerSHA256s: []string{checksum},
+		ServerCount:      1,
 	}); err != nil {
 		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
 	}
@@ -280,6 +282,9 @@ total_has: 1
 	if !ok || len(rawCommands) != 1 || !strings.Contains(rawCommands[0].(string), "helm install rancher") {
 		t.Fatalf("unexpected helm_commands: %#v", parsed.Rancher["helm_commands"])
 	}
+	if !strings.Contains(rawCommands[0].(string), "--set replicas=1") {
+		t.Fatalf("expected single-server manual command to include replicas=1, got %q", rawCommands[0].(string))
+	}
 	rawVersions, ok := parsed.K8S["versions"].([]interface{})
 	if !ok || len(rawVersions) != 1 || rawVersions[0] != "v1.34.6+rke2r1" {
 		t.Fatalf("unexpected k8s versions: %#v", parsed.K8S["versions"])
@@ -290,6 +295,27 @@ total_has: 1
 	}
 	if got := viper.GetStringSlice("rancher.helm_commands"); len(got) != 1 || !strings.Contains(got[0], "helm install rancher") {
 		t.Fatalf("expected viper manual helm command, got %#v", got)
+	}
+}
+
+func TestNormalizeManualPreflightRejectsSingleServerReplicasAboveOne(t *testing.T) {
+	_, _, _, err := normalizeManualPreflight(settings.PreflightConfigUpdate{
+		ServerCount: 1,
+		HelmCommands: []string{`helm install rancher rancher-latest/rancher \
+  --namespace cattle-system \
+  --version 2.14.1 \
+  --set hostname=placeholder \
+  --set tls=external \
+  --set replicas=3 \
+  --set agentTLSMode=system-store`},
+		K8SVersions:      []string{"v1.34.6+rke2r1"},
+		InstallerSHA256s: []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+	})
+	if err == nil {
+		t.Fatal("expected single-server manual replicas override to be rejected")
+	}
+	if !strings.Contains(err.Error(), "replicas=1") {
+		t.Fatalf("expected replicas guidance, got %v", err)
 	}
 }
 

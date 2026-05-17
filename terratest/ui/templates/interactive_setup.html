@@ -244,6 +244,30 @@
                     <span aria-hidden="true" class="h-6 w-11 rounded-full bg-zinc-300 ring-1 ring-zinc-300 transition peer-checked:bg-emerald-500 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-emerald-400 after:mt-0.5 after:ml-0.5 after:block after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition peer-checked:after:translate-x-5 dark:bg-zinc-800 dark:ring-white/10"></span>
                   </label>
                 </div>
+                <fieldset class="mt-5 grid gap-3">
+                  <legend class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">RKE2 server layout</legend>
+                  <input id="serverCountInput" name="serverCount" type="hidden" value="3" />
+                  <div class="grid gap-3 lg:grid-cols-3" role="radiogroup" aria-label="RKE2 server layout">
+                    <button type="button" data-server-count="1" role="radio" aria-checked="false" class="server-count-btn rounded-lg border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:bg-zinc-50 dark:border-white/10 dark:bg-black/20 dark:hover:bg-white/[0.06]">
+                      <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Single server</span>
+                      <span class="mt-1 block text-xs leading-5 text-zinc-600 dark:text-zinc-400">One RKE2 server node. Lower cost and faster setup, but not HA.</span>
+                    </button>
+                    <button type="button" data-server-count="3" role="radio" aria-checked="true" class="server-count-btn rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-left shadow-sm transition dark:border-emerald-500/30 dark:bg-emerald-500/10">
+                      <span class="flex flex-wrap items-center gap-2">
+                        <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">3 server HA</span>
+                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200">Default</span>
+                      </span>
+                      <span class="mt-1 block text-xs leading-5 text-zinc-600 dark:text-zinc-400">Three RKE2 server nodes. Recommended for normal HA testing.</span>
+                    </button>
+                    <button type="button" data-server-count="5" role="radio" aria-checked="false" class="server-count-btn rounded-lg border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:bg-zinc-50 dark:border-white/10 dark:bg-black/20 dark:hover:bg-white/[0.06]">
+                      <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">5 server HA</span>
+                      <span class="mt-1 block text-xs leading-5 text-zinc-600 dark:text-zinc-400">Five RKE2 server nodes for larger cluster testing. Higher cost and longer setup.</span>
+                    </button>
+                  </div>
+                  <p id="serverTopologyHint" class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                    Choose 1 for a lightweight single-server install, or 3/5 when you want HA-style server redundancy.
+                  </p>
+                </fieldset>
               </div>
 
               <div class="mt-4 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm transition-colors dark:border-white/10 dark:bg-white/[0.03]" id="gpuWorkerBox">

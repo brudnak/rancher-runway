@@ -77,6 +77,9 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 	if err := settings.ValidateOwnerConfig(); err != nil {
 		blockers = append(blockers, err.Error())
 	}
+	if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
+		blockers = append(blockers, err.Error())
+	}
 
 	for _, key := range []string{
 		"tf_vars.aws_vpc",

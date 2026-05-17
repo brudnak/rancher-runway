@@ -19,6 +19,7 @@ let config = setupData.config || {
   distro: 'auto',
   bootstrapPassword: '',
   preloadImages: false,
+  serverCount: 3,
   gpuWorker: { enabled: false, profile: 'standard', instanceType: 'g5.xlarge' },
   tfVars: {}
 }
@@ -77,6 +78,9 @@ const distroSelectEl = byId('distroSelect')
 const bootstrapPasswordInputEl = byId('bootstrapPasswordInput')
 const bootstrapPasswordToggleEl = byId('bootstrapPasswordToggle')
 const preloadImagesToggleEl = byId('preloadImagesToggle')
+const serverCountInputEl = byId('serverCountInput')
+const serverCountButtonEls = setupQueryAll('button[data-server-count]')
+const serverTopologyHintEl = byId('serverTopologyHint')
 const gpuWorkerBoxEl = byId('gpuWorkerBox')
 const gpuWorkerToggleEl = byId('gpuWorkerToggle')
 const gpuWorkerOptionsEl = byId('gpuWorkerOptions')
@@ -520,6 +524,9 @@ const renderEditableConfig = () => {
   distroSelectEl.value = config.distro || 'auto'
   bootstrapPasswordInputEl.value = config.bootstrapPassword || ''
   preloadImagesToggleEl.checked = Boolean(config.preloadImages)
+  if (serverCountInputEl) {
+    serverCountInputEl.value = String(normalizeServerCount(config.serverCount))
+  }
   if (gpuWorkerToggleEl) {
     gpuWorkerToggleEl.checked = Boolean(config.gpuWorker?.enabled)
   }
@@ -541,6 +548,7 @@ const renderEditableConfig = () => {
   })
 
   lockAllAdvancedAWSFields()
+  renderServerTopology()
   renderGPUWorkerOptions()
 }
 
@@ -585,6 +593,42 @@ const renderRows = () => {
       renderGPUWorkerOptions()
     })
   })
+}
+
+const normalizeServerCount = value => {
+  const count = Number(value)
+  return [1, 3, 5].includes(count) ? count : 3
+}
+
+const currentServerCount = () => normalizeServerCount(serverCountInputEl?.value || config.serverCount)
+
+const renderServerTopology = () => {
+  const selected = currentServerCount()
+  if (serverCountInputEl) {
+    serverCountInputEl.value = String(selected)
+  }
+  serverCountButtonEls.forEach(button => {
+    const count = normalizeServerCount(button.dataset.serverCount)
+    const active = count === selected
+    button.setAttribute('aria-checked', active ? 'true' : 'false')
+    button.classList.toggle('border-emerald-300', active)
+    button.classList.toggle('bg-emerald-50', active)
+    button.classList.toggle('dark:border-emerald-500/30', active)
+    button.classList.toggle('dark:bg-emerald-500/10', active)
+    button.classList.toggle('border-zinc-200', !active)
+    button.classList.toggle('bg-white', !active)
+    button.classList.toggle('dark:border-white/10', !active)
+    button.classList.toggle('dark:bg-black/20', !active)
+    button.classList.toggle('ring-1', active)
+    button.classList.toggle('ring-emerald-300', active)
+  })
+  if (serverTopologyHintEl) {
+    serverTopologyHintEl.textContent = selected === 1
+      ? 'Single-server RKE2 is valid for a lightweight Rancher install, but it is not highly available.'
+      : selected === 5
+        ? 'Five RKE2 servers are useful for larger HA-style testing, with higher EC2 cost and longer setup.'
+        : 'Three RKE2 servers are the recommended default for normal HA testing.'
+  }
 }
 
 const gpuWorkerEnabled = () => Boolean(gpuWorkerToggleEl?.checked)
@@ -1037,6 +1081,23 @@ const manualImageTagForVersion = version => {
   return normalized === 'head' ? 'head' : `v${normalized}`
 }
 
+const manualHelmSetValue = (command, key) => {
+  const normalized = String(command || '').replace(/\\\r?\n/g, ' ')
+  const pattern = /--set(?:-string|-json)?(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s\\]+))/g
+  let match
+  while ((match = pattern.exec(normalized)) !== null) {
+    const value = match[1] || match[2] || match[3] || ''
+    const parts = value.split(',')
+    for (const part of parts) {
+      const [name, ...rawValueParts] = part.split('=')
+      if (String(name || '').trim() === key && rawValueParts.length) {
+        return rawValueParts.join('=').trim().replace(/^['"]|['"]$/g, '')
+      }
+    }
+  }
+  return ''
+}
+
 const buildSeedHelmCommand = index => {
   const version = normalizeVersion(versions[index] || versions[0] || '2.14.0')
   const chartAlias = manualChartAliasForVersion(version)
@@ -1052,6 +1113,7 @@ const buildSeedHelmCommand = index => {
     '  --set tls=external \\',
     '  --set global.cattle.psp.enabled=false \\',
     `  --set image.tag=${imageTag} \\`,
+    ...(currentServerCount() === 1 ? ['  --set replicas=1 \\'] : []),
     '  --set agentTLSMode=system-store'
   ]
   return lines.join('\n')
@@ -1144,6 +1206,13 @@ const validateSetup = () => {
       }
       if (!resolveInstallerSHA && !/^[a-fA-F0-9]{64}$/.test(String(installerSHA256s[i] || '').trim())) {
         return { message: `Installer SHA256 for HA ${i + 1} must be a 64-character hex checksum.`, target: manualRowsEl.querySelector(`input[data-sha-index="${i}"]`) }
+      }
+      const manualReplicas = manualHelmSetValue(manualTrimmed[i], 'replicas')
+      if (currentServerCount() === 1 && manualReplicas && manualReplicas !== '1') {
+        return {
+          message: `Single-server layout needs Rancher replicas=1 for HA ${i + 1}. Change replicas or choose the 3/5 server layout.`,
+          target: manualRowsEl.querySelector(`textarea[data-manual-command-index="${i}"]`)
+        }
       }
     }
   }
@@ -1342,6 +1411,11 @@ const setSubmittingState = nextSubmitting => {
   bootstrapPasswordInputEl.disabled = nextSubmitting
   bootstrapPasswordToggleEl.disabled = nextSubmitting
   preloadImagesToggleEl.disabled = nextSubmitting
+  serverCountButtonEls.forEach(button => {
+    button.disabled = nextSubmitting
+    button.classList.toggle('cursor-not-allowed', nextSubmitting)
+    button.classList.toggle('opacity-60', nextSubmitting)
+  })
   if (gpuWorkerToggleEl) {
     gpuWorkerToggleEl.disabled = nextSubmitting
   }
@@ -2010,6 +2084,17 @@ resolveInstallerSHAToggleEl.addEventListener('change', event => {
 gpuWorkerToggleEl?.addEventListener('change', () => {
   clearValidationError()
   renderGPUWorkerOptions()
+})
+
+serverCountButtonEls.forEach(button => {
+  button.addEventListener('click', () => {
+    if (button.disabled || !serverCountInputEl) {
+      return
+    }
+    serverCountInputEl.value = String(normalizeServerCount(button.dataset.serverCount))
+    clearValidationError()
+    renderServerTopology()
+  })
 })
 
 gpuWorkerProfileButtonEls.forEach(button => {

@@ -64,6 +64,7 @@ type EditablePreflightConfig struct {
 	Distro            string            `json:"distro"`
 	BootstrapPassword string            `json:"bootstrapPassword"`
 	PreloadImages     bool              `json:"preloadImages"`
+	ServerCount       int               `json:"serverCount"`
 	GPUWorker         GPUWorkerConfig   `json:"gpuWorker"`
 	UserFirstName     string            `json:"userFirstName"`
 	UserLastName      string            `json:"userLastName"`
@@ -115,6 +116,32 @@ func GPUWorkerInstanceType(profile string) string {
 	}
 }
 
+func CurrentRKE2ServerCount() int {
+	return NormalizeRKE2ServerCount(viper.GetInt("rke2.server_count"))
+}
+
+func NormalizeRKE2ServerCount(count int) int {
+	switch count {
+	case 1, 3, 5:
+		return count
+	default:
+		return 3
+	}
+}
+
+func ValidateRKE2ServerCountConfig() error {
+	count := viper.GetInt("rke2.server_count")
+	if count == 0 {
+		return nil
+	}
+	switch count {
+	case 1, 3, 5:
+		return nil
+	default:
+		return fmt.Errorf("rke2.server_count must be 1, 3, or 5")
+	}
+}
+
 func CurrentEditablePreflightConfig() EditablePreflightConfig {
 	tfVars := make(map[string]string, len(EditableTFVarKeys))
 	for _, key := range EditableTFVarKeys {
@@ -133,6 +160,7 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 		Distro:            distro,
 		BootstrapPassword: viper.GetString("rancher.bootstrap_password"),
 		PreloadImages:     viper.GetBool("rke2.preload_images"),
+		ServerCount:       CurrentRKE2ServerCount(),
 		GPUWorker:         CurrentGPUWorkerConfig(),
 		UserFirstName:     OwnerFirstName(),
 		UserLastName:      OwnerLastName(),
@@ -159,6 +187,7 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 	if update.BootstrapPassword == "" {
 		return fmt.Errorf("rancher.bootstrap_password must be set")
 	}
+	update.ServerCount = NormalizeRKE2ServerCount(update.ServerCount)
 	update.UserFirstName = normalizeOwnerNamePart(update.UserFirstName)
 	update.UserLastName = normalizeOwnerNamePart(update.UserLastName)
 	if update.UserFirstName == "" {

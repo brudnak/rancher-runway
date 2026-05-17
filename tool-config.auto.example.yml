@@ -8,6 +8,8 @@ rancher:
   auto_approve: false
 
 rke2:
+  # RKE2 server nodes per Rancher cluster: 1 single-server, 3 default HA, or 5 expanded HA.
+  server_count: 3
   preload_images: true
 
 gpu_worker:

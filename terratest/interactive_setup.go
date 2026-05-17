@@ -695,6 +695,7 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 		Distro:                r.FormValue("distro"),
 		BootstrapPassword:     r.FormValue("bootstrapPassword"),
 		PreloadImages:         parseHTMLBool(r.FormValue("preloadImages")),
+		ServerCount:           parseHTMLInt(r.FormValue("serverCount")),
 		GPUWorkerEnabled:      parseHTMLBool(r.FormValue("gpuWorkerEnabled")),
 		GPUWorkerProfile:      r.FormValue("gpuWorkerProfile"),
 		GPUWorkerAMI:          r.FormValue("gpuWorkerAmi"),
@@ -714,6 +715,14 @@ func parseHTMLBool(value string) bool {
 	default:
 		return false
 	}
+}
+
+func parseHTMLInt(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0
+	}
+	return parsed
 }
 
 func (s *interactiveServer) runResolution() {

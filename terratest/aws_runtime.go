@@ -239,7 +239,11 @@ func estimateCurrentRunCost(totalHAs int, outputs map[string]string) (*cleanupCo
 
 	for i := 1; i <= totalHAs; i++ {
 		haOutputs := getHAOutputs(i, outputs)
-		for _, ip := range []string{haOutputs.Server1IP, haOutputs.Server2IP, haOutputs.Server3IP, haOutputs.GPUWorkerIP} {
+		ips := append([]string{}, haOutputs.ServerIPs...)
+		if haOutputs.GPUWorkerIP != "" {
+			ips = append(ips, haOutputs.GPUWorkerIP)
+		}
+		for _, ip := range ips {
 			if ip == "" || seenIPs[ip] {
 				continue
 			}

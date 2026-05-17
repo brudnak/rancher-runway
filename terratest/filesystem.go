@@ -146,6 +146,22 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+echo "Waiting for RKE2 ingress admission webhook..."
+for attempt in $(seq 1 60); do
+  admission_endpoint="$(kubectl -n kube-system get endpoints rke2-ingress-nginx-controller-admission -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
+  if [ -n "${admission_endpoint}" ]; then
+    echo "RKE2 ingress admission webhook is ready."
+    break
+  fi
+  if [ "${attempt}" -eq 60 ]; then
+    echo "ERROR: Timed out waiting for RKE2 ingress admission webhook endpoints."
+    kubectl -n kube-system get pods -o wide || true
+    kubectl -n kube-system get endpoints rke2-ingress-nginx-controller-admission -o yaml || true
+    exit 1
+  fi
+  sleep 10
+done
+
 helm repo update
 
 echo "Creating namespace..."

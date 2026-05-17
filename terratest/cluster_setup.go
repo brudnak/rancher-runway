@@ -18,13 +18,18 @@ import (
 func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, resolvedPlan *RancherResolvedPlan) error {
 	haDir := haInstanceDir(instanceNum)
 	haOutputs := getHAOutputs(instanceNum, outputs)
-
-	ips := []string{
-		haOutputs.Server1IP, haOutputs.Server2IP, haOutputs.Server3IP,
-		haOutputs.Server1PrivateIP, haOutputs.Server2PrivateIP, haOutputs.Server3PrivateIP,
+	serverIPs := haOutputs.ServerIPs
+	if len(serverIPs) == 0 {
+		return fmt.Errorf("no RKE2 server IPs found for HA %d", instanceNum)
 	}
-	if haOutputs.GPUWorkerIP != "" || haOutputs.GPUWorkerPrivateIP != "" {
-		ips = append(ips, haOutputs.GPUWorkerIP, haOutputs.GPUWorkerPrivateIP)
+
+	ips := append([]string{}, haOutputs.ServerIPs...)
+	ips = append(ips, haOutputs.ServerPrivateIPs...)
+	if haOutputs.GPUWorkerIP != "" {
+		ips = append(ips, haOutputs.GPUWorkerIP)
+	}
+	if haOutputs.GPUWorkerPrivateIP != "" {
+		ips = append(ips, haOutputs.GPUWorkerPrivateIP)
 	}
 	for _, ip := range ips {
 		if CheckIPAddress(ip) != "valid" {
@@ -50,13 +55,13 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 
 	CreateInstallScript(helmCommand, haDir)
 
-	log.Printf("Setting up first server node with IP %s", haOutputs.Server1IP)
-	err = setupFirstServerNode(haOutputs.Server1IP, haOutputs, resolvedPlan)
+	log.Printf("Setting up first server node with IP %s", serverIPs[0])
+	err = setupFirstServerNode(serverIPs[0], haOutputs, resolvedPlan)
 	if err != nil {
 		return fmt.Errorf("failed to setup first server node: %w", err)
 	}
 
-	token, err := getNodeToken(haOutputs.Server1IP)
+	token, err := getNodeToken(serverIPs[0])
 	if err != nil {
 		return fmt.Errorf("failed to get node token: %w", err)
 	}
@@ -65,7 +70,7 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 	var setupErr error
 	var setupErrMutex sync.Mutex
 
-	for i, ip := range []string{haOutputs.Server2IP, haOutputs.Server3IP} {
+	for i, ip := range serverIPs[1:] {
 		wg.Add(1)
 		nodeNum := i + 2
 
@@ -106,7 +111,7 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 	log.Printf("Waiting for cluster to fully initialize...")
 	time.Sleep(30 * time.Second)
 
-	err = getAndSaveKubeconfig(haOutputs.Server1IP, haDir)
+	err = getAndSaveKubeconfig(serverIPs[0], haDir)
 	if err != nil {
 		t.Logf("Warning: Failed to save kubeconfig: %v", err)
 	}
@@ -148,6 +153,14 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 }
 
 func rancherHelmCommandForHA(helmCommand, rancherURL string) string {
+	helmCommand = rancherHelmCommandWithHostname(helmCommand, rancherURL)
+	if viper.GetInt("rke2.server_count") == 1 && !helmCommandSetsValue(helmCommand, "replicas") {
+		helmCommand = strings.TrimSpace(helmCommand) + " \\\n  --set replicas=1"
+	}
+	return helmCommand
+}
+
+func rancherHelmCommandWithHostname(helmCommand, rancherURL string) string {
 	if strings.Contains(helmCommand, "--set hostname=") {
 		return strings.Replace(
 			helmCommand,
@@ -157,6 +170,74 @@ func rancherHelmCommandForHA(helmCommand, rancherURL string) string {
 		)
 	}
 	return strings.TrimSpace(helmCommand) + fmt.Sprintf(" \\\n  --set hostname=%s", rancherURL)
+}
+
+func helmCommandSetsValue(command, key string) bool {
+	_, ok := helmCommandSetValue(command, key)
+	return ok
+}
+
+func helmCommandSetValue(command, key string) (string, bool) {
+	fields, err := parseHelmCommandFields(command)
+	if err != nil {
+		return "", strings.Contains(command, key+"=")
+	}
+	for i := 0; i < len(fields); i++ {
+		field := fields[i]
+		switch {
+		case field == "--set" || field == "--set-string" || field == "--set-json":
+			if i+1 < len(fields) {
+				if value, ok := helmSetValueForKey(fields[i+1], key); ok {
+					return value, true
+				}
+			}
+			i++
+		case strings.HasPrefix(field, "--set="):
+			if value, ok := helmSetValueForKey(strings.TrimPrefix(field, "--set="), key); ok {
+				return value, true
+			}
+		case strings.HasPrefix(field, "--set-string="):
+			if value, ok := helmSetValueForKey(strings.TrimPrefix(field, "--set-string="), key); ok {
+				return value, true
+			}
+		case strings.HasPrefix(field, "--set-json="):
+			if value, ok := helmSetValueForKey(strings.TrimPrefix(field, "--set-json="), key); ok {
+				return value, true
+			}
+		}
+	}
+	return "", false
+}
+
+func helmSetValueContainsKey(value, key string) bool {
+	_, ok := helmSetValueForKey(value, key)
+	return ok
+}
+
+func helmSetValueForKey(value, key string) (string, bool) {
+	for _, part := range strings.Split(value, ",") {
+		name, rawValue, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok && strings.TrimSpace(name) == key {
+			return strings.TrimSpace(rawValue), true
+		}
+	}
+	return "", false
+}
+
+func rke2TLSSANs(haOutputs TerraformOutputs) []string {
+	values := append([]string{haOutputs.RancherURL}, haOutputs.ServerIPs...)
+	values = append(values, haOutputs.ServerPrivateIPs...)
+	return nonEmptyStrings(values...)
+}
+
+func rke2ConfigListLines(values []string) string {
+	lines := make([]string, 0, len(values))
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			lines = append(lines, fmt.Sprintf("  - %s", trimmed))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *RancherResolvedPlan) error {
@@ -177,21 +258,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 	}
 	log.Printf("[setupFirstServerNode] Config directory created. Output: %s", output)
 
-	configContent := fmt.Sprintf(`tls-san:
-  - %s
-  - %s
-  - %s
-  - %s
-  - %s
-  - %s
-  - %s`,
-		haOutputs.RancherURL,
-		haOutputs.Server1IP,
-		haOutputs.Server1PrivateIP,
-		haOutputs.Server2IP,
-		haOutputs.Server2PrivateIP,
-		haOutputs.Server3IP,
-		haOutputs.Server3PrivateIP)
+	configContent := fmt.Sprintf("tls-san:\n%s", rke2ConfigListLines(rke2TLSSANs(haOutputs)))
 
 	log.Printf("[setupFirstServerNode] Creating config file with content:\n%s", configContent)
 	cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/config.yaml << EOL\n%s\nEOL'", configContent)
@@ -449,25 +516,17 @@ func setupAdditionalServerNode(ip, token string, haOutputs TerraformOutputs, res
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	firstServerIP := haOutputs.Server1IP
+	if len(haOutputs.ServerIPs) > 0 {
+		firstServerIP = haOutputs.ServerIPs[0]
+	}
 	configContent := fmt.Sprintf(`server: https://%s:9345
 token: %s
 tls-san:
-  - %s
-  - %s
-  - %s
-  - %s
-  - %s
-  - %s
-  - %s`,
-		haOutputs.Server1IP,
+%s`,
+		firstServerIP,
 		token,
-		haOutputs.RancherURL,
-		haOutputs.Server1IP,
-		haOutputs.Server1PrivateIP,
-		haOutputs.Server2IP,
-		haOutputs.Server2PrivateIP,
-		haOutputs.Server3IP,
-		haOutputs.Server3PrivateIP)
+		rke2ConfigListLines(rke2TLSSANs(haOutputs)))
 
 	cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/config.yaml << EOL\n%s\nEOL'", configContent)
 	_, err = RunCommand(cmd, ip)
@@ -587,13 +646,17 @@ func setupGPUWorkerNode(ip, token string, haOutputs TerraformOutputs, resolvedPl
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
+	firstServerIP := haOutputs.Server1IP
+	if len(haOutputs.ServerIPs) > 0 {
+		firstServerIP = haOutputs.ServerIPs[0]
+	}
 	configContent := fmt.Sprintf(`server: https://%s:9345
 token: %s
 node-label:
   - "ha-rancher-rke2/gpu-worker=true"
   - "ha-rancher-rke2/rancher-ai-liz=true"
   - "ha-rancher-rke2/gpu-instance-type=%s"`,
-		haOutputs.Server1IP,
+		firstServerIP,
 		token,
 		haOutputs.GPUWorkerInstanceType)
 
