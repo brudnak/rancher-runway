@@ -50,6 +50,9 @@ func prepareRancherConfiguration(totalHAs int) ([]*RancherResolvedPlan, error) {
 }
 
 func rancherMode() string {
+	viperConfigMu.RLock()
+	defer viperConfigMu.RUnlock()
+
 	mode := strings.ToLower(strings.TrimSpace(viper.GetString("rancher.mode")))
 	if mode != "" {
 		return mode

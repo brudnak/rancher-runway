@@ -112,24 +112,29 @@ type awsResourceView struct {
 }
 
 type clusterView struct {
-	ID                  string    `json:"id"`
-	RunID               string    `json:"runId,omitempty"`
-	Type                string    `json:"type"`
-	HAIndex             int       `json:"haIndex"`
-	Name                string    `json:"name"`
-	Version             string    `json:"version,omitempty"`
-	RancherURL          string    `json:"rancherUrl,omitempty"`
-	LoadBalancer        string    `json:"loadBalancer,omitempty"`
-	Namespace           string    `json:"namespace,omitempty"`
-	ManagementClusterID string    `json:"managementClusterId,omitempty"`
-	KubeconfigPath      string    `json:"kubeconfigPath,omitempty"`
-	DownloadName        string    `json:"downloadName,omitempty"`
-	Provisioning        bool      `json:"provisioning,omitempty"`
-	ProvisioningMessage string    `json:"provisioningMessage,omitempty"`
-	Available           bool      `json:"available"`
-	Reachable           bool      `json:"reachable"`
-	Error               string    `json:"error,omitempty"`
-	Pods                []podView `json:"pods"`
+	ID                    string    `json:"id"`
+	RunID                 string    `json:"runId,omitempty"`
+	Type                  string    `json:"type"`
+	HAIndex               int       `json:"haIndex"`
+	Name                  string    `json:"name"`
+	Version               string    `json:"version,omitempty"`
+	RancherURL            string    `json:"rancherUrl,omitempty"`
+	LoadBalancer          string    `json:"loadBalancer,omitempty"`
+	GPUWorkerIP           string    `json:"gpuWorkerIp,omitempty"`
+	GPUWorkerPrivateIP    string    `json:"gpuWorkerPrivateIp,omitempty"`
+	GPUWorkerInstanceType string    `json:"gpuWorkerInstanceType,omitempty"`
+	GPUWorkerAMI          string    `json:"gpuWorkerAmi,omitempty"`
+	GPUWorkerSubnetID     string    `json:"gpuWorkerSubnetId,omitempty"`
+	Namespace             string    `json:"namespace,omitempty"`
+	ManagementClusterID   string    `json:"managementClusterId,omitempty"`
+	KubeconfigPath        string    `json:"kubeconfigPath,omitempty"`
+	DownloadName          string    `json:"downloadName,omitempty"`
+	Provisioning          bool      `json:"provisioning,omitempty"`
+	ProvisioningMessage   string    `json:"provisioningMessage,omitempty"`
+	Available             bool      `json:"available"`
+	Reachable             bool      `json:"reachable"`
+	Error                 string    `json:"error,omitempty"`
+	Pods                  []podView `json:"pods"`
 }
 
 type podView struct {
@@ -1365,6 +1370,11 @@ func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clus
 		if outputs != nil {
 			cluster.RancherURL = clickableURL(outputs[fmt.Sprintf("ha_%d_rancher_url", i)])
 			cluster.LoadBalancer = outputs[fmt.Sprintf("ha_%d_aws_lb", i)]
+			cluster.GPUWorkerIP = outputs[fmt.Sprintf("ha_%d_gpu_worker_ip", i)]
+			cluster.GPUWorkerPrivateIP = outputs[fmt.Sprintf("ha_%d_gpu_worker_private_ip", i)]
+			cluster.GPUWorkerInstanceType = outputs[fmt.Sprintf("ha_%d_gpu_worker_instance_type", i)]
+			cluster.GPUWorkerAMI = outputs[fmt.Sprintf("ha_%d_gpu_worker_ami", i)]
+			cluster.GPUWorkerSubnetID = outputs[fmt.Sprintf("ha_%d_gpu_worker_subnet_id", i)]
 		}
 
 		if !kubeconfigExists {

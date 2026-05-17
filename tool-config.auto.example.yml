@@ -10,6 +10,15 @@ rancher:
 rke2:
   preload_images: true
 
+gpu_worker:
+  enabled: false
+  # standard = g5.xlarge, 24 GB GPU memory; large = p5.4xlarge, 80 GB GPU memory.
+  profile: standard
+  instance_type: g5.xlarge
+  # Leave blank to auto-select the latest AWS Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04).
+  ami: ""
+  subnet_id: ""
+
 total_has: 2
 
 user:

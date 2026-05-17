@@ -93,10 +93,58 @@ variable "run_id" {
   default     = ""
 }
 
+variable "gpu_worker_enabled" {
+  type        = bool
+  description = "Whether each HA cluster should include one worker-only GPU node for Rancher AI/Liz testing."
+  default     = false
+}
+
+variable "gpu_worker_instance_type" {
+  type        = string
+  description = "EC2 instance type for optional worker-only GPU nodes."
+  default     = "g5.xlarge"
+}
+
+variable "gpu_worker_ami" {
+  type        = string
+  description = "Optional AMI override for GPU workers. Leave blank to use the latest AWS Deep Learning Base OSS Nvidia Driver GPU AMI for the selected region."
+  default     = ""
+}
+
+variable "gpu_worker_ami_name_filter" {
+  type        = string
+  description = "AMI name filter used when gpu_worker_ami is blank."
+  default     = "Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu 22.04)*"
+}
+
+variable "gpu_worker_subnet_id" {
+  type        = string
+  description = "Optional subnet override for GPU workers. Defaults prefer subnet B, then C, then A to avoid common us-east-2a GPU capacity pressure."
+  default     = ""
+}
+
+data "aws_ami" "gpu_worker" {
+  count       = var.gpu_worker_enabled && trimspace(var.gpu_worker_ami) == "" ? 1 : 0
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = [var.gpu_worker_ami_name_filter]
+  }
+
+  filter {
+    name   = "state"
+    values = ["available"]
+  }
+}
+
 # Module configuration
 locals {
-  ha_instances = { for i in range(1, var.total_has + 1) : i => "${var.aws_prefix}-h${i}" }
-  owner_name   = trimspace("${trimspace(var.owner_first_name)} ${trimspace(var.owner_last_name)}")
+  ha_instances                  = { for i in range(1, var.total_has + 1) : i => "${var.aws_prefix}-h${i}" }
+  owner_name                    = trimspace("${trimspace(var.owner_first_name)} ${trimspace(var.owner_last_name)}")
+  default_gpu_worker_subnet_ids = [var.aws_subnet_b, var.aws_subnet_c, var.aws_subnet_id]
+  resolved_gpu_worker_ami       = var.gpu_worker_enabled ? (trimspace(var.gpu_worker_ami) != "" ? trimspace(var.gpu_worker_ami) : data.aws_ami.gpu_worker[0].id) : ""
   common_tags = {
     NamePrefix             = var.aws_prefix
     Owner                  = local.owner_name
@@ -117,32 +165,41 @@ module "ha" {
   for_each = local.ha_instances
   source   = "./modules/rke2-ha"
 
-  aws_prefix             = each.value
-  aws_vpc                = var.aws_vpc
-  aws_subnet_a           = var.aws_subnet_a
-  aws_subnet_b           = var.aws_subnet_b
-  aws_subnet_c           = var.aws_subnet_c
-  aws_ami                = var.aws_ami
-  aws_subnet_id          = var.aws_subnet_id
-  aws_security_group_id  = var.aws_security_group_id
-  aws_pem_key_name       = var.aws_pem_key_name
-  aws_route53_fqdn       = var.aws_route53_fqdn
-  custom_hostname_prefix = trimspace(var.custom_hostname_prefix)
-  common_tags            = local.common_tags
+  aws_prefix               = each.value
+  aws_vpc                  = var.aws_vpc
+  aws_subnet_a             = var.aws_subnet_a
+  aws_subnet_b             = var.aws_subnet_b
+  aws_subnet_c             = var.aws_subnet_c
+  aws_ami                  = var.aws_ami
+  aws_subnet_id            = var.aws_subnet_id
+  aws_security_group_id    = var.aws_security_group_id
+  aws_pem_key_name         = var.aws_pem_key_name
+  aws_route53_fqdn         = var.aws_route53_fqdn
+  custom_hostname_prefix   = trimspace(var.custom_hostname_prefix)
+  common_tags              = local.common_tags
+  gpu_worker_enabled       = var.gpu_worker_enabled
+  gpu_worker_instance_type = var.gpu_worker_instance_type
+  gpu_worker_ami           = local.resolved_gpu_worker_ami
+  gpu_worker_subnet_id     = trimspace(var.gpu_worker_subnet_id) != "" ? trimspace(var.gpu_worker_subnet_id) : local.default_gpu_worker_subnet_ids[(tonumber(each.key) - 1) % length(local.default_gpu_worker_subnet_ids)]
 }
 
 # Outputs
 output "ha_details" {
   value = {
     for idx, instance in module.ha : "ha_${idx}" => {
-      server1_ip         = instance.server1_ip
-      server2_ip         = instance.server2_ip
-      server3_ip         = instance.server3_ip
-      server1_private_ip = instance.server1_private_ip
-      server2_private_ip = instance.server2_private_ip
-      server3_private_ip = instance.server3_private_ip
-      aws_lb             = instance.aws_lb
-      rancher_url        = instance.rancher_url
+      server1_ip               = instance.server1_ip
+      server2_ip               = instance.server2_ip
+      server3_ip               = instance.server3_ip
+      server1_private_ip       = instance.server1_private_ip
+      server2_private_ip       = instance.server2_private_ip
+      server3_private_ip       = instance.server3_private_ip
+      gpu_worker_ip            = instance.gpu_worker_ip
+      gpu_worker_private_ip    = instance.gpu_worker_private_ip
+      gpu_worker_instance_type = instance.gpu_worker_instance_type
+      gpu_worker_ami           = instance.gpu_worker_ami
+      gpu_worker_subnet_id     = instance.gpu_worker_subnet_id
+      aws_lb                   = instance.aws_lb
+      rancher_url              = instance.rancher_url
     }
   }
   sensitive = true
@@ -151,14 +208,19 @@ output "ha_details" {
 output "flat_outputs" {
   value = merge([
     for idx, instance in module.ha : {
-      "ha_${idx}_server1_ip"         = instance.server1_ip
-      "ha_${idx}_server2_ip"         = instance.server2_ip
-      "ha_${idx}_server3_ip"         = instance.server3_ip
-      "ha_${idx}_server1_private_ip" = instance.server1_private_ip
-      "ha_${idx}_server2_private_ip" = instance.server2_private_ip
-      "ha_${idx}_server3_private_ip" = instance.server3_private_ip
-      "ha_${idx}_aws_lb"             = instance.aws_lb
-      "ha_${idx}_rancher_url"        = instance.rancher_url
+      "ha_${idx}_server1_ip"               = instance.server1_ip
+      "ha_${idx}_server2_ip"               = instance.server2_ip
+      "ha_${idx}_server3_ip"               = instance.server3_ip
+      "ha_${idx}_server1_private_ip"       = instance.server1_private_ip
+      "ha_${idx}_server2_private_ip"       = instance.server2_private_ip
+      "ha_${idx}_server3_private_ip"       = instance.server3_private_ip
+      "ha_${idx}_gpu_worker_ip"            = instance.gpu_worker_ip
+      "ha_${idx}_gpu_worker_private_ip"    = instance.gpu_worker_private_ip
+      "ha_${idx}_gpu_worker_instance_type" = instance.gpu_worker_instance_type
+      "ha_${idx}_gpu_worker_ami"           = instance.gpu_worker_ami
+      "ha_${idx}_gpu_worker_subnet_id"     = instance.gpu_worker_subnet_id
+      "ha_${idx}_aws_lb"                   = instance.aws_lb
+      "ha_${idx}_rancher_url"              = instance.rancher_url
     }
   ]...)
   sensitive = true

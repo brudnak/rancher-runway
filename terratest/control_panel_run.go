@@ -30,24 +30,26 @@ type panelWorkspaceState struct {
 }
 
 type panelRunRecord struct {
-	RunID                string    `json:"runId"`
-	SlotID               string    `json:"slotId"`
-	SlotName             string    `json:"slotName"`
-	Status               string    `json:"status"`
-	CreatedAt            time.Time `json:"createdAt"`
-	UpdatedAt            time.Time `json:"updatedAt"`
-	TotalHAs             int       `json:"totalHAs"`
-	AWSPrefix            string    `json:"awsPrefix,omitempty"`
-	Route53FQDN          string    `json:"route53Fqdn,omitempty"`
-	Owner                string    `json:"owner,omitempty"`
-	CustomHostnamePrefix string    `json:"customHostnamePrefix,omitempty"`
-	RancherVersions      []string  `json:"rancherVersions,omitempty"`
-	TerraformBackend     string    `json:"terraformBackend"`
-	TerraformModuleDir   string    `json:"terraformModuleDir,omitempty"`
-	TerraformStatePath   string    `json:"terraformStatePath,omitempty"`
-	TerraformDataDir     string    `json:"terraformDataDir,omitempty"`
-	HAOutputRoot         string    `json:"haOutputRoot"`
-	SharedPaths          []string  `json:"sharedPaths"`
+	RunID                 string    `json:"runId"`
+	SlotID                string    `json:"slotId"`
+	SlotName              string    `json:"slotName"`
+	Status                string    `json:"status"`
+	CreatedAt             time.Time `json:"createdAt"`
+	UpdatedAt             time.Time `json:"updatedAt"`
+	TotalHAs              int       `json:"totalHAs"`
+	AWSPrefix             string    `json:"awsPrefix,omitempty"`
+	Route53FQDN           string    `json:"route53Fqdn,omitempty"`
+	Owner                 string    `json:"owner,omitempty"`
+	CustomHostnamePrefix  string    `json:"customHostnamePrefix,omitempty"`
+	RancherVersions       []string  `json:"rancherVersions,omitempty"`
+	GPUWorkerEnabled      bool      `json:"gpuWorkerEnabled,omitempty"`
+	GPUWorkerInstanceType string    `json:"gpuWorkerInstanceType,omitempty"`
+	TerraformBackend      string    `json:"terraformBackend"`
+	TerraformModuleDir    string    `json:"terraformModuleDir,omitempty"`
+	TerraformStatePath    string    `json:"terraformStatePath,omitempty"`
+	TerraformDataDir      string    `json:"terraformDataDir,omitempty"`
+	HAOutputRoot          string    `json:"haOutputRoot"`
+	SharedPaths           []string  `json:"sharedPaths"`
 }
 
 type localArtifactCleanupResult struct {
@@ -137,24 +139,26 @@ func (p *localControlPanel) createCurrentRunRecord(runID string, now time.Time) 
 	moduleDir := p.terraformModuleDirForRun(runID)
 	slotID := panelRunSlotID(runID)
 	record := panelRunRecord{
-		RunID:                runID,
-		SlotID:               slotID,
-		SlotName:             "Run " + safeRunPathSegment(runID),
-		Status:               "setup_running",
-		CreatedAt:            now,
-		UpdatedAt:            now,
-		TotalHAs:             p.totalHAs,
-		AWSPrefix:            terraformAWSPrefixForRun(viper.GetString("tf_vars.aws_prefix"), runID),
-		Route53FQDN:          strings.TrimSpace(viper.GetString("tf_vars.aws_route53_fqdn")),
-		Owner:                settings.OwnerLabel(),
-		CustomHostnamePrefix: strings.TrimSpace(viper.GetString(settings.CustomHostnameConfigKey)),
-		RancherVersions:      requestedRancherVersionsForRunRecord(p.totalHAs),
-		TerraformBackend:     terraformBackendLabelForRun(runID, statePath),
-		TerraformModuleDir:   moduleDir,
-		TerraformStatePath:   statePath,
-		TerraformDataDir:     dataDir,
-		HAOutputRoot:         p.haOutputRootForRun(runID),
-		SharedPaths:          p.sharedWorkspacePathLabels(),
+		RunID:                 runID,
+		SlotID:                slotID,
+		SlotName:              "Run " + safeRunPathSegment(runID),
+		Status:                "setup_running",
+		CreatedAt:             now,
+		UpdatedAt:             now,
+		TotalHAs:              p.totalHAs,
+		AWSPrefix:             terraformAWSPrefixForRun(viper.GetString("tf_vars.aws_prefix"), runID),
+		Route53FQDN:           strings.TrimSpace(viper.GetString("tf_vars.aws_route53_fqdn")),
+		Owner:                 settings.OwnerLabel(),
+		CustomHostnamePrefix:  strings.TrimSpace(viper.GetString(settings.CustomHostnameConfigKey)),
+		RancherVersions:       requestedRancherVersionsForRunRecord(p.totalHAs),
+		GPUWorkerEnabled:      settings.CurrentGPUWorkerConfig().Enabled,
+		GPUWorkerInstanceType: settings.CurrentGPUWorkerConfig().InstanceType,
+		TerraformBackend:      terraformBackendLabelForRun(runID, statePath),
+		TerraformModuleDir:    moduleDir,
+		TerraformStatePath:    statePath,
+		TerraformDataDir:      dataDir,
+		HAOutputRoot:          p.haOutputRootForRun(runID),
+		SharedPaths:           p.sharedWorkspacePathLabels(),
 	}
 	p.writeCurrentRunRecord(record)
 }

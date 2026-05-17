@@ -234,12 +234,12 @@ func shellSingleQuote(value string) string {
 }
 
 func estimateCurrentRunCost(totalHAs int, outputs map[string]string) (*cleanupCostEstimate, error) {
-	instanceIDs := make([]string, 0, totalHAs*3)
+	instanceIDs := make([]string, 0, totalHAs*4)
 	seenIPs := map[string]bool{}
 
 	for i := 1; i <= totalHAs; i++ {
 		haOutputs := getHAOutputs(i, outputs)
-		for _, ip := range []string{haOutputs.Server1IP, haOutputs.Server2IP, haOutputs.Server3IP} {
+		for _, ip := range []string{haOutputs.Server1IP, haOutputs.Server2IP, haOutputs.Server3IP, haOutputs.GPUWorkerIP} {
 			if ip == "" || seenIPs[ip] {
 				continue
 			}
@@ -286,18 +286,24 @@ func buildCleanupCostEstimate(region string, instanceIDs []string) (*cleanupCost
 		return nil, fmt.Errorf("no instance details returned for cleanup estimate")
 	}
 
-	instanceType := string(instances[0].InstanceType)
 	now := time.Now()
 	totalRuntimeHours := 0.0
+	estimatedEC2CostUSD := 0.0
+	instanceTypeCounts := map[string]int{}
 	volumeIDs := make([]string, 0, len(instances))
 	seenVolumes := map[string]bool{}
 
 	for _, instance := range instances {
-		if string(instance.InstanceType) != instanceType {
-			return nil, fmt.Errorf("mixed instance types are not yet supported in cleanup estimate")
+		instanceType := string(instance.InstanceType)
+		instanceTypeCounts[instanceType]++
+		ec2HourlyRateUSD, err := lookupEC2OnDemandHourlyPriceUSD(region, instanceType)
+		if err != nil {
+			return nil, err
 		}
 		if instance.LaunchTime != nil {
-			totalRuntimeHours += now.Sub(*instance.LaunchTime).Hours()
+			runtimeHours := now.Sub(*instance.LaunchTime).Hours()
+			totalRuntimeHours += runtimeHours
+			estimatedEC2CostUSD += ec2HourlyRateUSD * runtimeHours
 		}
 		for _, mapping := range instance.BlockDeviceMappings {
 			if mapping.Ebs == nil || mapping.Ebs.VolumeId == nil {
@@ -322,43 +328,50 @@ func buildCleanupCostEstimate(region string, instanceIDs []string) (*cleanupCost
 		return nil, fmt.Errorf("no volume details returned for cleanup estimate")
 	}
 
-	volumeType := string(volumesOutput.Volumes[0].VolumeType)
-	volumeSizeGiB := aws.ToInt32(volumesOutput.Volumes[0].Size)
+	estimatedEBSCostUSD := 0.0
+	volumeTypeCounts := map[string]int{}
+	volumeSizeGiB := int32(0)
 	for _, volume := range volumesOutput.Volumes {
-		if string(volume.VolumeType) != volumeType {
-			return nil, fmt.Errorf("mixed EBS volume types are not yet supported in cleanup estimate")
+		volumeType := string(volume.VolumeType)
+		volumeTypeCounts[volumeType]++
+		if volumeSizeGiB == 0 {
+			volumeSizeGiB = aws.ToInt32(volume.Size)
 		}
-		if aws.ToInt32(volume.Size) != volumeSizeGiB {
-			return nil, fmt.Errorf("mixed EBS volume sizes are not yet supported in cleanup estimate")
+		ebsMonthlyRateUSD, err := lookupEBSMonthlyPricePerGiBUSD(region, volumeType)
+		if err != nil {
+			return nil, err
 		}
+		estimatedEBSCostUSD += ebsMonthlyRateUSD * float64(aws.ToInt32(volume.Size)) * (totalRuntimeHours / float64(len(instances)) / 730.0)
 	}
-
-	ec2HourlyRateUSD, err := lookupEC2OnDemandHourlyPriceUSD(region, instanceType)
-	if err != nil {
-		return nil, err
-	}
-
-	ebsMonthlyRateUSD, err := lookupEBSMonthlyPricePerGiBUSD(region, volumeType)
-	if err != nil {
-		return nil, err
-	}
-
-	estimatedEC2CostUSD := ec2HourlyRateUSD * totalRuntimeHours
-	estimatedEBSCostUSD := ebsMonthlyRateUSD * float64(volumeSizeGiB*int32(len(volumesOutput.Volumes))) * (totalRuntimeHours / 730.0)
 
 	return &cleanupCostEstimate{
 		Region:              region,
 		TotalRuntimeHours:   totalRuntimeHours,
 		InstanceCount:       len(instances),
-		InstanceType:        instanceType,
+		InstanceType:        summarizeCountedNames(instanceTypeCounts),
 		VolumeCount:         len(volumesOutput.Volumes),
-		VolumeType:          volumeType,
+		VolumeType:          summarizeCountedNames(volumeTypeCounts),
 		VolumeSizeGiB:       volumeSizeGiB,
-		EC2HourlyRateUSD:    ec2HourlyRateUSD,
-		EBSMonthlyRateUSD:   ebsMonthlyRateUSD,
+		EC2HourlyRateUSD:    estimatedEC2CostUSD / math.Max(totalRuntimeHours, 1),
+		EBSMonthlyRateUSD:   0,
 		EstimatedEC2CostUSD: estimatedEC2CostUSD,
 		EstimatedEBSCostUSD: estimatedEBSCostUSD,
 	}, nil
+}
+
+func summarizeCountedNames(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(counts))
+	for name, count := range counts {
+		if count <= 1 {
+			parts = append(parts, name)
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s x%d", name, count))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func lookupEC2OnDemandHourlyPriceUSD(region, instanceType string) (float64, error) {
@@ -499,9 +512,9 @@ func logCleanupCostEstimate(estimate *cleanupCostEstimate) {
 	log.Printf("[cleanup] Estimated AWS cost for this run (EC2 + EBS only, live pricing):")
 	log.Printf("[cleanup] Region: %s", estimate.Region)
 	log.Printf("[cleanup] Total runtime across instances: %.2f hours", estimate.TotalRuntimeHours)
-	log.Printf("[cleanup] EC2: %d x %s at $%.4f/hour -> $%.2f estimated",
+	log.Printf("[cleanup] EC2: %d instance(s): %s, blended $%.4f/runtime-hour -> $%.2f estimated",
 		estimate.InstanceCount, estimate.InstanceType, estimate.EC2HourlyRateUSD, estimate.EstimatedEC2CostUSD)
-	log.Printf("[cleanup] EBS: %d x %d GiB %s at $%.4f/GiB-month -> $%.2f estimated",
-		estimate.VolumeCount, estimate.VolumeSizeGiB, estimate.VolumeType, estimate.EBSMonthlyRateUSD, estimate.EstimatedEBSCostUSD)
+	log.Printf("[cleanup] EBS: %d volume(s): %s -> $%.2f estimated",
+		estimate.VolumeCount, estimate.VolumeType, estimate.EstimatedEBSCostUSD)
 	log.Printf("[cleanup] Estimated total (EC2 + EBS only): $%.2f", totalEstimatedUSD)
 }

@@ -24,7 +24,9 @@ func (p *localControlPanel) newSetupEditor() *interactiveServer {
 			if len(plans) == 0 {
 				return fmt.Errorf("setup plan must resolve before starting AWS")
 			}
+			viperConfigMu.RLock()
 			p.totalHAs = viper.GetInt("total_has")
+			viperConfigMu.RUnlock()
 			if p.totalHAs < 1 {
 				p.totalHAs = len(plans)
 			}

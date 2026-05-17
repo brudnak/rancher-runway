@@ -17,6 +17,13 @@ const starterToolConfigYAML = `rancher:
 rke2:
   preload_images: true
 
+gpu_worker:
+  enabled: false
+  profile: standard
+  instance_type: g5.xlarge
+  ami: ""
+  subnet_id: ""
+
 total_has: 1
 
 user:

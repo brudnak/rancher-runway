@@ -50,24 +50,26 @@ type LocalWorkspaceRunState struct {
 }
 
 type LocalWorkspaceRunRecord struct {
-	RunID                string    `json:"runId"`
-	SlotID               string    `json:"slotId"`
-	SlotName             string    `json:"slotName"`
-	Status               string    `json:"status"`
-	CreatedAt            time.Time `json:"createdAt"`
-	UpdatedAt            time.Time `json:"updatedAt"`
-	TotalHAs             int       `json:"totalHAs"`
-	AWSPrefix            string    `json:"awsPrefix,omitempty"`
-	Route53FQDN          string    `json:"route53Fqdn,omitempty"`
-	Owner                string    `json:"owner,omitempty"`
-	CustomHostnamePrefix string    `json:"customHostnamePrefix,omitempty"`
-	RancherVersions      []string  `json:"rancherVersions,omitempty"`
-	TerraformBackend     string    `json:"terraformBackend"`
-	TerraformModuleDir   string    `json:"terraformModuleDir,omitempty"`
-	TerraformStatePath   string    `json:"terraformStatePath,omitempty"`
-	TerraformDataDir     string    `json:"terraformDataDir,omitempty"`
-	HAOutputRoot         string    `json:"haOutputRoot"`
-	SharedPaths          []string  `json:"sharedPaths"`
+	RunID                 string    `json:"runId"`
+	SlotID                string    `json:"slotId"`
+	SlotName              string    `json:"slotName"`
+	Status                string    `json:"status"`
+	CreatedAt             time.Time `json:"createdAt"`
+	UpdatedAt             time.Time `json:"updatedAt"`
+	TotalHAs              int       `json:"totalHAs"`
+	AWSPrefix             string    `json:"awsPrefix,omitempty"`
+	Route53FQDN           string    `json:"route53Fqdn,omitempty"`
+	Owner                 string    `json:"owner,omitempty"`
+	CustomHostnamePrefix  string    `json:"customHostnamePrefix,omitempty"`
+	RancherVersions       []string  `json:"rancherVersions,omitempty"`
+	GPUWorkerEnabled      bool      `json:"gpuWorkerEnabled,omitempty"`
+	GPUWorkerInstanceType string    `json:"gpuWorkerInstanceType,omitempty"`
+	TerraformBackend      string    `json:"terraformBackend"`
+	TerraformModuleDir    string    `json:"terraformModuleDir,omitempty"`
+	TerraformStatePath    string    `json:"terraformStatePath,omitempty"`
+	TerraformDataDir      string    `json:"terraformDataDir,omitempty"`
+	HAOutputRoot          string    `json:"haOutputRoot"`
+	SharedPaths           []string  `json:"sharedPaths"`
 }
 
 type LocalWorkspaceCheck struct {
@@ -80,21 +82,26 @@ type LocalWorkspaceCheck struct {
 }
 
 type LocalWorkspaceCluster struct {
-	ID                  string `json:"id"`
-	Type                string `json:"type"`
-	HAIndex             int    `json:"haIndex"`
-	Name                string `json:"name"`
-	Version             string `json:"version,omitempty"`
-	RancherURL          string `json:"rancherUrl,omitempty"`
-	LoadBalancer        string `json:"loadBalancer,omitempty"`
-	Namespace           string `json:"namespace,omitempty"`
-	ManagementClusterID string `json:"managementClusterId,omitempty"`
-	KubeconfigPath      string `json:"kubeconfigPath,omitempty"`
-	Provisioning        bool   `json:"provisioning,omitempty"`
-	Available           bool   `json:"available"`
-	Reachable           bool   `json:"reachable"`
-	Error               string `json:"error,omitempty"`
-	PodCount            int    `json:"podCount"`
+	ID                    string `json:"id"`
+	Type                  string `json:"type"`
+	HAIndex               int    `json:"haIndex"`
+	Name                  string `json:"name"`
+	Version               string `json:"version,omitempty"`
+	RancherURL            string `json:"rancherUrl,omitempty"`
+	LoadBalancer          string `json:"loadBalancer,omitempty"`
+	GPUWorkerIP           string `json:"gpuWorkerIp,omitempty"`
+	GPUWorkerPrivateIP    string `json:"gpuWorkerPrivateIp,omitempty"`
+	GPUWorkerInstanceType string `json:"gpuWorkerInstanceType,omitempty"`
+	GPUWorkerAMI          string `json:"gpuWorkerAmi,omitempty"`
+	GPUWorkerSubnetID     string `json:"gpuWorkerSubnetId,omitempty"`
+	Namespace             string `json:"namespace,omitempty"`
+	ManagementClusterID   string `json:"managementClusterId,omitempty"`
+	KubeconfigPath        string `json:"kubeconfigPath,omitempty"`
+	Provisioning          bool   `json:"provisioning,omitempty"`
+	Available             bool   `json:"available"`
+	Reachable             bool   `json:"reachable"`
+	Error                 string `json:"error,omitempty"`
+	PodCount              int    `json:"podCount"`
 }
 
 type LocalWorkspaceOperation struct {
@@ -197,24 +204,26 @@ func localWorkspaceRunState(state panelWorkspaceState) LocalWorkspaceRunState {
 
 func localWorkspaceRunRecord(record panelRunRecord) LocalWorkspaceRunRecord {
 	return LocalWorkspaceRunRecord{
-		RunID:                record.RunID,
-		SlotID:               record.SlotID,
-		SlotName:             record.SlotName,
-		Status:               record.Status,
-		CreatedAt:            record.CreatedAt,
-		UpdatedAt:            record.UpdatedAt,
-		TotalHAs:             record.TotalHAs,
-		AWSPrefix:            record.AWSPrefix,
-		Route53FQDN:          record.Route53FQDN,
-		Owner:                record.Owner,
-		CustomHostnamePrefix: record.CustomHostnamePrefix,
-		RancherVersions:      append([]string(nil), record.RancherVersions...),
-		TerraformBackend:     record.TerraformBackend,
-		TerraformModuleDir:   record.TerraformModuleDir,
-		TerraformStatePath:   record.TerraformStatePath,
-		TerraformDataDir:     record.TerraformDataDir,
-		HAOutputRoot:         record.HAOutputRoot,
-		SharedPaths:          append([]string(nil), record.SharedPaths...),
+		RunID:                 record.RunID,
+		SlotID:                record.SlotID,
+		SlotName:              record.SlotName,
+		Status:                record.Status,
+		CreatedAt:             record.CreatedAt,
+		UpdatedAt:             record.UpdatedAt,
+		TotalHAs:              record.TotalHAs,
+		AWSPrefix:             record.AWSPrefix,
+		Route53FQDN:           record.Route53FQDN,
+		Owner:                 record.Owner,
+		CustomHostnamePrefix:  record.CustomHostnamePrefix,
+		RancherVersions:       append([]string(nil), record.RancherVersions...),
+		GPUWorkerEnabled:      record.GPUWorkerEnabled,
+		GPUWorkerInstanceType: record.GPUWorkerInstanceType,
+		TerraformBackend:      record.TerraformBackend,
+		TerraformModuleDir:    record.TerraformModuleDir,
+		TerraformStatePath:    record.TerraformStatePath,
+		TerraformDataDir:      record.TerraformDataDir,
+		HAOutputRoot:          record.HAOutputRoot,
+		SharedPaths:           append([]string(nil), record.SharedPaths...),
 	}
 }
 
@@ -259,21 +268,26 @@ func localWorkspaceClusters(clusters []clusterView) []LocalWorkspaceCluster {
 	out := make([]LocalWorkspaceCluster, 0, len(clusters))
 	for _, cluster := range clusters {
 		out = append(out, LocalWorkspaceCluster{
-			ID:                  cluster.ID,
-			Type:                cluster.Type,
-			HAIndex:             cluster.HAIndex,
-			Name:                cluster.Name,
-			Version:             cluster.Version,
-			RancherURL:          cluster.RancherURL,
-			LoadBalancer:        cluster.LoadBalancer,
-			Namespace:           cluster.Namespace,
-			ManagementClusterID: cluster.ManagementClusterID,
-			KubeconfigPath:      cluster.KubeconfigPath,
-			Provisioning:        cluster.Provisioning,
-			Available:           cluster.Available,
-			Reachable:           cluster.Reachable,
-			Error:               cluster.Error,
-			PodCount:            len(cluster.Pods),
+			ID:                    cluster.ID,
+			Type:                  cluster.Type,
+			HAIndex:               cluster.HAIndex,
+			Name:                  cluster.Name,
+			Version:               cluster.Version,
+			RancherURL:            cluster.RancherURL,
+			LoadBalancer:          cluster.LoadBalancer,
+			GPUWorkerIP:           cluster.GPUWorkerIP,
+			GPUWorkerPrivateIP:    cluster.GPUWorkerPrivateIP,
+			GPUWorkerInstanceType: cluster.GPUWorkerInstanceType,
+			GPUWorkerAMI:          cluster.GPUWorkerAMI,
+			GPUWorkerSubnetID:     cluster.GPUWorkerSubnetID,
+			Namespace:             cluster.Namespace,
+			ManagementClusterID:   cluster.ManagementClusterID,
+			KubeconfigPath:        cluster.KubeconfigPath,
+			Provisioning:          cluster.Provisioning,
+			Available:             cluster.Available,
+			Reachable:             cluster.Reachable,
+			Error:                 cluster.Error,
+			PodCount:              len(cluster.Pods),
 		})
 	}
 	return out

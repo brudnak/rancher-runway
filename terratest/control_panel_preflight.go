@@ -48,6 +48,9 @@ func (p *localControlPanel) collectPanelPreflightWithWorkspace(blockOnRunRecords
 }
 
 func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
+	viperConfigMu.RLock()
+	defer viperConfigMu.RUnlock()
+
 	item := systemReadinessItem{Name: "Setup config"}
 
 	var blockers []string

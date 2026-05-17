@@ -246,6 +246,74 @@
                 </div>
               </div>
 
+              <div class="mt-4 overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm transition-colors dark:border-white/10 dark:bg-white/[0.03]" id="gpuWorkerBox">
+                <label class="flex cursor-pointer items-start justify-between gap-4 p-4">
+                  <span class="min-w-0">
+                    <span class="flex flex-wrap items-center gap-2">
+                      <span class="block text-sm font-semibold text-zinc-950 dark:text-zinc-100">Include GPU worker node for Liz AI assistant</span>
+                      <span id="gpuWorkerStatusBadge" class="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-zinc-600 dark:bg-white/10 dark:text-zinc-300">Optional</span>
+                    </span>
+                    <span class="mt-1 block text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400">
+                      Adds one worker-only GPU node per HA for local Ollama/Liz testing.
+                    </span>
+                    <span id="gpuWorkerHeaderHint" class="mt-1 block text-xs font-semibold leading-5 text-zinc-500 dark:text-zinc-500">
+                      Off by default. Turn on only for active AI testing.
+                    </span>
+                  </span>
+                  <input id="gpuWorkerToggle" name="gpuWorkerEnabled" value="true" type="checkbox" class="peer sr-only" />
+                  <span aria-hidden="true" class="mt-0.5 h-6 w-11 shrink-0 rounded-full bg-zinc-300 ring-1 ring-zinc-300 transition peer-checked:bg-rose-500 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-rose-400 after:mt-0.5 after:ml-0.5 after:block after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition peer-checked:after:translate-x-5 dark:bg-zinc-800 dark:ring-white/10"></span>
+                </label>
+                <div id="gpuWorkerOptions" class="hidden grid gap-4 border-t border-zinc-200 p-4 dark:border-white/10">
+                  <fieldset class="grid gap-3">
+                    <legend class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">GPU size</legend>
+                    <input id="gpuWorkerProfileInput" name="gpuWorkerProfile" type="hidden" value="standard" />
+                    <div class="grid gap-3 lg:grid-cols-2" role="radiogroup" aria-label="GPU worker size">
+                      <button id="gpuWorkerProfileStandardBtn" type="button" data-gpu-profile="standard" role="radio" aria-checked="true" class="gpu-profile-btn rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-left shadow-sm transition dark:border-emerald-500/30 dark:bg-emerald-500/10">
+                        <span class="flex flex-wrap items-center gap-2">
+                          <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Standard g5.xlarge</span>
+                          <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200">Recommended</span>
+                        </span>
+                        <span class="mt-1 block text-xs leading-5 text-zinc-700 dark:text-zinc-300">1x NVIDIA A10G, 24 GB GPU memory. Matches the Liz quick start gpt-oss:20b minimum class.</span>
+                      </button>
+                      <button id="gpuWorkerProfileLargeBtn" type="button" data-gpu-profile="large" role="radio" aria-checked="false" class="gpu-profile-btn rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-left shadow-sm transition hover:border-rose-200 hover:bg-rose-50 dark:border-white/10 dark:bg-white/[0.04] dark:hover:border-rose-500/25 dark:hover:bg-rose-500/10">
+                        <span class="flex flex-wrap items-center gap-2">
+                          <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Large p5.4xlarge</span>
+                          <span class="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-rose-800 dark:bg-rose-500/15 dark:text-rose-200">Extra warning</span>
+                        </span>
+                        <span class="mt-1 block text-xs leading-5 text-zinc-700 dark:text-zinc-300">1x NVIDIA H100, 80 GB GPU memory. Intended for the Liz docs gpt-oss:120b class; much higher cost and tighter AWS capacity.</span>
+                      </button>
+                    </div>
+                    <p class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+                      Liz docs list gpt-oss:20b at 24 GB VRAM and gpt-oss:120b at 80 GB VRAM. Start with the smaller worker unless you explicitly need the larger model.
+                    </p>
+                  </fieldset>
+                  <div id="gpuWorkerPriceBox" class="rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-3 text-sm leading-6 text-zinc-700 dark:border-white/10 dark:bg-black/20 dark:text-zinc-300">
+                    Price estimate will appear before plan resolution.
+                  </div>
+                  <details class="rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-white/[0.03]">
+                    <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-3.5 py-3 text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+                      <span>Advanced image and placement</span>
+                      <span class="text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">Optional</span>
+                    </summary>
+                    <div class="grid gap-4 border-t border-zinc-200 p-3.5 dark:border-white/10 lg:grid-cols-2">
+                      <label class="grid gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                        AMI override
+                        <input id="gpuWorkerAmiInput" name="gpuWorkerAmi" type="text" placeholder="Auto-select GPU-ready Ubuntu 22.04 AMI" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
+                        <span class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">Leave empty to use the latest AWS Deep Learning Base OSS Nvidia Driver GPU AMI.</span>
+                      </label>
+                      <label class="grid gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                        Subnet override
+                        <input id="gpuWorkerSubnetInput" name="gpuWorkerSubnetId" type="text" placeholder="Auto: prefer subnet B/C" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
+                        <span class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">Leave empty to prefer subnet B, then C, then A across HAs. Use only when AWS capacity requires a specific subnet.</span>
+                      </label>
+                    </div>
+                  </details>
+                  <div class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm font-semibold leading-6 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-100">
+                    Active GPU worker nodes must not be left running unused.
+                  </div>
+                </div>
+              </div>
+
               <div class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
                 <div class="mb-4">
                   <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Basic AWS settings</h2>

@@ -1156,6 +1156,11 @@ const renderWorkspace = workspace => {
                       <div><span class="font-semibold text-zinc-800 dark:text-zinc-200">Hostname:</span> ${escapeHtml(runHostnameLabel(run))}</div>
                       <div><span class="font-semibold text-zinc-800 dark:text-zinc-200">Terraform:</span> <span title="${escapeHtml(run.terraformStatePath || run.terraformBackend || '')}">${escapeHtml(compactPath(run.terraformStatePath || run.terraformBackend || 'not recorded'))}</span></div>
                     </div>
+                    ${run.gpuWorkerEnabled ? `
+                      <div class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm font-semibold text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
+                        Active GPU worker node${Number(run.totalHAs || 1) === 1 ? '' : 's'} in slot ${escapeHtml(run.slotId || run.runId || 'unknown')}: ${escapeHtml(String(run.totalHAs || 1))} x ${escapeHtml(run.gpuWorkerInstanceType || 'GPU instance')}. Do not leave running unused.
+                      </div>
+                    ` : ''}
                   </div>
                   <div class="run-action-rail flex shrink-0 flex-wrap gap-2 xl:max-w-[26rem]">
                     ${renderRunActionButton({ action: 'view-clusters', runId: run.runId, label: 'View clusters', variant: stats.total ? 'primary' : 'secondary', disabled: !stats.total, title: stats.total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.' })}
@@ -2683,6 +2688,20 @@ clustersEl.addEventListener('click', event => {
 
   if (action === 'toggle-pods') {
     clusterPanel.togglePods(clusterId)
+    return
+  }
+
+  if (action === 'toggle-gpu-commands') {
+    clusterPanel.toggleGPUCommands(clusterId)
+    return
+  }
+
+  if (action === 'copy-gpu-command') {
+    const commandIndex = button.dataset.commandIndex || ''
+    const commandText = button.closest('[data-gpu-command-row]')?.querySelector('code[data-gpu-command-text]')?.textContent || ''
+    copyTextToClipboard(commandText, 'Copied GPU setup command to clipboard.').then(copied => {
+      clusterPanel.flashGPUCommandCopy(clusterId, commandIndex, copied ? 'success' : 'error')
+    })
     return
   }
 

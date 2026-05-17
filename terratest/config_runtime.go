@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -24,6 +25,9 @@ func setupConfig(t *testing.T) {
 }
 
 func setupConfigE(repoRoot string) error {
+	viperConfigMu.Lock()
+	defer viperConfigMu.Unlock()
+
 	viper.Reset()
 
 	if strings.TrimSpace(repoRoot) == "" {
@@ -72,6 +76,28 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 		t.Fatalf("Failed to sync Terraform backend file: %v", err)
 	}
 
+	vars := filterTerraformVarsForModule(map[string]interface{}{
+		"total_has":                totalHAs,
+		"aws_prefix":               terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
+		"aws_vpc":                  viper.GetString("tf_vars.aws_vpc"),
+		"aws_subnet_a":             viper.GetString("tf_vars.aws_subnet_a"),
+		"aws_subnet_b":             viper.GetString("tf_vars.aws_subnet_b"),
+		"aws_subnet_c":             viper.GetString("tf_vars.aws_subnet_c"),
+		"aws_ami":                  viper.GetString("tf_vars.aws_ami"),
+		"aws_subnet_id":            viper.GetString("tf_vars.aws_subnet_id"),
+		"aws_security_group_id":    viper.GetString("tf_vars.aws_security_group_id"),
+		"aws_pem_key_name":         viper.GetString("tf_vars.aws_pem_key_name"),
+		"aws_route53_fqdn":         viper.GetString("tf_vars.aws_route53_fqdn"),
+		"custom_hostname_prefix":   customHostnamePrefix,
+		"owner_first_name":         settings.OwnerFirstName(),
+		"owner_last_name":          settings.OwnerLastName(),
+		"run_id":                   currentTerraformRunID(),
+		"gpu_worker_enabled":       settings.CurrentGPUWorkerConfig().Enabled,
+		"gpu_worker_instance_type": settings.CurrentGPUWorkerConfig().InstanceType,
+		"gpu_worker_ami":           settings.CurrentGPUWorkerConfig().AMI,
+		"gpu_worker_subnet_id":     settings.CurrentGPUWorkerConfig().SubnetID,
+	}, terraformModuleDir())
+
 	options := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
 		TerraformDir:  terraformModuleDir(),
 		NoColor:       true,
@@ -79,23 +105,7 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 		LockTimeout:   "5m",
 		EnvVars:       terraformEnvVarsFromEnv(),
 		BackendConfig: backendConfig,
-		Vars: map[string]interface{}{
-			"total_has":              totalHAs,
-			"aws_prefix":             terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
-			"aws_vpc":                viper.GetString("tf_vars.aws_vpc"),
-			"aws_subnet_a":           viper.GetString("tf_vars.aws_subnet_a"),
-			"aws_subnet_b":           viper.GetString("tf_vars.aws_subnet_b"),
-			"aws_subnet_c":           viper.GetString("tf_vars.aws_subnet_c"),
-			"aws_ami":                viper.GetString("tf_vars.aws_ami"),
-			"aws_subnet_id":          viper.GetString("tf_vars.aws_subnet_id"),
-			"aws_security_group_id":  viper.GetString("tf_vars.aws_security_group_id"),
-			"aws_pem_key_name":       viper.GetString("tf_vars.aws_pem_key_name"),
-			"aws_route53_fqdn":       viper.GetString("tf_vars.aws_route53_fqdn"),
-			"custom_hostname_prefix": customHostnamePrefix,
-			"owner_first_name":       settings.OwnerFirstName(),
-			"owner_last_name":        settings.OwnerLastName(),
-			"run_id":                 currentTerraformRunID(),
-		},
+		Vars:          vars,
 	})
 
 	if os.Getenv("GITHUB_ACTIONS") == "true" {
@@ -105,6 +115,47 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 	}
 
 	return options
+}
+
+var terraformVariableBlockPattern = regexp.MustCompile(`(?m)^\s*variable\s+"([^"]+)"`)
+
+func filterTerraformVarsForModule(vars map[string]interface{}, moduleDir string) map[string]interface{} {
+	declared, err := declaredTerraformVariables(moduleDir)
+	if err != nil {
+		return vars
+	}
+
+	filtered := make(map[string]interface{}, len(vars))
+	for key, value := range vars {
+		if declared[key] {
+			filtered[key] = value
+		}
+	}
+	return filtered
+}
+
+func declaredTerraformVariables(moduleDir string) (map[string]bool, error) {
+	entries, err := os.ReadDir(moduleDir)
+	if err != nil {
+		return nil, err
+	}
+
+	declared := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".tf") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(moduleDir, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range terraformVariableBlockPattern.FindAllStringSubmatch(string(data), -1) {
+			if len(match) > 1 {
+				declared[match[1]] = true
+			}
+		}
+	}
+	return declared, nil
 }
 
 func terraformBackendConfigFromEnv() (map[string]interface{}, error) {
@@ -306,14 +357,19 @@ func maskTerraformOutputs(outputs map[string]string) {
 func getHAOutputs(instanceNum int, outputs map[string]string) TerraformOutputs {
 	prefix := fmt.Sprintf("ha_%d", instanceNum)
 	return TerraformOutputs{
-		Server1IP:        outputs[fmt.Sprintf("%s_server1_ip", prefix)],
-		Server2IP:        outputs[fmt.Sprintf("%s_server2_ip", prefix)],
-		Server3IP:        outputs[fmt.Sprintf("%s_server3_ip", prefix)],
-		Server1PrivateIP: outputs[fmt.Sprintf("%s_server1_private_ip", prefix)],
-		Server2PrivateIP: outputs[fmt.Sprintf("%s_server2_private_ip", prefix)],
-		Server3PrivateIP: outputs[fmt.Sprintf("%s_server3_private_ip", prefix)],
-		LoadBalancerDNS:  outputs[fmt.Sprintf("%s_aws_lb", prefix)],
-		RancherURL:       outputs[fmt.Sprintf("%s_rancher_url", prefix)],
+		Server1IP:             outputs[fmt.Sprintf("%s_server1_ip", prefix)],
+		Server2IP:             outputs[fmt.Sprintf("%s_server2_ip", prefix)],
+		Server3IP:             outputs[fmt.Sprintf("%s_server3_ip", prefix)],
+		Server1PrivateIP:      outputs[fmt.Sprintf("%s_server1_private_ip", prefix)],
+		Server2PrivateIP:      outputs[fmt.Sprintf("%s_server2_private_ip", prefix)],
+		Server3PrivateIP:      outputs[fmt.Sprintf("%s_server3_private_ip", prefix)],
+		GPUWorkerIP:           outputs[fmt.Sprintf("%s_gpu_worker_ip", prefix)],
+		GPUWorkerPrivateIP:    outputs[fmt.Sprintf("%s_gpu_worker_private_ip", prefix)],
+		GPUWorkerInstanceType: outputs[fmt.Sprintf("%s_gpu_worker_instance_type", prefix)],
+		GPUWorkerAMI:          outputs[fmt.Sprintf("%s_gpu_worker_ami", prefix)],
+		GPUWorkerSubnetID:     outputs[fmt.Sprintf("%s_gpu_worker_subnet_id", prefix)],
+		LoadBalancerDNS:       outputs[fmt.Sprintf("%s_aws_lb", prefix)],
+		RancherURL:            outputs[fmt.Sprintf("%s_rancher_url", prefix)],
 	}
 }
 

@@ -45,6 +45,9 @@ func maybeEditAutoModePreflight() error {
 }
 
 func currentPreflightVersions() []string {
+	viperConfigMu.RLock()
+	defer viperConfigMu.RUnlock()
+
 	requestedVersions := viper.GetStringSlice("rancher.versions")
 	if len(requestedVersions) > 0 {
 		versions := make([]string, 0, len(requestedVersions))
@@ -736,7 +739,9 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if err := settings.NormalizePreflightConfigUpdate(&update); err != nil {
 		return err
 	}
+	viperConfigMu.RLock()
 	route53FQDN := viper.GetString("tf_vars.aws_route53_fqdn")
+	viperConfigMu.RUnlock()
 	if update.TFVars != nil {
 		route53FQDN = update.TFVars["aws_route53_fqdn"]
 	}
@@ -775,6 +780,13 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		setStringValue(userNode, "last_name", update.UserLastName)
 		rke2Node := ensureMappingValue(root, "rke2")
 		setBoolValue(rke2Node, "preload_images", update.PreloadImages)
+		gpuWorkerNode := ensureMappingValue(root, "gpu_worker")
+		gpuProfile := settings.NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
+		setBoolValue(gpuWorkerNode, "enabled", update.GPUWorkerEnabled)
+		setStringValue(gpuWorkerNode, "profile", gpuProfile)
+		setStringValue(gpuWorkerNode, "instance_type", settings.GPUWorkerInstanceType(gpuProfile))
+		setStringValue(gpuWorkerNode, "ami", strings.TrimSpace(update.GPUWorkerAMI))
+		setStringValue(gpuWorkerNode, "subnet_id", strings.TrimSpace(update.GPUWorkerSubnetID))
 	}
 	setStringValue(rancherNode, "mode", mode)
 	switch mode {
@@ -824,6 +836,8 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
+	viperConfigMu.Lock()
+	defer viperConfigMu.Unlock()
 	viper.Set("rancher.mode", mode)
 	viper.Set("rancher.version", "")
 	switch mode {
@@ -850,6 +864,12 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("user.first_name", update.UserFirstName)
 		viper.Set("user.last_name", update.UserLastName)
 		viper.Set("rke2.preload_images", update.PreloadImages)
+		gpuProfile := settings.NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
+		viper.Set("gpu_worker.enabled", update.GPUWorkerEnabled)
+		viper.Set("gpu_worker.profile", gpuProfile)
+		viper.Set("gpu_worker.instance_type", settings.GPUWorkerInstanceType(gpuProfile))
+		viper.Set("gpu_worker.ami", strings.TrimSpace(update.GPUWorkerAMI))
+		viper.Set("gpu_worker.subnet_id", strings.TrimSpace(update.GPUWorkerSubnetID))
 		for _, key := range settings.EditableTFVarKeys {
 			viper.Set("tf_vars."+key, update.TFVars[key])
 		}

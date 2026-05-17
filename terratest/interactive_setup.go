@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -285,6 +286,55 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 		})
 	})
 
+	mux.HandleFunc(interactiveSetupPath(basePath, "/api/gpu-price"), func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		region := strings.TrimSpace(r.URL.Query().Get("region"))
+		if region == "" {
+			viperConfigMu.RLock()
+			region = strings.TrimSpace(viper.GetString("tf_vars.aws_region"))
+			viperConfigMu.RUnlock()
+		}
+		if region == "" {
+			region = "us-east-2"
+		}
+		profile := settings.NormalizeGPUWorkerProfile(r.URL.Query().Get("profile"))
+		instanceType := settings.GPUWorkerInstanceType(profile)
+		count := 1
+		if parsed, err := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("count"))); err == nil && parsed > 0 {
+			count = parsed
+		}
+
+		hourlyRate, err := lookupEC2OnDemandHourlyPriceUSD(region, instanceType)
+		if err != nil {
+			writeJSON(w, map[string]any{
+				"region":       region,
+				"profile":      profile,
+				"instanceType": instanceType,
+				"count":        count,
+				"error":        err.Error(),
+			})
+			return
+		}
+
+		writeJSON(w, map[string]any{
+			"region":            region,
+			"profile":           profile,
+			"instanceType":      instanceType,
+			"count":             count,
+			"hourlyRateUsd":     hourlyRate,
+			"totalHourlyUsd":    hourlyRate * float64(count),
+			"estimateQualifier": "EC2 On-Demand Linux only; EBS and data transfer are extra.",
+		})
+	})
+
 	mux.HandleFunc(interactiveSetupPath(basePath, "/submit"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
@@ -507,6 +557,9 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 }
 
 func interactiveSetupTemplateDataFor(token string, configPath string, initialVersions []string, basePath string, embedded bool) interactiveSetupTemplateData {
+	viperConfigMu.RLock()
+	defer viperConfigMu.RUnlock()
+
 	initialCustomHostname := settings.CurrentCustomHostnamePrefix()
 	initialStateJSON, _ := json.Marshal(interactiveSetupState{
 		Token:                 token,
@@ -642,6 +695,10 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 		Distro:                r.FormValue("distro"),
 		BootstrapPassword:     r.FormValue("bootstrapPassword"),
 		PreloadImages:         parseHTMLBool(r.FormValue("preloadImages")),
+		GPUWorkerEnabled:      parseHTMLBool(r.FormValue("gpuWorkerEnabled")),
+		GPUWorkerProfile:      r.FormValue("gpuWorkerProfile"),
+		GPUWorkerAMI:          r.FormValue("gpuWorkerAmi"),
+		GPUWorkerSubnetID:     r.FormValue("gpuWorkerSubnetId"),
 		UserFirstName:         r.FormValue("userFirstName"),
 		UserLastName:          r.FormValue("userLastName"),
 		TFVars:                tfVars,
