@@ -4,10 +4,15 @@ const frame = document.querySelector("#panelFrame");
 const loadingShell = document.querySelector("#loadingShell");
 const status = document.querySelector("#status");
 const buildBadge = document.querySelector("#buildBadge");
+const retryButton = document.querySelector("#retryButton");
 
 const setStatus = (message, error = false) => {
   status.textContent = message;
   status.dataset.error = error ? "true" : "false";
+};
+
+const setRetryVisible = visible => {
+  retryButton.hidden = !visible;
 };
 
 const setBuildBadge = build => {
@@ -43,8 +48,9 @@ const waitForPanelStatus = async () => {
 
 const attachPanel = async () => {
   try {
-    const panelStatus = await waitForPanelStatus();
+    setRetryVisible(false);
     setStatus("Starting the local Go panel and attaching this native window.");
+    const panelStatus = await waitForPanelStatus();
     const result = await panelStatus();
     setBuildBadge(result?.build);
 
@@ -63,7 +69,12 @@ const attachPanel = async () => {
     setStatus("Opening the control panel.");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
+    setRetryVisible(true);
   }
 };
+
+retryButton.addEventListener("click", () => {
+  void attachPanel();
+});
 
 void attachPanel();

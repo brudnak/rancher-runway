@@ -126,6 +126,35 @@ h1 {
   color: #ffb4bd;
 }
 
+.retry-button {
+  min-height: 42px;
+  margin-top: 20px;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: #f6f7fb;
+  color: #141820;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+}
+
+.retry-button:hover {
+  background: #ffffff;
+}
+
+.retry-button:focus-visible {
+  outline: 3px solid rgba(48, 186, 120, 0.48);
+  outline-offset: 3px;
+}
+
+.retry-button[hidden] {
+  display: none;
+}
+
 @media (max-width: 640px) {
   .shell {
     align-items: flex-start;

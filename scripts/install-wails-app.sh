@@ -8,6 +8,11 @@ source_app="${repo_root}/desktop/wails/build/bin/${app_name}.app"
 target_app="${install_dir}/${app_name}.app"
 temp_app="${install_dir}/.${app_name}.app.tmp.$$"
 
+cleanup_temp_app() {
+  rm -rf "${temp_app}"
+}
+trap cleanup_temp_app EXIT
+
 "${repo_root}/scripts/build-wails-app.sh"
 
 if [[ ! -d "${source_app}" ]]; then
@@ -36,6 +41,7 @@ fi
 
 rm -rf "${target_app}"
 mv "${temp_app}" "${target_app}"
+trap - EXIT
 touch "${target_app}"
 
 if command -v xattr >/dev/null 2>&1; then

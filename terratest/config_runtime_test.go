@@ -230,7 +230,7 @@ func TestCurrentRunRecordCapturesSingleRunWorkspaceMetadata(t *testing.T) {
 	}
 }
 
-func TestIsolatedRunStartStatusBlocksFixedCustomHostname(t *testing.T) {
+func TestIsolatedRunStartStatusAllowsUniqueCustomHostname(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", filepath.Join(workspace, "output"))
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
@@ -280,11 +280,77 @@ func TestIsolatedRunStartStatusBlocksFixedCustomHostname(t *testing.T) {
 	}
 
 	ok, reason := panel.isolatedRunStartStatus()
-	if ok {
-		t.Fatal("expected fixed custom hostname to block isolated run")
+	if !ok {
+		t.Fatalf("expected unique custom hostname to allow isolated run, got %q", reason)
 	}
-	if !strings.Contains(reason, "custom_hostname_prefix") {
-		t.Fatalf("expected custom hostname reason, got %q", reason)
+}
+
+func TestIsolatedRunStartStatusBlocksDuplicateCustomHostname(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", filepath.Join(workspace, "output"))
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+	t.Setenv("DOCKERHUB_USERNAME", "test")
+	t.Setenv("DOCKERHUB_PASSWORD", "test")
+
+	repoRoot := filepath.Join(workspace, "repo")
+	testDir := filepath.Join(repoRoot, "terratest")
+	if err := os.MkdirAll(filepath.Join(repoRoot, "modules", "aws"), 0o755); err != nil {
+		t.Fatalf("failed to create terraform dir: %v", err)
+	}
+	if err := os.MkdirAll(testDir, 0o755); err != nil {
+		t.Fatalf("failed to create terratest dir: %v", err)
+	}
+	configPath := filepath.Join(repoRoot, "tool-config.yml")
+	if err := os.WriteFile(configPath, []byte("total_has: 1\n"), 0o600); err != nil {
+		t.Fatalf("failed to write config marker: %v", err)
+	}
+
+	viper.Reset()
+	viper.Set("total_has", 1)
+	viper.Set("rancher.mode", "auto")
+	viper.Set("rancher.version", "2.13-head")
+	viper.Set("rancher.distro", "auto")
+	viper.Set("rancher.bootstrap_password", "change-me")
+	viper.Set("tf_vars.aws_prefix", "atb")
+	viper.Set("tf_vars.aws_vpc", "vpc-123")
+	viper.Set("tf_vars.aws_subnet_a", "subnet-a")
+	viper.Set("tf_vars.aws_subnet_b", "subnet-b")
+	viper.Set("tf_vars.aws_subnet_c", "subnet-c")
+	viper.Set("tf_vars.aws_ami", "ami-123")
+	viper.Set("tf_vars.aws_subnet_id", "subnet-a")
+	viper.Set("tf_vars.aws_security_group_id", "sg-123")
+	viper.Set("tf_vars.aws_pem_key_name", "qa-key")
+	viper.Set("tf_vars.aws_route53_fqdn", "qa.example.com")
+	viper.Set("tf_vars.custom_hostname_prefix", "fixed")
+	viper.Set("user.first_name", "Ada")
+	viper.Set("user.last_name", "Lovelace")
+
+	panel := &localControlPanel{
+		repoRoot:   repoRoot,
+		testDir:    testDir,
+		configPath: configPath,
+		totalHAs:   1,
+		operations: newPanelOperations(),
+	}
+	panel.writeRunRecord(panelRunRecord{
+		RunID:                "abc12345",
+		SlotID:               "slot-abc12345",
+		SlotName:             "Run abc12345",
+		Status:               "ready",
+		CreatedAt:            time.Now(),
+		UpdatedAt:            time.Now(),
+		TotalHAs:             1,
+		Route53FQDN:          "qa.example.com",
+		CustomHostnamePrefix: "fixed",
+	})
+
+	ok, reason := panel.isolatedRunStartStatus()
+	if ok {
+		t.Fatal("expected duplicate custom hostname to block isolated run")
+	}
+	if !strings.Contains(reason, "fixed.qa.example.com") || !strings.Contains(reason, "abc12345") {
+		t.Fatalf("expected duplicate custom hostname reason, got %q", reason)
 	}
 }
 

@@ -65,6 +65,20 @@ type ControlPanelServer struct {
 	cleanupOnce sync.Once
 }
 
+type GPUInfrastructureSummary struct {
+	Active  bool                      `json:"active"`
+	Count   int                       `json:"count"`
+	Details []GPUInfrastructureDetail `json:"details,omitempty"`
+}
+
+type GPUInfrastructureDetail struct {
+	RunID        string `json:"runId,omitempty"`
+	HAIndex      int    `json:"haIndex,omitempty"`
+	IP           string `json:"ip,omitempty"`
+	PrivateIP    string `json:"privateIp,omitempty"`
+	InstanceType string `json:"instanceType,omitempty"`
+}
+
 type panelState struct {
 	Panel     panelSessionState      `json:"panel"`
 	Workspace panelWorkspaceState    `json:"workspace"`
@@ -558,6 +572,13 @@ func (s *ControlPanelServer) RunningOperation() string {
 		return ""
 	}
 	return s.panel.runningOperationNameLocked()
+}
+
+func (s *ControlPanelServer) GPUInfrastructure() GPUInfrastructureSummary {
+	if s == nil || s.panel == nil {
+		return GPUInfrastructureSummary{}
+	}
+	return s.panel.gpuInfrastructure()
 }
 
 func (s *ControlPanelServer) Wait() error {
@@ -1322,6 +1343,66 @@ func (p *localControlPanel) discoverClusters() []clusterView {
 		clusters = append(clusters, p.discoverClustersForRun(record)...)
 	}
 	return clusters
+}
+
+func (p *localControlPanel) gpuInfrastructure() GPUInfrastructureSummary {
+	runRecords := p.listRunRecords()
+	if len(runRecords) == 0 {
+		if record, ok := p.readCurrentRunRecord(); ok {
+			runRecords = []panelRunRecord{record}
+		}
+	}
+	if len(runRecords) == 0 {
+		runRecords = []panelRunRecord{{
+			RunID:    "",
+			TotalHAs: p.totalHAs,
+		}}
+	}
+
+	var details []GPUInfrastructureDetail
+	for _, record := range runRecords {
+		details = append(details, p.gpuInfrastructureForRun(record)...)
+	}
+	return GPUInfrastructureSummary{
+		Active:  len(details) > 0,
+		Count:   len(details),
+		Details: details,
+	}
+}
+
+func (p *localControlPanel) gpuInfrastructureForRun(record panelRunRecord) []GPUInfrastructureDetail {
+	outputs, err := readTerraformFlatOutputsWithModule(p.repoRoot, record.TerraformStatePath, record.TerraformDataDir, record.TerraformModuleDir)
+	if err != nil {
+		return nil
+	}
+
+	totalHAs := record.TotalHAs
+	if totalHAs < 1 {
+		totalHAs = p.totalHAs
+	}
+
+	runID := safeRunPathSegment(record.RunID)
+	details := make([]GPUInfrastructureDetail, 0, totalHAs)
+	for i := 1; i <= totalHAs; i++ {
+		prefix := fmt.Sprintf("ha_%d", i)
+		ip := strings.TrimSpace(outputs[fmt.Sprintf("%s_gpu_worker_ip", prefix)])
+		privateIP := strings.TrimSpace(outputs[fmt.Sprintf("%s_gpu_worker_private_ip", prefix)])
+		if ip == "" && privateIP == "" {
+			continue
+		}
+		instanceType := strings.TrimSpace(outputs[fmt.Sprintf("%s_gpu_worker_instance_type", prefix)])
+		if instanceType == "" {
+			instanceType = strings.TrimSpace(record.GPUWorkerInstanceType)
+		}
+		details = append(details, GPUInfrastructureDetail{
+			RunID:        runID,
+			HAIndex:      i,
+			IP:           ip,
+			PrivateIP:    privateIP,
+			InstanceType: instanceType,
+		})
+	}
+	return details
 }
 
 func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clusterView {

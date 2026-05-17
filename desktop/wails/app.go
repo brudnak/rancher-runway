@@ -14,15 +14,17 @@ import (
 
 	"github.com/brudnak/ha-rancher-rke2/internal/buildinfo"
 	harancher "github.com/brudnak/ha-rancher-rke2/terratest"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type App struct {
-	ctx     context.Context
-	mu      sync.Mutex
-	server  *harancher.ControlPanelServer
-	handler http.Handler
-	url     string
-	err     string
+	ctx      context.Context
+	mu       sync.Mutex
+	server   *harancher.ControlPanelServer
+	handler  http.Handler
+	url      string
+	err      string
+	repoRoot string
 }
 
 type DesktopPanelStatus struct {
@@ -34,6 +36,11 @@ type DesktopPanelStatus struct {
 
 var bundledRepoRoot string
 var desktopEnvOnce sync.Once
+
+const (
+	gpuCloseCancelButton = "Cancel close"
+	gpuCloseAnywayButton = "Close anyway"
+)
 
 func NewApp() *App {
 	return &App{}
@@ -62,7 +69,79 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	a.mu.Lock()
 	server := a.server
 	a.mu.Unlock()
-	return server != nil && server.LifecycleRunning()
+
+	if server == nil || !server.LifecycleRunning() {
+		return a.confirmCloseWithGPUInfrastructure(ctx, server)
+	}
+
+	title, message := lifecycleCloseBlockedDialog(server.RunningOperation())
+	_, _ = wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{
+		Type:          wailsruntime.WarningDialog,
+		Title:         title,
+		Message:       message,
+		Buttons:       []string{"OK"},
+		DefaultButton: "OK",
+	})
+	return true
+}
+
+func (a *App) confirmCloseWithGPUInfrastructure(ctx context.Context, server *harancher.ControlPanelServer) bool {
+	summary := harancher.GPUInfrastructureSummary{}
+	if server != nil {
+		summary = server.GPUInfrastructure()
+	}
+	if !summary.Active {
+		a.mu.Lock()
+		repoRoot := a.repoRoot
+		a.mu.Unlock()
+		if repoRoot != "" {
+			if inspected, err := harancher.InspectGPUInfrastructure(repoRoot); err == nil {
+				summary = inspected
+			}
+		}
+	}
+	if !summary.Active {
+		return false
+	}
+
+	title, message := gpuCloseWarningDialog(summary)
+	selection, err := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{
+		Type:          wailsruntime.WarningDialog,
+		Title:         title,
+		Message:       message,
+		Buttons:       []string{gpuCloseCancelButton, gpuCloseAnywayButton},
+		DefaultButton: gpuCloseCancelButton,
+		CancelButton:  gpuCloseCancelButton,
+	})
+	if err != nil || selection == gpuCloseAnywayButton {
+		return false
+	}
+	return true
+}
+
+func lifecycleCloseBlockedDialog(operation string) (string, string) {
+	operation = strings.TrimSpace(strings.ToLower(operation))
+	switch operation {
+	case "setup":
+		return "Setup is still running", "Rancher HA RKE2 is creating a run slot or provisioning infrastructure. Keep the app open and wait for setup to finish before closing it."
+	case "cleanup":
+		return "Cleanup is still running", "Rancher HA RKE2 is cleaning up infrastructure. Keep the app open and wait for cleanup to finish before closing it."
+	case "readiness":
+		return "Readiness checks are still running", "Rancher HA RKE2 is checking cluster readiness. Keep the app open and wait for the checks to finish before closing it."
+	default:
+		return "Lifecycle operation is still running", "Rancher HA RKE2 is running setup, slot creation, readiness, or cleanup work. Keep the app open and wait for the operation to finish before closing it."
+	}
+}
+
+func gpuCloseWarningDialog(summary harancher.GPUInfrastructureSummary) (string, string) {
+	count := summary.Count
+	if count < 1 {
+		count = len(summary.Details)
+	}
+	if count == 1 {
+		return "GPU infrastructure is active", "One GPU worker node appears to be deployed. GPU instances can be expensive; consider reopening the app and using the Destroy page to clean up the run slot soon."
+	}
+	return "GPU infrastructure is active", fmt.Sprintf("%d GPU worker nodes appear to be deployed. GPU instances can be expensive; consider reopening the app and using the Destroy page to clean up run slots soon.", count)
 }
 
 func (a *App) PanelStatus() DesktopPanelStatus {
@@ -71,7 +150,7 @@ func (a *App) PanelStatus() DesktopPanelStatus {
 
 	hydrateDesktopEnvironment()
 
-	if a.url != "" || a.err != "" {
+	if a.url != "" {
 		return DesktopPanelStatus{URL: a.url, RepoRoot: currentRepoHint(), Build: buildinfo.Current(), Error: a.err}
 	}
 
@@ -92,6 +171,8 @@ func (a *App) PanelStatus() DesktopPanelStatus {
 
 	a.server = server
 	a.url = server.URL()
+	a.err = ""
+	a.repoRoot = repoRoot
 	return DesktopPanelStatus{URL: a.url, RepoRoot: repoRoot, Build: buildinfo.Current()}
 }
 
@@ -127,6 +208,7 @@ func (a *App) panelHandler() (http.Handler, error) {
 	a.server = server
 	a.handler = handler
 	a.url = server.URL()
+	a.repoRoot = repoRoot
 	return handler, nil
 }
 

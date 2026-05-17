@@ -1,18 +1,19 @@
 # RKE2 Rancher HA Bootstrapper
 
-Deploy local Rancher High Availability test environments on AWS with RKE2,
-Terraform, and a local control panel. The project can be used from the command
-line, from guarded Go test entrypoints, or from a double-clickable macOS app.
+Deploy disposable Rancher High Availability test environments on AWS with RKE2,
+Terraform, and a local control panel. The project can be driven from the
+double-clickable macOS app, the `ha-rancher` CLI, or guarded Go test entrypoints.
 
 For repository-owned GitHub Actions automation, see [docs/README.md](docs/README.md).
 
 ## What This Builds
 
-- One or more 3-node RKE2 HA clusters on AWS
-- AWS ALB and Route53 records in front of Rancher
-- TLS terminated by AWS ACM, with Rancher configured for `tls=external`
-- Local kubeconfig and install artifacts for each HA cluster
-- A local-only control panel for preflight checks, setup, readiness, status, logs, and cleanup
+- One or more 3-node RKE2 HA management clusters on AWS
+- AWS ALB, ACM, and Route53 records in front of Rancher
+- Rancher installed with external TLS termination at the ALB
+- Optional worker-only GPU nodes for Rancher AI/Liz testing
+- Local kubeconfigs, install artifacts, run records, lifecycle logs, and cost history
+- A local-only control panel for setup, readiness, status, logs, AWS inventory, and cleanup
 
 RKE2 installer scripts and optional image bundles are checksum-verified before
 use. The setup path does not use `curl | bash`.
@@ -22,18 +23,19 @@ use. The setup path does not use `curl | bash`.
 From a fresh clone on Apple Silicon or Intel macOS:
 
 ```bash
-scripts/install.sh
+make setup
 ```
 
-The installer builds the native Wails app and installs `Rancher HA RKE2.app` to
-`/Applications` by default. It installs the Wails CLI with Go if it is missing, installs
-Node dependencies, regenerates the embedded control-panel CSS, builds the app,
-and removes transient build output after installation. Re-running the installer
-replaces the existing app bundle in place, so updating is:
+`make setup` is the friendly installer. It checks that `Rancher HA RKE2.app` is
+closed and that no setup, readiness, or cleanup operation is running, then
+rebuilds the Wails app and installs it to `/Applications` by default. It also
+installs missing build dependencies used by this repo, regenerates the embedded
+control-panel CSS, and removes transient build output after installation.
+
+Re-run the same command to update the installed app:
 
 ```bash
-git pull
-scripts/install.sh
+make setup
 ```
 
 Requirements:
@@ -42,18 +44,18 @@ Requirements:
 - Go matching the version in [go.mod](go.mod)
 - Node.js with `npm`
 - Terraform, Helm, and kubectl for real lifecycle runs
-- AWS credentials and any required Route53 inputs for provisioning
+- AWS credentials and Route53 inputs for provisioning
 
 Install somewhere other than `/Applications`:
 
 ```bash
-HA_RANCHER_INSTALL_DIR="$HOME/Desktop" scripts/install.sh
+make setup INSTALL_DIR="$HOME/Desktop"
 ```
 
 Keep the transient Wails build-output app as well as the installed copy:
 
 ```bash
-HA_RANCHER_KEEP_WAILS_BUILD_APP=1 scripts/install.sh
+HA_RANCHER_KEEP_WAILS_BUILD_APP=1 make setup
 ```
 
 ## Quick Start: CLI
@@ -73,33 +75,26 @@ export DOCKERHUB_USERNAME="optional-dockerhub-username"
 export DOCKERHUB_PASSWORD="optional-dockerhub-password"
 ```
 
-Run the lifecycle:
-
-```bash
-# Create infrastructure
-go test -v -run '^TestHaSetup$' -timeout 60m ./terratest
-
-# Wait for Rancher and rancher-webhook health
-go test -v -run '^TestHAWaitReady$' -timeout 35m ./terratest
-
-# Open the local control panel
-go test -v -run '^TestHAControlPanel$' -timeout 0 -count=1 ./terratest
-
-# Destroy infrastructure
-go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
-```
-
-The same local panel can be started through the CLI entrypoint:
+Open the local panel:
 
 ```bash
 go run ./cmd/ha-rancher panel
 ```
 
-Inspect local status without opening the browser:
+Inspect status without opening the browser:
 
 ```bash
 go run ./cmd/ha-rancher status
 go run ./cmd/ha-rancher status -json
+```
+
+The canonical lifecycle is also available through guarded test entrypoints:
+
+```bash
+go test -v -run '^TestHaSetup$' -timeout 60m ./terratest
+go test -v -run '^TestHAWaitReady$' -timeout 35m ./terratest
+go test -v -run '^TestHAControlPanel$' -timeout 0 -count=1 ./terratest
+go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
 ```
 
 ## Configuration
@@ -110,11 +105,17 @@ Use one of the checked-in examples as your starting point:
 - [tool-config.manual.example.yml](tool-config.manual.example.yml)
 
 Copy the example you want to `tool-config.yml` and adjust local values. The
-actual `tool-config.yml` is ignored so cloud account details, hostnames, and
-local choices do not get committed.
+actual `tool-config.yml` is ignored so account details, hostnames, and local
+choices do not get committed. The app can also create an ignored starter config
+in auto mode.
 
-The local app can also create an ignored starter `tool-config.yml` in auto mode
-with blank local values.
+Common local values:
+
+- `user.first_name` and `user.last_name` tag AWS resources with an owner.
+- `tf_vars.aws_prefix` is the base AWS resource prefix; run slots derive unique per-run prefixes from it.
+- `tf_vars.aws_pem_key_name` is the EC2 key pair name attached to instances for manual break-glass SSH. The tool itself configures nodes through AWS Systems Manager Run Command, not SSH.
+- `tf_vars.aws_route53_fqdn` is the hosted zone/domain used for Rancher records.
+- `tf_vars.custom_hostname_prefix` optionally pins Rancher to a custom DNS label such as `brudnak.example.com`.
 
 ### Auto Mode
 
@@ -134,7 +135,18 @@ rancher:
 rke2:
   preload_images: true
 
+gpu_worker:
+  enabled: false
+  profile: standard
+  instance_type: g5.xlarge
+  ami: ""
+  subnet_id: ""
+
 total_has: 2
+
+user:
+  first_name: "Ada"
+  last_name: "Lovelace"
 
 tf_vars:
   aws_region: "us-east-2"
@@ -186,45 +198,91 @@ rke2:
 For multiple HA clusters, provide one Rancher version or Helm command per HA.
 The tool validates the shape before provisioning starts.
 
+## Run Slots
+
+The control panel treats each setup as a run slot. A slot has isolated Terraform
+state, Terraform data, module files, HA output, kubeconfigs, logs, AWS names,
+and a run record under `terratest/automation-output/`.
+
+This means one checkout can keep recorded slots visible while starting another
+slot. Setup, readiness, and cleanup are still serialized so Terraform state and
+AWS actions stay unambiguous.
+
+Custom Rancher hostnames are supported for one HA per slot. A custom hostname
+does not block new slots as long as the full hostname is unique. Starting a new
+slot with a duplicate custom hostname is blocked until the existing slot is
+destroyed or the config is changed.
+
 ## Control Panel
 
 The local control panel is bound to `127.0.0.1` only. It provides:
 
-- Local preflight checks for tools, `tool-config.yml`, and required environment variables
-- Setup, readiness, and cleanup launchers using the canonical lifecycle flows
-- Searchable lifecycle logs
-- Per-cluster Rancher URL, kubeconfig path, and reachability
-- `cattle-system` visibility for Rancher and rancher-webhook pods
-- Recent pod logs and live log streaming
-- Active Rancher leader detection
-- Guarded cleanup that requires typing `cleanup`
+- Local preflight checks for tools, `tool-config.yml`, owner fields, and required environment variables
+- Interactive setup for auto/manual Rancher plans, custom DNS, and optional GPU workers
+- Guarded lifecycle launchers for setup, readiness, and cleanup
+- Run-slot overview with per-slot logs, Terraform paths, hostnames, and destroy actions
+- Per-cluster Rancher URL, kubeconfig path, reachability, and `cattle-system` visibility
+- Recent pod logs, live log streaming, and active Rancher leader detection
+- AWS inventory for resources associated with recorded slots and owner tags
+- Cleanup cost estimates and a local cost ledger
+- GPU infrastructure warnings, timed reminders, and reminder settings
 
-Panel state is disposable local cache under `terratest/automation-output/` and
-is ignored by Git. This checkout is treated as a single-run workspace: run
-cleanup before starting a new setup, or use a separate checkout with distinct
-state and hostname values.
+The macOS app also protects active work:
 
-Regenerate the embedded panel CSS after changing panel templates or Tailwind
-classes:
+- Closing the app is blocked while setup, readiness, or cleanup is running.
+- Closing the app with active GPU infrastructure shows a warning before exiting.
+- `make setup` refuses to replace the app while the app or lifecycle operations are active.
+
+## GPU Workers
+
+Set `gpu_worker.enabled: true` to add one worker-only GPU node per HA cluster.
+Profiles map to the expected instance families:
+
+- `standard`: `g5.xlarge`, 1x NVIDIA A10G, 24 GB GPU memory
+- `large`: `p5.4xlarge`, 1x NVIDIA H100, 80 GB GPU memory
+
+GPU workers are intended for Rancher AI/Liz testing and should not be left
+running unused. The panel surfaces GPU state in the header, cluster details,
+run slots, close warnings, and timed reminders. Timed reminders default to 15
+minutes and can be changed to 30 minutes or 1 hour from Settings. Disabling the
+reminders requires typing `disable gpu reminders`; close-time GPU warnings
+remain active.
+
+## Cleanup
+
+Destroy provisioned AWS resources from the panel's Destroy tab, or with the
+guarded test entrypoint:
 
 ```bash
-npm install
-npm run build:panel-css
+go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
 ```
 
-## Build Scripts
+Cleanup is per run slot. The slot record is removed only after Terraform destroy
+succeeds. Cleanup also prints a best-effort AWS estimate for EC2 runtime and EBS
+root volume cost. It is not a final AWS bill and does not include every charge
+type.
 
-Public installer:
+After all recorded slots are gone, the panel can clean ignored local run
+residue. This local cleanup does not destroy AWS resources.
+
+## Build And Test
+
+Useful top-level targets:
 
 ```bash
-scripts/install.sh
+make help
+make setup
+make app
+make panel-css
+make test
 ```
 
-Lower-level Wails helpers:
+Lower-level Wails helpers remain available:
 
 ```bash
 scripts/build-wails-app.sh
 scripts/install-wails-app.sh
+scripts/install.sh
 ```
 
 The Wails app stores the checkout path in ignored local build hints so a
@@ -250,7 +308,7 @@ For GoLand, configure the package as
 `github.com/brudnak/ha-rancher-rke2/terratest` and use an exact pattern such as
 `^TestHaSetup$`, `^TestHAControlPanel$`, or `^TestHACleanup$`.
 
-## Git Hygiene
+## Ignored Local State
 
 Important ignored local and generated paths include:
 
@@ -266,17 +324,6 @@ Important ignored local and generated paths include:
 - `dist/`
 
 `package-lock.json` files are intentionally kept so installs are repeatable.
-
-## Cleanup
-
-Destroy all provisioned AWS resources:
-
-```bash
-go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
-```
-
-Cleanup also prints a best-effort AWS estimate for EC2 runtime and EBS root
-volume cost. It is not a final AWS bill and does not include every charge type.
 
 ## Supply Chain Notes
 

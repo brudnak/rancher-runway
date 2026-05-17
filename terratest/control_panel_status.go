@@ -181,6 +181,45 @@ func InspectLocalWorkspace(repoRoot string) (LocalWorkspaceStatus, error) {
 	}, nil
 }
 
+func InspectGPUInfrastructure(repoRoot string) (GPUInfrastructureSummary, error) {
+	resolvedRoot := strings.TrimSpace(repoRoot)
+	var testDir string
+	var err error
+	if resolvedRoot == "" {
+		resolvedRoot, testDir, err = resolveControlPanelPaths(".")
+	} else {
+		resolvedRoot, testDir, err = resolveControlPanelPaths(resolvedRoot)
+	}
+	if err != nil {
+		return GPUInfrastructureSummary{}, err
+	}
+
+	if err := setupConfigE(resolvedRoot); err != nil {
+		return GPUInfrastructureSummary{}, fmt.Errorf("failed to read config: %w", err)
+	}
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		return GPUInfrastructureSummary{}, fmt.Errorf("failed to determine working directory: %w", err)
+	}
+	if err := os.Chdir(testDir); err != nil {
+		return GPUInfrastructureSummary{}, fmt.Errorf("failed to enter terratest directory: %w", err)
+	}
+	defer func() {
+		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
+			fmt.Fprintf(os.Stderr, "[ha-rancher] failed to restore working directory %s: %v\n", originalDir, restoreErr)
+		}
+	}()
+
+	panel := &localControlPanel{
+		totalHAs:   viper.GetInt("total_has"),
+		repoRoot:   resolvedRoot,
+		testDir:    testDir,
+		configPath: viper.ConfigFileUsed(),
+	}
+	return panel.gpuInfrastructure(), nil
+}
+
 func localWorkspaceRunState(state panelWorkspaceState) LocalWorkspaceRunState {
 	out := LocalWorkspaceRunState{
 		Mode:                     state.Mode,
