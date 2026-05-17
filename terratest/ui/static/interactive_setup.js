@@ -121,6 +121,10 @@ const helmValidationModalSummaryEl = byId('helmValidationModalSummary')
 const helmValidationModalBodyEl = byId('helmValidationModalBody')
 const helmValidationModalCloseEl = byId('helmValidationModalClose')
 
+if (confirmModalEl && confirmModalEl.parentElement !== document.body) {
+  document.body.appendChild(confirmModalEl)
+}
+
 const setPhase = phase => {
   if (phase === 'done') {
     renderCompletion(pendingCompletionShouldContinue)
@@ -362,6 +366,7 @@ const showConfirmModal = ({ title, body, confirmText = 'Continue', cancelText = 
   }
 
   let settled = false
+  const previousBodyOverflow = document.body.style.overflow
 
   const settle = result => {
     if (settled) {
@@ -375,6 +380,7 @@ const showConfirmModal = ({ title, body, confirmText = 'Continue', cancelText = 
     confirmModalCancelEl.removeEventListener('click', cancel)
     confirmModalEl.removeEventListener('click', backdropCancel)
     document.removeEventListener('keydown', escapeCancel)
+    document.body.style.overflow = previousBodyOverflow
     resolve(result)
   }
 
@@ -398,6 +404,7 @@ const showConfirmModal = ({ title, body, confirmText = 'Continue', cancelText = 
   confirmModalCancelEl.classList.toggle('hidden', !showCancel)
   confirmModalEl.classList.remove('hidden')
   confirmModalEl.classList.add('flex')
+  document.body.style.overflow = 'hidden'
   confirmModalConfirmEl.addEventListener('click', confirm)
   confirmModalCancelEl.addEventListener('click', cancel)
   confirmModalEl.addEventListener('click', backdropCancel)
@@ -593,6 +600,8 @@ const gpuWorkerProfileLabel = profile => profile === 'large'
 const gpuWorkerModelHint = profile => profile === 'large'
   ? 'Sized for the Liz docs gpt-oss:120b class (80 GB VRAM); expect much higher spend and more AWS capacity risk.'
   : 'Recommended for the Liz docs gpt-oss:20b class (24 GB VRAM).'
+
+const lizPrimeExtensionNote = 'The Liz UI extension is only available on Rancher Prime versions. Community Rancher can still create the GPU worker node, but the Liz UI extension will not be available there.'
 
 const gpuWorkerModelName = profile => profile === 'large' ? 'gpt-oss:120b' : 'gpt-oss:20b'
 
@@ -1602,7 +1611,7 @@ const prepareSetupSubmit = async event => {
       : ' This is the recommended smaller worker for the Liz gpt-oss:20b class.'
     const gpuConfirmed = await showConfirmModal({
       title: 'Confirm GPU worker spend',
-      body: `This will add ${count} ${gpuWorkerProfileLabel(profile)} worker node${count === 1 ? '' : 's'} for Liz AI assistant testing. ${modelWarning} ${priceLine} Destroy this run slot as soon as you are finished; do not leave GPU nodes running unused.`,
+      body: `This will add ${count} ${gpuWorkerProfileLabel(profile)} worker node${count === 1 ? '' : 's'} for Liz AI assistant testing. ${modelWarning} ${priceLine} ${lizPrimeExtensionNote} Destroy this run slot as soon as you are finished; do not leave GPU nodes running unused.`,
       confirmText: 'Add GPU worker nodes'
     })
     if (!gpuConfirmed) {
