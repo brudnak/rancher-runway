@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -115,6 +117,7 @@ func main() {
 	var signingResultPath string
 	var installResolutionPath string
 	var upgradeResolutionPath string
+	var maxTargets int
 
 	flag.StringVar(&planPath, "plan", "signoff-plan.json", "sign-off plan JSON path")
 	flag.StringVar(&ledgerPath, "ledger", "signoff-ledger.json", "sign-off ledger JSON path")
@@ -128,6 +131,7 @@ func main() {
 	flag.StringVar(&signingResultPath, "signing-result", "", "optional webhook signing verification result JSON path")
 	flag.StringVar(&installResolutionPath, "install-resolution", "", "optional Rancher install resolution JSON path")
 	flag.StringVar(&upgradeResolutionPath, "upgrade-resolution", "", "optional Rancher upgrade resolution JSON path")
+	flag.IntVar(&maxTargets, "max-targets", envIntOrDefault("SIGNOFF_LEDGER_MAX_TARGETS", 12), "maximum target versions to keep in the ledger; set 0 to disable pruning")
 	flag.Parse()
 
 	if strings.TrimSpace(laneName) == "" {
@@ -198,10 +202,54 @@ func main() {
 		CommitSHA:            strings.TrimSpace(commitSHA),
 		CompletedAt:          completedAt,
 	}
+	pruneLedgerTargets(&l, maxTargets)
 	if err := writeLedger(ledgerPath, l); err != nil {
 		fatalf("write ledger: %v", err)
 	}
 	fmt.Printf("Recorded %s %s as %s in %s\n", plan.TargetVersion, lane.Name, status, ledgerPath)
+}
+
+type targetRecency struct {
+	version     string
+	completedAt time.Time
+}
+
+func pruneLedgerTargets(l *ledger, maxTargets int) {
+	if l == nil || maxTargets <= 0 || len(l.Entries) <= maxTargets {
+		return
+	}
+
+	targets := make([]targetRecency, 0, len(l.Entries))
+	for version, lanes := range l.Entries {
+		targets = append(targets, targetRecency{
+			version:     version,
+			completedAt: latestCompletedAt(lanes),
+		})
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].completedAt.Equal(targets[j].completedAt) {
+			return targets[i].version > targets[j].version
+		}
+		return targets[i].completedAt.After(targets[j].completedAt)
+	})
+
+	for _, target := range targets[maxTargets:] {
+		delete(l.Entries, target.version)
+	}
+}
+
+func latestCompletedAt(lanes map[string]entry) time.Time {
+	var latest time.Time
+	for _, lane := range lanes {
+		completedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(lane.CompletedAt))
+		if err != nil {
+			continue
+		}
+		if completedAt.After(latest) {
+			latest = completedAt
+		}
+	}
+	return latest
 }
 
 func readRancherResolution(path string) (*rancherResolution, error) {
@@ -297,6 +345,18 @@ func writeLedger(path string, l ledger) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func fatalf(format string, args ...interface{}) {

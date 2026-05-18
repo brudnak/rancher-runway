@@ -18,7 +18,7 @@ func TestPrepareArtifactsSanitizesPublicBundle(t *testing.T) {
   "state_key_root": "ha-rancher-rke2/signoff",
   "lanes": [
     {
-      "name": "upgrade-alpha",
+      "name": "webhook-upgrade",
       "terraform_state_key": "ha-rancher-rke2/signoff/v2.14/terraform.tfstate",
       "aws_prefix": "gha-32790833-ua"
     }
@@ -58,11 +58,11 @@ func TestPrepareArtifactsSanitizesPublicBundle(t *testing.T) {
 	writeTestFile(t, filepath.Join(sourceDir, "automation-output", "signoff-dispatch-results.json"), `[
   {
     "rancher_version": "v2.14.1-alpha12",
-    "lane": "upgrade-alpha",
+    "lane": "webhook-upgrade",
     "observed_run": {
       "databaseId": 25132790833,
       "url": "https://github.com/brudnak/ha-rancher-rke2/actions/runs/25132790833",
-      "displayTitle": "Run v2.14.1-alpha12 / upgrade-alpha"
+      "displayTitle": "Run v2.14.1-alpha12 / webhook-upgrade"
     }
   }
 ]`)

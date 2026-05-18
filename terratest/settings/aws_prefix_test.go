@@ -22,6 +22,16 @@ func TestNormalizeAWSPrefixAllowsAutomationSignoffPrefix(t *testing.T) {
 	}
 }
 
+func TestNormalizeAWSPrefixAllowsAutomationSignoffPrefixWithOwnerInitials(t *testing.T) {
+	got, err := NormalizeAWSPrefix("GHA-ATB-73161683-FA")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "gha-atb-73161683-fa" {
+		t.Fatalf("expected normalized automation prefix, got %q", got)
+	}
+}
+
 func TestNormalizeAWSPrefixRejectsArbitraryLongPrefix(t *testing.T) {
 	if _, err := NormalizeAWSPrefix("github-actions"); err == nil {
 		t.Fatal("expected arbitrary long prefix to be rejected")
@@ -31,6 +41,9 @@ func TestNormalizeAWSPrefixRejectsArbitraryLongPrefix(t *testing.T) {
 func TestIsAutomationAWSPrefix(t *testing.T) {
 	if !IsAutomationAWSPrefix("gha-73161683-fa") {
 		t.Fatal("expected sign-off prefix to be treated as automation generated")
+	}
+	if !IsAutomationAWSPrefix("gha-atb-73161683-fa") {
+		t.Fatal("expected owner-scoped sign-off prefix to be treated as automation generated")
 	}
 	if IsAutomationAWSPrefix("atb") {
 		t.Fatal("manual prefix should not be treated as automation generated")

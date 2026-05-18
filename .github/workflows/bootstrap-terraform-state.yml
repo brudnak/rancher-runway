@@ -110,7 +110,7 @@ jobs:
               echo ""
               echo "### Non-secret automation values"
               echo ""
-              echo "Put these in the \`automation-smoke\` environment variables:"
+              echo "Put these in the \`rancher-signoff\` environment variables:"
               echo ""
               echo '```bash'
               cat backend.env

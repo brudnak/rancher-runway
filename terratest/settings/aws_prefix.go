@@ -9,7 +9,7 @@ import (
 )
 
 var awsPrefixPattern = regexp.MustCompile(`^[a-z]{2,3}$`)
-var automationAWSPrefixPattern = regexp.MustCompile(`^(gha-[a-z0-9]{1,8}-[a-z]{2}|local-[a-z]{2})$`)
+var automationAWSPrefixPattern = regexp.MustCompile(`^(gha-([a-z]{2,3}-)?[a-z0-9]{1,8}-[a-z]{2}|local-([a-z]{2,3}-)?[a-z]{2})$`)
 
 func NormalizeAWSPrefix(value string) (string, error) {
 	prefix := strings.ToLower(strings.TrimSpace(value))

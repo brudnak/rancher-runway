@@ -12,7 +12,7 @@ cleanup_on_cancel() {
 
   echo "Received ${signal}; attempting best-effort cleanup before exiting."
 
-  if [ "${SIGNOFF_LANE:-}" != "fresh-alpha-local-suites" ]; then
+  if [ "${SIGNOFF_LANE:-}" != "framework-regression" ]; then
     go test -v -run '^TestHADeleteLinodeDownstream$' -timeout "${CANCEL_DOWNSTREAM_CLEANUP_TIMEOUT:-10m}" ./terratest || true
   fi
 

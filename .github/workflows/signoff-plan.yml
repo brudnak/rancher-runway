@@ -1,11 +1,11 @@
-name: Plan Alpha/Webhook Sign-Off
-run-name: ${{ github.event.inputs.rancher_version && format('Plan Alpha/Webhook Sign-Off {0}', github.event.inputs.rancher_version) || 'Plan Alpha/Webhook Sign-Off latest per line' }}
+name: Plan Rancher Sign-Off
+run-name: ${{ github.event.inputs.rancher_version && format('Plan Rancher Sign-Off {0}', github.event.inputs.rancher_version) || 'Plan Rancher Sign-Off repo targets' }}
 
 on:
   workflow_dispatch:
     inputs:
       rancher_version:
-        description: Target Rancher alpha, for example v2.14.1-alpha6. Leave blank to use latest alpha per release line.
+        description: Optional single Rancher alpha, for example v2.14.1-alpha6. Leave blank to use signoff-targets.json.
         required: false
         type: string
       previous_rancher_version:
@@ -29,25 +29,31 @@ on:
       dispatch_runs:
         description: Dispatch uncovered sign-off lanes after planning.
         required: true
-        default: false
+        default: true
         type: boolean
       max_parallel_lanes:
         description: Maximum active sign-off lane runners to allow.
         required: false
         default: 4
         type: number
+      rerun_successful_lanes:
+        description: Dispatch lanes again even if a matching run already succeeded on this branch.
+        required: true
+        default: false
+        type: boolean
+      rke2_server_count:
+        description: RKE2 server nodes per HA for dispatched lane runners.
+        required: true
+        default: "3"
+        type: choice
+        options:
+          - "1"
+          - "3"
+          - "5"
       ignore_active_runner_id:
-        description: Active Run Alpha/Webhook Sign-Off run id to ignore when this planner was woken by that runner.
+        description: Active Run Rancher Sign-Off Lane run id to ignore when this planner was woken by that runner.
         required: false
         type: string
-  schedule:
-    # everything is 19
-    - cron: "19 * * * *"
-  workflow_run:
-    workflows:
-      - Run Alpha/Webhook Sign-Off
-    types:
-      - completed
 
 permissions:
   actions: write
@@ -60,8 +66,10 @@ concurrency:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    environment: rancher-signoff
     env:
       GH_TOKEN: ${{ github.token }}
+      AWS_PREFIX: ${{ vars.AWS_PREFIX }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -76,7 +84,6 @@ jobs:
       - name: Build automation tools
         run: |
           go build -o "$RUNNER_TEMP/signoff-plan" ./automation/signoff-plan
-          go build -o "$RUNNER_TEMP/sanitize-smoke-artifacts" ./automation/sanitize-smoke-artifacts
 
       - name: Generate sign-off plan
         env:
@@ -91,7 +98,7 @@ jobs:
           if [ -n "$INPUT_RANCHER_VERSION" ]; then
             args+=("-rancher-version" "$INPUT_RANCHER_VERSION")
           else
-            args+=("-latest-alpha-per-line")
+            args+=("-targets" "signoff-targets.json")
           fi
           if [ -n "$INPUT_PREVIOUS_RANCHER_VERSION" ]; then
             args+=("-previous-rancher-version" "$INPUT_PREVIOUS_RANCHER_VERSION")
@@ -101,16 +108,23 @@ jobs:
           fi
           args+=("-signing-policy" "$INPUT_SIGNING_POLICY")
           args+=("-run-id" "${{ github.run_id }}")
+          args+=("-ignore-ledger")
           args+=("-output" "signoff-plan.json")
+          if [ -n "${AWS_PREFIX:-}" ]; then
+            args+=("-aws-base-prefix" "$AWS_PREFIX")
+          fi
 
           "$RUNNER_TEMP/signoff-plan" "${args[@]}"
 
       - name: Build dispatch queue
         id: dispatch-queue
         env:
-          DISPATCH_REQUESTED: ${{ github.event_name == 'schedule' || github.event.inputs.dispatch_runs == 'true' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') }}
+          DISPATCH_REQUESTED: ${{ github.event.inputs.dispatch_runs == 'true' }}
           MAX_PARALLEL_LANES: ${{ github.event.inputs.max_parallel_lanes || '4' }}
+          RERUN_SUCCESSFUL_LANES: ${{ github.event.inputs.rerun_successful_lanes == 'true' }}
+          RKE2_SERVER_COUNT: ${{ github.event.inputs.rke2_server_count || '3' }}
           IGNORE_ACTIVE_RUNNER_ID: ${{ github.event.inputs.ignore_active_runner_id || '' }}
+          REF_NAME: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -127,16 +141,57 @@ jobs:
                   lane: .name,
                   previous_rancher_version: ($plan.previous_version // ""),
                   webhook_image: ($plan.webhook_image // ""),
-                  signing_policy: ($plan.signing_policy_input // "auto")
+                  signing_policy: ($plan.signing_policy_input // "auto"),
+                  rke2_server_count: env.RKE2_SERVER_COUNT
                 }]
-          ' signoff-plan.json > automation-output/signoff-dispatch-queue.json
+          ' signoff-plan.json > automation-output/signoff-dispatch-queue-raw.json
 
           gh run list \
-            --workflow run-alpha-webhook-signoff.yml \
-            --json databaseId,status,displayTitle,event,createdAt,url \
-            --jq '[.[] | select((.databaseId | tostring) != env.IGNORE_ACTIVE_RUNNER_ID) | select(.status == "queued" or .status == "in_progress" or .status == "pending" or .status == "requested" or .status == "waiting")]' \
+            --workflow run-rancher-signoff-lane.yml \
+            --limit 200 \
+            --json databaseId,status,conclusion,displayTitle,event,headBranch,createdAt,url \
+            > automation-output/signoff-lane-runs.json
+
+          jq '
+            [.[] | select((.databaseId | tostring) != env.IGNORE_ACTIVE_RUNNER_ID) | select(.status == "queued" or .status == "in_progress" or .status == "pending" or .status == "requested" or .status == "waiting")]
+          ' automation-output/signoff-lane-runs.json \
             > automation-output/signoff-active-runners.json
 
+          jq '
+            [.[] | select(.event == "workflow_dispatch") | select(.headBranch == env.REF_NAME) | select(.status == "completed" and .conclusion == "success")]
+          ' automation-output/signoff-lane-runs.json \
+            > automation-output/signoff-successful-runners.json
+
+          jq -n \
+            --slurpfile queue automation-output/signoff-dispatch-queue-raw.json \
+            --slurpfile active automation-output/signoff-active-runners.json \
+            --slurpfile successful automation-output/signoff-successful-runners.json \
+            --argjson rerun_successful "$RERUN_SUCCESSFUL_LANES" \
+            '
+              def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
+              ($active[0] | map(.displayTitle) | unique) as $active_titles
+              | ($successful[0] | map(.displayTitle) | unique) as $successful_titles
+              | [$queue[0][]
+                  | . + {display_title: title(.)}
+                  | select(($active_titles | index(.display_title)) | not)
+                  | select($rerun_successful or (($successful_titles | index(.display_title)) | not))
+                  | del(.display_title)]
+            ' > automation-output/signoff-dispatch-queue.json
+
+          raw_queue_count="$(jq 'length' automation-output/signoff-dispatch-queue-raw.json)"
+          active_blocked_count="$(jq -n --slurpfile queue automation-output/signoff-dispatch-queue-raw.json --slurpfile active automation-output/signoff-active-runners.json '
+            def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
+            ($active[0] | map(.displayTitle) | unique) as $active_titles
+            | [$queue[0][] | select(($active_titles | index(title(.))) != null)] | length
+          ')"
+          successful_skip_count="$(jq -n --argjson rerun_successful "$RERUN_SUCCESSFUL_LANES" --slurpfile queue automation-output/signoff-dispatch-queue-raw.json --slurpfile successful automation-output/signoff-successful-runners.json '
+            if $rerun_successful then 0
+            else
+              def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
+              ($successful[0] | map(.displayTitle) | unique) as $successful_titles
+              | [$queue[0][] | select(($successful_titles | index(title(.))) != null)] | length
+            end
+          ')"
           queue_count="$(jq 'length' automation-output/signoff-dispatch-queue.json)"
           active_runner_count="$(jq 'length' automation-output/signoff-active-runners.json)"
           if ! [[ "$MAX_PARALLEL_LANES" =~ ^[0-9]+$ ]] || [ "$MAX_PARALLEL_LANES" -lt 1 ]; then
@@ -156,11 +211,11 @@ jobs:
           dispatch_reason="Dispatching up to ${available_runner_count} uncovered sign-off lane(s)."
           if [ "$dispatch_enabled" = "true" ] && [ "$available_runner_count" = "0" ]; then
             dispatch_enabled="false"
-            dispatch_reason="Dispatch blocked because active Run Alpha/Webhook Sign-Off workflows reached max_parallel_lanes=${max_parallel_lanes}."
+            dispatch_reason="Dispatch blocked because active Run Rancher Sign-Off Lane workflows reached max_parallel_lanes=${max_parallel_lanes}."
           elif [ "$dispatch_enabled" != "true" ]; then
             dispatch_reason="Dispatch was not requested for this event/input."
           elif [ "$queue_count" = "0" ]; then
-            dispatch_reason="No uncovered sign-off lanes remain."
+            dispatch_reason="No pending sign-off lanes remain after removing active and already successful lanes."
           fi
 
           if [ "$dispatch_enabled" = "true" ]; then
@@ -180,44 +235,64 @@ jobs:
             --argjson dispatch_enabled "$dispatch_enabled" \
             --arg dispatch_reason "$dispatch_reason" \
             --arg ignored_active_runner_id "$IGNORE_ACTIVE_RUNNER_ID" \
+            --argjson rerun_successful_lanes "$RERUN_SUCCESSFUL_LANES" \
             --argjson max_parallel_lanes "$max_parallel_lanes" \
             --argjson available_runner_count "$available_runner_count" \
             --argjson active_runner_count "$active_runner_count" \
+            --argjson raw_queue_count "$raw_queue_count" \
+            --argjson active_blocked_count "$active_blocked_count" \
+            --argjson successful_skip_count "$successful_skip_count" \
             --argjson queue_count "$queue_count" \
             --argjson selected_count "$selected_count" \
             --slurpfile active automation-output/signoff-active-runners.json \
+            --slurpfile successful automation-output/signoff-successful-runners.json \
+            --slurpfile raw_queue automation-output/signoff-dispatch-queue-raw.json \
             --slurpfile queue automation-output/signoff-dispatch-queue.json \
             --slurpfile selected automation-output/signoff-dispatch-selected.json \
             '{
               dispatch_requested: $dispatch_requested,
               dispatch_enabled: $dispatch_enabled,
               dispatch_reason: $dispatch_reason,
+              rerun_successful_lanes: $rerun_successful_lanes,
               max_parallel_lanes: $max_parallel_lanes,
               available_runner_count: $available_runner_count,
               active_runner_count: $active_runner_count,
               ignored_active_runner_id: $ignored_active_runner_id,
+              raw_queue_count: $raw_queue_count,
+              active_blocked_count: $active_blocked_count,
+              successful_skip_count: $successful_skip_count,
               queue_count: $queue_count,
               selected_count: $selected_count,
               active_runners: $active[0],
+              successful_runners: $successful[0],
+              raw_lanes: $raw_queue[0],
               queued_lanes: $queue[0],
               selected_lanes: $selected[0]
             }' > automation-output/signoff-dispatch-summary.json
 
           echo "Dispatch decision: $dispatch_reason"
+          echo "Raw dispatch queue:"
+          jq . automation-output/signoff-dispatch-queue-raw.json
           echo "Dispatch queue:"
           jq . automation-output/signoff-dispatch-queue.json
           echo "Selected lanes:"
           jq . automation-output/signoff-dispatch-selected.json
           echo "Active runners:"
           jq . automation-output/signoff-active-runners.json
+          echo "Successful runners considered for skips:"
+          jq . automation-output/signoff-successful-runners.json
           {
             echo "requested=$DISPATCH_REQUESTED"
             echo "enabled=$dispatch_enabled"
             echo "reason=$dispatch_reason"
+            echo "rerun_successful_lanes=$RERUN_SUCCESSFUL_LANES"
             echo "max_parallel_lanes=$max_parallel_lanes"
             echo "available_runner_count=$available_runner_count"
             echo "active_runner_count=$active_runner_count"
             echo "ignored_active_runner_id=$IGNORE_ACTIVE_RUNNER_ID"
+            echo "raw_queue_count=$raw_queue_count"
+            echo "active_blocked_count=$active_blocked_count"
+            echo "successful_skip_count=$successful_skip_count"
             echo "queue_count=$queue_count"
             echo "selected_count=$selected_count"
           } >> "$GITHUB_OUTPUT"
@@ -242,13 +317,15 @@ jobs:
             previous_rancher_version="$(jq -r '.previous_rancher_version' <<<"$item")"
             webhook_image="$(jq -r '.webhook_image' <<<"$item")"
             signing_policy="$(jq -r '.signing_policy' <<<"$item")"
+            rke2_server_count="$(jq -r '.rke2_server_count' <<<"$item")"
 
             args=(
-              workflow run run-alpha-webhook-signoff.yml
+              workflow run run-rancher-signoff-lane.yml
               --ref "$REF_NAME"
               -f "rancher_version=$rancher_version"
               -f "lane=$lane"
               -f "signing_policy=$signing_policy"
+              -f "rke2_server_count=$rke2_server_count"
               -f "keep_infra_on_failure=false"
               -f "run_rancher_tests=true"
             )
@@ -262,7 +339,7 @@ jobs:
             gh "${args[@]}"
             sleep 3
             dispatched_run="$(TARGET_RUN_TITLE="Run $rancher_version / $lane" gh run list \
-              --workflow run-alpha-webhook-signoff.yml \
+              --workflow run-rancher-signoff-lane.yml \
               --limit 20 \
               --json databaseId,status,displayTitle,event,createdAt,url \
               --jq '[.[] | select(.event == "workflow_dispatch") | select(.displayTitle == env.TARGET_RUN_TITLE)] | sort_by(.createdAt) | reverse | .[0] // {}')"
@@ -291,7 +368,7 @@ jobs:
         if: ${{ always() && hashFiles('signoff-plan.json') != '' && hashFiles('automation-output/signoff-dispatch-summary.json') != '' }}
         run: |
           {
-            echo "## Alpha/webhook sign-off plan"
+            echo "## Rancher sign-off plan"
             echo ""
             echo '```json'
             cat signoff-plan.json
@@ -299,29 +376,45 @@ jobs:
             echo ""
             echo "Dispatch requested: \`${{ steps.dispatch-queue.outputs.requested }}\`."
             echo "Dispatch reason: \`${{ steps.dispatch-queue.outputs.reason }}\`."
+            echo "Rerun successful lanes: \`${{ steps.dispatch-queue.outputs.rerun_successful_lanes }}\`."
             echo "Max parallel lanes: \`${{ steps.dispatch-queue.outputs.max_parallel_lanes }}\`."
+            echo "RKE2 server count for dispatched lanes: \`${{ github.event.inputs.rke2_server_count || '3' }}\`."
             echo "Available runner slots: \`${{ steps.dispatch-queue.outputs.available_runner_count }}\`."
             echo "Active lane runners: \`${{ steps.dispatch-queue.outputs.active_runner_count }}\`."
             echo "Ignored active runner id: \`${{ steps.dispatch-queue.outputs.ignored_active_runner_id }}\`."
-            echo "Dispatch queue: \`${{ steps.dispatch-queue.outputs.queue_count }}\` lane(s); selected: \`${{ steps.dispatch-queue.outputs.selected_count }}\`."
+            echo "Planned lanes: \`${{ steps.dispatch-queue.outputs.raw_queue_count }}\`; active skipped: \`${{ steps.dispatch-queue.outputs.active_blocked_count }}\`; successful skipped: \`${{ steps.dispatch-queue.outputs.successful_skip_count }}\`."
+            echo "Pending dispatch queue: \`${{ steps.dispatch-queue.outputs.queue_count }}\` lane(s); selected: \`${{ steps.dispatch-queue.outputs.selected_count }}\`."
             echo ""
             echo '```json'
             cat automation-output/signoff-dispatch-summary.json
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Prepare public plan artifact
+      - name: Write plan receipt
         id: public_artifacts
         if: ${{ always() && hashFiles('signoff-plan.json') != '' }}
         run: |
-          "$RUNNER_TEMP/sanitize-smoke-artifacts" \
-            -source "$GITHUB_WORKSPACE" \
-            -output public-plan-artifacts
+          set -euo pipefail
+
+          mkdir -p public-plan-artifacts
+          dispatch_summary='{}'
+          if [ -s automation-output/signoff-dispatch-summary.json ]; then
+            dispatch_summary="$(jq -c . automation-output/signoff-dispatch-summary.json)"
+          fi
+
+          jq -n \
+            --slurpfile plan signoff-plan.json \
+            --argjson dispatch "$dispatch_summary" \
+            --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              completed_at: $completed_at,
+              plan: $plan[0],
+              dispatch: $dispatch
+            }' > public-plan-artifacts/signoff-plan-receipt.json
 
       - name: Upload plan artifact
         if: ${{ always() && steps.public_artifacts.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: signoff-plan
-          path: |
-            public-plan-artifacts/**
+          path: public-plan-artifacts/signoff-plan-receipt.json

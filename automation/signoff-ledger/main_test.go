@@ -11,8 +11,6 @@ func TestLedgerRecordsSuccessfulLane(t *testing.T) {
 	tempDir := t.TempDir()
 	planPath := filepath.Join(tempDir, "signoff-plan.json")
 	ledgerPath := filepath.Join(tempDir, "signoff-ledger.json")
-	signingPath := filepath.Join(tempDir, "webhook-signing.json")
-	installResolutionPath := filepath.Join(tempDir, "rancher-resolution-install-ha-1.json")
 	planJSON := `{
   "target_version": "v2.14.1-alpha7",
   "release_line": "v2.14",
@@ -27,7 +25,7 @@ func TestLedgerRecordsSuccessfulLane(t *testing.T) {
   "signing_registry": "stgregistry.suse.com",
   "lanes": [
     {
-      "name": "fresh-alpha",
+      "name": "webhook-fresh-install",
       "install_rancher": "v2.14.1-alpha7"
     }
   ]
@@ -35,65 +33,16 @@ func TestLedgerRecordsSuccessfulLane(t *testing.T) {
 	if err := os.WriteFile(planPath, []byte(planJSON), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	signingJSON := `{
-  "target_version": "v2.14.1-alpha7",
-  "webhook_image": "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5",
-  "signing_policy": "required",
-  "tool": "slsactl",
-  "enforced": true,
-  "signature_verified": true,
-  "provenance_verified": true,
-  "sbom_verified": true,
-  "verification_error": "not found",
-  "claim_types": [
-    "https://sigstore.dev/cosign/sign/v1",
-    "https://slsa.dev/provenance/v1"
-  ],
-  "verified_at": "2026-04-26T00:00:00Z"
-}`
-	if err := os.WriteFile(signingPath, []byte(signingJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	installResolutionJSON := `{
-  "phase": "install",
-  "ha_index": 1,
-  "requested_version": "2.14.1-alpha7",
-  "requested_distro": "auto",
-  "build_type": "alpha",
-  "resolved_distro": "community-staging",
-  "chart_repo_alias": "optimus-rancher-alpha",
-  "chart_version": "2.14.1-alpha7",
-  "chart_source": "optimus-rancher-alpha/rancher@2.14.1-alpha7",
-  "rancher_image": "stgregistry.suse.com/rancher/rancher",
-  "rancher_image_tag": "v2.14.1-alpha7",
-  "agent_image": "stgregistry.suse.com/rancher/rancher-agent:v2.14.1-alpha7",
-  "compatibility_baseline": "2.14.0",
-  "recommended_rke2_version": "v1.34.6+rke2r3",
-  "resolution_notes": [
-    "Using exact chart match optimus-rancher-alpha/rancher@2.14.1-alpha7"
-  ]
-}`
-	if err := os.WriteFile(installResolutionPath, []byte(installResolutionJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
 	plan, err := readPlan(planPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lane, err := findLane(plan, "fresh-alpha")
+	lane, err := findLane(plan, "webhook-fresh-install")
 	if err != nil {
 		t.Fatal(err)
 	}
 	l, err := readLedger(ledgerPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signingResult, err := readSigningResult(signingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	installResolution, err := readRancherResolution(installResolutionPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,8 +62,6 @@ func TestLedgerRecordsSuccessfulLane(t *testing.T) {
 			TargetWebhookTag:     plan.TargetWebhookTag,
 			SigningPolicy:        plan.SigningPolicy,
 			SigningRegistry:      plan.SigningRegistry,
-			SigningVerification:  signingResult,
-			InstallResolution:    installResolution,
 			CompletedAt:          "2026-04-25T00:00:00Z",
 		},
 	}
@@ -131,30 +78,46 @@ func TestLedgerRecordsSuccessfulLane(t *testing.T) {
 		`"schema_version": 2`,
 		`"coverage_policy": "alpha-webhook-signoff-v2"`,
 		`"v2.14.1-alpha7"`,
-		`"fresh-alpha"`,
+		`"webhook-fresh-install"`,
 		`"status": "success"`,
 		`"webhook_image": "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5"`,
 		`"target_webhook_build": "109.0.1+up0.10.1-rc.5"`,
 		`"previous_webhook_build": "109.0.0+up0.10.0"`,
 		`"signing_policy": "required"`,
 		`"signing_registry": "stgregistry.suse.com"`,
-		`"signing_verification": {`,
-		`"tool": "slsactl"`,
-		`"signature_verified": true`,
-		`"provenance_verified": true`,
-		`"sbom_verified": true`,
-		`"verification_error": "not found"`,
-		`"https://sigstore.dev/cosign/sign/v1"`,
-		`"https://slsa.dev/provenance/v1"`,
-		`"rancher_install_resolution": {`,
-		`"chart_repo_alias": "optimus-rancher-alpha"`,
-		`"chart_version": "2.14.1-alpha7"`,
-		`"chart_source": "optimus-rancher-alpha/rancher@2.14.1-alpha7"`,
-		`"resolved_distro": "community-staging"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected ledger to contain %s:\n%s", want, got)
 		}
+	}
+	for _, unwanted := range []string{
+		`"signing_verification"`,
+		`"rancher_install_resolution"`,
+		`"rancher_upgrade_resolution"`,
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("expected compact ledger not to contain %s:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestPruneLedgerTargetsKeepsMostRecentTargets(t *testing.T) {
+	l := ledger{Entries: map[string]map[string]entry{
+		"v2.14.1-alpha1": {"webhook-fresh-install": {CompletedAt: "2026-04-01T00:00:00Z"}},
+		"v2.14.1-alpha2": {"webhook-fresh-install": {CompletedAt: "2026-04-02T00:00:00Z"}},
+		"v2.14.1-alpha3": {"webhook-fresh-install": {CompletedAt: "2026-04-03T00:00:00Z"}},
+	}}
+
+	pruneLedgerTargets(&l, 2)
+
+	if _, ok := l.Entries["v2.14.1-alpha1"]; ok {
+		t.Fatalf("expected oldest target to be pruned: %#v", l.Entries)
+	}
+	if _, ok := l.Entries["v2.14.1-alpha2"]; !ok {
+		t.Fatalf("expected alpha2 to remain: %#v", l.Entries)
+	}
+	if _, ok := l.Entries["v2.14.1-alpha3"]; !ok {
+		t.Fatalf("expected alpha3 to remain: %#v", l.Entries)
 	}
 }
 

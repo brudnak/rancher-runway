@@ -17,13 +17,13 @@ import (
 )
 
 const (
-	rancherRepo           = "rancher/rancher"
-	defaultWebhook        = "rancher/rancher-webhook"
-	currentCoveragePolicy = "alpha-webhook-signoff-v2"
-	laneFreshAlpha        = "fresh-alpha"
-	laneUpgradeAlpha      = "upgrade-alpha"
-	laneOldWebhook        = "previous-with-candidate-webhook"
-	laneLocalSuites       = "fresh-alpha-local-suites"
+	rancherRepo                    = "rancher/rancher"
+	defaultWebhook                 = "rancher/rancher-webhook"
+	currentCoveragePolicy          = "alpha-webhook-signoff-v2"
+	laneWebhookFreshInstall        = "webhook-fresh-install"
+	laneWebhookUpgrade             = "webhook-upgrade"
+	laneWebhookCandidateOnPrevious = "webhook-candidate-on-previous"
+	laneFrameworkRegression        = "framework-regression"
 )
 
 var (
@@ -48,8 +48,6 @@ type plan struct {
 	SigningRegistry      string        `json:"signing_registry"`
 	RunID                string        `json:"run_id,omitempty"`
 	StateKeyRoot         string        `json:"state_key_root,omitempty"`
-	Ignored              bool          `json:"ignored,omitempty"`
-	IgnoreReason         string        `json:"ignore_reason,omitempty"`
 	Lanes                []lane        `json:"lanes"`
 	SkippedLanes         []skippedLane `json:"skipped_lanes,omitempty"`
 	GeneratedAt          string        `json:"generated_at"`
@@ -83,9 +81,16 @@ type signoffLedger struct {
 	Entries map[string]map[string]ledgerEntry `json:"entries"`
 }
 
-type targetIgnoreList struct {
-	Versions     map[string]string `json:"versions"`
-	ReleaseLines map[string]string `json:"release_lines"`
+type targetList struct {
+	Targets []targetSpec `json:"targets"`
+}
+
+type targetSpec struct {
+	RancherVersion         string `json:"rancher_version"`
+	PreviousRancherVersion string `json:"previous_rancher_version,omitempty"`
+	WebhookImage           string `json:"webhook_image,omitempty"`
+	SigningPolicy          string `json:"signing_policy,omitempty"`
+	Enabled                *bool  `json:"enabled,omitempty"`
 }
 
 type ledgerEntry struct {
@@ -125,8 +130,9 @@ func main() {
 	var outputPath string
 	var runID string
 	var stateKeyRoot string
+	var awsBasePrefix string
 	var ledgerPath string
-	var ignoreListPath string
+	var targetsPath string
 	var latestAlpha bool
 	var latestAlphaPerLine bool
 	var ignoreLedger bool
@@ -139,8 +145,9 @@ func main() {
 	flag.StringVar(&outputPath, "output", "", "optional JSON output path")
 	flag.StringVar(&runID, "run-id", os.Getenv("GITHUB_RUN_ID"), "workflow run id used to generate per-lane Terraform state keys")
 	flag.StringVar(&stateKeyRoot, "state-key-root", "ha-rancher-rke2/signoff", "root prefix for generated Terraform state keys")
+	flag.StringVar(&awsBasePrefix, "aws-base-prefix", os.Getenv("AWS_PREFIX"), "optional owner/base AWS prefix to include in generated sign-off resource prefixes")
 	flag.StringVar(&ledgerPath, "ledger", "signoff-ledger.json", "sign-off ledger path used to skip already successful lanes")
-	flag.StringVar(&ignoreListPath, "ignore-list", "signoff-ignore.json", "target ignore list path used to skip known-bad versions or release lines")
+	flag.StringVar(&targetsPath, "targets", "signoff-targets.json", "repo-owned target list used when no target version or latest-alpha flag is set")
 	flag.BoolVar(&latestAlpha, "latest-alpha", false, "resolve the latest Rancher alpha from GitHub releases")
 	flag.BoolVar(&latestAlphaPerLine, "latest-alpha-per-line", false, "resolve the latest Rancher alpha per vX.Y release line from GitHub releases")
 	flag.BoolVar(&ignoreLedger, "ignore-ledger", false, "ignore sign-off ledger entries when rendering lanes")
@@ -160,13 +167,55 @@ func main() {
 	if err != nil {
 		fatalf("read ledger: %v", err)
 	}
-	ignoreList, err := readTargetIgnoreList(ignoreListPath)
-	if err != nil {
-		fatalf("read ignore list: %v", err)
-	}
 
 	if latestAlpha && latestAlphaPerLine {
 		fatalf("set only one of -latest-alpha or -latest-alpha-per-line")
+	}
+
+	if targetVersion == "" && !latestAlpha && !latestAlphaPerLine {
+		targets, err := readTargetList(targetsPath)
+		if err != nil {
+			fatalf("read target list: %v", err)
+		}
+		if len(targets.Targets) == 0 {
+			writeJSON(planSet{
+				Mode:  "targets",
+				Plans: []plan{},
+				ResolutionNotes: []string{
+					fmt.Sprintf("No enabled sign-off targets were found in %s.", targetsPath),
+				},
+				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+			}, outputPath)
+			return
+		}
+
+		plans := make([]plan, 0, len(targets.Targets))
+		for _, target := range targets.Targets {
+			p, err := buildPlan(
+				ctx,
+				client,
+				target.RancherVersion,
+				firstNonEmpty(target.PreviousRancherVersion, previousVersion),
+				firstNonEmpty(target.WebhookImage, webhookImage),
+				firstNonEmpty(target.SigningPolicy, signingPolicy),
+				runID,
+				stateKeyRoot,
+				awsBasePrefix,
+			)
+			if err != nil {
+				fatalf("build sign-off plan for %s: %v", target.RancherVersion, err)
+			}
+			if !ignoreLedger {
+				p = applyLedgerSkips(p, ledger)
+			}
+			plans = append(plans, p)
+		}
+		writeJSON(planSet{
+			Mode:        "targets",
+			Plans:       plans,
+			GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		}, outputPath)
+		return
 	}
 
 	if latestAlphaPerLine {
@@ -188,15 +237,7 @@ func main() {
 		}
 		plans := make([]plan, 0, len(targets))
 		for _, version := range targets {
-			if reason, ignored := ignoreList.reasonFor(version); ignored {
-				p, err := ignoredPlan(version, reason, runID, stateKeyRoot)
-				if err != nil {
-					fatalf("build ignored sign-off plan for %s: %v", version, err)
-				}
-				plans = append(plans, p)
-				continue
-			}
-			p, err := buildPlan(ctx, client, version, previousVersion, webhookImage, signingPolicy, runID, stateKeyRoot)
+			p, err := buildPlan(ctx, client, version, previousVersion, webhookImage, signingPolicy, runID, stateKeyRoot, awsBasePrefix)
 			if err != nil {
 				fatalf("build sign-off plan for %s: %v", version, err)
 			}
@@ -226,16 +267,7 @@ func main() {
 		fatalf("set -rancher-version, -latest-alpha, or -latest-alpha-per-line")
 	}
 
-	if reason, ignored := ignoreList.reasonFor(targetVersion); ignored {
-		p, err := ignoredPlan(targetVersion, reason, runID, stateKeyRoot)
-		if err != nil {
-			fatalf("build ignored sign-off plan: %v", err)
-		}
-		writeJSON(p, outputPath)
-		return
-	}
-
-	p, err := buildPlan(ctx, client, targetVersion, previousVersion, webhookImage, signingPolicy, runID, stateKeyRoot)
+	p, err := buildPlan(ctx, client, targetVersion, previousVersion, webhookImage, signingPolicy, runID, stateKeyRoot, awsBasePrefix)
 	if err != nil {
 		fatalf("build sign-off plan: %v", err)
 	}
@@ -264,7 +296,7 @@ func writeJSON(value interface{}, outputPath string) {
 	}
 }
 
-func buildPlan(ctx context.Context, client githubClient, targetVersion, previousVersion, webhookImage, signingPolicyInput, runID, stateKeyRoot string) (plan, error) {
+func buildPlan(ctx context.Context, client githubClient, targetVersion, previousVersion, webhookImage, signingPolicyInput, runID, stateKeyRoot, awsBasePrefix string) (plan, error) {
 	target, err := parseAlphaVersion(targetVersion)
 	if err != nil {
 		return plan{}, err
@@ -323,30 +355,30 @@ func buildPlan(ctx context.Context, client githubClient, targetVersion, previous
 	webhookChanged := targetWebhookTag != previousWebhookTag
 	lanes := []lane{
 		{
-			Name:                laneFreshAlpha,
+			Name:                laneFrameworkRegression,
+			InstallRancher:      targetVersion,
+			ProvisionDownstream: false,
+			Description:         fmt.Sprintf("Fresh install %s, run framework regression suites against the local cluster.", targetVersion),
+		},
+		{
+			Name:                laneWebhookFreshInstall,
 			InstallRancher:      targetVersion,
 			ProvisionDownstream: true,
 			Description:         fmt.Sprintf("Fresh install %s, provision downstream Linode, run webhook suite.", targetVersion),
 		},
 		{
-			Name:                laneUpgradeAlpha,
+			Name:                laneWebhookUpgrade,
 			InstallRancher:      previousVersion,
 			UpgradeToRancher:    targetVersion,
 			ProvisionDownstream: true,
 			Description:         fmt.Sprintf("Install %s, provision downstream Linode, upgrade to %s, run webhook suite.", previousVersion, targetVersion),
-		},
-		{
-			Name:                laneLocalSuites,
-			InstallRancher:      targetVersion,
-			ProvisionDownstream: false,
-			Description:         fmt.Sprintf("Fresh install %s, run local-cluster suites such as frameworks regression and VAI enabled.", targetVersion),
 		},
 	}
 
 	var skipped []skippedLane
 	if webhookChanged {
 		lanes = append(lanes, lane{
-			Name:                 laneOldWebhook,
+			Name:                 laneWebhookCandidateOnPrevious,
 			InstallRancher:       previousVersion,
 			ProvisionDownstream:  true,
 			WebhookOverrideImage: webhookImage,
@@ -354,11 +386,11 @@ func buildPlan(ctx context.Context, client githubClient, targetVersion, previous
 		})
 	} else {
 		skipped = append(skipped, skippedLane{
-			Name:   laneOldWebhook,
+			Name:   laneWebhookCandidateOnPrevious,
 			Reason: fmt.Sprintf("Target alpha reuses previous Rancher webhook tag %s; overriding the old Rancher to the same webhook adds no coverage.", targetWebhookTag),
 		})
 	}
-	applyLaneRuntimeFields(lanes, targetVersion, fmt.Sprintf("v%d.%d", target.Major, target.Minor), runID, stateKeyRoot)
+	applyLaneRuntimeFields(lanes, targetVersion, fmt.Sprintf("v%d.%d", target.Major, target.Minor), runID, stateKeyRoot, awsBasePrefix)
 
 	return plan{
 		TargetVersion:        targetVersion,
@@ -399,103 +431,56 @@ func readLedger(path string) (signoffLedger, error) {
 	return ledger, nil
 }
 
-func readTargetIgnoreList(path string) (targetIgnoreList, error) {
+func readTargetList(path string) (targetList, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return targetIgnoreList{}, nil
+		return targetList{}, nil
 	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return targetIgnoreList{}, nil
+		return targetList{}, nil
 	}
 	if err != nil {
-		return targetIgnoreList{}, err
+		return targetList{}, err
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return targetIgnoreList{}, nil
+		return targetList{}, nil
 	}
-	var ignoreList targetIgnoreList
-	if err := json.Unmarshal(data, &ignoreList); err != nil {
-		return targetIgnoreList{}, err
+	var targets targetList
+	if err := json.Unmarshal(data, &targets); err != nil {
+		return targetList{}, err
 	}
-	return normalizeTargetIgnoreList(ignoreList), nil
+	return normalizeTargetList(targets), nil
 }
 
-func normalizeTargetIgnoreList(ignoreList targetIgnoreList) targetIgnoreList {
-	normalized := targetIgnoreList{}
-	if len(ignoreList.Versions) > 0 {
-		normalized.Versions = map[string]string{}
-		for version, reason := range ignoreList.Versions {
-			version = strings.TrimSpace(version)
-			if version == "" {
-				continue
-			}
-			version = normalizeTag(version)
-			reason = strings.TrimSpace(reason)
-			if version != "" && reason != "" {
-				normalized.Versions[version] = reason
-			}
+func normalizeTargetList(targets targetList) targetList {
+	normalized := targetList{Targets: make([]targetSpec, 0, len(targets.Targets))}
+	seen := map[string]bool{}
+	for _, target := range targets.Targets {
+		if target.Enabled != nil && !*target.Enabled {
+			continue
 		}
-	}
-	if len(ignoreList.ReleaseLines) > 0 {
-		normalized.ReleaseLines = map[string]string{}
-		for releaseLine, reason := range ignoreList.ReleaseLines {
-			releaseLine = normalizeReleaseLine(releaseLine)
-			reason = strings.TrimSpace(reason)
-			if releaseLine != "" && reason != "" {
-				normalized.ReleaseLines[releaseLine] = reason
-			}
+		target.RancherVersion = normalizeTag(target.RancherVersion)
+		target.PreviousRancherVersion = normalizeOptionalTag(target.PreviousRancherVersion)
+		target.WebhookImage = strings.TrimSpace(target.WebhookImage)
+		target.SigningPolicy = strings.TrimSpace(target.SigningPolicy)
+		if target.RancherVersion == "" || seen[target.RancherVersion] {
+			continue
 		}
+		seen[target.RancherVersion] = true
+		normalized.Targets = append(normalized.Targets, target)
 	}
 	return normalized
 }
 
-func (ignoreList targetIgnoreList) reasonFor(targetVersion string) (string, bool) {
-	if strings.TrimSpace(targetVersion) == "" {
-		return "", false
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
 	}
-	targetVersion = normalizeTag(targetVersion)
-	if reason := ignoreList.Versions[targetVersion]; reason != "" {
-		return reason, true
-	}
-	target, err := parseAlphaVersion(targetVersion)
-	if err != nil {
-		return "", false
-	}
-	releaseLine := fmt.Sprintf("v%d.%d", target.Major, target.Minor)
-	if reason := ignoreList.ReleaseLines[releaseLine]; reason != "" {
-		return reason, true
-	}
-	return "", false
-}
-
-func ignoredPlan(targetVersion, reason, runID, stateKeyRoot string) (plan, error) {
-	target, err := parseAlphaVersion(targetVersion)
-	if err != nil {
-		return plan{}, err
-	}
-	targetVersion = normalizeTag(targetVersion)
-	releaseLine := fmt.Sprintf("v%d.%d", target.Major, target.Minor)
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		reason = "Target is listed in the repo-owned sign-off ignore list."
-	}
-	return plan{
-		TargetVersion: targetVersion,
-		ReleaseLine:   releaseLine,
-		RunID:         strings.TrimSpace(runID),
-		StateKeyRoot:  strings.Trim(strings.TrimSpace(stateKeyRoot), "/"),
-		Ignored:       true,
-		IgnoreReason:  reason,
-		Lanes:         []lane{},
-		SkippedLanes: []skippedLane{
-			{Name: laneFreshAlpha, Reason: reason},
-			{Name: laneUpgradeAlpha, Reason: reason},
-			{Name: laneLocalSuites, Reason: reason},
-			{Name: laneOldWebhook, Reason: reason},
-		},
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-	}, nil
+	return ""
 }
 
 func applyLedgerSkips(p plan, ledger signoffLedger) plan {
@@ -530,11 +515,11 @@ func applyLedgerSkips(p plan, ledger signoffLedger) plan {
 	return p
 }
 
-func applyLaneRuntimeFields(lanes []lane, targetVersion, releaseLine, runID, stateKeyRoot string) {
+func applyLaneRuntimeFields(lanes []lane, targetVersion, releaseLine, runID, stateKeyRoot, awsBasePrefix string) {
 	runID = strings.TrimSpace(runID)
 	stateKeyRoot = strings.Trim(strings.TrimSpace(stateKeyRoot), "/")
 	for i := range lanes {
-		lanes[i].AWSPrefix = buildLaneAWSPrefix(runID, lanes[i].Name)
+		lanes[i].AWSPrefix = buildLaneAWSPrefix(runID, lanes[i].Name, awsBasePrefix)
 		if runID != "" && stateKeyRoot != "" {
 			lanes[i].TerraformStateKey = buildTerraformStateKey(stateKeyRoot, releaseLine, targetVersion, runID, lanes[i].Name)
 		}
@@ -553,19 +538,26 @@ func buildTerraformStateKey(root, releaseLine, targetVersion, runID, laneName st
 	return strings.Join(parts, "/")
 }
 
-func buildLaneAWSPrefix(runID, laneName string) string {
+func buildLaneAWSPrefix(runID, laneName, basePrefix string) string {
 	laneCode := map[string]string{
-		laneFreshAlpha:   "fa",
-		laneUpgradeAlpha: "ua",
-		laneOldWebhook:   "ow",
-		laneLocalSuites:  "ls",
+		laneFrameworkRegression:        "fr",
+		laneWebhookFreshInstall:        "wf",
+		laneWebhookUpgrade:             "wu",
+		laneWebhookCandidateOnPrevious: "wp",
 	}[laneName]
 	if laneCode == "" {
 		laneCode = "ln"
 	}
+	basePrefix = sanitizeAWSNamePart(basePrefix)
 	runID = compactRunID(runID)
 	if runID == "" {
+		if basePrefix != "" {
+			return "local-" + basePrefix + "-" + laneCode
+		}
 		return "local-" + laneCode
+	}
+	if basePrefix != "" {
+		return "gha-" + basePrefix + "-" + runID + "-" + laneCode
 	}
 	return "gha-" + runID + "-" + laneCode
 }
@@ -1152,7 +1144,14 @@ func normalizePolicyInput(input string) string {
 
 func normalizeTag(version string) string {
 	version = strings.TrimSpace(version)
+	if version == "" {
+		return ""
+	}
 	return "v" + strings.TrimPrefix(version, "v")
+}
+
+func normalizeOptionalTag(version string) string {
+	return normalizeTag(version)
 }
 
 func fatalf(format string, args ...interface{}) {

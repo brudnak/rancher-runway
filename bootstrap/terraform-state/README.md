@@ -48,7 +48,7 @@ TF_STATE_LOCK_TABLE=...
 TF_STATE_REGION=...
 ```
 
-Put those values in the protected `automation-smoke` environment variables.
+Put those values in the protected `rancher-signoff` environment variables.
 They are resource identifiers, not credentials, but workflow logs, summaries,
 and artifacts are visible to anyone with access to Actions runs for the
 repository. Keep actual AWS access in OIDC roles and environment secrets.
@@ -80,7 +80,7 @@ The HA Terratest runner switches to this backend only when all of these are set:
 export TF_STATE_BUCKET="your-unique-state-bucket"
 export TF_STATE_LOCK_TABLE="ha-rancher-rke2-terraform-locks"
 export TF_STATE_REGION="us-east-2"
-export TF_STATE_KEY="ha-rancher-rke2/signoff/v2.14/v2.14.1-alpha6/123456789/fresh-alpha/terraform.tfstate"
+export TF_STATE_KEY="ha-rancher-rke2/signoff/v2.14/v2.14.1-alpha6/123456789/webhook-fresh-install/terraform.tfstate"
 ```
 
 Leave them unset for local development with local Terraform state.

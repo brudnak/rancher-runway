@@ -12,11 +12,12 @@ func TestRenderToolConfigForFreshLane(t *testing.T) {
 		BootstrapPassword: "secret-password",
 		RancherDistro:     "auto",
 		PreloadImages:     true,
+		ServerCount:       5,
 		AutoApprove:       true,
 		OwnerFirstName:    "Ada",
 		OwnerLastName:     "Lovelace",
 		AWSRegion:         "us-east-2",
-		AWSPrefix:         "gha-23456789-fa",
+		AWSPrefix:         "gha-23456789-wf",
 		AWSVPC:            "vpc-123",
 		AWSSubnetA:        "subnet-a",
 		AWSSubnetB:        "subnet-b",
@@ -28,18 +29,19 @@ func TestRenderToolConfigForFreshLane(t *testing.T) {
 		AWSRoute53FQDN:    "example.com",
 	}
 	lane := signoffLane{
-		Name:           "fresh-alpha",
+		Name:           "webhook-fresh-install",
 		InstallRancher: "v2.14.1-alpha6",
-		AWSPrefix:      "gha-23456789-fa",
+		AWSPrefix:      "gha-23456789-wf",
 	}
 
 	rendered := renderToolConfig(cfg, lane)
 	assertContains(t, rendered, `version: "2.14.1-alpha6"`)
 	assertContains(t, rendered, `bootstrap_password: "secret-password"`)
 	assertContains(t, rendered, `auto_approve: true`)
+	assertContains(t, rendered, `server_count: 5`)
 	assertContains(t, rendered, `first_name: "Ada"`)
 	assertContains(t, rendered, `last_name: "Lovelace"`)
-	assertContains(t, rendered, `aws_prefix: "gha-23456789-fa"`)
+	assertContains(t, rendered, `aws_prefix: "gha-23456789-wf"`)
 	assertContains(t, rendered, `total_has: 1`)
 }
 
@@ -53,11 +55,11 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
   "webhook_image": "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5",
   "lanes": [
     {
-      "name": "fresh-alpha",
+      "name": "webhook-fresh-install",
       "install_rancher": "v2.14.1-alpha6",
       "upgrade_to_rancher": "v2.14.1-alpha7",
       "terraform_state_key": "state/key.tfstate",
-      "aws_prefix": "gha-23456789-fa"
+      "aws_prefix": "gha-23456789-wf"
     }
   ]
 }`
@@ -67,12 +69,13 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 
 	cfg := renderConfig{
 		PlanPath:          planPath,
-		LaneName:          "fresh-alpha",
+		LaneName:          "webhook-fresh-install",
 		OutputPath:        outputPath,
 		EnvOutputPath:     envPath,
 		BootstrapPassword: "secret-password",
 		RancherDistro:     "auto",
 		PreloadImages:     true,
+		ServerCount:       3,
 		AutoApprove:       true,
 		OwnerFirstName:    "Ada",
 		OwnerLastName:     "Lovelace",
@@ -117,7 +120,8 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertContains(t, string(output), `aws_prefix: "gha-23456789-fa"`)
+	assertContains(t, string(output), `aws_prefix: "gha-23456789-wf"`)
+	assertContains(t, string(output), `server_count: 3`)
 	assertContains(t, string(output), `first_name: "Ada"`)
 	assertContains(t, string(output), `last_name: "Lovelace"`)
 
@@ -126,7 +130,7 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertContains(t, string(envOutput), "TF_STATE_KEY=state/key.tfstate")
-	assertContains(t, string(envOutput), "SIGNOFF_AWS_PREFIX=gha-23456789-fa")
+	assertContains(t, string(envOutput), "SIGNOFF_AWS_PREFIX=gha-23456789-wf")
 	assertContains(t, string(envOutput), "RANCHER_UPGRADE_VERSION=v2.14.1-alpha7")
 	assertContains(t, string(envOutput), "RANCHER_WEBHOOK_IMAGE=stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5")
 }
@@ -135,7 +139,7 @@ func TestRenderEnvOutputRejectsNewlineInjection(t *testing.T) {
 	_, err := renderEnvOutput(
 		signoffPlan{WebhookImage: "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5\nRANCHER_ADMIN_TOKEN=oops"},
 		signoffLane{
-			Name:           "fresh-alpha",
+			Name:           "webhook-fresh-install",
 			InstallRancher: "v2.14.1-alpha7",
 		},
 	)
@@ -148,7 +152,7 @@ func TestRenderEnvOutputPrefersLaneWebhookOverride(t *testing.T) {
 	env, err := renderEnvOutput(
 		signoffPlan{WebhookImage: "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5"},
 		signoffLane{
-			Name:                 "previous-with-candidate-webhook",
+			Name:                 "webhook-candidate-on-previous",
 			InstallRancher:       "v2.14.0",
 			WebhookOverrideImage: "registry.rancher.com/rancher/rancher-webhook:v0.10.1-rc.5",
 		},
@@ -164,9 +168,10 @@ func TestRenderConfigRequiresOwnerName(t *testing.T) {
 		BootstrapPassword: "secret-password",
 		RancherDistro:     "auto",
 		PreloadImages:     true,
+		ServerCount:       3,
 		AutoApprove:       true,
 		AWSRegion:         "us-east-2",
-		AWSPrefix:         "gha-23456789-fa",
+		AWSPrefix:         "gha-23456789-wf",
 		AWSVPC:            "vpc-123",
 		AWSSubnetA:        "subnet-a",
 		AWSSubnetB:        "subnet-b",
@@ -178,9 +183,9 @@ func TestRenderConfigRequiresOwnerName(t *testing.T) {
 		AWSRoute53FQDN:    "example.com",
 	}
 	lane := signoffLane{
-		Name:           "fresh-alpha",
+		Name:           "webhook-fresh-install",
 		InstallRancher: "v2.14.1-alpha6",
-		AWSPrefix:      "gha-23456789-fa",
+		AWSPrefix:      "gha-23456789-wf",
 	}
 	err := cfg.validate(lane)
 	if err == nil {

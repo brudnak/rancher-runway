@@ -1,13 +1,13 @@
 # GitHub Actions Setup
 
-This repo can run disposable Rancher alpha smoke/sign-off lanes in GitHub
+This repo can run disposable Rancher alpha sign-off lanes in GitHub
 Actions while still keeping local `tool-config.yml` usage unchanged.
 
 The GitHub Actions path is intentionally environment-gated:
 
 - `automation-bootstrap` creates or updates the Terraform state backend.
-- `automation-smoke` provisions Rancher, optional Linode downstreams, optional
-  direct `rancher/tests` suite runs, reports results, and cleans up.
+- `rancher-signoff` provisions Rancher, optional Linode downstreams, optional
+  direct `rancher/tests` suite runs, writes compact receipts, and cleans up.
 
 Do not put cloud credentials, Rancher tokens, kubeconfigs, or generated `.env`
 files in GitHub variables, logs, reports, or artifacts.
@@ -19,7 +19,7 @@ Create these GitHub environments under repository settings.
 | Environment | Purpose | Recommended protection |
 | --- | --- | --- |
 | `automation-bootstrap` | One-time S3/DynamoDB state backend bootstrap. | Required reviewers. |
-| `automation-smoke` | Live AWS/Linode Rancher smoke lanes. | Required reviewers. |
+| `rancher-signoff` | Live AWS/Linode Rancher sign-off lanes. | Required reviewers. |
 
 ## Bootstrap Environment
 
@@ -41,17 +41,17 @@ TF_STATE_LOCK_TABLE=...
 TF_STATE_REGION=...
 ```
 
-Copy those values into `automation-smoke` environment variables. Bucket and
+Copy those values into `rancher-signoff` environment variables. Bucket and
 table names are not credentials, but they are visible to anyone who can view
 workflow logs/artifacts for this repository.
 
-## Smoke Environment Secrets
+## Sign-Off Environment Secrets
 
-`automation-smoke` secrets:
+`rancher-signoff` secrets:
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
-| `AWS_AUTOMATION_ROLE_ARN` | yes | AWS OIDC role used by live smoke lanes. |
+| `AWS_AUTOMATION_ROLE_ARN` | yes | AWS OIDC role used by live sign-off lanes. |
 | `RANCHER_BOOTSTRAP_PASSWORD` | yes | Initial Rancher admin password rendered into generated `tool-config.yml`. |
 | `LINODE_TOKEN` | yes for downstream lanes | Linode token used by Rancher to create the disposable downstream K3s node. |
 | `DOCKERHUB_USERNAME` | optional | Docker Hub auth for RKE2 pulls when needed. |
@@ -59,9 +59,9 @@ workflow logs/artifacts for this repository.
 The workflow masks repository secrets, generated Rancher admin tokens, and the
 generated Linode root password before noisy provisioning steps.
 
-## Smoke Environment Variables
+## Sign-Off Environment Variables
 
-`automation-smoke` variables:
+`rancher-signoff` variables:
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
@@ -78,6 +78,9 @@ generated Linode root password before noisy provisioning steps.
 | `AWS_SECURITY_GROUP_ID` | yes | Security group ID used by EC2 instances. |
 | `AWS_PEM_KEY_NAME` | yes | Existing EC2 key pair name expected by the Terraform module. |
 | `AWS_ROUTE53_FQDN` | yes | Route53 zone/domain suffix used for Rancher DNS records. |
+| `AWS_PREFIX` | recommended | Owner/base prefix included in generated sign-off resource names, for example `atb` produces `gha-atb-23456789-wu`. |
+| `OWNER_FIRST_NAME` | yes | First name used in AWS `Owner` tags. |
+| `OWNER_LAST_NAME` | yes | Last name used in AWS `Owner` tags. |
 | `RANCHER_TESTS_REF` | optional | Ref to clone from `https://github.com/rancher/tests.git`; defaults to `main`. |
 | `RANCHER_TEST_SUITE_SETTLE_SECONDS` | optional | Pause between direct `rancher/tests` suites; defaults to `30`. |
 
@@ -85,61 +88,59 @@ generated Linode root password before noisy provisioning steps.
 
 | Workflow | Creates cloud resources | Notes |
 | --- | --- | --- |
-| `signoff-plan.yml` | no, but it can dispatch the runner | Scheduled/manual plan generation. Scheduled runs dispatch the next uncovered sign-off lane from the ledger-filtered plan. Manual runs only dispatch when `dispatch_runs=true`. |
+| `signoff-plan.yml` | no, but it can dispatch the runner | Manual plan generation from `signoff-targets.json` or a single input version. Dispatch skips lanes already active or already successful on the current branch unless `rerun_successful_lanes=true`. |
 | `bootstrap-terraform-state.yml` | yes, only when `apply=true` | Creates or updates the persistent S3/DynamoDB backend. |
-| `run-alpha-webhook-signoff.yml` | yes | Runs one alpha/webhook sign-off lane, optionally with Linode downstreams and direct `rancher/tests` suite runs, then cleans up. |
+| `run-rancher-signoff-lane.yml` | yes | Runs one Rancher sign-off lane, optionally with Linode downstreams and direct `rancher/tests` suite runs, then cleans up. |
 
 ## First Live Run
 
 After environments, secrets, and variables are configured:
 
-1. Run `Plan Alpha/Webhook Sign-Off` manually for a known alpha, for example
+1. Run `Plan Rancher Sign-Off` manually for a known alpha, for example
    `v2.13.5-alpha5`, with `dispatch_runs=false`.
-2. Run `Run Alpha/Webhook Sign-Off` with:
+2. Run `Run Rancher Sign-Off Lane` with:
    - `rancher_version`: `v2.13.5-alpha5`
-   - `lane`: `fresh-alpha-local-suites`
+   - `lane`: `framework-regression`
    - `keep_infra_on_failure`: `false`
    - `run_rancher_tests`: `false`
 3. Confirm the run provisions Rancher, waits for readiness, renders a report,
-   uploads only safe artifacts, and destroys AWS infrastructure.
-4. Next, run `fresh-alpha` with `run_rancher_tests=false` to prove the
+   uploads a compact JSON receipt, and destroys AWS infrastructure.
+4. Next, run `webhook-fresh-install` with `run_rancher_tests=false` to prove the
    single-node Linode downstream and downstream cleanup.
 5. After those are clean, enable `run_rancher_tests=true` to clone
    `https://github.com/rancher/tests.git` and run the lane's suites in the same
-   workflow job. The local-suite lane runs framework regression plus VAI
+   workflow job. The `framework-regression` lane runs framework regression plus VAI
    disabled for Rancher 2.11 and older and VAI enabled for Rancher 2.12 and
    newer. Downstream webhook lanes run webhook security settings for Rancher
    2.14 and newer when the actual Rancher chart should contain those settings.
-6. After manual smoke is clean, leave `Plan Alpha/Webhook Sign-Off` scheduled.
-   It runs hourly at minute 19 as a safety net and dispatches one uncovered lane
-   at a time only when no lane runner is already queued or running. Successful
-   lane runs explicitly wake the planner through `workflow_dispatch`, so the next
-   lane starts as soon as the globally serialized runner is free. If the
-   ledger-filtered plan has no remaining lanes, it dispatches nothing.
+6. For normal use, edit `signoff-targets.json` with the alpha versions you care
+   about and run `Plan Rancher Sign-Off` manually with `dispatch_runs=true`.
 
-## Ignoring Known-Bad Targets
+## Target Selection
 
-Use `signoff-ignore.json` to temporarily remove known-bad Rancher alpha targets
-from repo-owned sign-off automation. Put a whole release line under
-`release_lines`, for example `v2.15`, or one alpha tag under `versions`, for
-example `v2.15.0-alpha3`.
+Use `signoff-targets.json` as the source of truth for manually selected targets:
 
-Ignored targets stay visible in `signoff-plan.json` with `ignored: true` and an
-empty `lanes` array, so scheduled planning can continue without launching runner
-jobs for that target.
+```json
+{
+  "targets": [
+    {
+      "rancher_version": "v2.14.1-alpha7"
+    }
+  ]
+}
+```
+
+To keep a target in the file without planning it, set `enabled` to `false`.
 
 Use `keep_infra_on_failure=true` only for manual debugging. It can leave AWS and
 Linode resources running.
 
 ## Safe Artifacts
 
-The smoke workflow uploads:
-
-- `signoff-plan.json`
-- `lane.env`
-- `automation-output/signoff-report.md`
-- non-secret `automation-output/*.json`
-- `test-results/*.xml` when `run_rancher_tests=true`
+The sign-off workflow uploads one compact JSON receipt per lane. The receipt
+keeps operational recovery fields such as `terraform_state_key` and `aws_prefix`
+but omits live Rancher URLs, kubeconfigs, generated environment files, raw
+Terraform outputs, and copied logs.
 
 It does not upload:
 
@@ -152,4 +153,4 @@ It does not upload:
 
 ## Cleanup
 
-Normal smoke runs clean up automatically when `keep_infra_on_failure=false`.
+Normal sign-off runs clean up automatically when `keep_infra_on_failure=false`.

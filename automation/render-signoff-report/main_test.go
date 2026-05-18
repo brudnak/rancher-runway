@@ -32,7 +32,7 @@ func TestRenderReportIncludesNonSecretMetadata(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "rancher-test-results.json"), `{
   "repo": "https://github.com/rancher/tests.git",
   "ref": "main",
-  "lane": "fresh-alpha",
+  "lane": "webhook-fresh-install",
   "rancher_version": "v2.14.1-alpha6",
   "results": [
     {
@@ -65,11 +65,11 @@ func TestRenderReportIncludesNonSecretMetadata(t *testing.T) {
 		SigningPolicy:      "required",
 		SigningRegistry:    "stgregistry.suse.com",
 		Lanes: []signoffLane{{
-			Name:                "fresh-alpha",
+			Name:                "webhook-fresh-install",
 			InstallRancher:      "v2.14.1-alpha6",
 			ProvisionDownstream: true,
 		}},
-	}, dir, "fresh-alpha", time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC))
+	}, dir, "webhook-fresh-install", time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

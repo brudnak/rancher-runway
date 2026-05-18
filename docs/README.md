@@ -40,18 +40,21 @@ forks can ignore it unless they intentionally configure their own cloud accounts
 
 Current workflow layers:
 
-- `signoff-plan.yml`: safe scheduled/manual planner. Scheduled runs dispatch
-  the next uncovered ledger lane as a safety net only when no lane runner is
-  queued or running; successful lane runs wake it through `workflow_run` so the
-  queue advances without waiting for the next cron tick. Manual runs dispatch
-  only when `dispatch_runs=true`.
+- `signoff-plan.yml`: manual planner from `signoff-targets.json` or one input
+  Rancher version. Dispatch skips lanes that are already active or already
+  successful on the current branch unless `rerun_successful_lanes=true`.
 - `bootstrap-terraform-state.yml`: manual S3/DynamoDB backend bootstrap, plan-only unless `apply=true`.
-- `run-alpha-webhook-signoff.yml`: manual sign-off lane runner for `fresh-alpha`, `upgrade-alpha`, `previous-with-candidate-webhook`, or `fresh-alpha-local-suites`, with automatic Helm repo setup, Rancher readiness gates, optional Linode downstream provisioning, webhook overrides, optional direct `rancher/tests` suites, Markdown reporting, and automatic cleanup.
+- `run-rancher-signoff-lane.yml`: manual sign-off lane runner for
+  `framework-regression`, `webhook-fresh-install`, `webhook-upgrade`, or
+  `webhook-candidate-on-previous`, with automatic Helm repo setup, Rancher
+  readiness gates, optional Linode downstream provisioning, webhook overrides,
+  optional direct `rancher/tests` suites, compact JSON receipts, and automatic
+  cleanup.
 ## Actions Visibility And State Bootstrap
 
 Run `bootstrap-terraform-state.yml` from GitHub Actions when you want the repo-owned automation to create the S3 state bucket and DynamoDB lock table. Keep it behind the protected `automation-bootstrap` environment with an OIDC role in `AWS_BOOTSTRAP_ROLE_ARN`.
 
-The bootstrap output contains bucket/table names and region only. Those values are not credentials, but Actions logs, summaries, and artifacts are visible to people who can read workflow runs for the repository. Put the resulting `TF_STATE_BUCKET`, `TF_STATE_LOCK_TABLE`, and `TF_STATE_REGION` values into the protected `automation-smoke` environment variables; do not print or upload AWS credentials.
+The bootstrap output contains bucket/table names and region only. Those values are not credentials, but Actions logs, summaries, and artifacts are visible to people who can read workflow runs for the repository. Put the resulting `TF_STATE_BUCKET`, `TF_STATE_LOCK_TABLE`, and `TF_STATE_REGION` values into the protected `rancher-signoff` environment variables; do not print or upload AWS credentials.
 
 ## Design Principle
 
@@ -59,6 +62,6 @@ This can be one repository if local and automated concerns stay separate:
 
 - Local defaults stay simple and interactive.
 - Actions defaults are headless, tagged, isolated, and disposable.
-- Reports are rendered as Markdown artifacts so results can be read without
-  scraping raw logs.
+- Lane receipts are compact JSON artifacts so results can be read without
+  scraping raw logs or uploading generated credentials.
 - Safety infrastructure, especially Terraform state storage, is bootstrapped separately and reused.

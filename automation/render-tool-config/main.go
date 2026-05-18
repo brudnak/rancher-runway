@@ -32,6 +32,7 @@ type renderConfig struct {
 	BootstrapPassword string
 	RancherDistro     string
 	PreloadImages     bool
+	ServerCount       int
 	AutoApprove       bool
 	OwnerFirstName    string
 	OwnerLastName     string
@@ -54,17 +55,18 @@ func main() {
 	autoApprove := "true"
 
 	flag.StringVar(&cfg.PlanPath, "plan", "signoff-plan.json", "sign-off plan JSON path")
-	flag.StringVar(&cfg.LaneName, "lane", "fresh-alpha", "lane name to render")
+	flag.StringVar(&cfg.LaneName, "lane", "framework-regression", "lane name to render")
 	flag.StringVar(&cfg.OutputPath, "output", "tool-config.yml", "tool-config.yml output path")
 	flag.StringVar(&cfg.EnvOutputPath, "env-output", "", "optional GitHub env output path")
 	flag.StringVar(&cfg.BootstrapPassword, "bootstrap-password", envOrDefault("RANCHER_BOOTSTRAP_PASSWORD", ""), "Rancher bootstrap password")
 	flag.StringVar(&cfg.RancherDistro, "rancher-distro", envOrDefault("RANCHER_DISTRO", "auto"), "Rancher distro")
 	flag.StringVar(&preloadImages, "preload-images", envOrDefault("RKE2_PRELOAD_IMAGES", "true"), "whether to preload RKE2 images")
+	flag.IntVar(&cfg.ServerCount, "server-count", envIntOrDefault("RKE2_SERVER_COUNT", 3), "RKE2 server nodes per Rancher cluster; must be 1, 3, or 5")
 	flag.StringVar(&autoApprove, "auto-approve", envOrDefault("RANCHER_AUTO_APPROVE", "true"), "whether Rancher plan approval is automatic")
 	flag.StringVar(&cfg.OwnerFirstName, "owner-first-name", envFirst("OWNER_FIRST_NAME", "USER_FIRST_NAME"), "owner first name for AWS tags and run metadata")
 	flag.StringVar(&cfg.OwnerLastName, "owner-last-name", envFirst("OWNER_LAST_NAME", "USER_LAST_NAME"), "owner last name for AWS tags and run metadata")
 	flag.StringVar(&cfg.AWSRegion, "aws-region", envOrDefault("AWS_REGION", "us-east-2"), "AWS region")
-	flag.StringVar(&cfg.AWSPrefix, "aws-prefix", envOrDefault("AWS_PREFIX", ""), "AWS resource prefix override")
+	flag.StringVar(&cfg.AWSPrefix, "aws-prefix", "", "AWS resource prefix override")
 	flag.StringVar(&cfg.AWSVPC, "aws-vpc", envOrDefault("AWS_VPC", ""), "AWS VPC ID")
 	flag.StringVar(&cfg.AWSSubnetA, "aws-subnet-a", envOrDefault("AWS_SUBNET_A", ""), "AWS subnet A ID")
 	flag.StringVar(&cfg.AWSSubnetB, "aws-subnet-b", envOrDefault("AWS_SUBNET_B", ""), "AWS subnet B ID")
@@ -96,6 +98,9 @@ func main() {
 	}
 	if strings.TrimSpace(cfg.AWSPrefix) == "" {
 		cfg.AWSPrefix = lane.AWSPrefix
+	}
+	if strings.TrimSpace(cfg.AWSPrefix) == "" {
+		cfg.AWSPrefix = envOrDefault("AWS_PREFIX", "")
 	}
 	if err := cfg.validate(lane); err != nil {
 		fatalf("validate config: %v", err)
@@ -139,6 +144,12 @@ func findLane(plan signoffPlan, laneName string) (signoffLane, error) {
 }
 
 func (cfg renderConfig) validate(lane signoffLane) error {
+	switch cfg.ServerCount {
+	case 1, 3, 5:
+	default:
+		return fmt.Errorf("server count must be 1, 3, or 5, got %d", cfg.ServerCount)
+	}
+
 	required := map[string]string{
 		"bootstrap password":    cfg.BootstrapPassword,
 		"lane install_rancher":  lane.InstallRancher,
@@ -178,6 +189,7 @@ func renderToolConfig(cfg renderConfig, lane signoffLane) string {
 
 rke2:
   preload_images: %t
+  server_count: %d
 
 total_has: 1
 
@@ -203,6 +215,7 @@ tf_vars:
 		yamlQuote(cfg.BootstrapPassword),
 		cfg.AutoApprove,
 		cfg.PreloadImages,
+		cfg.ServerCount,
 		yamlQuote(cfg.OwnerFirstName),
 		yamlQuote(cfg.OwnerLastName),
 		yamlQuote(cfg.AWSRegion),
@@ -261,6 +274,18 @@ func envOrDefault(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func envIntOrDefault(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func envFirst(keys ...string) string {

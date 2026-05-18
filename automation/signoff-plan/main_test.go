@@ -84,7 +84,7 @@ func TestBuildPlanAddsOldWebhookLaneWhenWebhookChanged(t *testing.T) {
 		"/stg/v2/rancher/rancher-webhook/manifests/v0.10.1-rc.5": "ok",
 	})
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5", "auto", "123456789", "ha-rancher-rke2/signoff")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5", "auto", "123456789", "ha-rancher-rke2/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -98,22 +98,34 @@ func TestBuildPlanAddsOldWebhookLaneWhenWebhookChanged(t *testing.T) {
 	if len(plan.Lanes) != 4 {
 		t.Fatalf("expected 4 lanes, got %d", len(plan.Lanes))
 	}
-	if plan.Lanes[2].Name != laneLocalSuites {
-		t.Fatalf("expected local suites lane, got %s", plan.Lanes[2].Name)
+	if plan.Lanes[0].Name != laneFrameworkRegression {
+		t.Fatalf("expected framework regression lane first, got %s", plan.Lanes[0].Name)
 	}
-	if plan.Lanes[2].ProvisionDownstream {
-		t.Fatal("expected local suites lane to skip downstream provisioning")
+	if plan.Lanes[0].ProvisionDownstream {
+		t.Fatal("expected framework regression lane to skip downstream provisioning")
 	}
-	if plan.Lanes[3].Name != laneOldWebhook {
-		t.Fatalf("expected old webhook lane, got %s", plan.Lanes[3].Name)
+	if plan.Lanes[1].Name != laneWebhookFreshInstall {
+		t.Fatalf("expected webhook fresh install lane second, got %s", plan.Lanes[1].Name)
+	}
+	if !plan.Lanes[1].ProvisionDownstream {
+		t.Fatal("expected webhook fresh install lane to provision downstream")
+	}
+	if plan.Lanes[2].Name != laneWebhookUpgrade {
+		t.Fatalf("expected webhook upgrade lane third, got %s", plan.Lanes[2].Name)
+	}
+	if !plan.Lanes[2].ProvisionDownstream || plan.Lanes[2].UpgradeToRancher == "" {
+		t.Fatal("expected webhook upgrade lane to provision downstream and upgrade")
+	}
+	if plan.Lanes[3].Name != laneWebhookCandidateOnPrevious {
+		t.Fatalf("expected candidate-on-previous webhook lane, got %s", plan.Lanes[3].Name)
 	}
 	if plan.Lanes[3].WebhookOverrideImage == "" {
 		t.Fatal("expected webhook override image")
 	}
-	if plan.Lanes[3].TerraformStateKey != "ha-rancher-rke2/signoff/v2.14/v2.14.1-alpha6/123456789/previous-with-candidate-webhook/terraform.tfstate" {
+	if plan.Lanes[3].TerraformStateKey != "ha-rancher-rke2/signoff/v2.14/v2.14.1-alpha6/123456789/webhook-candidate-on-previous/terraform.tfstate" {
 		t.Fatalf("unexpected state key: %s", plan.Lanes[3].TerraformStateKey)
 	}
-	if plan.Lanes[3].AWSPrefix != "gha-23456789-ow" {
+	if plan.Lanes[3].AWSPrefix != "gha-23456789-wp" {
 		t.Fatalf("unexpected AWS prefix: %s", plan.Lanes[3].AWSPrefix)
 	}
 }
@@ -133,7 +145,7 @@ func TestBuildPlanDiscoversStagingPrereleaseWebhookImageWhenNoOverride(t *testin
 		"docker.io":            client.rawBaseURL + "/docker",
 	}
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +158,7 @@ func TestBuildPlanDiscoversStagingPrereleaseWebhookImageWhenNoOverride(t *testin
 		t.Fatalf("expected report-only signing policy, got %s", plan.SigningPolicy)
 	}
 	if plan.Lanes[3].WebhookOverrideImage != wantImage {
-		t.Fatalf("expected old webhook lane to use %s, got %s", wantImage, plan.Lanes[3].WebhookOverrideImage)
+		t.Fatalf("expected candidate-on-previous webhook lane to use %s, got %s", wantImage, plan.Lanes[3].WebhookOverrideImage)
 	}
 }
 
@@ -165,7 +177,7 @@ func TestBuildPlanDiscoversReleasedWebhookImageForStableTagWhenNoOverride(t *tes
 		"docker.io":            client.rawBaseURL + "/docker",
 	}
 
-	plan, err := buildPlan(context.Background(), client, "v2.13.5-alpha6", "v2.13.4", "", "auto", "", "ha-rancher-rke2/signoff")
+	plan, err := buildPlan(context.Background(), client, "v2.13.5-alpha6", "v2.13.4", "", "auto", "", "ha-rancher-rke2/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,7 +204,7 @@ func TestBuildPlanFallsBackToDockerHubWhenSUSERegistriesAreMissing(t *testing.T)
 		"docker.io":            client.rawBaseURL + "/docker",
 	}
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -215,7 +227,7 @@ func TestBuildPlanFallsBackToPrimeBeforePublicSUSEAndDockerHub(t *testing.T) {
 		"/docker/v2/rancher/rancher-webhook/manifests/v0.10.1-rc.5": "ok",
 	})
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -237,7 +249,7 @@ func TestBuildPlanFailsWhenExplicitWebhookImageTagMismatchesBuildYAML(t *testing
 		"/stg/v2/rancher/rancher-webhook/manifests/v0.10.1-rc.5": "ok",
 	})
 
-	_, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.0", "auto", "", "ha-rancher-rke2/signoff")
+	_, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.0", "auto", "", "ha-rancher-rke2/signoff", "")
 	if err == nil {
 		t.Fatal("expected explicit mismatched webhook image tag to fail")
 	}
@@ -252,7 +264,7 @@ func TestBuildPlanFailsWhenExplicitWebhookImageIsMissing(t *testing.T) {
 		"/rancher/rancher/v2.14.0/build.yaml":        `webhookVersion: 109.0.0+up0.10.0`,
 	})
 
-	_, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5", "auto", "", "ha-rancher-rke2/signoff")
+	_, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5", "auto", "", "ha-rancher-rke2/signoff", "")
 	if err == nil {
 		t.Fatal("expected explicit missing webhook image to fail")
 	}
@@ -303,7 +315,7 @@ func TestBuildPlanSkipsOldWebhookLaneWhenWebhookUnchanged(t *testing.T) {
 		"/docker/v2/rancher/rancher-webhook/manifests/v0.10.1-rc.5": "ok",
 	})
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -317,25 +329,48 @@ func TestBuildPlanSkipsOldWebhookLaneWhenWebhookUnchanged(t *testing.T) {
 	if len(plan.Lanes) != 3 {
 		t.Fatalf("expected 3 lanes, got %d", len(plan.Lanes))
 	}
-	if plan.Lanes[2].Name != laneLocalSuites {
-		t.Fatalf("expected local suites lane, got %s", plan.Lanes[2].Name)
+	if plan.Lanes[0].Name != laneFrameworkRegression {
+		t.Fatalf("expected framework regression lane first, got %s", plan.Lanes[0].Name)
 	}
-	if len(plan.SkippedLanes) != 1 || plan.SkippedLanes[0].Name != laneOldWebhook {
-		t.Fatalf("expected skipped old webhook lane, got %#v", plan.SkippedLanes)
+	if plan.Lanes[0].ProvisionDownstream {
+		t.Fatal("expected framework regression lane to skip downstream provisioning")
+	}
+	if plan.Lanes[1].Name != laneWebhookFreshInstall {
+		t.Fatalf("expected webhook fresh install lane second, got %s", plan.Lanes[1].Name)
+	}
+	if plan.Lanes[2].Name != laneWebhookUpgrade {
+		t.Fatalf("expected webhook upgrade lane third, got %s", plan.Lanes[2].Name)
+	}
+	if len(plan.SkippedLanes) != 1 || plan.SkippedLanes[0].Name != laneWebhookCandidateOnPrevious {
+		t.Fatalf("expected skipped candidate-on-previous webhook lane, got %#v", plan.SkippedLanes)
 	}
 	if plan.Lanes[0].TerraformStateKey != "" {
 		t.Fatalf("expected no state key without run id, got %s", plan.Lanes[0].TerraformStateKey)
 	}
-	if plan.Lanes[0].AWSPrefix != "local-fa" {
+	if plan.Lanes[0].AWSPrefix != "local-fr" {
 		t.Fatalf("unexpected local AWS prefix: %s", plan.Lanes[0].AWSPrefix)
 	}
 }
 
 func TestBuildTerraformStateKey(t *testing.T) {
-	got := buildTerraformStateKey("root/", "v2.14", "v2.14.1-alpha6", "123", laneFreshAlpha)
-	want := "root/v2.14/v2.14.1-alpha6/123/fresh-alpha/terraform.tfstate"
+	got := buildTerraformStateKey("root/", "v2.14", "v2.14.1-alpha6", "123", laneWebhookFreshInstall)
+	want := "root/v2.14/v2.14.1-alpha6/123/webhook-fresh-install/terraform.tfstate"
 	if got != want {
 		t.Fatalf("expected %s, got %s", want, got)
+	}
+}
+
+func TestBuildLaneAWSPrefixIncludesOwnerBasePrefix(t *testing.T) {
+	got := buildLaneAWSPrefix("123456789", laneWebhookUpgrade, "ATB")
+	if got != "gha-atb-23456789-wu" {
+		t.Fatalf("unexpected AWS prefix: %s", got)
+	}
+}
+
+func TestBuildLaneAWSPrefixKeepsLegacyShapeWithoutOwnerBasePrefix(t *testing.T) {
+	got := buildLaneAWSPrefix("123456789", laneWebhookUpgrade, "")
+	if got != "gha-23456789-wu" {
+		t.Fatalf("unexpected AWS prefix: %s", got)
 	}
 }
 
@@ -368,57 +403,27 @@ func TestLatestAlphasPerLineReturnsNoRecentAlphaError(t *testing.T) {
 	}
 }
 
-func TestTargetIgnoreListSkipsReleaseLine(t *testing.T) {
-	ignoreList := normalizeTargetIgnoreList(targetIgnoreList{
-		ReleaseLines: map[string]string{
-			"2.15": "known-bad line",
-		},
-	})
+func TestNormalizeTargetListKeepsEnabledUniqueTargets(t *testing.T) {
+	disabled := false
+	targets := normalizeTargetList(targetList{Targets: []targetSpec{
+		{RancherVersion: " 2.14.1-alpha7 ", PreviousRancherVersion: "2.14.0", SigningPolicy: "required"},
+		{RancherVersion: "v2.14.1-alpha7"},
+		{RancherVersion: "v2.15.0-alpha1", Enabled: &disabled},
+		{RancherVersion: "  "},
+	}})
 
-	reason, ignored := ignoreList.reasonFor("v2.15.0-alpha3")
-	if !ignored {
-		t.Fatal("expected v2.15 alpha to be ignored")
+	if len(targets.Targets) != 1 {
+		t.Fatalf("expected one enabled unique target, got %#v", targets.Targets)
 	}
-	if reason != "known-bad line" {
-		t.Fatalf("unexpected ignore reason: %s", reason)
+	target := targets.Targets[0]
+	if target.RancherVersion != "v2.14.1-alpha7" {
+		t.Fatalf("unexpected target version: %#v", target)
 	}
-}
-
-func TestTargetIgnoreListExactVersionOverridesReleaseLine(t *testing.T) {
-	ignoreList := normalizeTargetIgnoreList(targetIgnoreList{
-		ReleaseLines: map[string]string{
-			"v2.15": "known-bad line",
-		},
-		Versions: map[string]string{
-			"2.15.0-alpha3": "specific broken alpha",
-		},
-	})
-
-	reason, ignored := ignoreList.reasonFor("v2.15.0-alpha3")
-	if !ignored {
-		t.Fatal("expected v2.15.0-alpha3 to be ignored")
+	if target.PreviousRancherVersion != "v2.14.0" {
+		t.Fatalf("unexpected previous version: %#v", target)
 	}
-	if reason != "specific broken alpha" {
-		t.Fatalf("expected exact version reason, got %s", reason)
-	}
-}
-
-func TestIgnoredPlanHasNoRunnableLanes(t *testing.T) {
-	plan, err := ignoredPlan("v2.15.0-alpha3", "known-bad line", "123456789", "root")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !plan.Ignored {
-		t.Fatal("expected plan to be marked ignored")
-	}
-	if plan.TargetVersion != "v2.15.0-alpha3" || plan.ReleaseLine != "v2.15" {
-		t.Fatalf("unexpected target metadata: %#v", plan)
-	}
-	if len(plan.Lanes) != 0 {
-		t.Fatalf("expected no runnable lanes, got %#v", plan.Lanes)
-	}
-	if len(plan.SkippedLanes) != 4 {
-		t.Fatalf("expected skipped lane records for all lane types, got %#v", plan.SkippedLanes)
+	if target.SigningPolicy != "required" {
+		t.Fatalf("unexpected signing policy: %#v", target)
 	}
 }
 
@@ -426,13 +431,13 @@ func TestApplyLedgerSkipsSuccessfulLanes(t *testing.T) {
 	plan := plan{
 		TargetVersion: "v2.14.1-alpha7",
 		Lanes: []lane{
-			{Name: laneFreshAlpha},
-			{Name: laneUpgradeAlpha},
+			{Name: laneWebhookFreshInstall},
+			{Name: laneWebhookUpgrade},
 		},
 	}
 	ledger := signoffLedger{Entries: map[string]map[string]ledgerEntry{
 		"v2.14.1-alpha7": {
-			laneFreshAlpha: {
+			laneWebhookFreshInstall: {
 				Status:         "success",
 				CoveragePolicy: currentCoveragePolicy,
 				RunID:          "123",
@@ -442,10 +447,10 @@ func TestApplyLedgerSkipsSuccessfulLanes(t *testing.T) {
 	}}
 
 	got := applyLedgerSkips(plan, ledger)
-	if len(got.Lanes) != 1 || got.Lanes[0].Name != laneUpgradeAlpha {
+	if len(got.Lanes) != 1 || got.Lanes[0].Name != laneWebhookUpgrade {
 		t.Fatalf("expected only upgrade lane to remain, got %#v", got.Lanes)
 	}
-	if len(got.SkippedLanes) != 1 || got.SkippedLanes[0].Name != laneFreshAlpha {
+	if len(got.SkippedLanes) != 1 || got.SkippedLanes[0].Name != laneWebhookFreshInstall {
 		t.Fatalf("expected fresh lane skip, got %#v", got.SkippedLanes)
 	}
 }
@@ -454,12 +459,12 @@ func TestApplyLedgerDoesNotSkipStaleCoveragePolicy(t *testing.T) {
 	plan := plan{
 		TargetVersion: "v2.14.1-alpha7",
 		Lanes: []lane{
-			{Name: laneFreshAlpha},
+			{Name: laneWebhookFreshInstall},
 		},
 	}
 	ledger := signoffLedger{Entries: map[string]map[string]ledgerEntry{
 		"v2.14.1-alpha7": {
-			laneFreshAlpha: {
+			laneWebhookFreshInstall: {
 				Status:         "success",
 				CoveragePolicy: "alpha-webhook-signoff-v1",
 				RunID:          "123",
@@ -469,7 +474,7 @@ func TestApplyLedgerDoesNotSkipStaleCoveragePolicy(t *testing.T) {
 	}}
 
 	got := applyLedgerSkips(plan, ledger)
-	if len(got.Lanes) != 1 || got.Lanes[0].Name != laneFreshAlpha {
+	if len(got.Lanes) != 1 || got.Lanes[0].Name != laneWebhookFreshInstall {
 		t.Fatalf("expected stale coverage entry not to skip lane, got %#v", got.Lanes)
 	}
 	if len(got.SkippedLanes) != 0 {

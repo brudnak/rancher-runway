@@ -1,4 +1,4 @@
-name: Run Alpha/Webhook Sign-Off
+name: Run Rancher Sign-Off Lane
 run-name: Run ${{ inputs.rancher_version }} / ${{ inputs.lane }}
 
 on:
@@ -11,13 +11,13 @@ on:
       lane:
         description: Validation lane to run.
         required: true
-        default: fresh-alpha
+        default: framework-regression
         type: choice
         options:
-          - fresh-alpha
-          - upgrade-alpha
-          - previous-with-candidate-webhook
-          - fresh-alpha-local-suites
+          - framework-regression
+          - webhook-fresh-install
+          - webhook-upgrade
+          - webhook-candidate-on-previous
       previous_rancher_version:
         description: Previous Rancher release. Leave blank to resolve automatically.
         required: false
@@ -50,21 +50,29 @@ on:
         description: rancher/tests ref to clone. Defaults to main.
         required: false
         type: string
+      rke2_server_count:
+        description: RKE2 server nodes per HA. Use 1 for single-server, 3 for default HA, or 5 for a larger HA layout.
+        required: true
+        default: "3"
+        type: choice
+        options:
+          - "1"
+          - "3"
+          - "5"
 
 permissions:
-  actions: write
-  contents: write
+  contents: read
   id-token: write
 
 concurrency:
-  group: run-alpha-webhook-signoff-${{ inputs.rancher_version }}-${{ inputs.lane }}
+  group: run-rancher-signoff-lane-${{ inputs.rancher_version }}-${{ inputs.lane }}
   cancel-in-progress: false
 
 jobs:
   run-lane:
     name: ${{ inputs.rancher_version }} / ${{ inputs.lane }}
     runs-on: ubuntu-latest
-    environment: automation-smoke
+    environment: rancher-signoff
     env:
       GH_TOKEN: ${{ github.token }}
       TF_IN_AUTOMATION: "true"
@@ -78,6 +86,7 @@ jobs:
       AWS_SUBNET_B: ${{ vars.AWS_SUBNET_B }}
       AWS_SUBNET_C: ${{ vars.AWS_SUBNET_C }}
       AWS_AMI: ${{ vars.AWS_AMI }}
+      AWS_PREFIX: ${{ vars.AWS_PREFIX }}
       AWS_SUBNET_ID: ${{ vars.AWS_SUBNET_ID }}
       AWS_SECURITY_GROUP_ID: ${{ vars.AWS_SECURITY_GROUP_ID }}
       AWS_PEM_KEY_NAME: ${{ vars.AWS_PEM_KEY_NAME }}
@@ -88,6 +97,7 @@ jobs:
       DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
       RANCHER_TESTS_REF: ${{ vars.RANCHER_TESTS_REF }}
       RANCHER_TEST_SUITE_SETTLE_SECONDS: ${{ vars.RANCHER_TEST_SUITE_SETTLE_SECONDS }}
+      RKE2_SERVER_COUNT: ${{ inputs.rke2_server_count }}
       OWNER_FIRST_NAME: ${{ vars.OWNER_FIRST_NAME }}
       OWNER_LAST_NAME: ${{ vars.OWNER_LAST_NAME }}
       SIGNOFF_LANE: ${{ inputs.lane }}
@@ -142,10 +152,8 @@ jobs:
       - name: Build automation tools
         run: |
           go build -o "$RUNNER_TEMP/signoff-plan" ./automation/signoff-plan
-          go build -o "$RUNNER_TEMP/signoff-ledger" ./automation/signoff-ledger
           go build -o "$RUNNER_TEMP/render-tool-config" ./automation/render-tool-config
           go build -o "$RUNNER_TEMP/render-signoff-report" ./automation/render-signoff-report
-          go build -o "$RUNNER_TEMP/sanitize-smoke-artifacts" ./automation/sanitize-smoke-artifacts
           go build -o "$RUNNER_TEMP/verify-webhook-signing" ./automation/verify-webhook-signing
 
       - name: Generate sign-off plan
@@ -162,6 +170,9 @@ jobs:
             "-ignore-ledger"
             "-output" "signoff-plan.json"
           )
+          if [ -n "${AWS_PREFIX:-}" ]; then
+            args+=("-aws-base-prefix" "$AWS_PREFIX")
+          fi
           if [ -n "$INPUT_PREVIOUS_RANCHER_VERSION" ]; then
             args+=("-previous-rancher-version" "$INPUT_PREVIOUS_RANCHER_VERSION")
           fi
@@ -278,36 +289,36 @@ jobs:
 
       - name: Export local suite env
         id: local_suite_env
-        if: ${{ inputs.lane == 'fresh-alpha-local-suites' }}
+        if: ${{ inputs.lane == 'framework-regression' }}
         run: go test -v -run '^TestHAWriteLocalSuiteEnv$' -timeout 5m ./terratest
 
       - name: Validate Linode token
-        if: ${{ inputs.lane != 'fresh-alpha-local-suites' }}
+        if: ${{ inputs.lane != 'framework-regression' }}
         run: test -n "${LINODE_TOKEN:-}"
 
       - name: Provision downstream Linode K3s
         id: downstream
-        if: ${{ inputs.lane != 'fresh-alpha-local-suites' }}
+        if: ${{ inputs.lane != 'framework-regression' }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAProvisionLinodeDownstream$' -timeout 20m ./terratest
 
       - name: Override local webhook image
         id: local_webhook
-        if: ${{ inputs.lane == 'previous-with-candidate-webhook' }}
+        if: ${{ inputs.lane == 'webhook-candidate-on-previous' }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAOverrideLocalWebhook$' -timeout 30m ./terratest
 
       - name: Override downstream webhook image
         id: downstream_webhook
-        if: ${{ inputs.lane == 'previous-with-candidate-webhook' }}
+        if: ${{ inputs.lane == 'webhook-candidate-on-previous' }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAOverrideDownstreamWebhook$' -timeout 20m ./terratest
 
       - name: Run Rancher upgrade
         id: upgrade
-        if: ${{ inputs.lane == 'upgrade-alpha' }}
+        if: ${{ inputs.lane == 'webhook-upgrade' }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAUpgradeRancher$' -timeout 45m ./terratest
 
       - name: Wait for webhook chart rollout
         id: webhook_chart
-        if: ${{ inputs.lane == 'upgrade-alpha' && inputs.run_rancher_tests == true }}
+        if: ${{ inputs.lane == 'webhook-upgrade' && inputs.run_rancher_tests == true }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAWaitWebhookChartVersion$' -timeout 20m ./terratest
 
       - name: Run Rancher tests
@@ -323,7 +334,7 @@ jobs:
           version="${{ inputs.rancher_version }}"
           version="${version#v}"
           IFS='.' read -r rancher_major rancher_minor _ <<< "$version"
-          if [ "${{ inputs.lane }}" = "fresh-alpha-local-suites" ]; then
+          if [ "${{ inputs.lane }}" = "framework-regression" ]; then
             env_file="automation-output/local-suite-ha-1.env"
             suites=(
               "TestConfigMapTestSuite"
@@ -336,8 +347,8 @@ jobs:
               suites+=("TestVaiTestSuite/TestVaiEnabled")
             fi
           fi
-          if [ "${{ inputs.lane }}" != "fresh-alpha-local-suites" ] && \
-             [ "${{ inputs.lane }}" != "previous-with-candidate-webhook" ] && \
+          if [ "${{ inputs.lane }}" != "framework-regression" ] && \
+             [ "${{ inputs.lane }}" != "webhook-candidate-on-previous" ] && \
              { [ "$rancher_major" -gt 2 ] || { [ "$rancher_major" -eq 2 ] && [ "$rancher_minor" -ge 14 ]; }; }; then
             suites+=("TestWebhookSecuritySettingsTestSuite")
           fi
@@ -433,7 +444,7 @@ jobs:
                 tags="validation,infra.any,cluster.any"
                 timeout_args=()
                 junit_name="TestWebhookTestSuite"
-                if [ "${{ inputs.lane }}" = "previous-with-candidate-webhook" ]; then
+                if [ "${{ inputs.lane }}" = "webhook-candidate-on-previous" ]; then
                   test_run="TestWebhookTestSuite/TestWebhookChart/Verify_(webhook_pod_logs|the_count_of_webhook_is_greater_than_zero)"
                   junit_name="TestWebhookTestSuite-WebhookOverride"
                 fi
@@ -530,12 +541,13 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Delete downstream Linode K3s
-        if: ${{ always() && steps.render_config.outcome == 'success' && inputs.lane != 'fresh-alpha-local-suites' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && steps.downstream.outcome == 'success' && (inputs.lane != 'upgrade-alpha' || steps.upgrade.outcome == 'success') && (inputs.lane != 'previous-with-candidate-webhook' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}
+        id: delete_downstream
+        if: ${{ always() && steps.render_config.outcome == 'success' && inputs.lane != 'framework-regression' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && steps.downstream.outcome == 'success' && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}
         run: go test -v -run '^TestHADeleteLinodeDownstream$' -timeout 25m ./terratest
 
       - name: Run lane cleanup
         id: cleanup
-        if: ${{ always() && steps.render_config.outcome == 'success' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && (inputs.lane == 'fresh-alpha-local-suites' || steps.downstream.outcome == 'success') && (inputs.lane != 'upgrade-alpha' || steps.upgrade.outcome == 'success') && (inputs.lane != 'previous-with-candidate-webhook' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}
+        if: ${{ always() && steps.render_config.outcome == 'success' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && (inputs.lane == 'framework-regression' || steps.downstream.outcome == 'success') && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}
         run: go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
 
       - name: Render sign-off report
@@ -547,82 +559,97 @@ jobs:
             -lane "${{ inputs.lane }}" \
             -output automation-output/signoff-report.md
 
-      - name: Prepare public smoke artifacts
-        id: public_artifacts
+      - name: Write lane receipt
+        id: lane_receipt
         if: always()
-        run: |
-          "$RUNNER_TEMP/sanitize-smoke-artifacts" \
-            -source "$GITHUB_WORKSPACE" \
-            -output public-smoke-artifacts
-
-      - name: Upload smoke artifacts
-        if: ${{ always() && steps.public_artifacts.outcome == 'success' }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ inputs.lane }}-smoke
-          path: |
-            public-smoke-artifacts/**
-
-      - name: Record successful sign-off lane
-        if: ${{ success() && inputs.run_rancher_tests == true }}
         env:
-          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SETUP_OUTCOME: ${{ steps.setup.outcome }}
+          READY_OUTCOME: ${{ steps.ready.outcome }}
+          LOCAL_SUITE_ENV_OUTCOME: ${{ steps.local_suite_env.outcome }}
+          DOWNSTREAM_OUTCOME: ${{ steps.downstream.outcome }}
+          LOCAL_WEBHOOK_OUTCOME: ${{ steps.local_webhook.outcome }}
+          DOWNSTREAM_WEBHOOK_OUTCOME: ${{ steps.downstream_webhook.outcome }}
+          UPGRADE_OUTCOME: ${{ steps.upgrade.outcome }}
+          WEBHOOK_CHART_OUTCOME: ${{ steps.webhook_chart.outcome }}
+          RANCHER_TESTS_OUTCOME: ${{ steps.rancher_tests.outcome }}
+          DELETE_DOWNSTREAM_OUTCOME: ${{ steps.delete_downstream.outcome }}
+          CLEANUP_OUTCOME: ${{ steps.cleanup.outcome }}
         run: |
           set -euo pipefail
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p automation-output/public
+          lane_plan="$(jq -c --arg lane "${{ inputs.lane }}" '.lanes[] | select(.name == $lane)' signoff-plan.json)"
+          tests_json='[]'
+          if [ -s automation-output/rancher-test-results.json ]; then
+            tests_json="$(jq -c '.results // [] | map({
+              suite: .suite,
+              package: .package,
+              status: .conclusion
+            })' automation-output/rancher-test-results.json)"
+          fi
 
-          max_attempts=5
-          completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          for attempt in $(seq 1 "$max_attempts"); do
-            git pull --rebase origin "${GITHUB_REF_NAME}"
+          jq -n \
+            --slurpfile plan signoff-plan.json \
+            --argjson lane_plan "$lane_plan" \
+            --argjson tests "$tests_json" \
+            --arg lane "${{ inputs.lane }}" \
+            --arg status "${{ job.status }}" \
+            --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg rke2_server_count "${{ inputs.rke2_server_count }}" \
+            --arg setup "$SETUP_OUTCOME" \
+            --arg ready "$READY_OUTCOME" \
+            --arg local_suite_env "$LOCAL_SUITE_ENV_OUTCOME" \
+            --arg downstream "$DOWNSTREAM_OUTCOME" \
+            --arg local_webhook "$LOCAL_WEBHOOK_OUTCOME" \
+            --arg downstream_webhook "$DOWNSTREAM_WEBHOOK_OUTCOME" \
+            --arg upgrade "$UPGRADE_OUTCOME" \
+            --arg webhook_chart "$WEBHOOK_CHART_OUTCOME" \
+            --arg rancher_tests "$RANCHER_TESTS_OUTCOME" \
+            --arg delete_downstream "$DELETE_DOWNSTREAM_OUTCOME" \
+            --arg cleanup "$CLEANUP_OUTCOME" \
+            '{
+              target_version: $plan[0].target_version,
+              previous_version: $plan[0].previous_version,
+              lane: $lane,
+              status: $status,
+              completed_at: $completed_at,
+              rke2_server_count: ($rke2_server_count | tonumber),
+              webhook_image: $plan[0].webhook_image,
+              terraform_state_key: ($lane_plan.terraform_state_key // ""),
+              aws_prefix: ($lane_plan.aws_prefix // ""),
+              steps: {
+                setup: $setup,
+                ready: $ready,
+                local_suite_env: $local_suite_env,
+                downstream: $downstream,
+                local_webhook: $local_webhook,
+                downstream_webhook: $downstream_webhook,
+                upgrade: $upgrade,
+                webhook_chart: $webhook_chart,
+                rancher_tests: $rancher_tests,
+                delete_downstream: $delete_downstream,
+                cleanup: $cleanup
+              },
+              tests: $tests
+            }' > automation-output/public/signoff-lane-receipt.json
 
-            "$RUNNER_TEMP/signoff-ledger" \
-              -plan signoff-plan.json \
-              -ledger signoff-ledger.json \
-              -lane "${{ inputs.lane }}" \
-              -status success \
-              -run-id "${{ github.run_id }}" \
-              -run-url "$RUN_URL" \
-              -workflow "${{ github.workflow }}" \
-              -commit-sha "${{ github.sha }}" \
-              -completed-at "$completed_at" \
-              -signing-result automation-output/webhook-signing.json \
-              -install-resolution automation-output/rancher-resolution-install-ha-1.json \
-              -upgrade-resolution automation-output/rancher-resolution-upgrade-ha-1.json
-
-            git add signoff-ledger.json
-            ahead_count="$(git rev-list --count "origin/${GITHUB_REF_NAME}..HEAD")"
-            if git diff --cached --quiet && [ "$ahead_count" = "0" ]; then
-              echo "No sign-off ledger changes to commit."
-              exit 0
-            fi
-            if ! git diff --cached --quiet; then
-              git commit -m "Record sign-off ${{ inputs.rancher_version }} ${{ inputs.lane }}"
-            fi
-            if git push; then
-              exit 0
-            fi
-            if [ "$attempt" = "$max_attempts" ]; then
-              break
-            fi
-            echo "Ledger push failed on attempt ${attempt}/${max_attempts}; retrying after rebase."
-            sleep $((attempt * 5))
-          done
-
-          echo "Failed to push sign-off ledger after ${max_attempts} attempts."
-          exit 1
+      - name: Upload lane receipt
+        if: ${{ always() && steps.lane_receipt.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signoff-lane-${{ inputs.rancher_version }}-${{ inputs.lane }}
+          path: automation-output/public/signoff-lane-receipt.json
 
       - name: Write step summary
         if: always()
         run: |
           {
-            echo "## Alpha/webhook sign-off lane"
+            echo "## Rancher sign-off lane"
             echo ""
             echo "- Lane: \`${{ inputs.lane }}\`"
             echo "- Rancher version: \`${{ inputs.rancher_version }}\`"
             echo "- Upgrade version: \`${RANCHER_UPGRADE_VERSION:-none}\`"
+            echo "- RKE2 server count: \`${{ inputs.rke2_server_count }}\`"
             echo "- Terraform state key: \`${TF_STATE_KEY:-unset}\`"
             echo "- Setup outcome: \`${{ steps.setup.outcome }}\`"
             echo "- Readiness outcome: \`${{ steps.ready.outcome }}\`"
@@ -632,25 +659,5 @@ jobs:
             echo "- Downstream webhook override outcome: \`${{ steps.downstream_webhook.outcome }}\`"
             echo "- Upgrade outcome: \`${{ steps.upgrade.outcome }}\`"
             echo "- Rancher tests outcome: \`${{ steps.rancher_tests.outcome }}\`"
-            echo "- Cleanup requested: \`${{ steps.render_config.outcome == 'success' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && (inputs.lane == 'fresh-alpha-local-suites' || steps.downstream.outcome == 'success') && (inputs.lane != 'upgrade-alpha' || steps.upgrade.outcome == 'success') && (inputs.lane != 'previous-with-candidate-webhook' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}\`"
+            echo "- Cleanup requested: \`${{ steps.render_config.outcome == 'success' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && (inputs.lane == 'framework-regression' || steps.downstream.outcome == 'success') && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  wake-planner:
-    name: Wake sign-off planner
-    needs: run-lane
-    if: ${{ needs.run-lane.result == 'success' && inputs.run_rancher_tests == true }}
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      REF_NAME: ${{ github.ref_name }}
-    steps:
-      - name: Dispatch planner for next lane
-        run: |
-          set -euo pipefail
-
-          gh workflow run signoff-plan.yml \
-            --repo "$GH_REPO" \
-            --ref "$REF_NAME" \
-            -f "dispatch_runs=true" \
-            -f "ignore_active_runner_id=${{ github.run_id }}"

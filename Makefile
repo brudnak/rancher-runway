@@ -6,7 +6,7 @@ INSTALL_DIR ?= /Applications
 APP_PATH := $(INSTALL_DIR)/$(APP_NAME).app
 STATUS_JSON := terratest/automation-output/install-status.json
 
-.PHONY: help setup install app build panel-css check-install-safe check-app-closed check-lifecycle-idle test
+.PHONY: help setup install app build panel-css check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
 
 help:
 	@printf '%s\n' "Targets:"
@@ -15,6 +15,7 @@ help:
 	@printf '  %-20s %s\n' "make app" "Build the Wails app without installing it"
 	@printf '  %-20s %s\n' "make panel-css" "Rebuild the embedded control-panel CSS"
 	@printf '  %-20s %s\n' "make test" "Run Go tests"
+	@printf '  %-20s %s\n' "make ci" "Run local CI checks"
 
 install: setup
 
@@ -32,6 +33,29 @@ panel-css:
 
 test:
 	@go test ./...
+
+ci: ci-go ci-web ci-terraform ci-workflows
+
+ci-go:
+	@go test ./...
+
+ci-web: panel-css
+	@npm --prefix desktop/wails/frontend run build
+
+ci-terraform:
+	@terraform -chdir=modules/aws fmt -check -recursive
+	@terraform -chdir=bootstrap/terraform-state fmt -check -recursive
+	@terraform -chdir=modules/aws init -backend=false -input=false -no-color
+	@terraform -chdir=modules/aws validate -no-color
+	@terraform -chdir=bootstrap/terraform-state init -backend=false -input=false -no-color
+	@terraform -chdir=bootstrap/terraform-state validate -no-color
+
+ci-workflows:
+	@if command -v actionlint >/dev/null 2>&1; then \
+	  actionlint .github/workflows/*.yml; \
+	else \
+	  go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml; \
+	fi
 
 check-install-safe: check-app-closed check-lifecycle-idle
 
