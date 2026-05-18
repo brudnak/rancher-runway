@@ -699,8 +699,11 @@ func (s *interactiveServer) runResolution() {
 	if err != nil {
 		s.mu.Lock()
 		s.resolveErr = err.Error()
+		s.phase = phaseEditor
+		s.submitted = false
 		s.mu.Unlock()
 		s.broadcast(interactiveEvent{Type: "error", Error: err.Error()})
+		s.broadcast(interactiveEvent{Type: "phase", Phase: phaseEditor})
 		select {
 		case s.resultCh <- interactiveResult{plans: nil, err: fmt.Errorf("plan resolution failed: %w", err)}:
 		default:

@@ -77,6 +77,17 @@ func TestClassifyRancherVersionAllowsPlainHead(t *testing.T) {
 	}
 }
 
+func TestClassifyRancherVersionAllowsCommitHead(t *testing.T) {
+	version := "2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
+	buildType, minorLine, err := classifyRancherVersion(version)
+	if err != nil {
+		t.Fatalf("expected commit head to be valid, got error: %v", err)
+	}
+	if buildType != "head" || minorLine != "2.13" {
+		t.Fatalf("expected commit head classification for 2.13, got buildType=%q minorLine=%q", buildType, minorLine)
+	}
+}
+
 func TestParseHelmSearchResultsSkipsLeadingWarnings(t *testing.T) {
 	output := []byte(`WARNING: Kubernetes configuration file is group-readable. This is insecure.
 WARNING: Kubernetes configuration file is world-readable. This is insecure.
@@ -272,9 +283,55 @@ func TestResolveImageSettingsAllowsMixedReleaseAndAlphaSources(t *testing.T) {
 		t.Fatalf("expected community head to use chart image with tag override only, got image=%q tag=%q agent=%q", headImage, headTag, headAgent)
 	}
 
+	commitHeadImage, commitHeadTag, commitHeadAgent, _ := resolveImageSettings("2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head", "head", "community")
+	if commitHeadImage != "" || commitHeadTag != "v2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head" || commitHeadAgent != "" {
+		t.Fatalf("expected community commit head to use chart image with tag override only, got image=%q tag=%q agent=%q", commitHeadImage, commitHeadTag, commitHeadAgent)
+	}
+
 	plainHeadImage, plainHeadTag, plainHeadAgent, _ := resolveImageSettings("head", "head", "community")
 	if plainHeadImage != "" || plainHeadTag != "head" || plainHeadAgent != "" {
 		t.Fatalf("expected plain head to use Docker Hub head tag without agent override, got image=%q tag=%q agent=%q", plainHeadImage, plainHeadTag, plainHeadAgent)
+	}
+}
+
+func TestResolveCommitHeadImageSettingsFindsStagingPair(t *testing.T) {
+	tag := "v2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/rancher/rancher/manifests/" + tag,
+			"/v2/rancher/rancher-agent/manifests/" + tag:
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	previousBases := rancherRegistryBaseURLs
+	rancherRegistryBaseURLs = map[string]string{
+		"stgregistry.suse.com": server.URL,
+		"docker.io":            server.URL,
+		"registry.rancher.com": server.URL,
+	}
+	t.Cleanup(func() {
+		rancherRegistryBaseURLs = previousBases
+	})
+
+	image, imageTag, agentImage, _, err := resolveCommitHeadImageSettings("2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head")
+	if err != nil {
+		t.Fatalf("expected commit head image settings to resolve, got error: %v", err)
+	}
+	if image != "stgregistry.suse.com/rancher/rancher" || imageTag != tag || agentImage != "stgregistry.suse.com/rancher/rancher-agent:"+tag {
+		t.Fatalf("unexpected commit head image settings: image=%q tag=%q agent=%q", image, imageTag, agentImage)
+	}
+}
+
+func TestRancherLatestTagOnlyDoesNotClearCommitHeadImages(t *testing.T) {
+	if shouldUseRancherLatestTagOnly("head", "rancher-latest", "2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head") {
+		t.Fatal("commit-specific head builds must keep discovered explicit image registry settings")
+	}
+	if !shouldUseRancherLatestTagOnly("head", "rancher-latest", "2.13-head") {
+		t.Fatal("minor-line head builds should keep the rancher-latest tag-only behavior")
 	}
 }
 

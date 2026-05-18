@@ -359,7 +359,7 @@ func editAutoModePreflightWithBrowser(configPath string, versions []string) erro
           <div>Remove</div>
         </div>
         <div class="rows" id="rows"></div>
-        <div class="field-help">Examples: 2.14-head, v2.14-head, or head. Leading v is stripped when saved.</div>
+        <div class="field-help">Examples: 2.14-head, 2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head, or head. Leading v is stripped when saved.</div>
         <div class="custom-hostname" id="customHostnameBox" data-enabled="false">
           <label class="checkbox-row">
             <input id="customHostnameToggle" type="checkbox" />

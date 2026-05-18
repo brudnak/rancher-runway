@@ -157,6 +157,11 @@ tf_vars:
 ```
 
 For one HA cluster, use `rancher.version` instead of `rancher.versions`.
+Auto mode accepts release versions, alpha/RC versions, `head`, minor-line head
+builds such as `2.13-head`, and commit-specific head image tags such as
+`2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head`. Commit-specific head
+inputs resolve a compatible chart from the same minor line and use the full
+`v...-head` value as the Rancher image tag.
 
 ### RKE2 Server Layout
 

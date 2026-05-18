@@ -35,6 +35,7 @@ let panelLifecycleMessage = ''
 let manualValidationResults = []
 let manualRKE2Recommendations = []
 let planCommandCopies = []
+let lastResolverFailure = ''
 
 const rowClass = 'grid gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center'
 const inputClass = 'w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100'
@@ -411,6 +412,25 @@ const showNoticeModal = ({ title, body, confirmText = 'Got it' }) => showConfirm
   confirmText,
   showCancel: false
 })
+
+const showResolverFailure = message => {
+  const normalized = String(message || '').trim()
+  if (!normalized) {
+    return
+  }
+  editorErrorBoxEl.textContent = normalized
+  editorStatusBoxEl.textContent = ''
+  setSubmittingState(false)
+  if (lastResolverFailure === normalized) {
+    return
+  }
+  lastResolverFailure = normalized
+  showNoticeModal({
+    title: 'Rancher plan resolution failed',
+    body: normalized,
+    confirmText: 'Review setup'
+  })
+}
 
 const readinessStyles = status => {
   const styles = {
@@ -1347,6 +1367,7 @@ const recommendManualRKE2Versions = async () => {
 }
 
 const beginResolutionUI = () => {
+  lastResolverFailure = ''
   logPanelEl.innerHTML = '<span class="text-zinc-400 dark:text-zinc-500">Waiting for resolver output...</span>'
   if (reviewLogPanelEl) {
     reviewLogPanelEl.innerHTML = '<span class="text-zinc-400 dark:text-zinc-500">Waiting for resolver output...</span>'
@@ -1620,14 +1641,19 @@ const applySetupSnapshot = snapshot => {
     renderPlanCards(snapshot.plan)
   }
   const error = typeof snapshot.error === 'string' ? snapshot.error : ''
+  editorErrorBoxEl.textContent = error
   resolvingErrorBoxEl.textContent = error
   reviewErrorBoxEl.textContent = error
 
   if (snapshot.phase && snapshot.phase !== setupRootEl.dataset.phase) {
     setPhase(snapshot.phase)
   }
-  if (snapshot.phase === 'review' || snapshot.phase === 'done') {
+  if (snapshot.phase === 'review' || snapshot.phase === 'done' || snapshot.phase === 'editor') {
     setSubmittingState(false)
+  }
+  if (snapshot.phase === 'editor' && error) {
+    showResolverFailure(error)
+    stopSetupStatePolling()
   }
 }
 
@@ -1679,7 +1705,7 @@ const connectEventStream = () => {
     switch (payload.type) {
       case 'phase':
         setPhase(payload.phase)
-        if (payload.phase === 'review') {
+        if (payload.phase === 'review' || payload.phase === 'editor') {
           setSubmittingState(false)
           stopSetupStatePolling()
         }
@@ -1695,6 +1721,7 @@ const connectEventStream = () => {
         renderPlanCards(payload.plan)
         break
       case 'error':
+        showResolverFailure(payload.error)
         resolvingErrorBoxEl.textContent = payload.error
         reviewErrorBoxEl.textContent = payload.error
         break

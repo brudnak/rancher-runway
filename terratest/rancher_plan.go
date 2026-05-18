@@ -26,6 +26,7 @@ const (
 
 var rancherRegistryHTTPClient = http.DefaultClient
 var rancherRegistryBaseURLs = map[string]string{}
+var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)-[0-9a-fA-F]{7,40}-head$`)
 
 func prepareRancherConfiguration(totalHAs int) ([]*RancherResolvedPlan, error) {
 	mode := rancherMode()
@@ -167,6 +168,12 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		}
 
 		rancherImage, rancherImageTag, agentImage, imageExplanation := resolveImageSettings(requestedVersion, buildType, resolvedDistro)
+		if buildType == "head" && isCommitHeadRancherVersion(requestedVersion) {
+			rancherImage, rancherImageTag, agentImage, imageExplanation, err = resolveCommitHeadImageSettings(requestedVersion)
+			if err != nil {
+				return nil, fmt.Errorf("resolve Rancher image settings for %s: %w", requestedVersion, err)
+			}
+		}
 		if buildType != "release" && chartVersion == requestedVersion && chartRepoAlias == "rancher-prime" {
 			rancherImage = ""
 			rancherImageTag = ""
@@ -186,7 +193,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		if buildType != "release" && chartVersion == requestedVersion && isExactStagingPrereleaseChart(chartRepoAlias) {
 			explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with explicit staging Rancher image overrides", chartRepoAlias, chartVersion))
 		}
-		if buildType != "release" && chartRepoAlias == "rancher-latest" {
+		if shouldUseRancherLatestTagOnly(buildType, chartRepoAlias, requestedVersion) {
 			rancherImage = ""
 			agentImage = ""
 			explanation = append(explanation, fmt.Sprintf("Using rancher-latest for this %s build, so only the Rancher image tag is overridden to %s", buildType, rancherImageTag))
@@ -379,6 +386,9 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 	case headPattern.MatchString(version):
 		parts := strings.Split(version, "-")
 		return "head", parts[0], nil
+	case commitHeadVersionPattern.MatchString(version):
+		parts := strings.Split(version, "-")
+		return "head", parts[0], nil
 	case alphaPattern.MatchString(version):
 		parts := strings.Split(version, "-")
 		return "alpha", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
@@ -390,6 +400,14 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 	default:
 		return "", "", fmt.Errorf("unsupported rancher.version format %q", version)
 	}
+}
+
+func isCommitHeadRancherVersion(version string) bool {
+	return commitHeadVersionPattern.MatchString(strings.TrimSpace(version))
+}
+
+func shouldUseRancherLatestTagOnly(buildType, chartRepoAlias, requestedVersion string) bool {
+	return buildType != "release" && chartRepoAlias == "rancher-latest" && !isCommitHeadRancherVersion(requestedVersion)
 }
 
 func chooseRancherSourceCandidates(requestedDistro, buildType string) ([]string, string, []string) {
@@ -788,6 +806,63 @@ func resolveImageSettings(requestedVersion, buildType, resolvedDistro string) (s
 		}
 		return "", "v" + requestedVersion, "", []string{"Using released community Rancher chart/image settings"}
 	}
+}
+
+type commitHeadImageCandidate struct {
+	label        string
+	registry     string
+	rancherImage string
+	agentImage   string
+}
+
+func resolveCommitHeadImageSettings(requestedVersion string) (string, string, string, []string, error) {
+	imageTag := "v" + requestedVersion
+	candidates := []commitHeadImageCandidate{
+		{
+			label:        "staging registry",
+			registry:     "stgregistry.suse.com",
+			rancherImage: "stgregistry.suse.com/rancher/rancher",
+			agentImage:   "stgregistry.suse.com/rancher/rancher-agent:" + imageTag,
+		},
+		{
+			label:        "Docker Hub",
+			registry:     "docker.io",
+			rancherImage: "docker.io/rancher/rancher",
+			agentImage:   "docker.io/rancher/rancher-agent:" + imageTag,
+		},
+		{
+			label:        "Rancher registry",
+			registry:     "registry.rancher.com",
+			rancherImage: "registry.rancher.com/rancher/rancher",
+			agentImage:   "registry.rancher.com/rancher/rancher-agent:" + imageTag,
+		},
+	}
+
+	var misses []string
+	for _, candidate := range candidates {
+		serverFound, serverErr := registryImageTagExists(candidate.registry, "rancher/rancher", imageTag)
+		agentFound, agentErr := registryImageTagExists(candidate.registry, "rancher/rancher-agent", imageTag)
+		if serverErr == nil && agentErr == nil && serverFound && agentFound {
+			return candidate.rancherImage, imageTag, candidate.agentImage, []string{
+				fmt.Sprintf("Found commit-specific head images in %s; using %s:%s and %s", candidate.label, candidate.rancherImage, imageTag, candidate.agentImage),
+			}, nil
+		}
+
+		var detail []string
+		if serverErr != nil {
+			detail = append(detail, "rancher/rancher lookup error: "+serverErr.Error())
+		} else if !serverFound {
+			detail = append(detail, "rancher/rancher missing")
+		}
+		if agentErr != nil {
+			detail = append(detail, "rancher/rancher-agent lookup error: "+agentErr.Error())
+		} else if !agentFound {
+			detail = append(detail, "rancher/rancher-agent missing")
+		}
+		misses = append(misses, fmt.Sprintf("%s (%s)", candidate.label, strings.Join(detail, "; ")))
+	}
+
+	return "", "", "", nil, fmt.Errorf("commit-specific head tag %s was not found as a matching Rancher server and agent image pair in checked registries: %s", imageTag, strings.Join(misses, "; "))
 }
 
 func isExactCommunityPrereleaseChart(chartRepoAlias string) bool {
