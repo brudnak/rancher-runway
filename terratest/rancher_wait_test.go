@@ -37,7 +37,7 @@ func TestSummarizeRancherPodsIncludesUnreadyPodsWhenWebhookMissing(t *testing.T)
 	if ready {
 		t.Fatal("expected pods not to be ready")
 	}
-	if !strings.Contains(summary, "rancher-webhook") || !strings.Contains(summary, "not ready") {
+	if !strings.Contains(summary, "rancher-webhook") || !strings.Contains(summary, "not ready") || !strings.Contains(summary, "pod groups") {
 		t.Fatalf("expected missing webhook and unready pod details, got %q", summary)
 	}
 }
@@ -74,5 +74,21 @@ func TestPodReadyForSignoff(t *testing.T) {
 				t.Fatalf("podReadyForSignoff() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestLastNonEmptyLines(t *testing.T) {
+	got := lastNonEmptyLines("one\ntwo\nthree\n", 2)
+	if got != "two\nthree" {
+		t.Fatalf("lastNonEmptyLines() = %q, want two trailing lines", got)
+	}
+}
+
+func TestSanitizeKubeDiagnosticOutput(t *testing.T) {
+	t.Setenv("RANCHER_BOOTSTRAP_PASSWORD", "secret-value")
+
+	got := sanitizeKubeDiagnosticOutput("password=secret-value")
+	if strings.Contains(got, "secret-value") {
+		t.Fatalf("expected secret to be redacted, got %q", got)
 	}
 }

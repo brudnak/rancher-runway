@@ -73,30 +73,6 @@ variable "common_tags" {
   description = "Common ownership and run tags applied to taggable AWS resources."
 }
 
-variable "gpu_worker_enabled" {
-  type        = bool
-  description = "Whether to add one worker-only GPU node to this HA cluster."
-  default     = false
-}
-
-variable "gpu_worker_instance_type" {
-  type        = string
-  description = "EC2 instance type for the optional worker-only GPU node."
-  default     = "g5.xlarge"
-}
-
-variable "gpu_worker_ami" {
-  type        = string
-  description = "AMI ID for the optional worker-only GPU node."
-  default     = ""
-}
-
-variable "gpu_worker_subnet_id" {
-  type        = string
-  description = "Subnet ID for the optional worker-only GPU node."
-  default     = ""
-}
-
 locals {
   resource_name_prefix = var.aws_prefix
   dns_label            = trimspace(var.custom_hostname_prefix) != "" ? trimspace(var.custom_hostname_prefix) : local.resource_name_prefix
@@ -123,41 +99,6 @@ resource "aws_instance" "aws_instance" {
   tags = merge(var.common_tags, {
     Name = "${local.resource_name_prefix}-${count.index + 1}"
   })
-}
-
-resource "aws_instance" "gpu_worker" {
-  count                  = var.gpu_worker_enabled ? 1 : 0
-  ami                    = trimspace(var.gpu_worker_ami) != "" ? trimspace(var.gpu_worker_ami) : var.aws_ami
-  instance_type          = var.gpu_worker_instance_type
-  subnet_id              = trimspace(var.gpu_worker_subnet_id) != "" ? trimspace(var.gpu_worker_subnet_id) : var.aws_subnet_id
-  vpc_security_group_ids = [var.aws_security_group_id]
-  key_name               = var.aws_pem_key_name
-  iam_instance_profile   = aws_iam_instance_profile.ssm_profile.name
-
-  root_block_device {
-    volume_size = 200
-    tags = merge(var.common_tags, {
-      Name                         = "${local.resource_name_prefix}-gpu-worker"
-      HA_Rancher_RKE2_GPU_Worker   = "true"
-      HA_Rancher_RKE2_GPU_Purpose  = "rancher-ai-liz"
-      HA_Rancher_RKE2_GPU_Warning  = "do-not-leave-running-unused"
-      HA_Rancher_RKE2_GPU_Instance = var.gpu_worker_instance_type
-    })
-  }
-
-  tags = merge(var.common_tags, {
-    Name                         = "${local.resource_name_prefix}-gpu-worker"
-    Role                         = "rke2-gpu-worker"
-    HA_Rancher_RKE2_GPU_Worker   = "true"
-    HA_Rancher_RKE2_GPU_Purpose  = "rancher-ai-liz"
-    HA_Rancher_RKE2_GPU_Warning  = "do-not-leave-running-unused"
-    HA_Rancher_RKE2_GPU_Instance = var.gpu_worker_instance_type
-    HA_Rancher_RKE2_GPU_AMI      = trimspace(var.gpu_worker_ami) != "" ? trimspace(var.gpu_worker_ami) : var.aws_ami
-  })
-
-  timeouts {
-    create = "6m"
-  }
 }
 
 # Application Load Balancer for Rancher UI. Public TLS terminates at the ALB,
@@ -313,26 +254,6 @@ output "server4_private_ip" {
 
 output "server5_private_ip" {
   value = try(aws_instance.aws_instance[4].private_ip, "")
-}
-
-output "gpu_worker_ip" {
-  value = var.gpu_worker_enabled ? aws_instance.gpu_worker[0].public_ip : ""
-}
-
-output "gpu_worker_private_ip" {
-  value = var.gpu_worker_enabled ? aws_instance.gpu_worker[0].private_ip : ""
-}
-
-output "gpu_worker_instance_type" {
-  value = var.gpu_worker_enabled ? var.gpu_worker_instance_type : ""
-}
-
-output "gpu_worker_ami" {
-  value = var.gpu_worker_enabled ? (trimspace(var.gpu_worker_ami) != "" ? trimspace(var.gpu_worker_ami) : var.aws_ami) : ""
-}
-
-output "gpu_worker_subnet_id" {
-  value = var.gpu_worker_enabled ? (trimspace(var.gpu_worker_subnet_id) != "" ? trimspace(var.gpu_worker_subnet_id) : var.aws_subnet_id) : ""
 }
 
 output "aws_lb" {

@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	harancher "github.com/brudnak/ha-rancher-rke2/terratest"
 )
 
 func TestShouldImportShellEnv(t *testing.T) {
@@ -79,40 +77,6 @@ func TestLifecycleCloseBlockedDialog(t *testing.T) {
 			}
 			if !strings.Contains(message, tc.wantMessage) {
 				t.Fatalf("message = %q, want it to contain %q", message, tc.wantMessage)
-			}
-		})
-	}
-}
-
-func TestGPUCloseWarningDialog(t *testing.T) {
-	tests := []struct {
-		name        string
-		summary     harancher.GPUInfrastructureSummary
-		wantMessage string
-	}{
-		{
-			name:        "single gpu",
-			summary:     harancher.GPUInfrastructureSummary{Active: true, Count: 1},
-			wantMessage: "One GPU worker node appears to be deployed",
-		},
-		{
-			name:        "multiple gpus",
-			summary:     harancher.GPUInfrastructureSummary{Active: true, Count: 2},
-			wantMessage: "2 GPU worker nodes appear to be deployed",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			title, message := gpuCloseWarningDialog(tc.summary)
-			if title != "GPU infrastructure is active" {
-				t.Fatalf("title = %q", title)
-			}
-			if !strings.Contains(message, tc.wantMessage) {
-				t.Fatalf("message = %q, want it to contain %q", message, tc.wantMessage)
-			}
-			if !strings.Contains(message, "Destroy page") {
-				t.Fatalf("message = %q, want cleanup guidance", message)
 			}
 		})
 	}

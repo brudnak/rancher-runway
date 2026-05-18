@@ -65,55 +65,9 @@ type EditablePreflightConfig struct {
 	BootstrapPassword string            `json:"bootstrapPassword"`
 	PreloadImages     bool              `json:"preloadImages"`
 	ServerCount       int               `json:"serverCount"`
-	GPUWorker         GPUWorkerConfig   `json:"gpuWorker"`
 	UserFirstName     string            `json:"userFirstName"`
 	UserLastName      string            `json:"userLastName"`
 	TFVars            map[string]string `json:"tfVars"`
-}
-
-type GPUWorkerConfig struct {
-	Enabled      bool   `json:"enabled"`
-	Profile      string `json:"profile"`
-	InstanceType string `json:"instanceType"`
-	AMI          string `json:"ami"`
-	SubnetID     string `json:"subnetId"`
-}
-
-func CurrentGPUWorkerConfig() GPUWorkerConfig {
-	enabled := viper.GetBool("gpu_worker.enabled")
-	profile := NormalizeGPUWorkerProfile(viper.GetString("gpu_worker.profile"))
-	instanceType := GPUWorkerInstanceType(profile)
-	if configured := strings.TrimSpace(viper.GetString("gpu_worker.instance_type")); configured != "" {
-		instanceType = configured
-	}
-
-	return GPUWorkerConfig{
-		Enabled:      enabled,
-		Profile:      profile,
-		InstanceType: instanceType,
-		AMI:          strings.TrimSpace(viper.GetString("gpu_worker.ami")),
-		SubnetID:     strings.TrimSpace(viper.GetString("gpu_worker.subnet_id")),
-	}
-}
-
-func NormalizeGPUWorkerProfile(profile string) string {
-	switch strings.ToLower(strings.TrimSpace(profile)) {
-	case "", "standard", "small":
-		return "standard"
-	case "large":
-		return "large"
-	default:
-		return "standard"
-	}
-}
-
-func GPUWorkerInstanceType(profile string) string {
-	switch NormalizeGPUWorkerProfile(profile) {
-	case "large":
-		return "p5.4xlarge"
-	default:
-		return "g5.xlarge"
-	}
 }
 
 func CurrentRKE2ServerCount() int {
@@ -161,7 +115,6 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 		BootstrapPassword: viper.GetString("rancher.bootstrap_password"),
 		PreloadImages:     viper.GetBool("rke2.preload_images"),
 		ServerCount:       CurrentRKE2ServerCount(),
-		GPUWorker:         CurrentGPUWorkerConfig(),
 		UserFirstName:     OwnerFirstName(),
 		UserLastName:      OwnerLastName(),
 		TFVars:            tfVars,

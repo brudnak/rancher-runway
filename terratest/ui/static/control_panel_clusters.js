@@ -137,12 +137,9 @@ export const createClusterPanel = ({
   const pendingLeaderHighlights = new Map()
   const collapsedClusters = new Map()
   const collapsedPods = new Map()
-  const collapsedGPUCommands = new Map()
   const initializedCollapseState = new Set()
   const kubeconfigPathActionFeedback = new Map()
   const kubeconfigPathActionTimers = new Map()
-  const gpuCommandCopyFeedback = new Map()
-  const gpuCommandCopyTimers = new Map()
 
   const initializeCollapseState = cluster => {
     if (initializedCollapseState.has(cluster.id)) {
@@ -152,9 +149,6 @@ export const createClusterPanel = ({
     if (cluster.type === 'downstream') {
       collapsedClusters.set(cluster.id, true)
       collapsedPods.set(cluster.id, true)
-    }
-    if (cluster.type === 'local' && cluster.gpuWorkerIp) {
-      collapsedGPUCommands.set(cluster.id, false)
     }
   }
 
@@ -218,284 +212,6 @@ export const createClusterPanel = ({
       <button type="button" data-action="download" data-cluster="${escapeHtml(cluster.id)}"${downloading ? ' disabled' : ''} class="inline-flex min-h-11 max-w-full items-center justify-center whitespace-normal rounded-lg bg-emerald-500 px-4 py-2 text-center text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400 disabled:cursor-default disabled:opacity-70">${downloadSpinner}${downloading ? 'Preparing kubeconfig' : downloadLabel}</button>
       <button type="button" data-action="copy-kubeconfig" data-cluster="${escapeHtml(cluster.id)}"${copying ? ' disabled' : ''} class="inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:cursor-default disabled:opacity-70 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">${copySpinner}${copying ? 'Copying' : 'Copy kubeconfig'}</button>
       ${copyHelmButtons}
-    `
-  }
-
-  const renderGPUWorkerPanel = cluster => {
-    if (cluster.type !== 'local' || !cluster.gpuWorkerIp) {
-      return ''
-    }
-
-    const instanceType = cluster.gpuWorkerInstanceType || 'GPU instance'
-    const kubeconfigPath = cluster.kubeconfigPath || '/path/to/kube_config.yaml'
-    const recommendedLizModel = instanceType === 'p5.4xlarge' ? 'gpt-oss:120b' : 'gpt-oss:20b'
-    const modelDetail = instanceType === 'p5.4xlarge'
-      ? 'The large GPU profile matches the gpt-oss:120b requirement from the Liz quick start. Use gpt-oss:20b instead if you only need a cheaper smoke test.'
-      : 'The standard GPU profile is sized for gpt-oss:20b, the smaller local model in the Liz quick start.'
-    const commands = [
-      {
-        title: 'Use this kubeconfig',
-        tone: 'Required',
-        detail: 'Sets this terminal session to the local HA cluster.',
-        command: `export KUBECONFIG="${kubeconfigPath}"`
-      },
-      {
-        title: 'Choose the local Ollama model',
-        tone: 'Required',
-        detail: modelDetail,
-        command: `export LIZ_MODEL="${recommendedLizModel}"`
-      },
-      {
-        title: 'Confirm the GPU worker joined',
-        tone: 'Check',
-        detail: 'Shows the worker label and EC2 GPU instance type.',
-        command: 'kubectl get nodes -L ha-rancher-rke2/gpu-worker -L ha-rancher-rke2/gpu-instance-type'
-      },
-      {
-        title: 'Add the Liz GPU worker label',
-        tone: 'Required',
-        detail: 'Marks only this worker as eligible for Ollama/Liz GPU scheduling.',
-        command: `GPU_NODE="$(kubectl get nodes -l ha-rancher-rke2/gpu-worker=true -o jsonpath='{.items[0].metadata.name}')"
-test -n "$GPU_NODE"
-kubectl label node "$GPU_NODE" liz-ai.suse.com/gpu-worker=true --overwrite`
-      },
-      {
-        title: 'Install the NVIDIA GPU Operator for RKE2',
-        tone: 'Required',
-        detail: 'Uses the RKE2 HelmChart path, RKE2 containerd socket, and disables driver install because the GPU AMI already provides NVIDIA drivers.',
-        command: `kubectl apply -f - <<'EOF'
-apiVersion: helm.cattle.io/v1
-kind: HelmChart
-metadata:
-  name: gpu-operator
-  namespace: kube-system
-spec:
-  repo: https://helm.ngc.nvidia.com/nvidia
-  chart: gpu-operator
-  version: v25.10.1
-  targetNamespace: gpu-operator
-  createNamespace: true
-  valuesContent: |-
-    driver:
-      enabled: false
-    toolkit:
-      env:
-      - name: CONTAINERD_SOCKET
-        value: /run/k3s/containerd/containerd.sock
-EOF`
-      },
-      {
-        title: 'Watch GPU Operator pods',
-        tone: 'Verify',
-        detail: 'Waits for the RKE2 toolkit and device plugin daemonsets before scheduling GPU workloads.',
-        command: `until kubectl -n gpu-operator get ds/nvidia-container-toolkit-daemonset ds/nvidia-device-plugin-daemonset >/dev/null 2>&1; do
-  sleep 10
-done
-kubectl -n gpu-operator rollout status ds/nvidia-container-toolkit-daemonset --timeout=30m
-kubectl -n gpu-operator rollout status ds/nvidia-device-plugin-daemonset --timeout=30m
-kubectl -n gpu-operator get pods -o wide`
-      },
-      {
-        title: 'Verify GPU capacity on the worker',
-        tone: 'Verify',
-        detail: 'Stops early if Kubernetes still has not advertised allocatable GPU capacity.',
-        command: `GPU_NODE="$(kubectl get nodes -l ha-rancher-rke2/gpu-worker=true -o jsonpath='{.items[0].metadata.name}')"
-GPU_COUNT="$(kubectl get node "$GPU_NODE" -o jsonpath='{.status.allocatable.nvidia\\.com/gpu}')"
-test "\${GPU_COUNT:-0}" -ge 1
-echo "GPU node $GPU_NODE has $GPU_COUNT allocatable NVIDIA GPU(s)."
-kubectl describe node "$GPU_NODE" | grep -A8 "nvidia.com/gpu"`
-      },
-      {
-        title: 'Run a CUDA smoke test',
-        tone: 'Verify',
-        detail: 'Runs only after allocatable GPU exists, waits for completion, then prints the benchmark output.',
-        command: `GPU_NODE="$(kubectl get nodes -l liz-ai.suse.com/gpu-worker=true -o jsonpath='{.items[0].metadata.name}')"
-GPU_COUNT="$(kubectl get node "$GPU_NODE" -o jsonpath='{.status.allocatable.nvidia\\.com/gpu}')"
-test "\${GPU_COUNT:-0}" -ge 1
-kubectl delete pod nbody-gpu-benchmark --ignore-not-found
-kubectl apply -f - <<'EOF'
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nbody-gpu-benchmark
-  namespace: default
-spec:
-  restartPolicy: OnFailure
-  nodeSelector:
-    liz-ai.suse.com/gpu-worker: "true"
-  containers:
-  - name: cuda-container
-    image: nvcr.io/nvidia/k8s/cuda-sample:nbody
-    args: ["nbody", "-gpu", "-benchmark"]
-    resources:
-      limits:
-        nvidia.com/gpu: 1
-EOF
-kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/nbody-gpu-benchmark --timeout=10m || {
-  kubectl describe pod nbody-gpu-benchmark
-  kubectl logs pod/nbody-gpu-benchmark --all-containers --tail=100 || true
-  exit 1
-}
-kubectl logs pod/nbody-gpu-benchmark --all-containers
-kubectl delete pod nbody-gpu-benchmark --ignore-not-found`
-      },
-      {
-        title: 'Deploy Ollama on the GPU worker',
-        tone: 'Required',
-        detail: 'Creates an in-cluster Ollama service named ollama in the Rancher AI agent namespace, matching the SUSE quick start URL.',
-        command: `kubectl apply -f - <<'EOF'
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cattle-ai-agent-system
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ollama
-  namespace: cattle-ai-agent-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ollama
-  template:
-    metadata:
-      labels:
-        app: ollama
-    spec:
-      nodeSelector:
-        liz-ai.suse.com/gpu-worker: "true"
-      containers:
-      - name: ollama
-        image: ollama/ollama:latest
-        env:
-        - name: OLLAMA_HOST
-          value: 0.0.0.0:11434
-        ports:
-        - name: http
-          containerPort: 11434
-        resources:
-          limits:
-            nvidia.com/gpu: 1
-        volumeMounts:
-        - name: ollama-data
-          mountPath: /root/.ollama
-      volumes:
-      - name: ollama-data
-        emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ollama
-  namespace: cattle-ai-agent-system
-spec:
-  selector:
-    app: ollama
-  ports:
-  - name: http
-    port: 11434
-    targetPort: 11434
-EOF`
-      },
-      {
-        title: 'Pull the model into Ollama',
-        tone: 'Required',
-        detail: 'This can take a while; the model is stored in the Ollama pod volume for this test run.',
-        command: `kubectl -n cattle-ai-agent-system rollout status deploy/ollama --timeout=15m
-kubectl -n cattle-ai-agent-system exec deploy/ollama -- ollama pull "$LIZ_MODEL"
-kubectl -n cattle-ai-agent-system exec deploy/ollama -- ollama list`
-      },
-      {
-        title: 'Create Rancher AI agent values',
-        tone: 'Required',
-        detail: 'Matches the SUSE quick start values, using the local Ollama service and selected model.',
-        command: `cat > /tmp/rancher-ai-values.yaml <<EOF
-ollamaLlmModel: "\${LIZ_MODEL:-gpt-oss:20b}"
-ollamaUrl: "http://ollama:11434"
-activeLlm: "ollama"
-EOF`
-      },
-      {
-        title: 'Install the Rancher AI agent',
-        tone: 'Required',
-        detail: 'Deploys the agent and MCP chart from the SUSE Rancher AI quick start.',
-        command: `helm upgrade --install rancher-ai-agent \\
-  --namespace cattle-ai-agent-system \\
-  --create-namespace \\
-  -f /tmp/rancher-ai-values.yaml \\
-  oci://registry.suse.com/rancher/charts/rancher-ai-agent`
-      },
-      {
-        title: 'Verify the Rancher AI backend',
-        tone: 'Verify',
-        detail: 'Checks that Ollama and the Rancher AI agent pods are up.',
-        command: `kubectl -n cattle-ai-agent-system wait --for=condition=Ready pod -l app=ollama --timeout=10m
-kubectl -n cattle-ai-agent-system wait --for=condition=Ready pod -l app.kubernetes.io/instance=rancher-ai-agent --timeout=10m
-kubectl -n cattle-ai-agent-system get pods -o wide`
-      },
-      {
-        title: 'Open Rancher to install the UI extension',
-        tone: 'Manual',
-        detail: 'Required by the SUSE quick start: Extensions > add official repositories > install AI Assistant > reload Rancher UI.',
-        command: cluster.rancherUrl ? `open "${cluster.rancherUrl}/dashboard/c/local/extensions"` : 'echo "Open Rancher UI > Extensions, add official repositories, install AI Assistant, then reload the Rancher UI."'
-      }
-    ]
-    const collapsed = collapsedGPUCommands.get(cluster.id) === true
-    const copyButtonClass = 'inline-flex min-h-9 items-center justify-center rounded-md border px-3 py-1.5 text-xs font-semibold disabled:cursor-default disabled:opacity-70'
-    const commandRows = commands.map((item, index) => {
-      const feedback = gpuCommandCopyFeedback.get(`${cluster.id}:${index}`)
-      const copied = feedback === 'success'
-      const failed = feedback === 'error'
-      const buttonTone = failed
-        ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200'
-        : copied
-          ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200'
-          : 'border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-white/15 dark:bg-white/[0.08] dark:text-zinc-100 dark:hover:bg-white/[0.12]'
-      const toneClass = item.tone === 'Required'
-        ? 'bg-rose-100 text-rose-800 dark:bg-rose-500/15 dark:text-rose-200'
-        : item.tone === 'Verify'
-          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200'
-          : 'bg-sky-100 text-sky-800 dark:bg-sky-500/15 dark:text-sky-200'
-
-      return `
-        <div data-gpu-command-row class="grid gap-3 rounded-lg border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-zinc-950/70">
-          <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(item.title)}</span>
-                <span class="rounded-full px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide ${toneClass}">${escapeHtml(item.tone)}</span>
-              </div>
-              <div class="mt-1 text-xs leading-5 text-zinc-600 dark:text-zinc-300">${escapeHtml(item.detail)}</div>
-            </div>
-            <button type="button" data-action="copy-gpu-command" data-cluster="${escapeHtml(cluster.id)}" data-command-index="${index}" class="${copyButtonClass} ${buttonTone}">${failed ? 'Copy failed' : copied ? 'Copied' : 'Copy'}</button>
-          </div>
-          <pre class="max-w-full overflow-auto whitespace-pre rounded-md border border-zinc-200 bg-zinc-50 p-3 font-mono text-xs leading-6 text-zinc-900 dark:border-white/10 dark:bg-black/35 dark:text-zinc-100"><code data-gpu-command-text>${escapeHtml(item.command)}</code></pre>
-        </div>
-      `
-    }).join('')
-
-    return `
-      <div class="mt-4 overflow-hidden rounded-xl border border-rose-200 bg-rose-50 text-zinc-950 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-zinc-50">
-        <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <span>
-            <span class="block text-sm font-semibold text-rose-900 dark:text-rose-100">Active GPU worker node in slot ${escapeHtml(cluster.runId || 'current')}</span>
-            <span class="mt-1 block text-sm leading-6 text-rose-800/85 dark:text-rose-100/75">${escapeHtml(instanceType)} at ${escapeHtml(cluster.gpuWorkerIp)}${cluster.gpuWorkerSubnetId ? ` in ${escapeHtml(cluster.gpuWorkerSubnetId)}` : ''}${cluster.gpuWorkerAmi ? ` using ${escapeHtml(cluster.gpuWorkerAmi)}` : ''}. Do not leave running unused.</span>
-          </span>
-          <button type="button" data-action="toggle-gpu-commands" data-cluster="${escapeHtml(cluster.id)}" class="inline-flex min-h-10 items-center justify-center rounded-lg bg-rose-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400">
-            ${collapsed ? 'Show GPU setup commands' : 'Hide GPU setup commands'}
-          </button>
-        </div>
-        ${collapsed ? '' : `
-        <div class="border-t border-rose-200 p-4 dark:border-rose-500/25">
-          <div class="mb-3 text-sm leading-6 text-rose-900 dark:text-rose-100">
-            Run these in order to prepare the RKE2 GPU worker, run Ollama on it, install the Rancher AI agent, and open the required Rancher UI extension step.
-          </div>
-          <div class="grid gap-3">${commandRows}</div>
-        </div>
-        `}
-      </div>
     `
   }
 
@@ -666,7 +382,6 @@ kubectl -n cattle-ai-agent-system get pods -o wide`
             ${namespace}
             ${clusterID}
           </div>
-          ${renderGPUWorkerPanel(cluster)}
           ${leaderSummary}
           ${renderPodsTable(cluster, pods, changedLeader)}
         `}
@@ -820,30 +535,11 @@ kubectl -n cattle-ai-agent-system get pods -o wide`
     renderLastState()
   }
 
-  const toggleGPUCommands = clusterId => {
-    collapsedGPUCommands.set(clusterId, collapsedGPUCommands.get(clusterId) !== true)
-    renderLastState()
-  }
-
-  const flashGPUCommandCopy = (clusterId, commandIndex, status) => {
-    const key = `${clusterId}:${commandIndex}`
-    window.clearTimeout(gpuCommandCopyTimers.get(key))
-    gpuCommandCopyFeedback.set(key, status)
-    renderLastState()
-    gpuCommandCopyTimers.set(key, window.setTimeout(() => {
-      if (gpuCommandCopyFeedback.get(key) === status) {
-        gpuCommandCopyFeedback.delete(key)
-        renderLastState()
-      }
-    }, 1800))
-  }
 
   return {
     flashKubeconfigPathAction,
-    flashGPUCommandCopy,
     renderClusters,
     toggleCluster,
-    toggleGPUCommands,
     togglePods,
     updateLeaderTracking
   }

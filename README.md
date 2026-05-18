@@ -11,7 +11,6 @@ For repository-owned GitHub Actions automation, see [docs/README.md](docs/README
 - One or more RKE2 management clusters on AWS: single-server, 3-server HA, or 5-server HA
 - AWS ALB, ACM, and Route53 records in front of Rancher
 - Rancher installed with external TLS termination at the ALB
-- Optional worker-only GPU nodes for Rancher AI/Liz testing
 - Local kubeconfigs, install artifacts, run records, lifecycle logs, and cost history
 - A local-only control panel for setup, readiness, status, logs, AWS inventory, and cleanup
 
@@ -136,13 +135,6 @@ rke2:
   server_count: 3
   preload_images: true
 
-gpu_worker:
-  enabled: false
-  profile: standard
-  instance_type: g5.xlarge
-  ami: ""
-  subnet_id: ""
-
 total_has: 2
 
 user:
@@ -176,8 +168,7 @@ cluster gets:
 - `5`: expanded HA layout for larger cluster testing, with higher cost and longer setup.
 
 RKE2 server nodes are schedulable by default, so a single-server install can run
-Rancher without separate worker nodes. Optional GPU workers remain worker-only
-agent nodes and are added on top of the selected server layout.
+Rancher without separate worker nodes.
 
 ### Manual Mode
 
@@ -233,35 +224,18 @@ destroyed or the config is changed.
 The local control panel is bound to `127.0.0.1` only. It provides:
 
 - Local preflight checks for tools, `tool-config.yml`, owner fields, and required environment variables
-- Interactive setup for auto/manual Rancher plans, custom DNS, and optional GPU workers
+- Interactive setup for auto/manual Rancher plans and custom DNS
 - Guarded lifecycle launchers for setup, readiness, and cleanup
 - Run-slot overview with per-slot logs, Terraform paths, hostnames, and destroy actions
 - Per-cluster Rancher URL, kubeconfig path, reachability, and `cattle-system` visibility
 - Recent pod logs, live log streaming, and active Rancher leader detection
 - AWS inventory for resources associated with recorded slots and owner tags
 - Cleanup cost estimates and a local cost ledger
-- GPU infrastructure warnings, timed reminders, and reminder settings
 
 The macOS app also protects active work:
 
 - Closing the app is blocked while setup, readiness, or cleanup is running.
-- Closing the app with active GPU infrastructure shows a warning before exiting.
 - `make setup` refuses to replace the app while the app or lifecycle operations are active.
-
-## GPU Workers
-
-Set `gpu_worker.enabled: true` to add one worker-only GPU node per HA cluster.
-Profiles map to the expected instance families:
-
-- `standard`: `g5.xlarge`, 1x NVIDIA A10G, 24 GB GPU memory
-- `large`: `p5.4xlarge`, 1x NVIDIA H100, 80 GB GPU memory
-
-GPU workers are intended for Rancher AI/Liz testing and should not be left
-running unused. The panel surfaces GPU state in the header, cluster details,
-run slots, close warnings, and timed reminders. Timed reminders default to 15
-minutes and can be changed to 30 minutes or 1 hour from Settings. Disabling the
-reminders requires typing `disable gpu reminders`; close-time GPU warnings
-remain active.
 
 ## Cleanup
 

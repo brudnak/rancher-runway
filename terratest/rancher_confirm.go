@@ -353,11 +353,6 @@ func openBrowser(targetURL string) error {
 
 func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 	sections := []string{"Continue with this Rancher plan?"}
-	gpuEnabled := viper.GetBool("gpu_worker.enabled")
-	gpuInstanceType := strings.TrimSpace(viper.GetString("gpu_worker.instance_type"))
-	if gpuInstanceType == "" {
-		gpuInstanceType = "g5.xlarge"
-	}
 
 	for i, plan := range plans {
 		if plan == nil {
@@ -376,10 +371,6 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 		if plan.RecommendedRKE2Version != "" {
 			sectionLines = append(sectionLines, "Resolved RKE2/K8s: "+plan.RecommendedRKE2Version)
 		}
-		if gpuEnabled {
-			sectionLines = append(sectionLines, fmt.Sprintf("GPU worker: enabled, one %s worker-only node will join this HA for Rancher AI/Liz testing", gpuInstanceType))
-			sectionLines = append(sectionLines, "GPU warning: do not leave this run slot running unused")
-		}
 		for commandIndex, helmCommand := range plan.HelmCommands {
 			sectionLines = append(sectionLines, fmt.Sprintf("Helm command %d:", commandIndex+1))
 			sectionLines = append(sectionLines, sanitizeHelmCommandForDialog(helmCommand))
@@ -392,11 +383,6 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 }
 
 func logResolvedPlans(plans []*RancherResolvedPlan) {
-	gpuEnabled := viper.GetBool("gpu_worker.enabled")
-	gpuInstanceType := strings.TrimSpace(viper.GetString("gpu_worker.instance_type"))
-	if gpuInstanceType == "" {
-		gpuInstanceType = "g5.xlarge"
-	}
 	for i, plan := range plans {
 		log.Printf("[resolver] Rancher resolution summary for HA %d:", i+1)
 		log.Printf("[resolver] Requested version: %s", plan.RequestedVersion)
@@ -416,9 +402,6 @@ func logResolvedPlans(plans []*RancherResolvedPlan) {
 		log.Printf("[resolver] Support matrix: %s", plan.SupportMatrixURL)
 		log.Printf("[resolver] Recommended RKE2 version: %s", plan.RecommendedRKE2Version)
 		log.Printf("[resolver] Resolved installer SHA256: %s", plan.InstallerSHA256)
-		if gpuEnabled {
-			log.Printf("[resolver] GPU worker: enabled for HA %d with one %s worker-only node; do not leave this run slot running unused", i+1, gpuInstanceType)
-		}
 		for _, explanation := range plan.Explanation {
 			log.Printf("[resolver] Reason: %s", explanation)
 		}

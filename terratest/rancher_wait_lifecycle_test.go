@@ -108,6 +108,7 @@ func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initial
 		time.Sleep(20 * time.Second)
 	}
 
+	logRancherReadinessDiagnostics(kubeconfigPath, instanceNum)
 	return fmt.Errorf("[ha-%d] timed out after %s waiting for Rancher readiness", instanceNum, timeout)
 }
 
@@ -215,7 +216,7 @@ func summarizeRancherPods(pods []podView) (bool, string) {
 
 	switch {
 	case len(missing) > 0:
-		summary := fmt.Sprintf("waiting for pods: %s (found %d relevant pods)", strings.Join(missing, ", "), interesting)
+		summary := fmt.Sprintf("waiting for pod groups: %s (found %d relevant pods)", strings.Join(missing, ", "), interesting)
 		if len(notReady) > 0 {
 			summary += "; not ready: " + strings.Join(notReady, "; ")
 		}
@@ -238,6 +239,83 @@ func podReadyForSignoff(pod podView) bool {
 		return false
 	}
 	return strings.EqualFold(pod.Status, "Running")
+}
+
+func logRancherReadinessDiagnostics(kubeconfigPath string, instanceNum int) {
+	if _, err := os.Stat(kubeconfigPath); err != nil {
+		log.Printf("[ready][ha-%d][diagnostics] kubeconfig not available at %s: %v", instanceNum, kubeconfigPath, err)
+		return
+	}
+
+	log.Printf("[ready][ha-%d][diagnostics] collecting bounded cattle-system diagnostics", instanceNum)
+	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system pods", 120, "get", "pods", "-n", "cattle-system", "-o", "wide")
+	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system deployments", 120, "get", "deployments", "-n", "cattle-system", "-o", "wide")
+	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system services", 120, "get", "svc,endpoints", "-n", "cattle-system", "-o", "wide")
+	logKubectlDiagnostic(kubeconfigPath, instanceNum, "recent cattle-system events", 120, "get", "events", "-n", "cattle-system", "--sort-by=.lastTimestamp")
+
+	pods, err := fetchRelevantPods(kubeconfigPath)
+	if err != nil {
+		log.Printf("[ready][ha-%d][diagnostics] failed to list Rancher pods: %v", instanceNum, err)
+		return
+	}
+	for _, pod := range pods {
+		name := strings.ToLower(pod.Name)
+		if !strings.HasPrefix(name, "rancher-") {
+			continue
+		}
+		namespace := strings.TrimSpace(pod.Namespace)
+		if namespace == "" {
+			namespace = "cattle-system"
+		}
+		logKubectlDiagnostic(kubeconfigPath, instanceNum, fmt.Sprintf("describe pod %s/%s", namespace, pod.Name), 180, "describe", "pod", pod.Name, "-n", namespace)
+		logKubectlDiagnostic(kubeconfigPath, instanceNum, fmt.Sprintf("logs pod %s/%s", namespace, pod.Name), 160, "logs", "pod/"+pod.Name, "-n", namespace, "--all-containers", "--tail=120")
+		if pod.Restarts > 0 {
+			logKubectlDiagnostic(kubeconfigPath, instanceNum, fmt.Sprintf("previous logs pod %s/%s", namespace, pod.Name), 160, "logs", "pod/"+pod.Name, "-n", namespace, "--all-containers", "--previous", "--tail=120")
+		}
+	}
+}
+
+func logKubectlDiagnostic(kubeconfigPath string, instanceNum int, title string, maxLines int, args ...string) {
+	output, err := runKubectlOutput(kubeconfigPath, args...)
+	if err != nil {
+		log.Printf("[ready][ha-%d][diagnostics] %s failed: %v", instanceNum, title, err)
+		return
+	}
+	output = sanitizeKubeDiagnosticOutput(output)
+	output = lastNonEmptyLines(output, maxLines)
+	if output == "" {
+		output = "(no output)"
+	}
+	log.Printf("[ready][ha-%d][diagnostics] %s:\n%s", instanceNum, title, output)
+}
+
+func sanitizeKubeDiagnosticOutput(output string) string {
+	replacements := []string{
+		viper.GetString("rancher.bootstrap_password"),
+		os.Getenv("RANCHER_BOOTSTRAP_PASSWORD"),
+		os.Getenv("LINODE_TOKEN"),
+		os.Getenv("DOCKERHUB_PASSWORD"),
+	}
+	for _, value := range replacements {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		output = strings.ReplaceAll(output, value, "***")
+	}
+	return output
+}
+
+func lastNonEmptyLines(output string, maxLines int) string {
+	output = strings.TrimSpace(output)
+	if output == "" || maxLines <= 0 {
+		return output
+	}
+	lines := strings.Split(output, "\n")
+	if len(lines) <= maxLines {
+		return output
+	}
+	return strings.Join(lines[len(lines)-maxLines:], "\n")
 }
 
 func durationFromEnv(name string, fallback time.Duration) time.Duration {

@@ -14,13 +14,22 @@ func maskGitHubActionsValue(value string) {
 	if value == "" {
 		return
 	}
+	masked := map[string]bool{}
+	fmt.Printf("::add-mask::%s\n", value)
+	masked[value] = true
 	for _, part := range strings.FieldsFunc(value, func(r rune) bool {
-		return r == '\r' || r == '\n'
+		return r == '\r' || r == '\n' || r == ','
 	}) {
-		if strings.TrimSpace(part) != "" {
+		part = strings.TrimSpace(part)
+		if part != "" && !masked[part] {
 			fmt.Printf("::add-mask::%s\n", part)
+			masked[part] = true
 		}
 	}
+}
+
+func githubActions() bool {
+	return os.Getenv("GITHUB_ACTIONS") == "true"
 }
 
 func maskGitHubActionsURL(value string) {

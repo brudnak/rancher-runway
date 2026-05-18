@@ -20,7 +20,6 @@ let config = setupData.config || {
   bootstrapPassword: '',
   preloadImages: false,
   serverCount: 3,
-  gpuWorker: { enabled: false, profile: 'standard', instanceType: 'g5.xlarge' },
   tfVars: {}
 }
 let customHostnameEnabled = Boolean(setupData.customHostnameEnabled)
@@ -81,16 +80,6 @@ const preloadImagesToggleEl = byId('preloadImagesToggle')
 const serverCountInputEl = byId('serverCountInput')
 const serverCountButtonEls = setupQueryAll('button[data-server-count]')
 const serverTopologyHintEl = byId('serverTopologyHint')
-const gpuWorkerBoxEl = byId('gpuWorkerBox')
-const gpuWorkerToggleEl = byId('gpuWorkerToggle')
-const gpuWorkerOptionsEl = byId('gpuWorkerOptions')
-const gpuWorkerProfileInputEl = byId('gpuWorkerProfileInput')
-const gpuWorkerProfileButtonEls = setupQueryAll('button[data-gpu-profile]')
-const gpuWorkerStatusBadgeEl = byId('gpuWorkerStatusBadge')
-const gpuWorkerHeaderHintEl = byId('gpuWorkerHeaderHint')
-const gpuWorkerPriceBoxEl = byId('gpuWorkerPriceBox')
-const gpuWorkerAmiInputEl = byId('gpuWorkerAmiInput')
-const gpuWorkerSubnetInputEl = byId('gpuWorkerSubnetInput')
 const userFirstNameInputEl = byId('userFirstNameInput')
 const userLastNameInputEl = byId('userLastNameInput')
 const systemReadinessDetailsEl = byId('systemReadinessDetails')
@@ -527,18 +516,6 @@ const renderEditableConfig = () => {
   if (serverCountInputEl) {
     serverCountInputEl.value = String(normalizeServerCount(config.serverCount))
   }
-  if (gpuWorkerToggleEl) {
-    gpuWorkerToggleEl.checked = Boolean(config.gpuWorker?.enabled)
-  }
-  if (gpuWorkerProfileInputEl) {
-    gpuWorkerProfileInputEl.value = config.gpuWorker?.profile === 'large' ? 'large' : 'standard'
-  }
-  if (gpuWorkerAmiInputEl) {
-    gpuWorkerAmiInputEl.value = config.gpuWorker?.ami || ''
-  }
-  if (gpuWorkerSubnetInputEl) {
-    gpuWorkerSubnetInputEl.value = config.gpuWorker?.subnetId || ''
-  }
   userFirstNameInputEl.value = config.userFirstName || ''
   userLastNameInputEl.value = config.userLastName || ''
 
@@ -549,7 +526,6 @@ const renderEditableConfig = () => {
 
   lockAllAdvancedAWSFields()
   renderServerTopology()
-  renderGPUWorkerOptions()
 }
 
 const renderRows = () => {
@@ -590,7 +566,6 @@ const renderRows = () => {
 
       versions.splice(Number(button.getAttribute('data-remove-index')), 1)
       renderRows()
-      renderGPUWorkerOptions()
     })
   })
 }
@@ -631,184 +606,6 @@ const renderServerTopology = () => {
   }
 }
 
-const gpuWorkerEnabled = () => Boolean(gpuWorkerToggleEl?.checked)
-
-const gpuWorkerProfile = () => gpuWorkerProfileInputEl?.value === 'large' ? 'large' : 'standard'
-
-const gpuWorkerInstanceType = profile => profile === 'large' ? 'p5.4xlarge' : 'g5.xlarge'
-
-const gpuWorkerProfileLabel = profile => profile === 'large'
-  ? 'Large p5.4xlarge (1x NVIDIA H100, 80 GB GPU memory)'
-  : 'Standard g5.xlarge (1x NVIDIA A10G, 24 GB GPU memory)'
-
-const gpuWorkerModelHint = profile => profile === 'large'
-  ? 'Sized for the Liz docs gpt-oss:120b class (80 GB VRAM); expect much higher spend and more AWS capacity risk.'
-  : 'Recommended for the Liz docs gpt-oss:20b class (24 GB VRAM).'
-
-const lizPrimeExtensionNote = 'The Liz UI extension is only available on Rancher Prime versions. Community Rancher can still create the GPU worker node, but the Liz UI extension will not be available there.'
-
-const gpuWorkerModelName = profile => profile === 'large' ? 'gpt-oss:120b' : 'gpt-oss:20b'
-
-const gpuWorkerDefaultPlacementHint = profile => profile === 'large'
-  ? 'Auto: prefer subnet B/C.'
-  : 'Auto: prefer subnet B/C.'
-
-const renderGPUWorkerProfileButtons = () => {
-  const selected = gpuWorkerProfile()
-  gpuWorkerProfileButtonEls.forEach(button => {
-    const active = button.dataset.gpuProfile === selected
-    button.setAttribute('aria-checked', active ? 'true' : 'false')
-    button.classList.toggle('border-emerald-300', active && selected === 'standard')
-    button.classList.toggle('bg-emerald-50', active && selected === 'standard')
-    button.classList.toggle('dark:border-emerald-500/30', active && selected === 'standard')
-    button.classList.toggle('dark:bg-emerald-500/10', active && selected === 'standard')
-    button.classList.toggle('border-rose-300', active && selected === 'large')
-    button.classList.toggle('bg-rose-50', active && selected === 'large')
-    button.classList.toggle('dark:border-rose-500/30', active && selected === 'large')
-    button.classList.toggle('dark:bg-rose-500/10', active && selected === 'large')
-    button.classList.toggle('border-zinc-200', !active)
-    button.classList.toggle('bg-zinc-50', !active)
-    button.classList.toggle('dark:border-white/10', !active)
-    button.classList.toggle('dark:bg-white/[0.04]', !active)
-    button.classList.toggle('ring-1', active)
-    button.classList.toggle('ring-emerald-300', active && selected === 'standard')
-    button.classList.toggle('ring-rose-300', active && selected === 'large')
-  })
-}
-
-const formatUSD = value => {
-  const number = Number(value)
-  if (!Number.isFinite(number)) {
-    return 'unavailable'
-  }
-  return `$${number.toFixed(number >= 10 ? 2 : 4)}`
-}
-
-const renderGPUWorkerOptions = () => {
-  if (!gpuWorkerOptionsEl || !gpuWorkerPriceBoxEl) {
-    return
-  }
-
-  const enabled = gpuWorkerEnabled()
-  const count = activeHACount()
-  const profile = gpuWorkerProfile()
-  const instanceType = gpuWorkerInstanceType(profile)
-  const amiOverride = String(gpuWorkerAmiInputEl?.value || '').trim()
-  const subnetOverride = String(gpuWorkerSubnetInputEl?.value || '').trim()
-  gpuWorkerOptionsEl.classList.toggle('hidden', !enabled)
-  gpuWorkerBoxEl?.classList.toggle('border-zinc-200', !enabled)
-  gpuWorkerBoxEl?.classList.toggle('dark:border-white/10', !enabled)
-  gpuWorkerBoxEl?.classList.toggle('border-rose-200', enabled)
-  gpuWorkerBoxEl?.classList.toggle('dark:border-rose-500/30', enabled)
-  gpuWorkerBoxEl?.classList.toggle('bg-rose-50/30', enabled)
-  gpuWorkerBoxEl?.classList.toggle('dark:bg-rose-500/[0.04]', enabled)
-  gpuWorkerBoxEl?.classList.toggle('shadow-rose-500/10', enabled)
-  if (gpuWorkerStatusBadgeEl) {
-    gpuWorkerStatusBadgeEl.textContent = enabled ? 'Cost risk' : 'Optional'
-    gpuWorkerStatusBadgeEl.className = enabled
-      ? 'rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-rose-800 dark:bg-rose-500/15 dark:text-rose-200'
-      : 'rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-zinc-600 dark:bg-white/10 dark:text-zinc-300'
-  }
-  if (gpuWorkerHeaderHintEl) {
-    gpuWorkerHeaderHintEl.textContent = enabled
-      ? `${count} ${instanceType} worker${count === 1 ? '' : 's'} will be added. Destroy the slot when testing is done.`
-      : 'Off by default. Turn on only for active AI testing.'
-    gpuWorkerHeaderHintEl.className = enabled
-      ? 'mt-1 block text-xs font-semibold leading-5 text-rose-700 dark:text-rose-200'
-      : 'mt-1 block text-xs font-semibold leading-5 text-zinc-500 dark:text-zinc-500'
-  }
-  renderGPUWorkerProfileButtons()
-
-  if (!enabled) {
-    gpuWorkerPriceBoxEl.textContent = 'Price estimate will appear before plan resolution.'
-    return
-  }
-
-  gpuWorkerPriceBoxEl.innerHTML = `
-    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Workers</div>
-        <div class="mt-1 font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(count)} x ${escapeHtml(instanceType)}</div>
-      </div>
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Liz model</div>
-        <div class="mt-1 font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(gpuWorkerModelName(profile))}</div>
-      </div>
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Image</div>
-        <div class="mt-1 font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(amiOverride || 'Auto GPU AMI')}</div>
-      </div>
-      <div>
-        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Placement</div>
-        <div class="mt-1 font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(subnetOverride || gpuWorkerDefaultPlacementHint(profile))}</div>
-      </div>
-    </div>
-    <div class="mt-3 border-t border-zinc-200 pt-3 text-xs leading-5 text-zinc-600 dark:border-white/10 dark:text-zinc-400">
-      Live AWS price check will run before plan resolution. ${escapeHtml(gpuWorkerModelHint(profile))}
-    </div>
-    ${profile === 'large' ? '<div class="mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold leading-5 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-100">Large H100 workers are expensive and more likely to hit AWS quota or regional capacity limits.</div>' : ''}
-  `
-}
-
-const loadGPUWorkerPrice = async () => {
-  if (!gpuWorkerEnabled()) {
-    return null
-  }
-
-  const tfVars = collectTFVars()
-  const count = activeHACount()
-  const profile = gpuWorkerProfile()
-  const params = new URLSearchParams({
-    token,
-    region: tfVars.aws_region || 'us-east-2',
-    profile,
-    count: String(count)
-  })
-  if (gpuWorkerPriceBoxEl) {
-    gpuWorkerPriceBoxEl.innerHTML = '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Checking live AWS GPU price...'
-  }
-  const response = await fetch(setupEndpoint(`/api/gpu-price?${params.toString()}`), {
-    cache: 'no-store',
-    headers: { 'Accept': 'application/json' }
-  })
-  if (!response.ok) {
-    throw new Error(await response.text() || 'GPU price check failed.')
-  }
-  const price = await response.json()
-  if (gpuWorkerPriceBoxEl) {
-    if (price.error) {
-      gpuWorkerPriceBoxEl.innerHTML = `
-        <div class="font-semibold">GPU price unavailable for ${escapeHtml(price.instanceType || gpuWorkerInstanceType(profile))} in ${escapeHtml(price.region || tfVars.aws_region || 'this region')}</div>
-        <div class="mt-1">${escapeHtml(price.error)}</div>
-        <div class="mt-1 font-semibold text-rose-700 dark:text-rose-200">AWS setup may fail if this instance type is unavailable or quota-limited in the selected region.</div>
-      `
-    } else {
-      gpuWorkerPriceBoxEl.innerHTML = `
-        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Workers</div>
-            <div class="mt-1 font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(price.instanceType)} x ${escapeHtml(price.count)}</div>
-          </div>
-          <div>
-            <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Each</div>
-            <div class="mt-1 font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(formatUSD(price.hourlyRateUsd))}/hr</div>
-          </div>
-          <div>
-            <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Total</div>
-            <div class="mt-1 font-semibold text-rose-700 dark:text-rose-200">${escapeHtml(formatUSD(price.totalHourlyUsd))}/hr</div>
-          </div>
-          <div>
-            <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Model</div>
-            <div class="mt-1 font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(gpuWorkerModelName(profile))}</div>
-          </div>
-        </div>
-        <div class="mt-3 border-t border-zinc-200 pt-3 text-xs leading-5 text-zinc-600 dark:border-white/10 dark:text-zinc-400">${escapeHtml(price.estimateQualifier || 'EC2 estimate only.')} Destroy this run slot as soon as testing is finished.</div>
-      `
-    }
-  }
-  return price
-}
-
 const renderMode = () => {
   setupMode = setupMode === 'manual' ? 'manual' : 'auto'
   if (modeInputEl) {
@@ -838,7 +635,6 @@ const renderMode = () => {
     manualAddBtnEl.classList.toggle('opacity-50', customHostnameEnabled)
   }
   totalInstancesValueEl.textContent = String(activeHACount())
-  renderGPUWorkerOptions()
   setSubmittingState(submitting)
 }
 
@@ -1040,7 +836,6 @@ const renderManualRows = () => {
       renderManualValidation()
       renderManualRKE2Recommendations()
       totalInstancesValueEl.textContent = String(activeHACount())
-      renderGPUWorkerOptions()
     })
   })
   renderManualValidation()
@@ -1416,20 +1211,6 @@ const setSubmittingState = nextSubmitting => {
     button.classList.toggle('cursor-not-allowed', nextSubmitting)
     button.classList.toggle('opacity-60', nextSubmitting)
   })
-  if (gpuWorkerToggleEl) {
-    gpuWorkerToggleEl.disabled = nextSubmitting
-  }
-  gpuWorkerProfileButtonEls.forEach(button => {
-    button.disabled = nextSubmitting
-    button.classList.toggle('cursor-not-allowed', nextSubmitting)
-    button.classList.toggle('opacity-60', nextSubmitting)
-  })
-  if (gpuWorkerSubnetInputEl) {
-    gpuWorkerSubnetInputEl.disabled = nextSubmitting
-  }
-  if (gpuWorkerAmiInputEl) {
-    gpuWorkerAmiInputEl.disabled = nextSubmitting
-  }
   userFirstNameInputEl.disabled = nextSubmitting
   userLastNameInputEl.disabled = nextSubmitting
 
@@ -1661,36 +1442,6 @@ const prepareSetupSubmit = async event => {
 
   if (!pemConfirmed) {
     return
-  }
-
-  if (gpuWorkerEnabled()) {
-    let price = null
-    try {
-      price = await loadGPUWorkerPrice()
-    } catch (error) {
-      await showNoticeModal({
-        title: 'GPU price check failed',
-        body: error instanceof Error ? error.message : 'Unable to check AWS GPU pricing before setup.'
-      })
-    }
-
-    const count = activeHACount()
-    const profile = gpuWorkerProfile()
-    const instanceType = price?.instanceType || gpuWorkerInstanceType(profile)
-    const priceLine = price && !price.error
-      ? `${formatUSD(price.hourlyRateUsd)}/hr each x ${count} = ${formatUSD(price.totalHourlyUsd)}/hr total for all GPU workers.`
-      : `Live pricing was unavailable for ${instanceType}; AWS setup may still attempt to create ${count} GPU worker node${count === 1 ? '' : 's'}.`
-    const modelWarning = profile === 'large'
-      ? ' You selected the large H100 worker for the Liz gpt-oss:120b class. This is the expensive option and may fail if AWS quota or regional capacity is not available.'
-      : ' This is the recommended smaller worker for the Liz gpt-oss:20b class.'
-    const gpuConfirmed = await showConfirmModal({
-      title: 'Confirm GPU worker spend',
-      body: `This will add ${count} ${gpuWorkerProfileLabel(profile)} worker node${count === 1 ? '' : 's'} for Liz AI assistant testing. ${modelWarning} ${priceLine} ${lizPrimeExtensionNote} Destroy this run slot as soon as you are finished; do not leave GPU nodes running unused.`,
-      confirmText: 'Add GPU worker nodes'
-    })
-    if (!gpuConfirmed) {
-      return
-    }
   }
 
   const formData = new FormData(setupFormEl)
@@ -1969,7 +1720,6 @@ addBtnEl.addEventListener('click', () => {
 
   versions.push('')
   renderRows()
-  renderGPUWorkerOptions()
 })
 
 manualAddBtnEl.addEventListener('click', () => {
@@ -1992,7 +1742,6 @@ manualAddBtnEl.addEventListener('click', () => {
   renderManualRows()
   renderManualRKE2Recommendations()
   totalInstancesValueEl.textContent = String(activeHACount())
-  renderGPUWorkerOptions()
 })
 
 validateHelmBtnEl.addEventListener('click', async () => {
@@ -2081,11 +1830,6 @@ resolveInstallerSHAToggleEl.addEventListener('change', event => {
   renderManualRows()
 })
 
-gpuWorkerToggleEl?.addEventListener('change', () => {
-  clearValidationError()
-  renderGPUWorkerOptions()
-})
-
 serverCountButtonEls.forEach(button => {
   button.addEventListener('click', () => {
     if (button.disabled || !serverCountInputEl) {
@@ -2095,27 +1839,6 @@ serverCountButtonEls.forEach(button => {
     clearValidationError()
     renderServerTopology()
   })
-})
-
-gpuWorkerProfileButtonEls.forEach(button => {
-  button.addEventListener('click', () => {
-    if (button.disabled || !gpuWorkerProfileInputEl) {
-      return
-    }
-    gpuWorkerProfileInputEl.value = button.dataset.gpuProfile === 'large' ? 'large' : 'standard'
-    clearValidationError()
-    renderGPUWorkerOptions()
-  })
-})
-
-gpuWorkerSubnetInputEl?.addEventListener('input', () => {
-  clearValidationError()
-  renderGPUWorkerOptions()
-})
-
-gpuWorkerAmiInputEl?.addEventListener('input', () => {
-  clearValidationError()
-  renderGPUWorkerOptions()
 })
 
 bootstrapPasswordToggleEl.addEventListener('click', toggleBootstrapPasswordVisibility)

@@ -781,13 +781,6 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		rke2Node := ensureMappingValue(root, "rke2")
 		setBoolValue(rke2Node, "preload_images", update.PreloadImages)
 		setIntValue(rke2Node, "server_count", update.ServerCount)
-		gpuWorkerNode := ensureMappingValue(root, "gpu_worker")
-		gpuProfile := settings.NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
-		setBoolValue(gpuWorkerNode, "enabled", update.GPUWorkerEnabled)
-		setStringValue(gpuWorkerNode, "profile", gpuProfile)
-		setStringValue(gpuWorkerNode, "instance_type", settings.GPUWorkerInstanceType(gpuProfile))
-		setStringValue(gpuWorkerNode, "ami", strings.TrimSpace(update.GPUWorkerAMI))
-		setStringValue(gpuWorkerNode, "subnet_id", strings.TrimSpace(update.GPUWorkerSubnetID))
 	}
 	setStringValue(rancherNode, "mode", mode)
 	switch mode {
@@ -866,12 +859,6 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("user.last_name", update.UserLastName)
 		viper.Set("rke2.preload_images", update.PreloadImages)
 		viper.Set("rke2.server_count", update.ServerCount)
-		gpuProfile := settings.NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
-		viper.Set("gpu_worker.enabled", update.GPUWorkerEnabled)
-		viper.Set("gpu_worker.profile", gpuProfile)
-		viper.Set("gpu_worker.instance_type", settings.GPUWorkerInstanceType(gpuProfile))
-		viper.Set("gpu_worker.ami", strings.TrimSpace(update.GPUWorkerAMI))
-		viper.Set("gpu_worker.subnet_id", strings.TrimSpace(update.GPUWorkerSubnetID))
 		for _, key := range settings.EditableTFVarKeys {
 			viper.Set("tf_vars."+key, update.TFVars[key])
 		}

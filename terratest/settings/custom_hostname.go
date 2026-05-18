@@ -25,10 +25,6 @@ type PreflightConfigUpdate struct {
 	BootstrapPassword     string            `json:"bootstrapPassword"`
 	PreloadImages         bool              `json:"preloadImages"`
 	ServerCount           int               `json:"serverCount"`
-	GPUWorkerEnabled      bool              `json:"gpuWorkerEnabled"`
-	GPUWorkerProfile      string            `json:"gpuWorkerProfile"`
-	GPUWorkerAMI          string            `json:"gpuWorkerAmi"`
-	GPUWorkerSubnetID     string            `json:"gpuWorkerSubnetId"`
 	UserFirstName         string            `json:"userFirstName"`
 	UserLastName          string            `json:"userLastName"`
 	TFVars                map[string]string `json:"tfVars"`

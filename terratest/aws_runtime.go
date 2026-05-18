@@ -59,6 +59,7 @@ func initAWSClients() error {
 }
 
 func getInstanceIDFromIP(publicIP string) (string, error) {
+	maskGitHubActionsValue(publicIP)
 	if err := initAWSClients(); err != nil {
 		return "", err
 	}
@@ -87,12 +88,14 @@ func getInstanceIDFromIP(publicIP string) (string, error) {
 	}
 
 	instanceID := aws.ToString(result.Reservations[0].Instances[0].InstanceId)
+	maskGitHubActionsValue(instanceID)
 	log.Printf("Resolved IP %s to instance %s", publicIP, instanceID)
 
 	return instanceID, nil
 }
 
 func waitForSSMAgent(instanceID string, maxSeconds int) error {
+	maskGitHubActionsValue(instanceID)
 	if err := initAWSClients(); err != nil {
 		return err
 	}
@@ -129,6 +132,7 @@ func waitForSSMAgent(instanceID string, maxSeconds int) error {
 }
 
 func runCommandSSM(cmd string, instanceID string) (string, error) {
+	maskGitHubActionsValue(instanceID)
 	if err := initAWSClients(); err != nil {
 		return "", err
 	}
@@ -151,6 +155,9 @@ func runCommandSSM(cmd string, instanceID string) (string, error) {
 	}
 
 	commandID := sendOutput.Command.CommandId
+	if commandID != nil {
+		maskGitHubActionsValue(*commandID)
+	}
 	log.Printf("[SSM] Command sent with ID: %s", *commandID)
 
 	maxAttempts := 120
@@ -208,6 +215,7 @@ func runCommandSSM(cmd string, instanceID string) (string, error) {
 }
 
 func RunCommand(cmd string, pubIP string) (string, error) {
+	maskGitHubActionsValue(pubIP)
 	log.Printf("[RunCommand] Starting command execution for IP %s", pubIP)
 
 	instanceID, err := getInstanceIDFromIP(pubIP)
@@ -240,9 +248,6 @@ func estimateCurrentRunCost(totalHAs int, outputs map[string]string) (*cleanupCo
 	for i := 1; i <= totalHAs; i++ {
 		haOutputs := getHAOutputs(i, outputs)
 		ips := append([]string{}, haOutputs.ServerIPs...)
-		if haOutputs.GPUWorkerIP != "" {
-			ips = append(ips, haOutputs.GPUWorkerIP)
-		}
 		for _, ip := range ips {
 			if ip == "" || seenIPs[ip] {
 				continue
