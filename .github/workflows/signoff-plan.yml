@@ -172,10 +172,9 @@ jobs:
               ($active[0] | map(.displayTitle) | unique) as $active_titles
               | ($successful[0] | map(.displayTitle) | unique) as $successful_titles
               | [$queue[0][]
-                  | . + {display_title: title(.)}
-                  | select(($active_titles | index(.display_title)) | not)
-                  | select($rerun_successful or (($successful_titles | index(.display_title)) | not))
-                  | del(.display_title)]
+                  | title(.) as $display_title
+                  | select(($active_titles | index($display_title)) | not)
+                  | select($rerun_successful or (($successful_titles | index($display_title)) | not))]
             ' > automation-output/signoff-dispatch-queue.json
 
           raw_queue_count="$(jq 'length' automation-output/signoff-dispatch-queue-raw.json)"
