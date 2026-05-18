@@ -181,14 +181,18 @@ jobs:
           active_blocked_count="$(jq -n --slurpfile queue automation-output/signoff-dispatch-queue-raw.json --slurpfile active automation-output/signoff-active-runners.json '
             def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
             ($active[0] | map(.displayTitle) | unique) as $active_titles
-            | [$queue[0][] | select(($active_titles | index(title(.))) != null)] | length
+            | [$queue[0][]
+                | title(.) as $display_title
+                | select(($active_titles | index($display_title)) != null)] | length
           ')"
           successful_skip_count="$(jq -n --argjson rerun_successful "$RERUN_SUCCESSFUL_LANES" --slurpfile queue automation-output/signoff-dispatch-queue-raw.json --slurpfile successful automation-output/signoff-successful-runners.json '
             if $rerun_successful then 0
             else
               def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
               ($successful[0] | map(.displayTitle) | unique) as $successful_titles
-              | [$queue[0][] | select(($successful_titles | index(title(.))) != null)] | length
+              | [$queue[0][]
+                  | title(.) as $display_title
+                  | select(($successful_titles | index($display_title)) != null)] | length
             end
           ')"
           queue_count="$(jq 'length' automation-output/signoff-dispatch-queue.json)"
