@@ -261,14 +261,14 @@ func (p *localControlPanel) readRunRecord(runID string) (panelRunRecord, bool) {
 			log.Printf("[control-panel] Failed to parse run record %s: %v", safeRunID, parseErr)
 			return panelRunRecord{}, false
 		}
-		return record, true
+		return p.enrichRunRecord(record), true
 	}
 	if err != nil && !os.IsNotExist(err) {
 		log.Printf("[control-panel] Failed to read run record %s: %v", safeRunID, err)
 	}
 
 	if current, ok := p.readCurrentRunRecord(); ok && sameRunID(current.RunID, safeRunID) {
-		return current, true
+		return p.enrichRunRecord(current), true
 	}
 	return panelRunRecord{}, false
 }
@@ -376,9 +376,46 @@ func (p *localControlPanel) listRunRecords() []panelRunRecord {
 }
 
 func (p *localControlPanel) enrichRunRecord(record panelRunRecord) panelRunRecord {
+	record = p.normalizeRunRecordArtifactPaths(record)
 	record.RunFolderPath = runFolderPathForRecord(record)
 	record.RunFolderExists = record.RunFolderPath != "" && pathExists(record.RunFolderPath)
 	return record
+}
+
+func (p *localControlPanel) normalizeRunRecordArtifactPaths(record panelRunRecord) panelRunRecord {
+	runID := safeRunPathSegment(record.RunID)
+	record.TerraformModuleDir = p.remapRunArtifactPath(record.TerraformModuleDir, runID)
+	record.TerraformStatePath = p.remapRunArtifactPath(record.TerraformStatePath, runID)
+	record.TerraformDataDir = p.remapRunArtifactPath(record.TerraformDataDir, runID)
+	record.HAOutputRoot = p.remapRunArtifactPath(record.HAOutputRoot, runID)
+	record.RunFolderPath = p.remapRunArtifactPath(record.RunFolderPath, runID)
+	if strings.HasPrefix(record.TerraformBackend, "local (") && strings.HasSuffix(record.TerraformBackend, ")") {
+		backendPath := strings.TrimSuffix(strings.TrimPrefix(record.TerraformBackend, "local ("), ")")
+		record.TerraformBackend = "local (" + p.remapRunArtifactPath(backendPath, runID) + ")"
+	}
+	return record
+}
+
+func (p *localControlPanel) remapRunArtifactPath(rawPath string, runID string) string {
+	path := strings.TrimSpace(rawPath)
+	if path == "" || runID == "" {
+		return path
+	}
+
+	cleanPath := filepath.Clean(path)
+	if !filepath.IsAbs(cleanPath) || pathExists(cleanPath) {
+		return cleanPath
+	}
+
+	parts := strings.Split(filepath.ToSlash(cleanPath), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] != "automation-output" || parts[i+1] != "runs" || parts[i+2] != runID {
+			continue
+		}
+		suffix := filepath.FromSlash(strings.Join(parts[i+3:], "/"))
+		return filepath.Join(p.testDir, "automation-output", "runs", runID, suffix)
+	}
+	return cleanPath
 }
 
 func runFolderPathForRecord(record panelRunRecord) string {

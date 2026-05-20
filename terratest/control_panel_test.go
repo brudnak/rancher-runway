@@ -140,6 +140,78 @@ func TestWorkspaceStateMarksRunFolderAvailability(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStateRemapsMovedCheckoutRunFolder(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	repoRoot := filepath.Join(workspace, "rancher-runway")
+	testDir := filepath.Join(repoRoot, "terratest")
+	oldRepoRoot := filepath.Join(workspace, "ha-rancher-rke2")
+	runRoot := filepath.Join(testDir, "automation-output", "runs", "abc12345")
+	moduleDir := filepath.Join(runRoot, "terraform", "module")
+	statePath := filepath.Join(runRoot, "terraform", "terraform.tfstate")
+	dataDir := filepath.Join(runRoot, "terraform", ".terraform")
+	haOutputRoot := filepath.Join(runRoot, "ha")
+	for _, dir := range []string{moduleDir, dataDir, haOutputRoot} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create run dir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(statePath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("failed to create terraform state: %v", err)
+	}
+
+	oldRunRoot := filepath.Join(oldRepoRoot, "terratest", "automation-output", "runs", "abc12345")
+	panel := &localControlPanel{repoRoot: repoRoot, testDir: testDir}
+	panel.writeRunRecord(panelRunRecord{
+		RunID:              "abc12345",
+		SlotID:             "slot-abc12345",
+		SlotName:           "Run abc12345",
+		Status:             "ready",
+		CreatedAt:          time.Now(),
+		UpdatedAt:          time.Now(),
+		TerraformBackend:   "local (" + filepath.Join(oldRunRoot, "terraform", "terraform.tfstate") + ")",
+		TerraformModuleDir: filepath.Join(oldRunRoot, "terraform", "module"),
+		TerraformStatePath: filepath.Join(oldRunRoot, "terraform", "terraform.tfstate"),
+		TerraformDataDir:   filepath.Join(oldRunRoot, "terraform", ".terraform"),
+		HAOutputRoot:       filepath.Join(oldRunRoot, "ha"),
+		RunFolderPath:      oldRunRoot,
+	})
+
+	state := panel.workspaceState()
+	if len(state.Runs) != 1 {
+		t.Fatalf("expected one run, got %d", len(state.Runs))
+	}
+	run := state.Runs[0]
+	if !run.RunFolderExists {
+		t.Fatal("expected moved run folder to be marked available")
+	}
+	if run.RunFolderPath != runRoot {
+		t.Fatalf("expected remapped run folder %q, got %q", runRoot, run.RunFolderPath)
+	}
+	if run.TerraformModuleDir != moduleDir {
+		t.Fatalf("expected remapped module dir %q, got %q", moduleDir, run.TerraformModuleDir)
+	}
+	if run.TerraformStatePath != statePath {
+		t.Fatalf("expected remapped state path %q, got %q", statePath, run.TerraformStatePath)
+	}
+	if run.TerraformDataDir != dataDir {
+		t.Fatalf("expected remapped data dir %q, got %q", dataDir, run.TerraformDataDir)
+	}
+	if run.HAOutputRoot != haOutputRoot {
+		t.Fatalf("expected remapped HA output root %q, got %q", haOutputRoot, run.HAOutputRoot)
+	}
+	if want := "local (" + statePath + ")"; run.TerraformBackend != want {
+		t.Fatalf("expected remapped backend %q, got %q", want, run.TerraformBackend)
+	}
+	readRun, ok := panel.readRunRecord("abc12345")
+	if !ok {
+		t.Fatal("expected run record to be readable")
+	}
+	if readRun.TerraformStatePath != statePath {
+		t.Fatalf("expected readRunRecord to remap state path %q, got %q", statePath, readRun.TerraformStatePath)
+	}
+}
+
 func TestHandleShutdownBlocksWhileLifecycleRuns(t *testing.T) {
 	panel := &localControlPanel{
 		token:      "token",
