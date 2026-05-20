@@ -95,6 +95,51 @@ func TestResolveAllowedLocalPathBlocksOutsideCheckout(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStateMarksRunFolderAvailability(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	repoRoot := filepath.Join(workspace, "repo")
+	testDir := filepath.Join(repoRoot, "terratest")
+	runRoot := filepath.Join(testDir, "automation-output", "runs", "abc12345")
+	moduleDir := filepath.Join(runRoot, "terraform", "module")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatalf("failed to create run module dir: %v", err)
+	}
+
+	panel := &localControlPanel{repoRoot: repoRoot, testDir: testDir}
+	panel.writeRunRecord(panelRunRecord{
+		RunID:              "abc12345",
+		SlotID:             "slot-abc12345",
+		SlotName:           "Run abc12345",
+		Status:             "ready",
+		CreatedAt:          time.Now(),
+		UpdatedAt:          time.Now(),
+		TerraformModuleDir: moduleDir,
+	})
+
+	state := panel.workspaceState()
+	if len(state.Runs) != 1 {
+		t.Fatalf("expected one run, got %d", len(state.Runs))
+	}
+	if state.Runs[0].RunFolderPath != runRoot {
+		t.Fatalf("expected run folder %q, got %q", runRoot, state.Runs[0].RunFolderPath)
+	}
+	if !state.Runs[0].RunFolderExists {
+		t.Fatal("expected run folder to be marked available")
+	}
+
+	if err := os.RemoveAll(runRoot); err != nil {
+		t.Fatalf("failed to remove run root: %v", err)
+	}
+	state = panel.workspaceState()
+	if len(state.Runs) != 1 {
+		t.Fatalf("expected one stale run record, got %d", len(state.Runs))
+	}
+	if state.Runs[0].RunFolderExists {
+		t.Fatal("expected missing run folder to be marked unavailable")
+	}
+}
+
 func TestHandleShutdownBlocksWhileLifecycleRuns(t *testing.T) {
 	panel := &localControlPanel{
 		token:      "token",
@@ -432,6 +477,30 @@ func TestPanelOperationStateClearsCompletedCleanupOnInteractiveStartup(t *testin
 	}
 	if len(snapshot.Output) != 0 {
 		t.Fatalf("expected cleanup output to clear, got %#v", snapshot.Output)
+	}
+}
+
+func TestSnapshotOperationHidesFailedCleanupForRemovedRun(t *testing.T) {
+	finishedAt := time.Now().Add(-time.Minute)
+	panel := &localControlPanel{operations: newPanelOperations()}
+	panel.operations[panelOperationCleanup] = &panelOperationState{
+		StartedAt:  &finishedAt,
+		FinishedAt: &finishedAt,
+		Error:      "exit status 1",
+		RunID:      "abc12345",
+		Command:    "go test -v -run '^TestHACleanup$'",
+		Output:     []string{"cleanup failed"},
+	}
+
+	snapshot := panel.snapshotOperationForRuns(panelOperationCleanup, map[string]bool{})
+	if snapshot.Error != "" {
+		t.Fatalf("expected failed cleanup for removed run to be hidden, got %q", snapshot.Error)
+	}
+	if snapshot.RunID != "" {
+		t.Fatalf("expected cleanup run id to be hidden, got %q", snapshot.RunID)
+	}
+	if len(snapshot.Output) != 0 {
+		t.Fatalf("expected cleanup output to be hidden, got %#v", snapshot.Output)
 	}
 }
 

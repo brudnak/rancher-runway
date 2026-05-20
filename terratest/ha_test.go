@@ -14,7 +14,17 @@ import (
 func TestHaSetup(t *testing.T) {
 	requireExplicitLifecycleTest(t, "TestHaSetup")
 	setupConfig(t)
+	if err := validateDeploymentType(); err != nil {
+		t.Fatalf("Deployment config preflight failed: %v", err)
+	}
+	if isHostedTenantK3SDeployment() {
+		runHostedTenantSetup(t)
+		return
+	}
+	runHARKE2Setup(t)
+}
 
+func runHARKE2Setup(t *testing.T) {
 	resolvedPlans, err := resolveRancherSetup()
 	if err != nil {
 		t.Fatalf("Rancher setup canceled or failed: %v", err)
@@ -122,7 +132,7 @@ func TestHACleanup(t *testing.T) {
 	defer cleanupBootstrapTerraformLocalFiles()
 	defer cleanupTerraformNonStateFiles()
 
-	totalHAs := viper.GetInt("total_has")
+	totalHAs := configuredRancherInstanceCount()
 	if err := validateSecretEnvironment(); err != nil {
 		t.Fatalf("Secret environment preflight failed before cleanup: %v", err)
 	}
@@ -134,19 +144,28 @@ func TestHACleanup(t *testing.T) {
 	outputs, outputsErr := getTerraformOutputsE(t, terraformOptions)
 	if outputsErr != nil {
 		log.Printf("[cleanup] Terraform outputs unavailable before destroy, likely no infrastructure was applied yet: %v", outputsErr)
+		var estimateErr error
+		costEstimate, estimateErr = estimateCurrentRunCostFromRecordedAWSResources()
+		if estimateErr != nil {
+			log.Printf("[cleanup] Could not estimate AWS cost from recorded resources before destroy: %v", estimateErr)
+		}
 	} else {
 		var estimateErr error
 		costEstimate, estimateErr = estimateCurrentRunCost(totalHAs, outputs)
 		if estimateErr != nil {
-			log.Printf("[cleanup] Could not estimate EC2/EBS cost before destroy: %v", estimateErr)
+			log.Printf("[cleanup] Could not estimate AWS cost before destroy: %v", estimateErr)
 		}
 	}
 	if _, err := terraform.DestroyE(t, terraformOptions); err != nil {
 		t.Fatalf("Terraform destroy failed: %v", err)
 	}
 
-	for i := 1; i <= totalHAs; i++ {
-		cleanupHAInstance(i)
+	if isHostedTenantK3SDeployment() {
+		cleanupHostedTenantInstances(totalHAs)
+	} else {
+		for i := 1; i <= totalHAs; i++ {
+			cleanupHAInstance(i)
+		}
 	}
 	cleanupTerraformFiles()
 	cleanupAutomationOutput()

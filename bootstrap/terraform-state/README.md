@@ -21,11 +21,11 @@ terraform init
 terraform plan \
   -var 'aws_region=us-east-2' \
   -var 'state_bucket_name=your-unique-state-bucket' \
-  -var 'lock_table_name=ha-rancher-rke2-terraform-locks'
+  -var 'lock_table_name=rancher-runway-terraform-locks'
 terraform apply \
   -var 'aws_region=us-east-2' \
   -var 'state_bucket_name=your-unique-state-bucket' \
-  -var 'lock_table_name=ha-rancher-rke2-terraform-locks'
+  -var 'lock_table_name=rancher-runway-terraform-locks'
 ```
 
 ## GitHub Actions Usage
@@ -58,7 +58,7 @@ repository. Keep actual AWS access in OIDC roles and environment secrets.
 Sign-off lanes should use keys like:
 
 ```text
-ha-rancher-rke2/signoff/<release-line>/<rancher-version>/<run-id>/<lane>/terraform.tfstate
+rancher-runway/signoff/<release-line>/<rancher-version>/<run-id>/<lane>/terraform.tfstate
 ```
 
 Each lane gets a unique key so cleanup, retries, and reports stay isolated.
@@ -78,9 +78,9 @@ The HA Terratest runner switches to this backend only when all of these are set:
 
 ```bash
 export TF_STATE_BUCKET="your-unique-state-bucket"
-export TF_STATE_LOCK_TABLE="ha-rancher-rke2-terraform-locks"
+export TF_STATE_LOCK_TABLE="rancher-runway-terraform-locks"
 export TF_STATE_REGION="us-east-2"
-export TF_STATE_KEY="ha-rancher-rke2/signoff/v2.14/v2.14.1-alpha6/123456789/webhook-fresh-install/terraform.tfstate"
+export TF_STATE_KEY="rancher-runway/signoff/v2.14/v2.14.1-alpha6/123456789/webhook-fresh-install/terraform.tfstate"
 ```
 
 Leave them unset for local development with local Terraform state.

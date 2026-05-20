@@ -14,6 +14,9 @@ const starterToolConfigYAML = `rancher:
   bootstrap_password: ""
   auto_approve: false
 
+deployment:
+  type: ha-rke2
+
 rke2:
   preload_images: true
 

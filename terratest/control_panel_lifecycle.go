@@ -29,6 +29,10 @@ func (p *localControlPanel) startSetup() error {
 		return fmt.Errorf("preflight blocked setup: %s", preflight.Summary)
 	}
 
+	afterSuccess := p.startReadinessAfterSetup
+	if isHostedTenantK3SDeployment() {
+		afterSuccess = nil
+	}
 	return p.startPanelCommand(panelCommandSpec{
 		Operation:    panelOperationSetup,
 		DisplayName:  "setup",
@@ -36,7 +40,7 @@ func (p *localControlPanel) startSetup() error {
 		Timeout:      "90m",
 		StartLine:    "[control-panel] Starting canonical setup via go test -run ^TestHaSetup$",
 		SuccessLine:  "[control-panel] Setup completed successfully",
-		AfterSuccess: p.startReadinessAfterSetup,
+		AfterSuccess: afterSuccess,
 	})
 }
 
@@ -70,6 +74,9 @@ func readinessCommandSpec() panelCommandSpec {
 }
 
 func (p *localControlPanel) readinessPreflightError() error {
+	if isHostedTenantK3SDeployment() {
+		return fmt.Errorf("readiness checks are currently only wired for ha-rke2; hosted-tenant-k3s setup waits for host and tenant Ranchers during setup")
+	}
 	if p.totalHAs < 1 {
 		return fmt.Errorf("readiness requires at least one configured HA")
 	}

@@ -20,6 +20,7 @@ import {
   readinessFailedRun,
   renderRunActionButton,
   runClusterStats,
+  runFolderAvailable,
   runFolderPath,
   runHasFailure,
   runHostnameLabel,
@@ -792,7 +793,7 @@ const renderCommandDeck = state => {
         tone: currentStats.total ? 'emerald' : 'amber',
         eyebrow: 'Current slot',
         title: `Run ${currentRun.runId || 'unknown'}`,
-        detail: `${currentRun.totalHAs || 1} HA target${Number(currentRun.totalHAs || 1) === 1 ? '' : 's'} for ${runVersionsLabel(currentRun)}. ${currentStats.total ? `${currentStats.reachable}/${currentStats.total} cluster records reachable.` : 'Cluster records are not visible yet.'}`,
+        detail: `${currentRun.totalHAs || 1} ${currentRun.deploymentType === 'hosted-tenant-k3s' ? 'hosted-tenant Rancher instance' : 'HA target'}${Number(currentRun.totalHAs || 1) === 1 ? '' : 's'} for ${runVersionsLabel(currentRun)}. ${currentStats.total ? `${currentStats.reachable}/${currentStats.total} cluster records reachable.` : 'Cluster records are not visible yet.'}`,
         meta: currentRun.status || 'recorded',
         action: currentStats.total ? 'clusters' : 'runs',
         actionLabel: currentStats.total ? 'Open clusters' : 'View slot'
@@ -1023,8 +1024,8 @@ const renderWorkspace = workspace => {
     workspaceSlotSummaryEl.textContent = activeOperation
       ? `${activeOperation[1]} is active. Setup, readiness, and destroy stay serialized so Terraform state and AWS actions remain unambiguous.`
       : runs.length
-        ? 'Every slot below has isolated Terraform state, HA output, kubeconfigs, AWS names, logs, and a dedicated destroy target.'
-        : 'Use Setup to resolve and approve a Rancher HA plan. The run will appear here before AWS resources are created.'
+        ? 'Every slot below has isolated Terraform state, deployment output, kubeconfigs, AWS names, logs, and a dedicated destroy target.'
+        : 'Use Setup to resolve and approve a Rancher Runway plan. The run will appear here before AWS resources are created.'
   }
   if (selectedCleanupRunId && !runs.some(run => run.runId === selectedCleanupRunId)) {
     selectedCleanupRunId = ''
@@ -1170,7 +1171,7 @@ const renderWorkspace = workspace => {
                   <div class="run-action-rail flex shrink-0 flex-wrap gap-2 xl:max-w-[26rem]">
                     ${renderRunActionButton({ action: 'view-clusters', runId: run.runId, label: 'View clusters', variant: stats.total ? 'primary' : 'secondary', disabled: !stats.total, title: stats.total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.' })}
                     ${renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled, title: readinessTitle })}
-                    ${renderRunActionButton({ action: 'open-run-folder', runId: run.runId, label: 'Open folder', disabled: !runFolderPath(run), title: runFolderPath(run) ? 'Open this run slot folder in Finder.' : 'Run folder path is not recorded yet.' })}
+                    ${renderRunActionButton({ action: 'open-run-folder', runId: run.runId, label: 'Open folder', disabled: !runFolderAvailable(run), title: runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.' })}
                     ${renderRunActionButton({ action: 'copy-terraform-path', runId: run.runId, label: 'Copy TF path', disabled: !runTerraformPath(run), title: runTerraformPath(run) ? 'Copy the Terraform module/state path for this run.' : 'Terraform path is not recorded yet.' })}
                     ${renderRunActionButton({ action: 'open-setup-logs', runId: run.runId, label: 'Setup logs' })}
                     ${renderRunActionButton({ action: 'open-readiness-logs', runId: run.runId, label: 'Readiness logs' })}
@@ -1288,7 +1289,7 @@ const renderDestroySlots = workspace => {
             </div>
           </div>
           <div class="flex shrink-0 flex-wrap gap-2 lg:justify-end">
-            <button type="button" data-action="open-run-folder" data-run-id="${escapeHtml(run.runId || '')}" ${runFolderPath(run) ? '' : 'disabled'} class="${runFolderPath(run) ? 'rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]' : 'rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400'}">Open folder</button>
+            <button type="button" data-action="open-run-folder" data-run-id="${escapeHtml(run.runId || '')}" ${runFolderAvailable(run) ? '' : 'disabled'} title="${escapeHtml(runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.')}" class="${runFolderAvailable(run) ? 'rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]' : 'rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400'}">Open folder</button>
             <button type="button" data-action="destroy-slot" data-run-id="${escapeHtml(run.runId || '')}" title="${escapeHtml(disabledTitle)}" ${disabled ? 'disabled' : ''} class="${disabled ? 'rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400' : 'rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400'}">${buttonLabel}</button>
           </div>
         </div>
@@ -1622,6 +1623,8 @@ const renderCleanupCost = (cleanup, output) => {
             ${cost.runtime ? `<div><span class="font-semibold">Runtime:</span> ${escapeHtml(cost.runtime)}</div>` : ''}
             ${cost.ec2 ? `<div><span class="font-semibold">EC2:</span> ${escapeHtml(cost.ec2)}</div>` : ''}
             ${cost.ebs ? `<div><span class="font-semibold">EBS:</span> ${escapeHtml(cost.ebs)}</div>` : ''}
+            ${cost.rds ? `<div><span class="font-semibold">RDS/Aurora:</span> ${escapeHtml(cost.rds)}</div>` : ''}
+            ${cost.loadBalancers ? `<div><span class="font-semibold">Load balancers:</span> ${escapeHtml(cost.loadBalancers)}</div>` : ''}
           </div>
         </div>
       </div>
@@ -1629,7 +1632,7 @@ const renderCleanupCost = (cleanup, output) => {
     return
   }
 
-  const estimateUnavailable = output.some(line => line.includes('Could not estimate EC2/EBS cost') || line.includes('Terraform outputs unavailable'))
+  const estimateUnavailable = output.some(line => line.includes('Could not estimate EC2/EBS cost') || line.includes('Could not estimate AWS cost') || line.includes('Terraform outputs unavailable'))
   if (cleanup && cleanup.finishedAt && estimateUnavailable) {
     cleanupCostEl.classList.remove('hidden')
     cleanupCostEl.innerHTML = `
@@ -1689,7 +1692,7 @@ const renderCostHistory = costs => {
     <div class="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-white/10 dark:bg-white/[0.03]">
       <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">${escapeHtml(label)}</div>
       <div class="mt-1 text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">${escapeHtml(formatUSD(value))}</div>
-      <div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Estimated EC2 + EBS only</div>
+      <div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Estimated AWS cleanup cost</div>
     </div>
   `).join('')
 
@@ -1697,7 +1700,7 @@ const renderCostHistory = costs => {
   if (!entries.length) {
     costHistoryTableEl.innerHTML = `
       <div class="bg-zinc-50 p-4 text-sm text-zinc-600 dark:bg-white/[0.03] dark:text-zinc-400">
-        No persisted cost estimates yet. Successful destroys will add estimated EC2 and EBS cost rows here.
+        No persisted cost estimates yet. Successful destroys will add estimated EC2, EBS, RDS/Aurora, and load balancer cost rows here.
       </div>
     `
     return
@@ -1715,6 +1718,8 @@ const renderCostHistory = costs => {
             <th class="px-4 py-3">Runtime</th>
             <th class="px-4 py-3">EC2</th>
             <th class="px-4 py-3">EBS</th>
+            <th class="px-4 py-3">RDS</th>
+            <th class="px-4 py-3">LB</th>
             <th class="px-4 py-3">Total</th>
           </tr>
         </thead>
@@ -1733,6 +1738,8 @@ const renderCostHistory = costs => {
                 <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(Number(entry.totalRuntimeHours || 0).toFixed(2))}h</td>
                 <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(formatUSD(entry.ec2CostUsd))}</td>
                 <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(formatUSD(entry.ebsCostUsd))}</td>
+                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(formatUSD(entry.rdsCostUsd))}</td>
+                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(formatUSD(entry.loadBalancerCostUsd))}</td>
                 <td class="px-4 py-3 font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(formatUSD(entry.totalCostUsd))}</td>
               </tr>
             `
@@ -2763,6 +2770,10 @@ workspaceRunMetaEl?.addEventListener('click', event => {
     return
   }
   if (action === 'open-run-folder') {
+    if (!runFolderAvailable(run)) {
+      refreshStatusEl.textContent = 'Run folder is not available locally.'
+      return
+    }
     openLocalPath(runFolderPath(run))
     return
   }
@@ -2814,6 +2825,10 @@ cleanupSlotsEl?.addEventListener('click', event => {
   const runId = button.dataset.runId || ''
   if (button.dataset.action === 'open-run-folder') {
     const run = (lastState?.workspace?.runs || []).find(candidate => sameRunKey(candidate.runId, runId))
+    if (!runFolderAvailable(run)) {
+      refreshStatusEl.textContent = 'Run folder is not available locally.'
+      return
+    }
     openLocalPath(runFolderPath(run))
     return
   }

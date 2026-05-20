@@ -559,7 +559,7 @@ func TestTerraformBackendConfigFromEnvBuildsS3Backend(t *testing.T) {
 	t.Setenv("TF_STATE_BUCKET", "bucket")
 	t.Setenv("TF_STATE_LOCK_TABLE", "locks")
 	t.Setenv("TF_STATE_REGION", "us-east-2")
-	t.Setenv("TF_STATE_KEY", "ha-rancher-rke2/signoff/v2.14/v2.14.1-alpha6/123/webhook-fresh-install/terraform.tfstate")
+	t.Setenv("TF_STATE_KEY", "rancher-runway/signoff/v2.14/v2.14.1-alpha6/123/webhook-fresh-install/terraform.tfstate")
 
 	backendConfig, err := terraformBackendConfigFromEnv()
 	if err != nil {
@@ -568,7 +568,7 @@ func TestTerraformBackendConfigFromEnvBuildsS3Backend(t *testing.T) {
 
 	expected := map[string]interface{}{
 		"bucket":         "bucket",
-		"key":            "ha-rancher-rke2/signoff/v2.14/v2.14.1-alpha6/123/webhook-fresh-install/terraform.tfstate",
+		"key":            "rancher-runway/signoff/v2.14/v2.14.1-alpha6/123/webhook-fresh-install/terraform.tfstate",
 		"region":         "us-east-2",
 		"dynamodb_table": "locks",
 		"encrypt":        true,
@@ -585,14 +585,14 @@ func TestTerraformBackendConfigAddsRunSuffixToS3Key(t *testing.T) {
 	t.Setenv("TF_STATE_BUCKET", "bucket")
 	t.Setenv("TF_STATE_LOCK_TABLE", "locks")
 	t.Setenv("TF_STATE_REGION", "us-east-2")
-	t.Setenv("TF_STATE_KEY", "ha-rancher-rke2/local/terraform.tfstate")
+	t.Setenv("TF_STATE_KEY", "rancher-runway/local/terraform.tfstate")
 	t.Setenv("HA_RANCHER_RUN_ID", "ABC_123")
 
 	backendConfig, err := terraformBackendConfigFromEnv()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "ha-rancher-rke2/local/runs/abc_123/terraform.tfstate"
+	want := "rancher-runway/local/runs/abc_123/terraform.tfstate"
 	if got := backendConfig["key"]; got != want {
 		t.Fatalf("expected key %q, got %#v", want, backendConfig["key"])
 	}

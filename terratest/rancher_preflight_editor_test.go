@@ -21,6 +21,9 @@ func TestUpdateAutoModeConfigFileRewritesVersionsAndTotalHAs(t *testing.T) {
   version: "2.14.1-alpha3"
   bootstrap_password: "admin"
 total_has: 1
+rke2:
+  preload_images: false
+  server_count: 5
 tf_vars:
   aws_region: "us-east-2"
 `
@@ -217,6 +220,119 @@ tf_vars:
 	}
 }
 
+func TestUpdateAutoModeConfigFileWritesHostedTenantConfig(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "tool-config.yml")
+
+	initialConfig := `deployment:
+  type: ha-rke2
+rancher:
+  mode: auto
+  versions:
+    - "2.14-head"
+total_has: 1
+tf_vars:
+  aws_region: "us-east-2"
+  aws_prefix: "atb"
+  aws_pem_key_name: "qa-key"
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	if err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		DeploymentType:        deploymentTypeHostedTenantK3S,
+		Versions:              []string{"2.14-head", "v2.13-head", "2.12.9-alpha3"},
+		Distro:                "auto",
+		BootstrapPassword:     "change-me",
+		UserFirstName:         "Ada",
+		UserLastName:          "Lovelace",
+		TFVars:                map[string]string{"aws_prefix": "atb", "aws_pem_key_name": "qa-key"},
+		HostedRDSPassword:     "S3curePass1",
+		HostedEC2InstanceType: "m5.xlarge",
+		PreloadImages:         true,
+	}); err != nil {
+		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read updated config: %v", err)
+	}
+
+	var parsed struct {
+		Deployment            map[string]interface{} `yaml:"deployment"`
+		Rancher               map[string]interface{} `yaml:"rancher"`
+		K3S                   map[string]interface{} `yaml:"k3s"`
+		RKE2                  map[string]interface{} `yaml:"rke2"`
+		TotalHAs              int                    `yaml:"total_has"`
+		TotalRancherInstances int                    `yaml:"total_rancher_instances"`
+		TFVars                map[string]interface{} `yaml:"tf_vars"`
+	}
+	if err := yaml.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("failed to parse updated config: %v", err)
+	}
+
+	if parsed.Deployment["type"] != deploymentTypeHostedTenantK3S {
+		t.Fatalf("expected hosted tenant deployment type, got %#v", parsed.Deployment)
+	}
+	if parsed.TotalHAs != 3 || parsed.TotalRancherInstances != 3 {
+		t.Fatalf("expected both counts to be 3, got total_has=%d total_rancher_instances=%d", parsed.TotalHAs, parsed.TotalRancherInstances)
+	}
+	rawVersions, ok := parsed.Rancher["versions"].([]interface{})
+	if !ok || len(rawVersions) != 3 || rawVersions[1] != "2.13-head" {
+		t.Fatalf("unexpected hosted tenant versions: %#v", parsed.Rancher["versions"])
+	}
+	if parsed.TFVars["aws_rds_password"] != "S3curePass1" || parsed.TFVars["aws_ec2_instance_type"] != "m5.xlarge" {
+		t.Fatalf("expected hosted tenant tf vars, got %#v", parsed.TFVars)
+	}
+	if parsed.K3S["preload_images"] != true {
+		t.Fatalf("expected hosted tenant k3s.preload_images=true, got %#v", parsed.K3S)
+	}
+	if parsed.RKE2 != nil {
+		t.Fatalf("expected hosted tenant setup to remove rke2 node layout settings, got %#v", parsed.RKE2)
+	}
+	if got := viper.GetString("deployment.type"); got != deploymentTypeHostedTenantK3S {
+		t.Fatalf("expected viper deployment.type hosted tenant, got %q", got)
+	}
+	if got := viper.GetInt("total_rancher_instances"); got != 3 {
+		t.Fatalf("expected viper total_rancher_instances 3, got %d", got)
+	}
+	if !viper.GetBool("k3s.preload_images") {
+		t.Fatalf("expected viper k3s.preload_images true")
+	}
+}
+
+func TestUpdateAutoModeConfigFileRejectsTooManyHostedTenants(t *testing.T) {
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "tool-config.yml")
+
+	initialConfig := `deployment:
+  type: hosted-tenant-k3s
+rancher:
+  mode: auto
+total_rancher_instances: 2
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		DeploymentType:    deploymentTypeHostedTenantK3S,
+		Versions:          []string{"2.14-head", "2.14-head", "2.14-head", "2.14-head", "2.14-head"},
+		HostedRDSPassword: "S3curePass1",
+	})
+	if err == nil {
+		t.Fatal("expected too many hosted tenants to fail validation")
+	}
+	if !strings.Contains(err.Error(), "at most 4") {
+		t.Fatalf("expected max count guidance, got %v", err)
+	}
+}
+
 func TestUpdateAutoModeConfigFileWritesManualModeCommandsAndChecksums(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -378,8 +494,57 @@ func TestNormalizeAWSPrefixRequiresTwoOrThreeLetters(t *testing.T) {
 	}
 }
 
+func TestValidateHostedTenantRDSPasswordMatchesRDSMySQLRules(t *testing.T) {
+	if err := validateHostedTenantRDSPassword("S3curePass1!"); err != nil {
+		t.Fatalf("expected generated-safe password to be valid, got %v", err)
+	}
+
+	for _, value := range []string{
+		"short7",
+		"has space 1",
+		"has/slash1",
+		"has'quote1",
+		`has"quote1`,
+		"has@sign1",
+		strings.Repeat("a", 42),
+	} {
+		if err := validateHostedTenantRDSPassword(value); err == nil {
+			t.Fatalf("expected %q to be invalid", value)
+		}
+	}
+}
+
+func TestBuildResolvedPlansDialogMessageLabelsHostedTenantK3SPlans(t *testing.T) {
+	message := buildResolvedPlansDialogMessage([]*RancherResolvedPlan{
+		{
+			RequestedVersion:      "2.14.2-alpha3",
+			ChartRepoAlias:        "rancher-alpha",
+			ChartVersion:          "2.14.2-alpha3",
+			RecommendedK3SVersion: "v1.35.4+k3s1",
+			HelmCommands:          []string{"helm install rancher rancher-alpha/rancher"},
+		},
+		{
+			RequestedVersion:      "2.14.2-alpha3",
+			ChartRepoAlias:        "rancher-alpha",
+			ChartVersion:          "2.14.2-alpha3",
+			RecommendedK3SVersion: "v1.35.4+k3s1",
+			HelmCommands:          []string{"helm install rancher rancher-alpha/rancher"},
+		},
+	})
+
+	if !strings.Contains(message, "Host\n") || !strings.Contains(message, "Tenant 1\n") {
+		t.Fatalf("expected hosted tenant section labels, got:\n%s", message)
+	}
+	if !strings.Contains(message, "Resolved K3s/K8s: v1.35.4+k3s1") {
+		t.Fatalf("expected K3s resolved label, got:\n%s", message)
+	}
+	if strings.Contains(message, "Resolved RKE2/K8s") {
+		t.Fatalf("did not expect RKE2 label for hosted tenant plan, got:\n%s", message)
+	}
+}
+
 func TestDecodePreflightConfigUpdateRequestFromHTMXForm(t *testing.T) {
-	body := strings.NewReader("versions=head&versions=v2.14-head&distro=community&bootstrapPassword=secret&preloadImages=true&userFirstName=Ada&userLastName=Lovelace&customHostnameEnabled=true&customHostname=demo&tfVars.aws_prefix=ATB&tfVars.aws_pem_key_name=qa-key&tfVars.aws_route53_fqdn=qa.rancher.space")
+	body := strings.NewReader("deploymentType=hosted-tenant-k3s&versions=head&versions=v2.14-head&distro=community&bootstrapPassword=secret&preloadImages=true&serverCount=5&hostedRDSPassword=S3curePass1&hostedEC2InstanceType=m5.xlarge&userFirstName=Ada&userLastName=Lovelace&customHostnameEnabled=true&customHostname=demo&tfVars.aws_prefix=ATB&tfVars.aws_pem_key_name=qa-key&tfVars.aws_route53_fqdn=qa.rancher.space")
 	req := httptest.NewRequest("POST", "/submit", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
@@ -390,8 +555,11 @@ func TestDecodePreflightConfigUpdateRequestFromHTMXForm(t *testing.T) {
 	if len(update.Versions) != 2 || update.Versions[0] != "head" || update.Versions[1] != "v2.14-head" {
 		t.Fatalf("unexpected versions: %#v", update.Versions)
 	}
-	if update.Distro != "community" || update.BootstrapPassword != "secret" || !update.PreloadImages || !update.CustomHostnameEnabled {
+	if update.DeploymentType != deploymentTypeHostedTenantK3S || update.Distro != "community" || update.BootstrapPassword != "secret" || !update.PreloadImages || !update.CustomHostnameEnabled {
 		t.Fatalf("unexpected decoded update: %#v", update)
+	}
+	if update.ServerCount != 5 || update.HostedRDSPassword != "S3curePass1" || update.HostedEC2InstanceType != "m5.xlarge" {
+		t.Fatalf("unexpected hosted tenant settings: %#v", update)
 	}
 	if update.UserFirstName != "Ada" || update.UserLastName != "Lovelace" {
 		t.Fatalf("unexpected decoded owner: %#v", update)

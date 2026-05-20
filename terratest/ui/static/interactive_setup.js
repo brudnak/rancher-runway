@@ -22,6 +22,10 @@ let config = setupData.config || {
   serverCount: 3,
   tfVars: {}
 }
+const normalizeDeploymentType = value => String(value || '').trim().toLowerCase() === 'hosted-tenant-k3s' ? 'hosted-tenant-k3s' : 'ha-rke2'
+let deploymentType = normalizeDeploymentType(setupData.deploymentType || config.deploymentType)
+const hostedTenantMinInstances = 2
+const hostedTenantMaxInstances = 4
 let customHostnameEnabled = Boolean(setupData.customHostnameEnabled)
 let customHostname = ''
 let submitting = false
@@ -45,6 +49,10 @@ const unlockIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" view
 
 const setupFormEl = byId('setupForm')
 const modeInputEl = byId('modeInput')
+const deploymentTypeInputEl = byId('deploymentTypeInput')
+const haRke2DeploymentBtnEl = byId('haRke2DeploymentBtn')
+const hostedTenantDeploymentBtnEl = byId('hostedTenantDeploymentBtn')
+const deploymentSummaryEl = byId('deploymentSummary')
 const autoModeBtnEl = byId('autoModeBtn')
 const manualModeBtnEl = byId('manualModeBtn')
 const autoModePanelEl = byId('autoModePanel')
@@ -74,13 +82,23 @@ const editorCancelBtnEl = byId('editorCancelBtn')
 const customHostnameBoxEl = byId('customHostnameBox')
 const customHostnameToggleEl = byId('customHostnameToggle')
 const customHostnameInputEl = byId('customHostnameInput')
+const hostedTenantPanelEl = byId('hostedTenantPanel')
+const hostedRdsPasswordInputEl = byId('hostedRdsPasswordInput')
+const hostedRdsPasswordGenerateBtnEl = byId('hostedRdsPasswordGenerateBtn')
+const hostedRdsPasswordToggleEl = byId('hostedRdsPasswordToggle')
+const hostedRdsPasswordLockToggleEl = byId('hostedRdsPasswordLockToggle')
+const hostedEc2InstanceTypeInputEl = byId('hostedEc2InstanceTypeInput')
+const hostedEc2InstanceTypeLockToggleEl = byId('hostedEc2InstanceTypeLockToggle')
 const distroSelectEl = byId('distroSelect')
 const bootstrapPasswordInputEl = byId('bootstrapPasswordInput')
 const bootstrapPasswordToggleEl = byId('bootstrapPasswordToggle')
 const preloadImagesToggleEl = byId('preloadImagesToggle')
+const preloadImagesTextEl = byId('preloadImagesText')
 const serverCountInputEl = byId('serverCountInput')
 const serverCountButtonEls = setupQueryAll('button[data-server-count]')
+const rke2ServerLayoutFieldsetEl = byId('rke2ServerLayoutFieldset')
 const serverTopologyHintEl = byId('serverTopologyHint')
+const totalInstancesLabelEl = byId('totalInstancesLabel')
 const userFirstNameInputEl = byId('userFirstNameInput')
 const userLastNameInputEl = byId('userLastNameInput')
 const systemReadinessDetailsEl = byId('systemReadinessDetails')
@@ -93,9 +111,12 @@ const lockToggleEls = setupQueryAll('button[data-lock-toggle]')
 const secretToggleEls = setupQueryAll('button[data-secret-toggle]')
 const logPanelEl = byId('logPanel')
 const reviewLogPanelEl = byId('reviewLogPanel')
+const resolvingSummaryEl = byId('resolvingSummary')
 const resolvingErrorBoxEl = byId('resolvingErrorBox')
 const planCardsEl = byId('planCards')
 const planFallbackEl = byId('planFallback')
+const resolvedPlanHeadingEl = byId('resolvedPlanHeading')
+const reviewResolverLogSummaryEl = byId('reviewResolverLogSummary')
 const reviewErrorBoxEl = byId('reviewErrorBox')
 const respondActionsEl = byId('respondActions')
 const doneAccentEl = byId('doneAccent')
@@ -186,12 +207,23 @@ const parseResolvedPlanText = planText => {
   lines.forEach(rawLine => {
     const line = String(rawLine || '').replace(/\s+$/, '')
     const trimmed = line.trim()
-    const haMatch = trimmed.match(/^HA\s+(\d+)$/)
+    const haMatch = trimmed.match(/^(HA|Tenant)\s+(\d+)$/)
 
     if (haMatch) {
       finishCurrent()
       current = {
-        title: `HA ${haMatch[1]}`,
+        title: `${haMatch[1]} ${haMatch[2]}`,
+        details: [],
+        commands: []
+      }
+      activeCommand = null
+      return
+    }
+
+    if (trimmed === 'Host') {
+      finishCurrent()
+      current = {
+        title: 'Host',
         details: [],
         commands: []
       }
@@ -238,6 +270,16 @@ const renderPlanCards = planText => {
 
   const text = String(planText || '').trim()
   const cards = parseResolvedPlanText(text)
+  const hosted = text.includes('Resolved K3s/K8s:') || cards.some(card => card.title === 'Host' || card.title.startsWith('Tenant '))
+
+  if (resolvedPlanHeadingEl) {
+    resolvedPlanHeadingEl.textContent = hosted ? 'Resolved hosted tenant install plan' : 'Resolved HA install plan'
+  }
+  if (reviewResolverLogSummaryEl) {
+    reviewResolverLogSummaryEl.textContent = hosted
+      ? 'Version, chart, K3s, and installer resolution output.'
+      : 'Version, chart, RKE2, and installer resolution output.'
+  }
 
   if (!text) {
     planCardsEl.innerHTML = ''
@@ -256,6 +298,7 @@ const renderPlanCards = planText => {
   planFallbackEl.classList.add('hidden')
   planFallbackEl.textContent = ''
   planCommandCopies = []
+  const emptyLabel = hosted ? 'hosted tenant instance' : 'HA'
   const renderCodeLines = commandText => String(commandText || '').split('\n').map((line, index) => `
     <div class="setup-code-line">
       <span class="setup-code-line-number">${index + 1}</span>
@@ -271,7 +314,7 @@ const renderPlanCards = planText => {
           <div class="mt-1 break-words text-sm font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(detail.value || '-')}</div>
         </div>
       `).join('')
-      : '<div class="text-sm text-zinc-500 dark:text-zinc-400">No resolved metadata was emitted for this HA.</div>'
+      : `<div class="text-sm text-zinc-500 dark:text-zinc-400">No resolved metadata was emitted for this ${emptyLabel}.</div>`
 
     const commands = card.commands.length
       ? card.commands.map(command => {
@@ -301,7 +344,7 @@ const renderPlanCards = planText => {
               <h3 class="text-lg font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(card.title)}</h3>
               <span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700 dark:bg-white/[0.06] dark:text-zinc-200">Ready for approval</span>
             </div>
-            <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Resolved install details for review before AWS setup starts.</p>
+            <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">${hosted ? 'Resolved hosted tenant install details for review before AWS setup starts.' : 'Resolved install details for review before AWS setup starts.'}</p>
           </div>
           <span class="inline-flex shrink-0 items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200">
             Details
@@ -338,6 +381,32 @@ const sanitizeDisplayValue = value => {
 }
 
 customHostname = sanitizeDisplayValue(setupData.customHostname || '')
+
+const isHostedTenantDeployment = () => deploymentType === 'hosted-tenant-k3s'
+
+const autoRowLabel = index => isHostedTenantDeployment()
+  ? index === 0 ? 'Host' : `Tenant ${index}`
+  : `HA ${index + 1}`
+
+const activeInstanceLabel = () => isHostedTenantDeployment() ? 'Rancher instances' : 'HAs'
+
+const minimumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMinInstances : 1
+
+const maximumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMaxInstances : Number.POSITIVE_INFINITY
+
+const ensureDeploymentCompatibleRows = () => {
+  const minimumRows = minimumAutoRows()
+  while (versions.length < minimumRows) {
+    versions.push('')
+  }
+  if (versions.length > maximumAutoRows()) {
+    versions = versions.slice(0, maximumAutoRows())
+  }
+  if (isHostedTenantDeployment()) {
+    setupMode = 'auto'
+    customHostnameEnabled = false
+  }
+}
 
 const showValidationError = (message, target) => {
   editorErrorBoxEl.textContent = message
@@ -538,6 +607,16 @@ const renderEditableConfig = () => {
   }
   userFirstNameInputEl.value = config.userFirstName || ''
   userLastNameInputEl.value = config.userLastName || ''
+  if (hostedRdsPasswordInputEl) {
+    hostedRdsPasswordInputEl.value = config.hostedRDSPassword || ''
+    hostedRdsPasswordInputEl.type = 'password'
+    if (hostedRdsPasswordToggleEl) {
+      hostedRdsPasswordToggleEl.textContent = 'Show'
+    }
+  }
+  if (hostedEc2InstanceTypeInputEl) {
+    hostedEc2InstanceTypeInputEl.value = config.hostedEC2InstanceType || 'm5.large'
+  }
 
   tfVarInputEls.forEach(input => {
     const key = input.getAttribute('data-tf-var')
@@ -545,20 +624,62 @@ const renderEditableConfig = () => {
   })
 
   lockAllAdvancedAWSFields()
+  setHostedRDSPasswordLocked(true)
+  setHostedEC2InstanceTypeLocked(true)
+  renderHostedRDSPasswordGenerateState()
   renderServerTopology()
 }
 
+const renderDeploymentType = () => {
+  ensureDeploymentCompatibleRows()
+  const hosted = isHostedTenantDeployment()
+  if (deploymentTypeInputEl) {
+    deploymentTypeInputEl.value = deploymentType
+  }
+  haRke2DeploymentBtnEl?.setAttribute('aria-pressed', hosted ? 'false' : 'true')
+  hostedTenantDeploymentBtnEl?.setAttribute('aria-pressed', hosted ? 'true' : 'false')
+  hostedTenantPanelEl?.classList.toggle('hidden', !hosted)
+  customHostnameBoxEl?.classList.toggle('hidden', hosted)
+  rke2ServerLayoutFieldsetEl?.classList.toggle('hidden', hosted)
+  if (manualModeBtnEl) {
+    manualModeBtnEl.disabled = submitting || hosted
+    manualModeBtnEl.title = hosted ? 'Hosted tenant K3s setup currently resolves through auto mode.' : ''
+    manualModeBtnEl.classList.toggle('cursor-not-allowed', hosted)
+    manualModeBtnEl.classList.toggle('opacity-50', hosted)
+  }
+  if (addBtnEl) {
+    addBtnEl.textContent = hosted ? 'Add tenant' : 'Add HA'
+  }
+  if (manualAddBtnEl) {
+    manualAddBtnEl.textContent = hosted ? 'Add tenant' : 'Add HA'
+  }
+  if (totalInstancesLabelEl) {
+    totalInstancesLabelEl.textContent = hosted ? 'Total Rancher instances for this run:' : 'Total HAs for this run:'
+  }
+  if (deploymentSummaryEl) {
+    deploymentSummaryEl.textContent = hosted
+      ? 'Hosted tenant K3s creates one host Rancher first, then one to three tenant Ranchers backed by RDS/Aurora MySQL.'
+      : 'HA RKE2 creates standalone Rancher management clusters using the RKE2 server layout below.'
+  }
+  if (preloadImagesTextEl) {
+    preloadImagesTextEl.textContent = hosted ? 'Preload K3s images' : 'Preload RKE2 images'
+  }
+  renderHostedRDSPasswordGenerateState()
+}
+
 const renderRows = () => {
+  ensureDeploymentCompatibleRows()
   if (customHostnameEnabled && versions.length !== 1) {
     versions = [versions[0] || '']
   }
 
   rowsEl.innerHTML = versions.map((version, index) => {
-    const removeDisabled = customHostnameEnabled || versions.length <= 1 ? ' disabled' : ''
+    const removeDisabled = customHostnameEnabled || versions.length <= minimumAutoRows() ? ' disabled' : ''
+    const label = autoRowLabel(index)
 
     return [
       `<div class="${rowClass}">`,
-      `<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">HA ${index + 1}</div>`,
+      `<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
       `<div><input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="2.14.1-alpha3" /></div>`,
       `<div><button class="${removeButtonClass}" type="button" data-remove-index="${index}"${removeDisabled}>Remove</button></div>`,
       '</div>'
@@ -566,10 +687,14 @@ const renderRows = () => {
   }).join('')
 
   totalInstancesValueEl.textContent = String(versions.length)
-  addBtnEl.disabled = submitting
-  addBtnEl.setAttribute('aria-disabled', customHostnameEnabled ? 'true' : 'false')
-  addBtnEl.classList.toggle('cursor-not-allowed', customHostnameEnabled)
-  addBtnEl.classList.toggle('opacity-50', customHostnameEnabled)
+  const addDisabled = customHostnameEnabled || versions.length >= maximumAutoRows()
+  addBtnEl.disabled = submitting || addDisabled
+  addBtnEl.setAttribute('aria-disabled', addDisabled ? 'true' : 'false')
+  addBtnEl.classList.toggle('cursor-not-allowed', addDisabled)
+  addBtnEl.classList.toggle('opacity-50', addDisabled)
+  addBtnEl.title = isHostedTenantDeployment() && versions.length >= hostedTenantMaxInstances
+    ? 'Hosted tenant K3s supports up to 4 total Rancher instances: 1 host plus 3 tenants.'
+    : ''
 
   rowsEl.querySelectorAll('input[data-index]').forEach(input => {
     input.addEventListener('input', event => {
@@ -580,7 +705,7 @@ const renderRows = () => {
 
   rowsEl.querySelectorAll('button[data-remove-index]').forEach(button => {
     button.addEventListener('click', () => {
-      if (versions.length <= 1 || submitting || customHostnameEnabled) {
+      if (versions.length <= minimumAutoRows() || submitting || customHostnameEnabled) {
         return
       }
 
@@ -627,6 +752,9 @@ const renderServerTopology = () => {
 }
 
 const renderMode = () => {
+  if (isHostedTenantDeployment()) {
+    setupMode = 'auto'
+  }
   setupMode = setupMode === 'manual' ? 'manual' : 'auto'
   if (modeInputEl) {
     modeInputEl.value = setupMode
@@ -639,7 +767,9 @@ const renderMode = () => {
     modeValueEl.textContent = setupMode
   }
   if (modeSummaryEl) {
-    modeSummaryEl.textContent = setupMode === 'manual'
+    modeSummaryEl.textContent = isHostedTenantDeployment()
+      ? 'Hosted tenant K3s uses auto mode so the host and tenant Rancher plans can resolve before the AWS run starts.'
+      : setupMode === 'manual'
       ? 'Manual mode saves one editable Helm command and one RKE2 version per HA, then validates the Helm render before AWS starts.'
       : 'Auto mode resolves Rancher chart, image, RKE2 version, and installer SHA256 from the requested Rancher versions.'
   }
@@ -650,9 +780,9 @@ const renderMode = () => {
     renderRows()
   }
   if (manualAddBtnEl) {
-    manualAddBtnEl.disabled = submitting || customHostnameEnabled
-    manualAddBtnEl.classList.toggle('cursor-not-allowed', customHostnameEnabled)
-    manualAddBtnEl.classList.toggle('opacity-50', customHostnameEnabled)
+    manualAddBtnEl.disabled = submitting || customHostnameEnabled || isHostedTenantDeployment()
+    manualAddBtnEl.classList.toggle('cursor-not-allowed', customHostnameEnabled || isHostedTenantDeployment())
+    manualAddBtnEl.classList.toggle('opacity-50', customHostnameEnabled || isHostedTenantDeployment())
   }
   totalInstancesValueEl.textContent = String(activeHACount())
   setSubmittingState(submitting)
@@ -863,6 +993,9 @@ const renderManualRows = () => {
 }
 
 const renderCustomHostname = () => {
+  if (isHostedTenantDeployment()) {
+    customHostnameEnabled = false
+  }
   customHostnameBoxEl.dataset.enabled = customHostnameEnabled ? 'true' : 'false'
   customHostnameToggleEl.checked = customHostnameEnabled
   customHostnameInputEl.value = customHostname
@@ -963,6 +1096,41 @@ const normalizedK8SVersions = () => k8sVersions.map(version => String(version ||
 
 const validRKE2Version = value => /^v?1\.\d+\.\d+\+rke2r\d+$/.test(String(value || '').trim())
 
+const hostedRDSPasswordValidationMessage = value => {
+  const password = String(value || '').trim()
+  if (password.length < 8) {
+    return 'Hosted tenant RDS password must be at least 8 characters.'
+  }
+  if (password.length > 41) {
+    return 'Hosted tenant RDS password must be 41 characters or fewer for RDS MySQL/Aurora.'
+  }
+  if (/[/'"@ ]/.test(password)) {
+    return 'Hosted tenant RDS password cannot contain /, \', ", @, or spaces.'
+  }
+  for (let i = 0; i < password.length; i += 1) {
+    const code = password.charCodeAt(i)
+    if (code < 32 || code > 126) {
+      return 'Hosted tenant RDS password must contain printable ASCII characters only.'
+    }
+  }
+  return ''
+}
+
+const hostedRDSPasswordAlphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!#$%&()*+,-.:;<=>?[]^_{|}~'
+
+const generateHostedRDSPassword = () => {
+  const length = 32
+  const chars = new Uint32Array(length)
+  if (window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(chars)
+  } else {
+    for (let i = 0; i < chars.length; i += 1) {
+      chars[i] = Math.floor(Math.random() * hostedRDSPasswordAlphabet.length)
+    }
+  }
+  return Array.from(chars, value => hostedRDSPasswordAlphabet[value % hostedRDSPasswordAlphabet.length]).join('')
+}
+
 const normalizedAWSPrefix = () => {
   const input = setupQuery('input[data-tf-var="aws_prefix"]')
   return String((input && input.value) || '').trim().toLowerCase()
@@ -994,11 +1162,27 @@ const validateSetup = () => {
     return { message: 'At least one HA version is required.', target: rowsEl.querySelector('input[data-index]') }
   }
 
+  if (isHostedTenantDeployment()) {
+    if (setupMode !== 'auto') {
+      return { message: 'Hosted tenant K3s setup currently supports auto mode only.', target: autoModeBtnEl }
+    }
+    if (trimmed.length < 2) {
+      return { message: 'Hosted tenant K3s needs one host and at least one tenant.', target: rowsEl.querySelector('input[data-index]') }
+    }
+    if (trimmed.length > hostedTenantMaxInstances) {
+      return { message: 'Hosted tenant K3s supports up to 4 total Rancher instances: 1 host plus 3 tenants.', target: rowsEl }
+    }
+    const passwordMessage = hostedRDSPasswordValidationMessage(hostedRdsPasswordInputEl?.value || '')
+    if (passwordMessage) {
+      return { message: passwordMessage, target: hostedRdsPasswordInputEl }
+    }
+  }
+
   if (setupMode === 'auto') {
     for (let i = 0; i < trimmed.length; i += 1) {
       if (!trimmed[i]) {
         return {
-          message: `Version for HA ${i + 1} cannot be empty.`,
+          message: `Version for ${autoRowLabel(i)} cannot be empty.`,
           target: rowsEl.querySelector(`input[data-index="${i}"]`)
         }
       }
@@ -1120,6 +1304,64 @@ const lockAllAdvancedAWSFields = () => {
   })
 }
 
+const setLockedInputTone = (input, locked) => {
+  input.classList.toggle('text-zinc-950', !locked)
+  input.classList.toggle('dark:text-zinc-100', !locked)
+  input.classList.toggle('text-zinc-500', locked)
+  input.classList.toggle('dark:text-zinc-500', locked)
+  input.classList.toggle('bg-white', !locked)
+  input.classList.toggle('dark:bg-zinc-950/50', !locked)
+  input.classList.toggle('bg-zinc-100', locked)
+  input.classList.toggle('dark:bg-zinc-950/30', locked)
+}
+
+const setLockButtonTone = (button, locked) => {
+  button.classList.toggle('text-emerald-600', !locked)
+  button.classList.toggle('dark:text-emerald-400', !locked)
+  button.classList.toggle('text-zinc-500', locked)
+  button.classList.toggle('dark:text-zinc-400', locked)
+}
+
+const setHostedRDSPasswordLocked = locked => {
+  if (!hostedRdsPasswordInputEl || !hostedRdsPasswordLockToggleEl) {
+    return
+  }
+
+  hostedRdsPasswordInputEl.readOnly = locked
+  hostedRdsPasswordLockToggleEl.innerHTML = locked ? lockIcon : unlockIcon
+  hostedRdsPasswordLockToggleEl.dataset.state = locked ? 'locked' : 'unlocked'
+  hostedRdsPasswordLockToggleEl.title = locked ? 'Unlock RDS MySQL password' : 'Lock RDS MySQL password'
+  hostedRdsPasswordLockToggleEl.setAttribute('aria-label', hostedRdsPasswordLockToggleEl.title)
+  setLockButtonTone(hostedRdsPasswordLockToggleEl, locked)
+  setLockedInputTone(hostedRdsPasswordInputEl, locked)
+}
+
+const renderHostedRDSPasswordGenerateState = () => {
+  if (!hostedRdsPasswordGenerateBtnEl || !hostedRdsPasswordInputEl) {
+    return
+  }
+  const empty = !String(hostedRdsPasswordInputEl.value || '').trim()
+  hostedRdsPasswordGenerateBtnEl.disabled = submitting || !empty
+  hostedRdsPasswordGenerateBtnEl.classList.toggle('cursor-not-allowed', !empty)
+  hostedRdsPasswordGenerateBtnEl.classList.toggle('opacity-50', !empty)
+  hostedRdsPasswordGenerateBtnEl.title = empty ? '' : 'Clear the RDS password before generating a new one.'
+}
+
+const setHostedEC2InstanceTypeLocked = locked => {
+  if (!hostedEc2InstanceTypeInputEl || !hostedEc2InstanceTypeLockToggleEl) {
+    return
+  }
+
+  hostedEc2InstanceTypeInputEl.readOnly = locked
+  hostedEc2InstanceTypeLockToggleEl.innerHTML = locked ? lockIcon : unlockIcon
+  hostedEc2InstanceTypeLockToggleEl.dataset.state = locked ? 'locked' : 'unlocked'
+  hostedEc2InstanceTypeLockToggleEl.title = locked ? 'Unlock hosted tenant EC2 type' : 'Lock hosted tenant EC2 type'
+  hostedEc2InstanceTypeLockToggleEl.setAttribute('aria-label', hostedEc2InstanceTypeLockToggleEl.title)
+
+  setLockButtonTone(hostedEc2InstanceTypeLockToggleEl, locked)
+  setLockedInputTone(hostedEc2InstanceTypeInputEl, locked)
+}
+
 const toggleBootstrapPasswordVisibility = () => {
   const showing = bootstrapPasswordInputEl.type === 'text'
   bootstrapPasswordInputEl.type = showing ? 'password' : 'text'
@@ -1150,7 +1392,7 @@ const completionCopy = shouldContinue => shouldContinue
   : {
       title: 'Setup canceled',
       body: 'You can close this tab. The local test run will stop with a canceled setup message.',
-      detail: 'No Rancher HA plan was approved from this browser session.',
+      detail: 'No Rancher Runway plan was approved from this browser session.',
       accentClass: 'flex h-11 w-11 items-center justify-center rounded-full bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300',
       icon: '<path d="M18 6 6 18"></path><path d="m6 6 12 12"></path>'
     }
@@ -1210,26 +1452,36 @@ const setSubmittingState = nextSubmitting => {
     button.classList.toggle('opacity-60', actionDisabled)
     button.classList.toggle('grayscale', actionDisabled)
   })
-  ;[manualAddBtnEl, validateHelmBtnEl, recommendRKE2BtnEl, autoModeBtnEl, manualModeBtnEl].forEach(button => {
+  ;[manualAddBtnEl, validateHelmBtnEl, recommendRKE2BtnEl, autoModeBtnEl, manualModeBtnEl, haRke2DeploymentBtnEl, hostedTenantDeploymentBtnEl, hostedRdsPasswordGenerateBtnEl, hostedRdsPasswordLockToggleEl, hostedEc2InstanceTypeLockToggleEl].forEach(button => {
     if (!button) {
       return
     }
-    button.disabled = actionDisabled || (button === manualAddBtnEl && customHostnameEnabled)
+    button.disabled = actionDisabled || (button === manualAddBtnEl && customHostnameEnabled) || (button === manualModeBtnEl && isHostedTenantDeployment())
     button.classList.toggle('cursor-not-allowed', actionDisabled)
     button.classList.toggle('opacity-60', actionDisabled)
     button.classList.toggle('grayscale', actionDisabled)
   })
-  customHostnameToggleEl.disabled = nextSubmitting
-  customHostnameInputEl.disabled = nextSubmitting
+  customHostnameToggleEl.disabled = nextSubmitting || isHostedTenantDeployment()
+  customHostnameInputEl.disabled = nextSubmitting || isHostedTenantDeployment()
+  if (hostedRdsPasswordInputEl) {
+    hostedRdsPasswordInputEl.disabled = nextSubmitting || panelBooting || panelLifecycleBusy
+  }
+  if (hostedRdsPasswordToggleEl) {
+    hostedRdsPasswordToggleEl.disabled = nextSubmitting
+  }
+  if (hostedEc2InstanceTypeInputEl) {
+    hostedEc2InstanceTypeInputEl.disabled = nextSubmitting || panelBooting || panelLifecycleBusy
+  }
+  renderHostedRDSPasswordGenerateState()
   resolveInstallerSHAToggleEl.disabled = nextSubmitting
   distroSelectEl.disabled = nextSubmitting
   bootstrapPasswordInputEl.disabled = nextSubmitting
   bootstrapPasswordToggleEl.disabled = nextSubmitting
   preloadImagesToggleEl.disabled = nextSubmitting
   serverCountButtonEls.forEach(button => {
-    button.disabled = nextSubmitting
-    button.classList.toggle('cursor-not-allowed', nextSubmitting)
-    button.classList.toggle('opacity-60', nextSubmitting)
+    button.disabled = nextSubmitting || isHostedTenantDeployment()
+    button.classList.toggle('cursor-not-allowed', nextSubmitting || isHostedTenantDeployment())
+    button.classList.toggle('opacity-60', nextSubmitting || isHostedTenantDeployment())
   })
   userFirstNameInputEl.disabled = nextSubmitting
   userLastNameInputEl.disabled = nextSubmitting
@@ -1248,7 +1500,7 @@ const setSubmittingState = nextSubmitting => {
 
   rowsEl.querySelectorAll('input, button[data-remove-index]').forEach(element => {
     element.disabled = nextSubmitting || (panelBooting && element.hasAttribute('data-remove-index')) ||
-      (element.hasAttribute('data-remove-index') && (customHostnameEnabled || versions.length <= 1))
+      (element.hasAttribute('data-remove-index') && (customHostnameEnabled || versions.length <= minimumAutoRows()))
   })
   manualRowsEl.querySelectorAll('textarea, input, button').forEach(element => {
     element.disabled = nextSubmitting || panelBooting || panelLifecycleBusy ||
@@ -1368,6 +1620,11 @@ const recommendManualRKE2Versions = async () => {
 
 const beginResolutionUI = () => {
   lastResolverFailure = ''
+  if (resolvingSummaryEl) {
+    resolvingSummaryEl.textContent = isHostedTenantDeployment()
+      ? 'No AWS resources are being created yet. This step fetches Helm repos, SUSE support data, K3s patch releases, and installer SHA256 hashes, then shows the final hosted tenant plan for approval.'
+      : 'No AWS resources are being created yet. This step fetches Helm repos, SUSE support data, RKE2 patch releases, and installer SHA256 hashes, then shows the final plan for approval.'
+  }
   logPanelEl.innerHTML = '<span class="text-zinc-400 dark:text-zinc-500">Waiting for resolver output...</span>'
   if (reviewLogPanelEl) {
     reviewLogPanelEl.innerHTML = '<span class="text-zinc-400 dark:text-zinc-500">Waiting for resolver output...</span>'
@@ -1463,6 +1720,19 @@ const prepareSetupSubmit = async event => {
 
   if (!pemConfirmed) {
     return
+  }
+
+  if (isHostedTenantDeployment()) {
+    const hostedTenantConfirmed = await showConfirmModal({
+      title: 'Confirm hosted tenant setup',
+      body: 'Hosted tenant K3s setup takes longer than HA RKE2 because each Rancher instance uses a two-node K3s cluster backed by an Aurora MySQL/RDS datastore. The database resources can take a while to become ready; expect roughly 17 minutes before the run is fully set up.',
+      confirmText: 'Create hosted tenant',
+      cancelText: 'Go back'
+    })
+
+    if (!hostedTenantConfirmed) {
+      return
+    }
   }
 
   const formData = new FormData(setupFormEl)
@@ -1745,7 +2015,17 @@ addBtnEl.addEventListener('click', () => {
     return
   }
 
+  if (versions.length >= maximumAutoRows()) {
+    showNoticeModal({
+      title: 'Hosted tenant limit reached',
+      body: 'Hosted tenant K3s supports up to 4 total Rancher instances: 1 host plus 3 tenants.',
+      confirmText: 'Got it'
+    })
+    return
+  }
+
   versions.push('')
+  renderDeploymentType()
   renderRows()
 })
 
@@ -1842,10 +2122,38 @@ manualModeBtnEl.addEventListener('click', () => {
   if (submitting || setupMode === 'manual') {
     return
   }
+  if (isHostedTenantDeployment()) {
+    showNoticeModal({
+      title: 'Hosted tenant uses auto mode',
+      body: 'Hosted tenant K3s needs the resolver to build the host and tenant plans before setup, so this path currently stays in auto mode.',
+      confirmText: 'Got it'
+    })
+    return
+  }
   setupMode = 'manual'
   clearValidationError()
   ensureManualRows()
   renderMode()
+})
+
+haRke2DeploymentBtnEl?.addEventListener('click', () => {
+  if (submitting || deploymentType === 'ha-rke2') {
+    return
+  }
+  deploymentType = 'ha-rke2'
+  clearValidationError()
+  renderDeploymentType()
+  renderCustomHostname()
+})
+
+hostedTenantDeploymentBtnEl?.addEventListener('click', () => {
+  if (submitting || deploymentType === 'hosted-tenant-k3s') {
+    return
+  }
+  deploymentType = 'hosted-tenant-k3s'
+  clearValidationError()
+  renderDeploymentType()
+  renderCustomHostname()
 })
 
 resolveInstallerSHAToggleEl.addEventListener('change', event => {
@@ -1869,6 +2177,76 @@ serverCountButtonEls.forEach(button => {
 })
 
 bootstrapPasswordToggleEl.addEventListener('click', toggleBootstrapPasswordVisibility)
+hostedRdsPasswordToggleEl?.addEventListener('click', () => {
+  if (!hostedRdsPasswordInputEl || !hostedRdsPasswordToggleEl) {
+    return
+  }
+  const showing = hostedRdsPasswordInputEl.type === 'text'
+  hostedRdsPasswordInputEl.type = showing ? 'password' : 'text'
+  hostedRdsPasswordToggleEl.textContent = showing ? 'Show' : 'Hide'
+})
+
+hostedRdsPasswordInputEl?.addEventListener('input', clearValidationError)
+hostedRdsPasswordInputEl?.addEventListener('input', renderHostedRDSPasswordGenerateState)
+hostedRdsPasswordInputEl?.addEventListener('blur', () => {
+  if (submitting) {
+    return
+  }
+  setHostedRDSPasswordLocked(true)
+})
+hostedEc2InstanceTypeInputEl?.addEventListener('input', clearValidationError)
+hostedEc2InstanceTypeInputEl?.addEventListener('blur', () => {
+  if (submitting) {
+    return
+  }
+  setHostedEC2InstanceTypeLocked(true)
+})
+hostedRdsPasswordGenerateBtnEl?.addEventListener('click', () => {
+  if (submitting || !hostedRdsPasswordInputEl) {
+    return
+  }
+  if (String(hostedRdsPasswordInputEl.value || '').trim()) {
+    renderHostedRDSPasswordGenerateState()
+    return
+  }
+  hostedRdsPasswordInputEl.value = generateHostedRDSPassword()
+  hostedRdsPasswordInputEl.type = 'password'
+  if (hostedRdsPasswordToggleEl) {
+    hostedRdsPasswordToggleEl.textContent = 'Show'
+  }
+  setHostedRDSPasswordLocked(true)
+  renderHostedRDSPasswordGenerateState()
+  clearValidationError()
+  editorStatusBoxEl.textContent = 'Generated an RDS MySQL password that fits AWS character and length rules.'
+})
+hostedRdsPasswordLockToggleEl?.addEventListener('mousedown', event => {
+  event.preventDefault()
+})
+hostedRdsPasswordLockToggleEl?.addEventListener('click', () => {
+  if (submitting || !hostedRdsPasswordInputEl) {
+    return
+  }
+  const willUnlock = hostedRdsPasswordInputEl.readOnly
+  setHostedRDSPasswordLocked(!willUnlock)
+  if (willUnlock) {
+    hostedRdsPasswordInputEl.focus()
+    hostedRdsPasswordInputEl.select()
+  }
+})
+hostedEc2InstanceTypeLockToggleEl?.addEventListener('mousedown', event => {
+  event.preventDefault()
+})
+hostedEc2InstanceTypeLockToggleEl?.addEventListener('click', () => {
+  if (submitting || !hostedEc2InstanceTypeInputEl) {
+    return
+  }
+  const willUnlock = hostedEc2InstanceTypeInputEl.readOnly
+  setHostedEC2InstanceTypeLocked(!willUnlock)
+  if (willUnlock) {
+    hostedEc2InstanceTypeInputEl.focus()
+    hostedEc2InstanceTypeInputEl.select()
+  }
+})
 
 themeToggleEl?.addEventListener('click', () => {
   setTheme(currentTheme() === 'dark' ? 'light' : 'dark')
@@ -1996,8 +2374,9 @@ setupRootEl.addEventListener('rancher-control-panel-lifecycle', event => {
   setPanelLifecycleState(Boolean(event.detail?.busy), event.detail?.message || '')
 })
 
-renderCustomHostname()
 renderEditableConfig()
+renderDeploymentType()
+renderCustomHostname()
 setPanelBootingState(panelBooting)
 setTheme(currentTheme(), false)
 loadSystemReadiness()

@@ -23,6 +23,9 @@ rancher:
         --set rancherImageTag=v2.14.0 \
         --set agentTLSMode=system-store
 
+deployment:
+  type: ha-rke2
+
 total_has: 2
 
 user:

@@ -33,6 +33,12 @@ func TestCostLedgerRecordsAndSummarizesCleanupEstimate(t *testing.T) {
 		VolumeSizeGiB:       200,
 		EstimatedEC2CostUSD: 0.44,
 		EstimatedEBSCostUSD: 0.31,
+		DBInstanceCount:     1,
+		DBInstanceClass:     "db.r5.large",
+		EstimatedRDSCostUSD: 0.12,
+		LoadBalancerCount:   1,
+		LoadBalancerType:    "application",
+		EstimatedLBCostUSD:  0.08,
 	}
 
 	if err := recordCleanupCostEstimate(estimate); err != nil {
@@ -57,11 +63,17 @@ func TestCostLedgerRecordsAndSummarizesCleanupEstimate(t *testing.T) {
 	if entry.Owner != "Ada Lovelace" {
 		t.Fatalf("expected owner metadata, got %q", entry.Owner)
 	}
-	if got := entry.TotalCostUSD; got != 0.75 {
-		t.Fatalf("expected total cost 0.75, got %.2f", got)
+	if got := entry.RDSCostUSD; got != 0.12 {
+		t.Fatalf("expected RDS cost 0.12, got %.2f", got)
 	}
-	if got := history.Totals.Lifetime; got != 0.75 {
-		t.Fatalf("expected lifetime total 0.75, got %.2f", got)
+	if got := entry.LoadBalancerCostUSD; got != 0.08 {
+		t.Fatalf("expected load balancer cost 0.08, got %.2f", got)
+	}
+	if got := entry.TotalCostUSD; got != 0.95 {
+		t.Fatalf("expected total cost 0.95, got %.2f", got)
+	}
+	if got := history.Totals.Lifetime; got != 0.95 {
+		t.Fatalf("expected lifetime total 0.95, got %.2f", got)
 	}
 }
 

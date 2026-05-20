@@ -32,7 +32,9 @@ const statusFor = cluster => {
 
 const emptyPodsText = cluster => cluster.type === 'downstream'
   ? 'Pods are unavailable until the downstream kubeconfig is reachable.'
-  : 'Pods are unavailable until kubeconfig exists and kubectl can reach the cluster.'
+  : cluster.deploymentType === 'hosted-tenant-k3s'
+    ? 'Pods are unavailable until the hosted-tenant kubeconfig exists and kubectl can reach the cluster.'
+    : 'Pods are unavailable until kubeconfig exists and kubectl can reach the cluster.'
 
 const metaItem = (label, value) => `
   <div class="min-w-0">
@@ -44,6 +46,18 @@ const metaItem = (label, value) => `
 const clusterRunKey = cluster => String(cluster?.runId || 'default')
 
 const clusterHAKey = cluster => String(cluster?.haIndex || 0)
+
+const hostedTenantInstanceLabel = clusterOrHA => {
+  const index = Number(clusterOrHA?.haIndex || 0)
+  const role = clusterOrHA?.role || clusterOrHA?.local?.role
+  if (role === 'host' || index === 1) {
+    return 'Host'
+  }
+  if (index > 1) {
+    return `Tenant ${index - 1}`
+  }
+  return 'Tenant'
+}
 
 const runLabelForClusterGroup = (runKey, workspace) => {
   const runs = Array.isArray(workspace?.runs) ? workspace.runs : []
@@ -305,14 +319,17 @@ export const createClusterPanel = ({
     const currentLeader = pods.find(pod => pod.leader && pod.leaderLabel === 'Leader') || pods.find(pod => pod.leader)
     const changedLeader = pendingLeaderHighlights.get(cluster.id)
     const isDownstream = cluster.type === 'downstream'
+    const isHostedTenant = cluster.deploymentType === 'hosted-tenant-k3s'
     const status = statusFor(cluster)
     const clusterCollapsed = collapsedClusters.get(cluster.id) === true
     const toggleText = clusterCollapsed ? 'Show details' : 'Hide details'
     const version = cluster.version ? ` <span class="text-zinc-500 dark:text-zinc-400">(${escapeHtml(cluster.version)})</span>` : ''
-    const typeBadge = badge(isDownstream ? 'Downstream' : 'Local')
+    const typeBadge = badge(isDownstream ? 'Downstream' : isHostedTenant ? hostedTenantInstanceLabel(cluster) : 'Local')
     const contextParts = isDownstream
       ? [`Downstream from HA ${cluster.haIndex}`]
-      : [`Management cluster for HA ${cluster.haIndex}`]
+      : isHostedTenant
+        ? [`Hosted-tenant K3s ${hostedTenantInstanceLabel(cluster).toLowerCase()}`]
+        : [`Management cluster for HA ${cluster.haIndex}`]
 
     if (isDownstream && cluster.namespace) {
       contextParts.push(`namespace ${cluster.namespace}`)
@@ -324,7 +341,7 @@ export const createClusterPanel = ({
     const rancherURL = cluster.rancherUrl
       ? `<a href="${escapeHtml(cluster.rancherUrl)}" data-external-url="${escapeHtml(cluster.rancherUrl)}" class="text-emerald-600 hover:text-emerald-500 dark:text-emerald-300">${escapeHtml(cluster.rancherUrl)}</a>`
       : '<span class="text-zinc-500 dark:text-zinc-400">Unavailable</span>'
-    const loadBalancer = cluster.loadBalancer ? escapeHtml(cluster.loadBalancer) : '<span class="text-zinc-500 dark:text-zinc-400">Unavailable</span>'
+    const loadBalancer = cluster.loadBalancer ? escapeHtml(cluster.loadBalancer) : isHostedTenant ? '<span class="text-zinc-500 dark:text-zinc-400">Managed by hosted-tenant ALB</span>' : '<span class="text-zinc-500 dark:text-zinc-400">Unavailable</span>'
     const openingKubeconfigPath = actionState.activeOpenKubeconfigPathClusterId === cluster.id
     const copyingKubeconfigPath = actionState.activeCopyKubeconfigPathClusterId === cluster.id
     const openPathFeedback = kubeconfigPathActionFeedback.get(pathActionKey('open', cluster.id))
@@ -356,7 +373,9 @@ export const createClusterPanel = ({
       : '<div class="mt-4 text-sm text-zinc-500 dark:text-zinc-400">Leader not detected yet.</div>'
     const downstreamClasses = isDownstream
       ? 'border-l-4 border-l-emerald-500 bg-emerald-50/50 dark:bg-emerald-500/[0.04]'
-      : 'bg-white dark:bg-white/[0.03]'
+      : isHostedTenant && cluster.role === 'host'
+        ? 'border-l-4 border-l-sky-500 bg-sky-50/50 dark:bg-sky-500/[0.04]'
+        : 'bg-white dark:bg-white/[0.03]'
 
     return `
       <article class="min-w-0 overflow-hidden rounded-2xl border border-zinc-200 ${downstreamClasses} p-4 shadow-sm dark:border-white/10">
@@ -455,10 +474,16 @@ export const createClusterPanel = ({
       const active = ha.haKey === activeHA?.haKey
       const downstreamCount = ha.downstreams.length
       const version = ha.local?.version ? ` • ${ha.local.version}` : ''
+      const tabLabel = ha.local?.deploymentType === 'hosted-tenant-k3s'
+        ? hostedTenantInstanceLabel(ha)
+        : `HA ${ha.haIndex || ha.haKey}`
+      const countLabel = ha.local?.deploymentType === 'hosted-tenant-k3s'
+        ? downstreamCount ? `${downstreamCount} import` : 'K3s'
+        : `${downstreamCount} downstream`
       return `
         <button type="button" data-action="select-cluster-ha" data-ha-key="${escapeHtml(ha.haKey)}" class="${active ? 'rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-800 shadow-sm dark:border-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-200' : 'rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]'}">
-          HA ${escapeHtml(ha.haIndex || ha.haKey)}${escapeHtml(version)}
-          <span class="${active ? 'ml-2 text-emerald-600 dark:text-emerald-300' : 'ml-2 text-zinc-500 dark:text-zinc-400'}">${downstreamCount} downstream</span>
+          ${escapeHtml(tabLabel)}${escapeHtml(version)}
+          <span class="${active ? 'ml-2 text-emerald-600 dark:text-emerald-300' : 'ml-2 text-zinc-500 dark:text-zinc-400'}">${escapeHtml(countLabel)}</span>
         </button>
       `
     }).join('')
@@ -470,7 +495,9 @@ export const createClusterPanel = ({
       : '<div class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">No local cluster record found for this HA yet.</div>'
     const downstreamHTML = downstreams.length
       ? downstreams.map(renderCluster).join('')
-      : '<div class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">No downstream clusters discovered for this HA yet.</div>'
+      : activeHA?.local?.deploymentType === 'hosted-tenant-k3s'
+        ? '<div class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">No imported cluster records discovered for this hosted-tenant instance yet.</div>'
+        : '<div class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">No downstream clusters discovered for this HA yet.</div>'
 
     clustersEl.innerHTML = `
       <div class="grid gap-4">
@@ -479,16 +506,16 @@ export const createClusterPanel = ({
           <div class="mt-2 flex flex-wrap gap-2">${runTabs}</div>
         </div>
         <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
-          <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">HA cluster</div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">${activeRunGroup.has.some(ha => ha.local?.deploymentType === 'hosted-tenant-k3s') ? 'Hosted tenant instance' : 'HA cluster'}</div>
           <div class="mt-2 flex flex-wrap gap-2">${haTabs}</div>
         </div>
         <div class="grid gap-4">
           <div>
-            <div class="mb-2 text-sm font-semibold text-zinc-950 dark:text-zinc-100">Management cluster</div>
+          <div class="mb-2 text-sm font-semibold text-zinc-950 dark:text-zinc-100">${activeHA?.local?.deploymentType === 'hosted-tenant-k3s' ? 'Rancher instance' : 'Management cluster'}</div>
             ${localHTML}
           </div>
           <div>
-            <div class="mb-2 text-sm font-semibold text-zinc-950 dark:text-zinc-100">Downstream clusters</div>
+            <div class="mb-2 text-sm font-semibold text-zinc-950 dark:text-zinc-100">${activeHA?.local?.deploymentType === 'hosted-tenant-k3s' ? 'Imported cluster records' : 'Downstream clusters'}</div>
             <div class="grid gap-4">${downstreamHTML}</div>
           </div>
         </div>

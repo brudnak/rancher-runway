@@ -96,20 +96,20 @@ printf '%s\n' "${repo_root}" > "${repo_root}/desktop/wails/repo_hint.txt"
 
 icon_png="${repo_root}/desktop/wails/build/appicon.png"
 if [[ "$(uname -s)" == "Darwin" && -x "${repo_root}/scripts/render-macos-icon.swift" ]]; then
-  HA_RANCHER_ICON_PNG_OUT="${icon_png}" "${repo_root}/scripts/render-macos-icon.swift"
+  RANCHER_RUNWAY_ICON_PNG_OUT="${icon_png}" "${repo_root}/scripts/render-macos-icon.swift"
 fi
 
 (
   cd "${repo_root}/desktop/wails"
   build_ldflags="-X 'main.bundledRepoRoot=${repo_root}'"
-  build_commit="${HA_RANCHER_BUILD_COMMIT:-$(resolve_build_commit)}"
-  build_date="${HA_RANCHER_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+  build_commit="${RANCHER_RUNWAY_BUILD_COMMIT:-${HA_RANCHER_BUILD_COMMIT:-$(resolve_build_commit)}}"
+  build_date="${RANCHER_RUNWAY_BUILD_DATE:-${HA_RANCHER_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}"
   if [[ -z "${build_commit}" ]]; then
     build_commit="auto"
   fi
   build_ldflags="${build_ldflags} -X 'github.com/brudnak/ha-rancher-rke2/internal/buildinfo.Commit=${build_commit}'"
   build_ldflags="${build_ldflags} -X 'github.com/brudnak/ha-rancher-rke2/internal/buildinfo.BuildDate=${build_date}'"
-  HA_RANCHER_REPO="${repo_root}" "${wails_bin}" build -ldflags "${build_ldflags}"
+  RANCHER_RUNWAY_REPO="${repo_root}" HA_RANCHER_REPO="${repo_root}" "${wails_bin}" build -ldflags "${build_ldflags}"
 )
 
-echo "Built ${repo_root}/desktop/wails/build/bin/Rancher HA RKE2.app"
+echo "Built ${repo_root}/desktop/wails/build/bin/Rancher Runway.app"

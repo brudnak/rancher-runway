@@ -15,16 +15,16 @@ func TestPrepareArtifactsSanitizesPublicBundle(t *testing.T) {
 	writeTestFile(t, filepath.Join(sourceDir, "signoff-plan.json"), `{
   "target_version": "v2.14.1-alpha12",
   "run_id": "25132790833",
-  "state_key_root": "ha-rancher-rke2/signoff",
+  "state_key_root": "rancher-runway/signoff",
   "lanes": [
     {
       "name": "webhook-upgrade",
-      "terraform_state_key": "ha-rancher-rke2/signoff/v2.14/terraform.tfstate",
+      "terraform_state_key": "rancher-runway/signoff/v2.14/terraform.tfstate",
       "aws_prefix": "gha-32790833-ua"
     }
   ]
 }`)
-	writeTestFile(t, filepath.Join(sourceDir, "lane.env"), "TF_STATE_KEY=ha-rancher-rke2/signoff/state.tfstate\n")
+	writeTestFile(t, filepath.Join(sourceDir, "lane.env"), "TF_STATE_KEY=rancher-runway/signoff/state.tfstate\n")
 	writeTestFile(t, filepath.Join(sourceDir, "automation-output", "downstream-ha-1.json"), `{
   "ha_index": 1,
   "cluster_name": "gha-32790833-ha1-61abcbed",
@@ -61,7 +61,7 @@ func TestPrepareArtifactsSanitizesPublicBundle(t *testing.T) {
     "lane": "webhook-upgrade",
     "observed_run": {
       "databaseId": 25132790833,
-      "url": "https://github.com/brudnak/ha-rancher-rke2/actions/runs/25132790833",
+      "url": "https://github.com/brudnak/rancher-runway/actions/runs/25132790833",
       "displayTitle": "Run v2.14.1-alpha12 / webhook-upgrade"
     }
   }

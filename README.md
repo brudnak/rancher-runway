@@ -1,14 +1,15 @@
-# RKE2 Rancher HA Bootstrapper
+# Rancher Runway
 
-Deploy disposable Rancher High Availability test environments on AWS with RKE2,
-Terraform, and a local control panel. The project can be driven from the
-double-clickable macOS app, the `ha-rancher` CLI, or guarded Go test entrypoints.
+Deploy disposable Rancher test environments on AWS with RKE2 or hosted-tenant
+K3s, Terraform, and a local control panel. The project can be driven from the
+double-clickable macOS app, the `rancher-runway` CLI, or guarded Go test entrypoints.
 
 For repository-owned GitHub Actions automation, see [docs/README.md](docs/README.md).
 
 ## What This Builds
 
 - One or more RKE2 management clusters on AWS: single-server, 3-server HA, or 5-server HA
+- Optional hosted/tenant K3s deployments: one host Rancher plus tenant Ranchers on imported K3s clusters
 - AWS ALB, ACM, and Route53 records in front of Rancher
 - Rancher installed with external TLS termination at the ALB
 - Local kubeconfigs, install artifacts, run records, lifecycle logs, and cost history
@@ -25,7 +26,7 @@ From a fresh clone on Apple Silicon or Intel macOS:
 make setup
 ```
 
-`make setup` is the friendly installer. It checks that `Rancher HA RKE2.app` is
+`make setup` is the friendly installer. It checks that `Rancher Runway.app` is
 closed and that no setup, readiness, or cleanup operation is running, then
 rebuilds the Wails app and installs it to `/Applications` by default. It also
 installs missing build dependencies used by this repo, regenerates the embedded
@@ -54,7 +55,7 @@ make setup INSTALL_DIR="$HOME/Desktop"
 Keep the transient Wails build-output app as well as the installed copy:
 
 ```bash
-HA_RANCHER_KEEP_WAILS_BUILD_APP=1 make setup
+RANCHER_RUNWAY_KEEP_WAILS_BUILD_APP=1 make setup
 ```
 
 ## Quick Start: CLI
@@ -77,14 +78,14 @@ export DOCKERHUB_PASSWORD="optional-dockerhub-password"
 Open the local panel:
 
 ```bash
-go run ./cmd/ha-rancher panel
+go run ./cmd/rancher-runway panel
 ```
 
 Inspect status without opening the browser:
 
 ```bash
-go run ./cmd/ha-rancher status
-go run ./cmd/ha-rancher status -json
+go run ./cmd/rancher-runway status
+go run ./cmd/rancher-runway status -json
 ```
 
 The canonical lifecycle is also available through guarded test entrypoints:
@@ -102,6 +103,7 @@ Use one of the checked-in examples as your starting point:
 
 - [tool-config.auto.example.yml](tool-config.auto.example.yml)
 - [tool-config.manual.example.yml](tool-config.manual.example.yml)
+- [tool-config.hosted-tenant.auto.example.yml](tool-config.hosted-tenant.auto.example.yml)
 
 Copy the example you want to `tool-config.yml` and adjust local values. The
 actual `tool-config.yml` is ignored so account details, hostnames, and local
@@ -110,6 +112,7 @@ in auto mode.
 
 Common local values:
 
+- `deployment.type` chooses the deployment shape. Use `ha-rke2` for the original RKE2 HA flow or `hosted-tenant-k3s` for one host Rancher plus tenant Ranchers on imported K3s clusters.
 - `user.first_name` and `user.last_name` tag AWS resources with an owner.
 - `tf_vars.aws_prefix` is the base AWS resource prefix; run slots derive unique per-run prefixes from it.
 - `tf_vars.aws_pem_key_name` is the EC2 key pair name attached to instances for manual break-glass SSH. The tool itself configures nodes through AWS Systems Manager Run Command, not SSH.
@@ -212,8 +215,8 @@ The tool validates the shape before provisioning starts.
 ## Run Slots
 
 The control panel treats each setup as a run slot. A slot has isolated Terraform
-state, Terraform data, module files, HA output, kubeconfigs, logs, AWS names,
-and a run record under `terratest/automation-output/`.
+state, Terraform data, module files, deployment output, kubeconfigs, logs, AWS
+names, and a run record under `terratest/automation-output/`.
 
 This means one checkout can keep recorded slots visible while starting another
 slot. Setup, readiness, and cleanup are still serialized so Terraform state and
@@ -252,9 +255,9 @@ go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
 ```
 
 Cleanup is per run slot. The slot record is removed only after Terraform destroy
-succeeds. Cleanup also prints a best-effort AWS estimate for EC2 runtime and EBS
-root volume cost. It is not a final AWS bill and does not include every charge
-type.
+succeeds. Cleanup also prints a best-effort AWS estimate for EC2 runtime, EBS
+root volume cost, and hosted-tenant RDS/Aurora runtime when present. It is not a
+final AWS bill and does not include every charge type.
 
 After all recorded slots are gone, the panel can clean ignored local run
 residue. This local cleanup does not destroy AWS resources.

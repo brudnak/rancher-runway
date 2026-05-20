@@ -27,13 +27,13 @@ func TestAWSInventoryMatchesRejectsDifferentOwner(t *testing.T) {
 	}
 
 	if collector.matches("oth-12345678-bb-h1", map[string]string{
-		"ManagedBy": awsManagedByTagValue,
+		"ManagedBy": "rancher-runway",
 		"Owner":     "Other Owner",
 	}) {
 		t.Fatal("resource with a different Owner tag matched by prefix and ManagedBy tag")
 	}
 
-	if collector.matches("unrelated", map[string]string{"ManagedBy": awsManagedByTagValue}) {
+	if collector.matches("unrelated", map[string]string{"ManagedBy": "rancher-runway"}) {
 		t.Fatal("ManagedBy-only resource matched while owner scoping is configured")
 	}
 

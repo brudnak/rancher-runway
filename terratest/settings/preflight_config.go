@@ -61,13 +61,16 @@ func normalizeOwnerNamePart(value string) string {
 }
 
 type EditablePreflightConfig struct {
-	Distro            string            `json:"distro"`
-	BootstrapPassword string            `json:"bootstrapPassword"`
-	PreloadImages     bool              `json:"preloadImages"`
-	ServerCount       int               `json:"serverCount"`
-	UserFirstName     string            `json:"userFirstName"`
-	UserLastName      string            `json:"userLastName"`
-	TFVars            map[string]string `json:"tfVars"`
+	Distro                string            `json:"distro"`
+	BootstrapPassword     string            `json:"bootstrapPassword"`
+	PreloadImages         bool              `json:"preloadImages"`
+	ServerCount           int               `json:"serverCount"`
+	DeploymentType        string            `json:"deploymentType"`
+	HostedRDSPassword     string            `json:"hostedRDSPassword"`
+	HostedEC2InstanceType string            `json:"hostedEC2InstanceType"`
+	UserFirstName         string            `json:"userFirstName"`
+	UserLastName          string            `json:"userLastName"`
+	TFVars                map[string]string `json:"tfVars"`
 }
 
 func CurrentRKE2ServerCount() int {
@@ -109,15 +112,26 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 	if distro == "" {
 		distro = "auto"
 	}
+	deploymentType := strings.ToLower(strings.TrimSpace(viper.GetString("deployment.type")))
+	if deploymentType == "" {
+		deploymentType = strings.ToLower(strings.TrimSpace(viper.GetString("environment.type")))
+	}
+	preloadImages := viper.GetBool("rke2.preload_images")
+	if deploymentType == "hosted-tenant-k3s" {
+		preloadImages = viper.GetBool("k3s.preload_images")
+	}
 
 	return EditablePreflightConfig{
-		Distro:            distro,
-		BootstrapPassword: viper.GetString("rancher.bootstrap_password"),
-		PreloadImages:     viper.GetBool("rke2.preload_images"),
-		ServerCount:       CurrentRKE2ServerCount(),
-		UserFirstName:     OwnerFirstName(),
-		UserLastName:      OwnerLastName(),
-		TFVars:            tfVars,
+		Distro:                distro,
+		BootstrapPassword:     viper.GetString("rancher.bootstrap_password"),
+		PreloadImages:         preloadImages,
+		ServerCount:           CurrentRKE2ServerCount(),
+		DeploymentType:        deploymentType,
+		HostedRDSPassword:     viper.GetString("tf_vars.aws_rds_password"),
+		HostedEC2InstanceType: strings.TrimSpace(viper.GetString("tf_vars.aws_ec2_instance_type")),
+		UserFirstName:         OwnerFirstName(),
+		UserLastName:          OwnerLastName(),
+		TFVars:                tfVars,
 	}
 }
 

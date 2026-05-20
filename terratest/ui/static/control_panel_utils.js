@@ -65,7 +65,8 @@ export const extractCleanupLineValue = (output, label) => {
 }
 
 export const parseCleanupCost = output => {
-  const total = extractCleanupLineValue(output, 'Estimated total (EC2 + EBS only):')
+  const total = extractCleanupLineValue(output, 'Estimated total:')
+    || extractCleanupLineValue(output, 'Estimated total (EC2 + EBS only):')
   if (!total) {
     return null
   }
@@ -75,7 +76,9 @@ export const parseCleanupCost = output => {
     region: extractCleanupLineValue(output, 'Region:'),
     runtime: extractCleanupLineValue(output, 'Total runtime across instances:'),
     ec2: extractCleanupLineValue(output, 'EC2:'),
-    ebs: extractCleanupLineValue(output, 'EBS:')
+    ebs: extractCleanupLineValue(output, 'EBS:'),
+    rds: extractCleanupLineValue(output, 'RDS/Aurora:'),
+    loadBalancers: extractCleanupLineValue(output, 'Load balancers:')
   }
 }
 

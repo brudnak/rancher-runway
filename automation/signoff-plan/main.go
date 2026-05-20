@@ -144,7 +144,7 @@ func main() {
 	flag.StringVar(&signingPolicy, "signing-policy", "auto", "required, report-only, skip, or auto")
 	flag.StringVar(&outputPath, "output", "", "optional JSON output path")
 	flag.StringVar(&runID, "run-id", os.Getenv("GITHUB_RUN_ID"), "workflow run id used to generate per-lane Terraform state keys")
-	flag.StringVar(&stateKeyRoot, "state-key-root", "ha-rancher-rke2/signoff", "root prefix for generated Terraform state keys")
+	flag.StringVar(&stateKeyRoot, "state-key-root", "rancher-runway/signoff", "root prefix for generated Terraform state keys")
 	flag.StringVar(&awsBasePrefix, "aws-base-prefix", os.Getenv("AWS_PREFIX"), "optional owner/base AWS prefix to include in generated sign-off resource prefixes")
 	flag.StringVar(&ledgerPath, "ledger", "signoff-ledger.json", "sign-off ledger path used to skip already successful lanes")
 	flag.StringVar(&targetsPath, "targets", "signoff-targets.json", "repo-owned target list used when no target version or latest-alpha flag is set")
@@ -1003,7 +1003,7 @@ func parseBearerChallenge(value string) (map[string]string, error) {
 
 func (c githubClient) addHeaders(req *http.Request) {
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "ha-rancher-rke2-signoff-plan")
+	req.Header.Set("User-Agent", "rancher-runway-signoff-plan")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}

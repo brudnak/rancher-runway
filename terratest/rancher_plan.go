@@ -220,21 +220,25 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		}
 
 		supportMatrixURL := buildSupportMatrixURL(compatibilityBaseline)
-		highestRKE2Minor, supportExplanation, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
-		if err != nil {
-			return nil, err
-		}
-		explanation = append(explanation, supportExplanation)
+		recommendedRKE2Version := ""
+		installerSHA256 := ""
+		if !isHostedTenantK3SDeployment() {
+			highestRKE2Minor, supportExplanation, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
+			if err != nil {
+				return nil, err
+			}
+			explanation = append(explanation, supportExplanation)
 
-		recommendedRKE2Version, err := resolveLatestRKE2Patch(highestRKE2Minor)
-		if err != nil {
-			return nil, err
-		}
-		explanation = append(explanation, fmt.Sprintf("Selected %s as the latest available RKE2 patch in the supported v1.%d line", recommendedRKE2Version, highestRKE2Minor))
+			recommendedRKE2Version, err = resolveLatestRKE2Patch(highestRKE2Minor)
+			if err != nil {
+				return nil, err
+			}
+			explanation = append(explanation, fmt.Sprintf("Selected %s as the latest available RKE2 patch in the supported v1.%d line", recommendedRKE2Version, highestRKE2Minor))
 
-		installerSHA256, err := resolveInstallerSHA256(recommendedRKE2Version)
-		if err != nil {
-			return nil, err
+			installerSHA256, err = resolveInstallerSHA256(recommendedRKE2Version)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		helmCommands := buildAutoHelmCommands(1, rancherHelmOperationInstall, chartRepoAlias, chartVersion, bootstrapPassword, rancherImage, rancherImageTag, agentImage, useRancherImageFields)

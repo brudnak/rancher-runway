@@ -70,10 +70,10 @@ generated Linode root password before noisy provisioning steps.
 | `TF_STATE_REGION` | yes | AWS region for the Terraform backend. |
 | `AWS_REGION` | yes | AWS region for Rancher infrastructure. |
 | `AWS_VPC` | yes | Existing VPC ID. |
-| `AWS_SUBNET_A` | yes | Existing subnet for HA node/security wiring. |
-| `AWS_SUBNET_B` | yes | Existing subnet for HA node/security wiring. |
-| `AWS_SUBNET_C` | yes | Existing subnet for HA node/security wiring. |
-| `AWS_AMI` | yes | AMI used by Rancher HA nodes. |
+| `AWS_SUBNET_A` | yes | Existing subnet for infrastructure node/security wiring. |
+| `AWS_SUBNET_B` | yes | Existing subnet for infrastructure node/security wiring. |
+| `AWS_SUBNET_C` | yes | Existing subnet for infrastructure node/security wiring. |
+| `AWS_AMI` | yes | AMI used by Rancher infrastructure nodes. |
 | `AWS_SUBNET_ID` | yes | Subnet ID used by EC2 instances. |
 | `AWS_SECURITY_GROUP_ID` | yes | Security group ID used by EC2 instances. |
 | `AWS_PEM_KEY_NAME` | yes | Existing EC2 key pair name expected by the Terraform module. |

@@ -15,6 +15,7 @@ const CustomHostnameConfigKey = "tf_vars.custom_hostname_prefix"
 var customHostnameLabelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 type PreflightConfigUpdate struct {
+	DeploymentType        string            `json:"deploymentType"`
 	Mode                  string            `json:"mode"`
 	Versions              []string          `json:"versions"`
 	HelmCommands          []string          `json:"helmCommands"`
@@ -25,6 +26,8 @@ type PreflightConfigUpdate struct {
 	BootstrapPassword     string            `json:"bootstrapPassword"`
 	PreloadImages         bool              `json:"preloadImages"`
 	ServerCount           int               `json:"serverCount"`
+	HostedRDSPassword     string            `json:"hostedRDSPassword"`
+	HostedEC2InstanceType string            `json:"hostedEC2InstanceType"`
 	UserFirstName         string            `json:"userFirstName"`
 	UserLastName          string            `json:"userLastName"`
 	TFVars                map[string]string `json:"tfVars"`

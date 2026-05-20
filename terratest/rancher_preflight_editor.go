@@ -61,12 +61,12 @@ func currentPreflightVersions() []string {
 		return []string{singleVersion}
 	}
 
-	totalHAs := viper.GetInt("total_has")
-	if totalHAs < 1 {
-		totalHAs = 1
+	totalRanchers := configuredRancherInstanceCount()
+	if totalRanchers < 1 {
+		totalRanchers = 1
 	}
 
-	return make([]string, totalHAs)
+	return make([]string, totalRanchers)
 }
 
 func editAutoModePreflightWithBrowser(configPath string, versions []string) error {
@@ -716,9 +716,22 @@ func normalizePreflightVersions(versions []string) ([]string, error) {
 }
 
 func updateAutoModeConfigFile(configPath string, update settings.PreflightConfigUpdate) error {
+	requestedDeploymentType := strings.ToLower(strings.TrimSpace(update.DeploymentType))
+	if requestedDeploymentType == "" {
+		requestedDeploymentType = deploymentType()
+	}
+	switch requestedDeploymentType {
+	case deploymentTypeHARKE2, deploymentTypeHostedTenantK3S:
+	default:
+		return fmt.Errorf("deployment.type must be %s or %s", deploymentTypeHARKE2, deploymentTypeHostedTenantK3S)
+	}
+	hostedTenant := requestedDeploymentType == deploymentTypeHostedTenantK3S
 	mode := strings.ToLower(strings.TrimSpace(update.Mode))
 	if mode == "" {
 		mode = "auto"
+	}
+	if hostedTenant && mode != "auto" {
+		return fmt.Errorf("hosted-tenant-k3s setup editor currently supports auto mode only")
 	}
 	var normalizedVersions []string
 	var normalizedHelmCommands []string
@@ -738,6 +751,28 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	}
 	if err := settings.NormalizePreflightConfigUpdate(&update); err != nil {
 		return err
+	}
+	if hostedTenant {
+		if len(normalizedVersions) < hostedTenantMinInstances {
+			return fmt.Errorf("hosted-tenant-k3s requires one host and at least one tenant Rancher version")
+		}
+		if len(normalizedVersions) > hostedTenantMaxInstances {
+			return fmt.Errorf("hosted-tenant-k3s supports at most 4 total Rancher instances")
+		}
+		update.CustomHostnameEnabled = false
+		update.CustomHostnameInput = ""
+		password := strings.TrimSpace(update.HostedRDSPassword)
+		if password == "" {
+			password = hostedTenantRDSPassword()
+		}
+		if err := validateHostedTenantRDSPassword(password); err != nil {
+			return err
+		}
+		update.HostedRDSPassword = password
+		update.HostedEC2InstanceType = strings.TrimSpace(update.HostedEC2InstanceType)
+		if update.HostedEC2InstanceType == "" {
+			update.HostedEC2InstanceType = hostedTenantEC2InstanceType()
+		}
 	}
 	viperConfigMu.RLock()
 	route53FQDN := viper.GetString("tf_vars.aws_route53_fqdn")
@@ -771,6 +806,8 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		return fmt.Errorf("config root must be a YAML mapping")
 	}
 
+	deploymentNode := ensureMappingValue(root, "deployment")
+	setStringValue(deploymentNode, "type", requestedDeploymentType)
 	rancherNode := ensureMappingValue(root, "rancher")
 	if update.TFVars != nil {
 		setStringValue(rancherNode, "distro", update.Distro)
@@ -778,9 +815,14 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		userNode := ensureMappingValue(root, "user")
 		setStringValue(userNode, "first_name", update.UserFirstName)
 		setStringValue(userNode, "last_name", update.UserLastName)
-		rke2Node := ensureMappingValue(root, "rke2")
-		setBoolValue(rke2Node, "preload_images", update.PreloadImages)
-		setIntValue(rke2Node, "server_count", update.ServerCount)
+		if hostedTenant {
+			k3sNode := ensureMappingValue(root, "k3s")
+			setBoolValue(k3sNode, "preload_images", update.PreloadImages)
+		} else {
+			rke2Node := ensureMappingValue(root, "rke2")
+			setBoolValue(rke2Node, "preload_images", update.PreloadImages)
+			setIntValue(rke2Node, "server_count", update.ServerCount)
+		}
 	}
 	setStringValue(rancherNode, "mode", mode)
 	switch mode {
@@ -789,11 +831,17 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		deleteMappingKey(rancherNode, "version")
 		deleteMappingKey(rancherNode, "helm_commands")
 		setIntValue(root, "total_has", len(normalizedVersions))
+		if hostedTenant {
+			setIntValue(root, "total_rancher_instances", len(normalizedVersions))
+		} else {
+			deleteMappingKey(root, "total_rancher_instances")
+		}
 	case "manual":
 		setStringLiteralSequenceValue(rancherNode, "helm_commands", normalizedHelmCommands)
 		deleteMappingKey(rancherNode, "version")
 		deleteMappingKey(rancherNode, "versions")
 		setIntValue(root, "total_has", len(normalizedHelmCommands))
+		deleteMappingKey(root, "total_rancher_instances")
 		k8sNode := ensureMappingValue(root, "k8s")
 		setStringSequenceValue(k8sNode, "versions", normalizedK8SVersions)
 		deleteMappingKey(k8sNode, "version")
@@ -806,6 +854,14 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		for _, key := range settings.EditableTFVarKeys {
 			setStringValue(tfVarsNode, key, update.TFVars[key])
 		}
+		if hostedTenant {
+			setStringValue(tfVarsNode, "aws_rds_password", update.HostedRDSPassword)
+			setStringValue(tfVarsNode, "aws_ec2_instance_type", update.HostedEC2InstanceType)
+		}
+	} else if hostedTenant {
+		tfVarsNode := ensureMappingValue(root, "tf_vars")
+		setStringValue(tfVarsNode, "aws_rds_password", update.HostedRDSPassword)
+		setStringValue(tfVarsNode, "aws_ec2_instance_type", update.HostedEC2InstanceType)
 	}
 	if customHostnamePrefix == "" {
 		if tfVarsNode := mappingValue(root, "tf_vars"); tfVarsNode != nil {
@@ -814,6 +870,15 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	} else {
 		tfVarsNode := ensureMappingValue(root, "tf_vars")
 		setStringValue(tfVarsNode, "custom_hostname_prefix", customHostnamePrefix)
+	}
+	if hostedTenant {
+		if rke2Node := mappingValue(root, "rke2"); rke2Node != nil {
+			deleteMappingKey(rke2Node, "preload_images")
+			deleteMappingKey(rke2Node, "server_count")
+			if len(rke2Node.Content) == 0 {
+				deleteMappingKey(root, "rke2")
+			}
+		}
 	}
 
 	var output bytes.Buffer
@@ -832,6 +897,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 
 	viperConfigMu.Lock()
 	defer viperConfigMu.Unlock()
+	viper.Set("deployment.type", requestedDeploymentType)
 	viper.Set("rancher.mode", mode)
 	viper.Set("rancher.version", "")
 	switch mode {
@@ -839,6 +905,11 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("rancher.versions", normalizedVersions)
 		viper.Set("rancher.helm_commands", []string{})
 		viper.Set("total_has", len(normalizedVersions))
+		if hostedTenant {
+			viper.Set("total_rancher_instances", len(normalizedVersions))
+		} else {
+			viper.Set("total_rancher_instances", 0)
+		}
 	case "manual":
 		viper.Set("rancher.versions", []string{})
 		viper.Set("rancher.helm_commands", normalizedHelmCommands)
@@ -851,17 +922,28 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("rke2.install_script_sha256s", checksumMap)
 		viper.Set("rke2.install_script_sha256", "")
 		viper.Set("total_has", len(normalizedHelmCommands))
+		viper.Set("total_rancher_instances", 0)
 	}
 	if update.TFVars != nil {
 		viper.Set("rancher.distro", update.Distro)
 		viper.Set("rancher.bootstrap_password", update.BootstrapPassword)
 		viper.Set("user.first_name", update.UserFirstName)
 		viper.Set("user.last_name", update.UserLastName)
-		viper.Set("rke2.preload_images", update.PreloadImages)
-		viper.Set("rke2.server_count", update.ServerCount)
+		if hostedTenant {
+			viper.Set("k3s.preload_images", update.PreloadImages)
+		} else {
+			viper.Set("rke2.preload_images", update.PreloadImages)
+			viper.Set("rke2.server_count", update.ServerCount)
+		}
 		for _, key := range settings.EditableTFVarKeys {
 			viper.Set("tf_vars."+key, update.TFVars[key])
 		}
+	}
+	if hostedTenant {
+		viper.Set("tf_vars.aws_rds_password", update.HostedRDSPassword)
+		viper.Set("tf_vars.aws_ec2_instance_type", update.HostedEC2InstanceType)
+		viper.Set("rke2.preload_images", false)
+		viper.Set("rke2.server_count", 0)
 	}
 	viper.Set(settings.CustomHostnameConfigKey, customHostnamePrefix)
 

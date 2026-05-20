@@ -34,6 +34,7 @@ type panelRunRecord struct {
 	SlotID               string    `json:"slotId"`
 	SlotName             string    `json:"slotName"`
 	Status               string    `json:"status"`
+	DeploymentType       string    `json:"deploymentType,omitempty"`
 	CreatedAt            time.Time `json:"createdAt"`
 	UpdatedAt            time.Time `json:"updatedAt"`
 	TotalHAs             int       `json:"totalHAs"`
@@ -47,6 +48,8 @@ type panelRunRecord struct {
 	TerraformStatePath   string    `json:"terraformStatePath,omitempty"`
 	TerraformDataDir     string    `json:"terraformDataDir,omitempty"`
 	HAOutputRoot         string    `json:"haOutputRoot"`
+	RunFolderPath        string    `json:"runFolderPath,omitempty"`
+	RunFolderExists      bool      `json:"runFolderExists"`
 	SharedPaths          []string  `json:"sharedPaths"`
 }
 
@@ -103,6 +106,10 @@ func (p *localControlPanel) startIsolatedRun() error {
 	if ok, reason := p.isolatedRunStartStatus(); !ok {
 		return fmt.Errorf("isolated run blocked: %s", reason)
 	}
+	afterSuccess := p.startReadinessAfterSetup
+	if isHostedTenantK3SDeployment() {
+		afterSuccess = nil
+	}
 	return p.startPanelCommand(panelCommandSpec{
 		Operation:    panelOperationSetup,
 		DisplayName:  "setup",
@@ -110,7 +117,7 @@ func (p *localControlPanel) startIsolatedRun() error {
 		Timeout:      "90m",
 		StartLine:    "[control-panel] Starting canonical setup via go test -run ^TestHaSetup$",
 		SuccessLine:  "[control-panel] Setup completed successfully",
-		AfterSuccess: p.startReadinessAfterSetup,
+		AfterSuccess: afterSuccess,
 	})
 }
 
@@ -175,6 +182,7 @@ func (p *localControlPanel) createCurrentRunRecord(runID string, now time.Time) 
 		SlotID:               slotID,
 		SlotName:             "Run " + safeRunPathSegment(runID),
 		Status:               "setup_running",
+		DeploymentType:       deploymentType(),
 		CreatedAt:            now,
 		UpdatedAt:            now,
 		TotalHAs:             p.totalHAs,
@@ -343,6 +351,7 @@ func (p *localControlPanel) listRunRecords() []panelRunRecord {
 				continue
 			}
 			record.RunID = safeRunPathSegment(record.RunID)
+			record = p.enrichRunRecord(record)
 			recordsByID[record.RunID] = record
 		}
 	} else if !os.IsNotExist(err) {
@@ -351,6 +360,7 @@ func (p *localControlPanel) listRunRecords() []panelRunRecord {
 
 	if current, ok := p.readCurrentRunRecord(); ok && strings.TrimSpace(current.RunID) != "" {
 		current.RunID = safeRunPathSegment(current.RunID)
+		current = p.enrichRunRecord(current)
 		recordsByID[current.RunID] = current
 		p.writeRunRecord(current)
 	}
@@ -363,6 +373,25 @@ func (p *localControlPanel) listRunRecords() []panelRunRecord {
 		return records[i].CreatedAt.After(records[j].CreatedAt)
 	})
 	return records
+}
+
+func (p *localControlPanel) enrichRunRecord(record panelRunRecord) panelRunRecord {
+	record.RunFolderPath = runFolderPathForRecord(record)
+	record.RunFolderExists = record.RunFolderPath != "" && pathExists(record.RunFolderPath)
+	return record
+}
+
+func runFolderPathForRecord(record panelRunRecord) string {
+	if path := strings.TrimSpace(record.TerraformModuleDir); path != "" {
+		return strings.TrimSuffix(filepath.Clean(path), string(filepath.Separator)+filepath.Join("terraform", "module"))
+	}
+	if path := strings.TrimSpace(record.TerraformStatePath); path != "" {
+		return strings.TrimSuffix(filepath.Clean(path), string(filepath.Separator)+filepath.Join("terraform", "terraform.tfstate"))
+	}
+	if path := strings.TrimSpace(record.HAOutputRoot); path != "" {
+		return strings.TrimSuffix(filepath.Clean(path), string(filepath.Separator)+"ha")
+	}
+	return ""
 }
 
 func (p *localControlPanel) currentHAOutputRoot() string {
@@ -460,6 +489,21 @@ func (p *localControlPanel) haInstanceDirForRun(record panelRunRecord, instanceN
 		return filepath.Join(root, fmt.Sprintf("high-availability-%d", instanceNum))
 	}
 	return p.haInstanceDir(instanceNum)
+}
+
+func (p *localControlPanel) hostedTenantInstanceDirForRun(record panelRunRecord, instanceNum int) string {
+	root := strings.TrimSpace(record.HAOutputRoot)
+	if root == "" {
+		root = p.currentHAOutputRoot()
+	}
+	name := "host-rancher"
+	if instanceNum > 1 {
+		name = fmt.Sprintf("tenant-%d-rancher", instanceNum-1)
+	}
+	if root == "" {
+		return name
+	}
+	return filepath.Join(root, name)
 }
 
 func runScopedClusterName(runID string, name string) string {

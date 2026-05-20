@@ -56,6 +56,7 @@ type interactiveSetupState struct {
 	Token                 string                           `json:"token"`
 	BasePath              string                           `json:"basePath,omitempty"`
 	ConfigPath            string                           `json:"configPath"`
+	DeploymentType        string                           `json:"deploymentType"`
 	Mode                  string                           `json:"mode"`
 	Versions              []string                         `json:"versions"`
 	HelmCommands          []string                         `json:"helmCommands"`
@@ -101,15 +102,23 @@ func resolveRancherSetup() ([]*RancherResolvedPlan, error) {
 		return runInteractiveAutoModeSetup()
 	}
 
-	totalHAs := viper.GetInt("total_has")
+	totalHAs := configuredRancherInstanceCount()
 	if totalHAs < 1 {
-		return nil, fmt.Errorf("total_has must be at least 1")
+		return nil, fmt.Errorf("configured Rancher instance count must be at least 1")
 	}
-	if err := settings.ValidateCustomHostnameConfig(totalHAs); err != nil {
-		return nil, err
+	if !isHostedTenantK3SDeployment() {
+		if err := settings.ValidateCustomHostnameConfig(totalHAs); err != nil {
+			return nil, err
+		}
 	}
 
-	plans, err := prepareRancherConfiguration(totalHAs)
+	var plans []*RancherResolvedPlan
+	var err error
+	if isHostedTenantK3SDeployment() {
+		plans, err = prepareHostedTenantRancherConfiguration(totalHAs)
+	} else {
+		plans, err = prepareRancherConfiguration(totalHAs)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -516,6 +525,7 @@ func interactiveSetupTemplateDataFor(token string, configPath string, initialVer
 		Token:                 token,
 		BasePath:              normalizeInteractiveBasePath(basePath),
 		ConfigPath:            configPath,
+		DeploymentType:        deploymentType(),
 		Mode:                  rancherMode(),
 		Versions:              initialVersions,
 		HelmCommands:          currentManualHelmCommands(),
@@ -637,6 +647,7 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 	}
 
 	return settings.PreflightConfigUpdate{
+		DeploymentType:        r.FormValue("deploymentType"),
 		Mode:                  r.FormValue("mode"),
 		Versions:              r.Form["versions"],
 		HelmCommands:          r.Form["helmCommands"],
@@ -647,6 +658,8 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 		BootstrapPassword:     r.FormValue("bootstrapPassword"),
 		PreloadImages:         parseHTMLBool(r.FormValue("preloadImages")),
 		ServerCount:           parseHTMLInt(r.FormValue("serverCount")),
+		HostedRDSPassword:     r.FormValue("hostedRDSPassword"),
+		HostedEC2InstanceType: r.FormValue("hostedEC2InstanceType"),
 		UserFirstName:         r.FormValue("userFirstName"),
 		UserLastName:          r.FormValue("userLastName"),
 		TFVars:                tfVars,
@@ -684,11 +697,18 @@ func (s *interactiveServer) runResolution() {
 		log.SetFlags(originalFlags)
 	}()
 
-	totalHAs := viper.GetInt("total_has")
-	err := settings.ValidateCustomHostnameConfig(totalHAs)
+	totalHAs := configuredRancherInstanceCount()
+	var err error
+	if !isHostedTenantK3SDeployment() {
+		err = settings.ValidateCustomHostnameConfig(totalHAs)
+	}
 	var plans []*RancherResolvedPlan
 	if err == nil {
-		plans, err = prepareRancherConfiguration(totalHAs)
+		if isHostedTenantK3SDeployment() {
+			plans, err = prepareHostedTenantRancherConfiguration(totalHAs)
+		} else {
+			plans, err = prepareRancherConfiguration(totalHAs)
+		}
 	}
 	if err == nil {
 		logResolvedPlans(plans)

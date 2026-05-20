@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -euo pipefail -c
 
-APP_NAME ?= Rancher HA RKE2
+APP_NAME ?= Rancher Runway
 INSTALL_DIR ?= /Applications
 APP_PATH := $(INSTALL_DIR)/$(APP_NAME).app
 STATUS_JSON := terratest/automation-output/install-status.json
@@ -21,7 +21,7 @@ install: setup
 
 setup: check-install-safe
 	@echo "Building and replacing $(APP_PATH)"
-	@HA_RANCHER_APP_NAME="$(APP_NAME)" HA_RANCHER_INSTALL_DIR="$(INSTALL_DIR)" scripts/install.sh
+	@RANCHER_RUNWAY_APP_NAME="$(APP_NAME)" RANCHER_RUNWAY_INSTALL_DIR="$(INSTALL_DIR)" scripts/install.sh
 
 app:
 	@scripts/build-wails-app.sh
@@ -79,7 +79,7 @@ check-app-closed:
 
 check-lifecycle-idle:
 	@mkdir -p "$$(dirname "$(STATUS_JSON)")"; \
-	if ! go run ./cmd/ha-rancher status -json > "$(STATUS_JSON).tmp"; then \
+	if ! go run ./cmd/rancher-runway status -json > "$(STATUS_JSON).tmp"; then \
 	  rm -f "$(STATUS_JSON).tmp"; \
 	  echo "Could not inspect local lifecycle status; continuing with app install checks only." >&2; \
 	  exit 0; \

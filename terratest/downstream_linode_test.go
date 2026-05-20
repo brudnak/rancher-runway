@@ -80,8 +80,8 @@ func TestRenderLinodeDownstreamResources(t *testing.T) {
 }
 
 func TestDNSLabel(t *testing.T) {
-	got := dnsLabel("HA_Rancher_RKE2/Some Lane!!")
-	if got != "ha-rancher-rke2-some-lane" {
+	got := dnsLabel("Rancher_Runway/Some Lane!!")
+	if got != "rancher-runway-some-lane" {
 		t.Fatalf("dnsLabel() = %q", got)
 	}
 }
@@ -189,7 +189,7 @@ func TestDownstreamClusterNamePrefix(t *testing.T) {
 	}{
 		{name: "explicit", explicit: "custom", runID: "1234567890", want: "custom"},
 		{name: "github", runID: "1234567890", want: "gha"},
-		{name: "local", want: "ha-rancher-rke2"},
+		{name: "local", want: "rancher-runway"},
 	}
 
 	for _, tt := range tests {

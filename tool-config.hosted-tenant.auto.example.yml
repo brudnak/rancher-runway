@@ -1,21 +1,21 @@
 rancher:
   mode: auto
   versions:
-    - "2.13-head"
-    - "2.13.4"
+    - "2.13-head" # host Rancher
+    - "2.13.4"    # tenant 1 Rancher
+    - "2.12.4"    # tenant 2 Rancher
   distro: auto
   bootstrap_password: "change-me"
   auto_approve: false
 
 deployment:
-  type: ha-rke2
+  type: hosted-tenant-k3s
 
-rke2:
-  # RKE2 server nodes per Rancher cluster: 1 single-server, 3 default HA, or 5 expanded HA.
-  server_count: 3
+k3s:
   preload_images: true
 
-total_has: 2
+# Total host + tenant Rancher instances. Instance 1 is the host; instances 2+ are tenants. Supported range: 2-4.
+total_rancher_instances: 3
 
 user:
   first_name: ""
@@ -33,6 +33,5 @@ tf_vars:
   aws_security_group_id: ""
   aws_pem_key_name: ""
   aws_route53_fqdn: ""
-  # Optional: custom Rancher DNS label, for example "brudnak" -> brudnak.<aws_route53_fqdn>.
-  # Requires total_has: 1. Omit or leave blank for generated names.
-  custom_hostname_prefix: ""
+  aws_rds_password: "" # 8-41 printable ASCII chars; no /, ', ", @, or spaces. The setup UI can generate one.
+  aws_ec2_instance_type: "m5.large"

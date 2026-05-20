@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "6.40.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "3.7.2"
+    }
   }
 }
 
@@ -13,6 +17,28 @@ variable "total_has" {
   type        = number
   description = "Number of HA instances to create"
   default     = 1
+}
+
+variable "deployment_type" {
+  type        = string
+  description = "Deployment shape to create: ha-rke2 or hosted-tenant-k3s."
+  default     = "ha-rke2"
+
+  validation {
+    condition     = contains(["ha-rke2", "hosted-tenant-k3s"], var.deployment_type)
+    error_message = "deployment_type must be ha-rke2 or hosted-tenant-k3s."
+  }
+}
+
+variable "total_rancher_instances" {
+  type        = number
+  description = "Total hosted/tenant Rancher instances to create, including the host at index 1."
+  default     = 0
+
+  validation {
+    condition     = var.total_rancher_instances == 0 || (var.total_rancher_instances >= 2 && var.total_rancher_instances <= 4)
+    error_message = "total_rancher_instances must be 0 or between 2 and 4."
+  }
 }
 
 variable "aws_region" {
@@ -66,6 +92,24 @@ variable "aws_pem_key_name" {
   description = "Name of the PEM key for SSH access"
 }
 
+variable "aws_rds_password" {
+  type        = string
+  description = "RDS password for hosted-tenant K3s datastore clusters."
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.aws_rds_password == "" || (length(var.aws_rds_password) >= 8 && length(var.aws_rds_password) <= 41 && length(regexall("[/'\"@ ]", var.aws_rds_password)) == 0)
+    error_message = "aws_rds_password must be 8-41 characters and cannot contain /, ', \", @, or spaces."
+  }
+}
+
+variable "aws_ec2_instance_type" {
+  type        = string
+  description = "EC2 instance type for hosted-tenant K3s nodes."
+  default     = "m5.large"
+}
+
 variable "server_count" {
   type        = number
   description = "Number of RKE2 server nodes per Rancher cluster. Use 1 for a single-server install, or 3/5 for odd-sized HA."
@@ -106,12 +150,15 @@ variable "run_id" {
 
 # Module configuration
 locals {
-  ha_instances = { for i in range(1, var.total_has + 1) : i => "${var.aws_prefix}-h${i}" }
-  owner_name   = trimspace("${trimspace(var.owner_first_name)} ${trimspace(var.owner_last_name)}")
+  normalized_deployment_type      = trimspace(var.deployment_type) != "" ? trimspace(var.deployment_type) : "ha-rke2"
+  hosted_tenant_total_instances   = var.total_rancher_instances > 0 ? var.total_rancher_instances : var.total_has
+  ha_instances                    = local.normalized_deployment_type == "ha-rke2" ? { for i in range(1, var.total_has + 1) : i => "${var.aws_prefix}-h${i}" } : {}
+  hosted_tenant_rancher_instances = local.normalized_deployment_type == "hosted-tenant-k3s" ? { for i in range(1, local.hosted_tenant_total_instances + 1) : i => "${var.aws_prefix}-t${i}" } : {}
+  owner_name                      = trimspace("${trimspace(var.owner_first_name)} ${trimspace(var.owner_last_name)}")
   common_tags = {
     NamePrefix             = var.aws_prefix
     Owner                  = local.owner_name
-    ManagedBy              = "ha-rancher-rke2"
+    ManagedBy              = "rancher-runway"
     HA_Rancher_RKE2_Run_ID = trimspace(var.run_id) != "" ? trimspace(var.run_id) : var.aws_prefix
   }
 }
@@ -143,6 +190,25 @@ module "ha" {
   common_tags            = local.common_tags
 }
 
+module "hosted_tenant" {
+  for_each = local.hosted_tenant_rancher_instances
+  source   = "./modules/k3s-tenant-ha"
+
+  aws_prefix            = each.value
+  aws_vpc               = var.aws_vpc
+  aws_subnet_a          = var.aws_subnet_a
+  aws_subnet_b          = var.aws_subnet_b
+  aws_subnet_c          = var.aws_subnet_c
+  aws_ami               = var.aws_ami
+  aws_subnet_id         = var.aws_subnet_id
+  aws_security_group_id = var.aws_security_group_id
+  aws_pem_key_name      = var.aws_pem_key_name
+  aws_rds_password      = var.aws_rds_password
+  aws_route53_fqdn      = var.aws_route53_fqdn
+  aws_ec2_instance_type = var.aws_ec2_instance_type
+  common_tags           = local.common_tags
+}
+
 # Outputs
 output "ha_details" {
   value = {
@@ -167,8 +233,22 @@ output "ha_details" {
   sensitive = true
 }
 
+output "hosted_tenant_details" {
+  value = {
+    for idx, instance in module.hosted_tenant : "hosted_${idx}" => {
+      server1_ip     = instance.server1_ip
+      server2_ip     = instance.server2_ip
+      mysql_endpoint = instance.mysql_endpoint
+      mysql_password = instance.mysql_password
+      aws_lb         = instance.aws_lb
+      rancher_url    = instance.rancher_url
+    }
+  }
+  sensitive = true
+}
+
 output "flat_outputs" {
-  value = merge([
+  value = merge(concat([
     for idx, instance in module.ha : {
       "ha_${idx}_server_count"       = tostring(instance.server_count)
       "ha_${idx}_server_ips"         = join(",", instance.server_ips)
@@ -186,6 +266,15 @@ output "flat_outputs" {
       "ha_${idx}_aws_lb"             = instance.aws_lb
       "ha_${idx}_rancher_url"        = instance.rancher_url
     }
-  ]...)
+    ], [
+    for idx, instance in module.hosted_tenant : {
+      "hosted_${idx}_server1_ip"     = instance.server1_ip
+      "hosted_${idx}_server2_ip"     = instance.server2_ip
+      "hosted_${idx}_mysql_endpoint" = instance.mysql_endpoint
+      "hosted_${idx}_mysql_password" = instance.mysql_password
+      "hosted_${idx}_aws_lb"         = instance.aws_lb
+      "hosted_${idx}_rancher_url"    = instance.rancher_url
+    }
+  ])...)
   sensitive = true
 }

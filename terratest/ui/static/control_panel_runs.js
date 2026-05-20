@@ -16,6 +16,9 @@ export const runHostnameLabel = run => {
   if (!run) {
     return 'not recorded'
   }
+  if (run.deploymentType === 'hosted-tenant-k3s') {
+    return run.awsPrefix && run.route53Fqdn ? `${run.awsPrefix}-t*.${run.route53Fqdn}` : run.route53Fqdn || 'generated per slot'
+  }
   if (run.customHostnamePrefix) {
     return `${run.customHostnamePrefix}.${run.route53Fqdn || ''}`.replace(/\.$/, '')
   }
@@ -130,6 +133,9 @@ export const runTimelineHTML = (run, state) => {
 }
 
 export const runFolderPath = run => {
+  if (run?.runFolderPath) {
+    return run.runFolderPath
+  }
   const terraformModule = trimTrailingPathSeparator(run?.terraformModuleDir || '')
   if (terraformModule) {
     return terraformModule.replace(/[\\/]terraform[\\/]module$/, '')
@@ -144,6 +150,8 @@ export const runFolderPath = run => {
   }
   return ''
 }
+
+export const runFolderAvailable = run => Boolean(runFolderPath(run) && run?.runFolderExists !== false)
 
 export const runTerraformPath = run => {
   if (run?.terraformModuleDir) {

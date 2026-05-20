@@ -61,6 +61,7 @@ type LocalWorkspaceRunRecord struct {
 	Route53FQDN          string    `json:"route53Fqdn,omitempty"`
 	Owner                string    `json:"owner,omitempty"`
 	CustomHostnamePrefix string    `json:"customHostnamePrefix,omitempty"`
+	DeploymentType       string    `json:"deploymentType,omitempty"`
 	RancherVersions      []string  `json:"rancherVersions,omitempty"`
 	TerraformBackend     string    `json:"terraformBackend"`
 	TerraformModuleDir   string    `json:"terraformModuleDir,omitempty"`
@@ -82,6 +83,8 @@ type LocalWorkspaceCheck struct {
 type LocalWorkspaceCluster struct {
 	ID                  string `json:"id"`
 	Type                string `json:"type"`
+	DeploymentType      string `json:"deploymentType,omitempty"`
+	Role                string `json:"role,omitempty"`
 	HAIndex             int    `json:"haIndex"`
 	Name                string `json:"name"`
 	Version             string `json:"version,omitempty"`
@@ -135,12 +138,12 @@ func InspectLocalWorkspace(repoRoot string) (LocalWorkspaceStatus, error) {
 	}
 	defer func() {
 		if restoreErr := os.Chdir(originalDir); restoreErr != nil {
-			fmt.Fprintf(os.Stderr, "[ha-rancher] failed to restore working directory %s: %v\n", originalDir, restoreErr)
+			fmt.Fprintf(os.Stderr, "[rancher-runway] failed to restore working directory %s: %v\n", originalDir, restoreErr)
 		}
 	}()
 
 	panel := &localControlPanel{
-		totalHAs:                  viper.GetInt("total_has"),
+		totalHAs:                  configuredRancherInstanceCount(),
 		repoRoot:                  resolvedRoot,
 		testDir:                   testDir,
 		configPath:                viper.ConfigFileUsed(),
@@ -208,6 +211,7 @@ func localWorkspaceRunRecord(record panelRunRecord) LocalWorkspaceRunRecord {
 		Route53FQDN:          record.Route53FQDN,
 		Owner:                record.Owner,
 		CustomHostnamePrefix: record.CustomHostnamePrefix,
+		DeploymentType:       record.DeploymentType,
 		RancherVersions:      append([]string(nil), record.RancherVersions...),
 		TerraformBackend:     record.TerraformBackend,
 		TerraformModuleDir:   record.TerraformModuleDir,
@@ -261,6 +265,8 @@ func localWorkspaceClusters(clusters []clusterView) []LocalWorkspaceCluster {
 		out = append(out, LocalWorkspaceCluster{
 			ID:                  cluster.ID,
 			Type:                cluster.Type,
+			DeploymentType:      cluster.DeploymentType,
+			Role:                cluster.Role,
 			HAIndex:             cluster.HAIndex,
 			Name:                cluster.Name,
 			Version:             cluster.Version,

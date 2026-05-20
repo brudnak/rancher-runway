@@ -2,8 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-app_name="${HA_RANCHER_APP_NAME:-Rancher HA RKE2}"
-install_dir="${HA_RANCHER_INSTALL_DIR:-/Applications}"
+app_name="${RANCHER_RUNWAY_APP_NAME:-${HA_RANCHER_APP_NAME:-Rancher Runway}}"
+install_dir="${RANCHER_RUNWAY_INSTALL_DIR:-${HA_RANCHER_INSTALL_DIR:-/Applications}}"
 source_app="${repo_root}/desktop/wails/build/bin/${app_name}.app"
 target_app="${install_dir}/${app_name}.app"
 temp_app="${install_dir}/.${app_name}.app.tmp.$$"
@@ -49,9 +49,9 @@ if command -v xattr >/dev/null 2>&1; then
 fi
 
 echo "Installed ${target_app}"
-echo "Double-click it to open the native Rancher HA RKE2 control panel."
+echo "Double-click it to open the native Rancher Runway control panel."
 
-if [[ "${HA_RANCHER_KEEP_WAILS_BUILD_APP:-}" != "1" ]]; then
+if [[ "${RANCHER_RUNWAY_KEEP_WAILS_BUILD_APP:-${HA_RANCHER_KEEP_WAILS_BUILD_APP:-}}" != "1" ]]; then
   rm -rf "${source_app}"
   echo "Removed build copy ${source_app}"
 fi

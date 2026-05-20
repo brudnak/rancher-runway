@@ -54,17 +54,26 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 	item := systemReadinessItem{Name: "Setup config"}
 
 	var blockers []string
-	totalHAs := viper.GetInt("total_has")
-	if totalHAs < 1 {
+	if err := validateDeploymentType(); err != nil {
+		blockers = append(blockers, err.Error())
+	}
+	totalInstances := configuredRancherInstanceCount()
+	if isHostedTenantK3SDeployment() {
+		if totalInstances < hostedTenantMinInstances {
+			blockers = append(blockers, "total_rancher_instances must be at least 2")
+		} else if totalInstances > hostedTenantMaxInstances {
+			blockers = append(blockers, "total_rancher_instances cannot exceed 4")
+		}
+	} else if totalInstances < 1 {
 		blockers = append(blockers, "total_has must be at least 1")
 	}
 
 	mode := rancherMode()
 	switch mode {
 	case "auto":
-		blockers = append(blockers, panelAutoModeConfigBlockers(totalHAs)...)
+		blockers = append(blockers, panelAutoModeConfigBlockers(totalInstances)...)
 	case "manual":
-		blockers = append(blockers, panelManualModeConfigBlockers(totalHAs)...)
+		blockers = append(blockers, panelManualModeConfigBlockers(totalInstances)...)
 	default:
 		blockers = append(blockers, fmt.Sprintf("rancher.mode must be auto or manual, got %q", mode))
 	}
@@ -77,8 +86,17 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 	if err := settings.ValidateOwnerConfig(); err != nil {
 		blockers = append(blockers, err.Error())
 	}
-	if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
-		blockers = append(blockers, err.Error())
+	if !isHostedTenantK3SDeployment() {
+		if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
+			blockers = append(blockers, err.Error())
+		}
+	}
+	if isHostedTenantK3SDeployment() {
+		if password := hostedTenantRDSPassword(); password == "" {
+			blockers = append(blockers, "tf_vars.aws_rds_password or AWS_RDS_PASSWORD")
+		} else if err := validateHostedTenantRDSPassword(password); err != nil {
+			blockers = append(blockers, err.Error())
+		}
 	}
 
 	for _, key := range []string{
@@ -134,7 +152,7 @@ func panelAutoModeConfigBlockers(totalHAs int) []string {
 			blockers = append(blockers, "rancher.version")
 		}
 		if len(requestedVersions) > 1 {
-			blockers = append(blockers, "rancher.versions must contain one version when total_has is 1")
+			blockers = append(blockers, "rancher.versions must contain one version when only one Rancher instance is configured")
 		}
 		return blockers
 	}
@@ -152,14 +170,31 @@ func panelManualModeConfigBlockers(totalHAs int) []string {
 		blockers = append(blockers, fmt.Sprintf("rancher.helm_commands must contain %d command(s)", totalHAs))
 	}
 
-	k8sVersions := nonEmptyStringSlice(viper.GetStringSlice("k8s.versions"))
-	if len(k8sVersions) != totalHAs {
-		blockers = append(blockers, fmt.Sprintf("k8s.versions must contain %d version(s)", totalHAs))
-	}
-	checksums := viper.GetStringMapString("rke2.install_script_sha256s")
-	for _, version := range k8sVersions {
-		if strings.TrimSpace(checksums[version]) == "" {
-			blockers = append(blockers, fmt.Sprintf("rke2.install_script_sha256s.%s", version))
+	if isHostedTenantK3SDeployment() {
+		k3sVersions := nonEmptyStringSlice(viper.GetStringSlice("k3s.versions"))
+		if len(k3sVersions) != totalHAs {
+			blockers = append(blockers, fmt.Sprintf("k3s.versions must contain %d version(s)", totalHAs))
+		}
+		installChecksums := viper.GetStringMapString("k3s.install_script_sha256s")
+		airgapChecksums := viper.GetStringMapString("k3s.airgap_image_sha256s")
+		for _, version := range k3sVersions {
+			if strings.TrimSpace(installChecksums[version]) == "" {
+				blockers = append(blockers, fmt.Sprintf("k3s.install_script_sha256s.%s", version))
+			}
+			if viper.GetBool("k3s.preload_images") && strings.TrimSpace(airgapChecksums[version]) == "" {
+				blockers = append(blockers, fmt.Sprintf("k3s.airgap_image_sha256s.%s", version))
+			}
+		}
+	} else {
+		k8sVersions := nonEmptyStringSlice(viper.GetStringSlice("k8s.versions"))
+		if len(k8sVersions) != totalHAs {
+			blockers = append(blockers, fmt.Sprintf("k8s.versions must contain %d version(s)", totalHAs))
+		}
+		checksums := viper.GetStringMapString("rke2.install_script_sha256s")
+		for _, version := range k8sVersions {
+			if strings.TrimSpace(checksums[version]) == "" {
+				blockers = append(blockers, fmt.Sprintf("rke2.install_script_sha256s.%s", version))
+			}
 		}
 	}
 	return blockers

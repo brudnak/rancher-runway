@@ -84,7 +84,7 @@ func TestBuildPlanAddsOldWebhookLaneWhenWebhookChanged(t *testing.T) {
 		"/stg/v2/rancher/rancher-webhook/manifests/v0.10.1-rc.5": "ok",
 	})
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5", "auto", "123456789", "ha-rancher-rke2/signoff", "")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5", "auto", "123456789", "rancher-runway/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestBuildPlanAddsOldWebhookLaneWhenWebhookChanged(t *testing.T) {
 	if plan.Lanes[3].WebhookOverrideImage == "" {
 		t.Fatal("expected webhook override image")
 	}
-	if plan.Lanes[3].TerraformStateKey != "ha-rancher-rke2/signoff/v2.14/v2.14.1-alpha6/123456789/webhook-candidate-on-previous/terraform.tfstate" {
+	if plan.Lanes[3].TerraformStateKey != "rancher-runway/signoff/v2.14/v2.14.1-alpha6/123456789/webhook-candidate-on-previous/terraform.tfstate" {
 		t.Fatalf("unexpected state key: %s", plan.Lanes[3].TerraformStateKey)
 	}
 	if plan.Lanes[3].AWSPrefix != "gha-23456789-wp" {
@@ -145,7 +145,7 @@ func TestBuildPlanDiscoversStagingPrereleaseWebhookImageWhenNoOverride(t *testin
 		"docker.io":            client.rawBaseURL + "/docker",
 	}
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff", "")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "rancher-runway/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestBuildPlanDiscoversReleasedWebhookImageForStableTagWhenNoOverride(t *tes
 		"docker.io":            client.rawBaseURL + "/docker",
 	}
 
-	plan, err := buildPlan(context.Background(), client, "v2.13.5-alpha6", "v2.13.4", "", "auto", "", "ha-rancher-rke2/signoff", "")
+	plan, err := buildPlan(context.Background(), client, "v2.13.5-alpha6", "v2.13.4", "", "auto", "", "rancher-runway/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestBuildPlanFallsBackToDockerHubWhenSUSERegistriesAreMissing(t *testing.T)
 		"docker.io":            client.rawBaseURL + "/docker",
 	}
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff", "")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "rancher-runway/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestBuildPlanFallsBackToPrimeBeforePublicSUSEAndDockerHub(t *testing.T) {
 		"/docker/v2/rancher/rancher-webhook/manifests/v0.10.1-rc.5": "ok",
 	})
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff", "")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "rancher-runway/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestBuildPlanFailsWhenExplicitWebhookImageTagMismatchesBuildYAML(t *testing
 		"/stg/v2/rancher/rancher-webhook/manifests/v0.10.1-rc.5": "ok",
 	})
 
-	_, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.0", "auto", "", "ha-rancher-rke2/signoff", "")
+	_, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.0", "auto", "", "rancher-runway/signoff", "")
 	if err == nil {
 		t.Fatal("expected explicit mismatched webhook image tag to fail")
 	}
@@ -264,7 +264,7 @@ func TestBuildPlanFailsWhenExplicitWebhookImageIsMissing(t *testing.T) {
 		"/rancher/rancher/v2.14.0/build.yaml":        `webhookVersion: 109.0.0+up0.10.0`,
 	})
 
-	_, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5", "auto", "", "ha-rancher-rke2/signoff", "")
+	_, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5", "auto", "", "rancher-runway/signoff", "")
 	if err == nil {
 		t.Fatal("expected explicit missing webhook image to fail")
 	}
@@ -315,7 +315,7 @@ func TestBuildPlanSkipsOldWebhookLaneWhenWebhookUnchanged(t *testing.T) {
 		"/docker/v2/rancher/rancher-webhook/manifests/v0.10.1-rc.5": "ok",
 	})
 
-	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "ha-rancher-rke2/signoff", "")
+	plan, err := buildPlan(context.Background(), client, "v2.14.1-alpha6", "v2.14.0", "", "auto", "", "rancher-runway/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

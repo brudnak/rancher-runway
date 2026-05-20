@@ -84,13 +84,13 @@ func lifecycleCloseBlockedDialog(operation string) (string, string) {
 	operation = strings.TrimSpace(strings.ToLower(operation))
 	switch operation {
 	case "setup":
-		return "Setup is still running", "Rancher HA RKE2 is creating a run slot or provisioning infrastructure. Keep the app open and wait for setup to finish before closing it."
+		return "Setup is still running", "Rancher Runway is creating a run slot or provisioning infrastructure. Keep the app open and wait for setup to finish before closing it."
 	case "cleanup":
-		return "Cleanup is still running", "Rancher HA RKE2 is cleaning up infrastructure. Keep the app open and wait for cleanup to finish before closing it."
+		return "Cleanup is still running", "Rancher Runway is cleaning up infrastructure. Keep the app open and wait for cleanup to finish before closing it."
 	case "readiness":
-		return "Readiness checks are still running", "Rancher HA RKE2 is checking cluster readiness. Keep the app open and wait for the checks to finish before closing it."
+		return "Readiness checks are still running", "Rancher Runway is checking cluster readiness. Keep the app open and wait for the checks to finish before closing it."
 	default:
-		return "Lifecycle operation is still running", "Rancher HA RKE2 is running setup, slot creation, readiness, or cleanup work. Keep the app open and wait for the operation to finish before closing it."
+		return "Lifecycle operation is still running", "Rancher Runway is running setup, slot creation, readiness, or cleanup work. Keep the app open and wait for the operation to finish before closing it."
 	}
 }
 
@@ -164,6 +164,7 @@ func (a *App) panelHandler() (http.Handler, error) {
 
 func resolveDesktopRepoRoot() (string, error) {
 	candidates := []string{
+		os.Getenv("RANCHER_RUNWAY_REPO"),
 		os.Getenv("HA_RANCHER_REPO"),
 		currentRepoHint(),
 	}
@@ -181,7 +182,7 @@ func resolveDesktopRepoRoot() (string, error) {
 		}
 	}
 
-	return "", errors.New("could not find the ha-rancher-rke2 repository; set HA_RANCHER_REPO or rebuild the Wails app from the checkout")
+	return "", errors.New("could not find the Rancher Runway repository; set RANCHER_RUNWAY_REPO or HA_RANCHER_REPO, or rebuild the Wails app from the checkout")
 }
 
 func currentRepoHint() string {
@@ -251,7 +252,7 @@ func hydrateDesktopEnvironment() {
 }
 
 func mergeLoginShellEnvironment() {
-	if os.Getenv("HA_RANCHER_SKIP_SHELL_ENV") == "1" {
+	if os.Getenv("RANCHER_RUNWAY_SKIP_SHELL_ENV") == "1" || os.Getenv("HA_RANCHER_SKIP_SHELL_ENV") == "1" {
 		return
 	}
 	if _, err := os.Stat("/bin/zsh"); err != nil {

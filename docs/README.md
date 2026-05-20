@@ -1,7 +1,7 @@
 # Documentation
 
 This directory is for the automation and operational docs that would make the
-root README too noisy. The root README stays focused on local Rancher HA usage:
+root README too noisy. The root README stays focused on local Rancher Runway usage:
 copy a `tool-config.yml`, run setup, open the local control panel, and clean up.
 
 ## Start Here

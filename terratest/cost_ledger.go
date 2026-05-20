@@ -29,18 +29,20 @@ type panelCostHistoryTotals struct {
 }
 
 type panelCostEntryView struct {
-	RunID             string    `json:"runId"`
-	SlotID            string    `json:"slotId,omitempty"`
-	Owner             string    `json:"owner,omitempty"`
-	AWSPrefix         string    `json:"awsPrefix,omitempty"`
-	Region            string    `json:"region"`
-	FinishedAt        time.Time `json:"finishedAt"`
-	TotalRuntimeHours float64   `json:"totalRuntimeHours"`
-	EC2CostUSD        float64   `json:"ec2CostUsd"`
-	EBSCostUSD        float64   `json:"ebsCostUsd"`
-	TotalCostUSD      float64   `json:"totalCostUsd"`
-	Currency          string    `json:"currency"`
-	Source            string    `json:"source"`
+	RunID               string    `json:"runId"`
+	SlotID              string    `json:"slotId,omitempty"`
+	Owner               string    `json:"owner,omitempty"`
+	AWSPrefix           string    `json:"awsPrefix,omitempty"`
+	Region              string    `json:"region"`
+	FinishedAt          time.Time `json:"finishedAt"`
+	TotalRuntimeHours   float64   `json:"totalRuntimeHours"`
+	EC2CostUSD          float64   `json:"ec2CostUsd"`
+	EBSCostUSD          float64   `json:"ebsCostUsd"`
+	RDSCostUSD          float64   `json:"rdsCostUsd"`
+	LoadBalancerCostUSD float64   `json:"loadBalancerCostUsd"`
+	TotalCostUSD        float64   `json:"totalCostUsd"`
+	Currency            string    `json:"currency"`
+	Source              string    `json:"source"`
 }
 
 func costLedgerPath() string {
@@ -87,7 +89,13 @@ func initCostLedger(db *sql.DB) error {
 			instance_type TEXT,
 			volume_count INTEGER NOT NULL DEFAULT 0,
 			volume_type TEXT,
-			volume_size_gib INTEGER NOT NULL DEFAULT 0
+			volume_size_gib INTEGER NOT NULL DEFAULT 0,
+			rds_cost_usd REAL NOT NULL DEFAULT 0,
+			db_instance_count INTEGER NOT NULL DEFAULT 0,
+			db_instance_class TEXT,
+			load_balancer_cost_usd REAL NOT NULL DEFAULT 0,
+			load_balancer_count INTEGER NOT NULL DEFAULT 0,
+			load_balancer_type TEXT
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS cost_estimates_run_finished_source_idx ON cost_estimates(run_id, finished_at, source)`,
 	}
@@ -95,6 +103,19 @@ func initCostLedger(db *sql.DB) error {
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
 			return fmt.Errorf("failed to initialize cost ledger: %w", err)
+		}
+	}
+	migrations := []string{
+		`ALTER TABLE cost_estimates ADD COLUMN rds_cost_usd REAL NOT NULL DEFAULT 0`,
+		`ALTER TABLE cost_estimates ADD COLUMN db_instance_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE cost_estimates ADD COLUMN db_instance_class TEXT`,
+		`ALTER TABLE cost_estimates ADD COLUMN load_balancer_cost_usd REAL NOT NULL DEFAULT 0`,
+		`ALTER TABLE cost_estimates ADD COLUMN load_balancer_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE cost_estimates ADD COLUMN load_balancer_type TEXT`,
+	}
+	for _, statement := range migrations {
+		if _, err := db.Exec(statement); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return fmt.Errorf("failed to migrate cost ledger: %w", err)
 		}
 	}
 	return nil
@@ -117,7 +138,7 @@ func recordCleanupCostEstimate(estimate *cleanupCostEstimate) error {
 		startedAt = record.CreatedAt.UTC()
 	}
 
-	totalCost := estimate.EstimatedEC2CostUSD + estimate.EstimatedEBSCostUSD
+	totalCost := estimate.EstimatedEC2CostUSD + estimate.EstimatedEBSCostUSD + estimate.EstimatedRDSCostUSD + estimate.EstimatedLBCostUSD
 	db, err := openCostLedger()
 	if err != nil {
 		return err
@@ -127,9 +148,10 @@ func recordCleanupCostEstimate(estimate *cleanupCostEstimate) error {
 	_, err = db.Exec(
 		`INSERT OR IGNORE INTO cost_estimates (
 			run_id, slot_id, owner, aws_prefix, region, started_at, finished_at, created_at,
-			runtime_seconds, total_runtime_hours, ec2_cost_usd, ebs_cost_usd, total_cost_usd,
-			currency, source, instance_count, instance_type, volume_count, volume_type, volume_size_gib
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			runtime_seconds, total_runtime_hours, ec2_cost_usd, ebs_cost_usd, rds_cost_usd, load_balancer_cost_usd, total_cost_usd,
+			currency, source, instance_count, instance_type, volume_count, volume_type, volume_size_gib,
+			db_instance_count, db_instance_class, load_balancer_count, load_balancer_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		runID,
 		record.SlotID,
 		record.Owner,
@@ -142,6 +164,8 @@ func recordCleanupCostEstimate(estimate *cleanupCostEstimate) error {
 		estimate.TotalRuntimeHours,
 		estimate.EstimatedEC2CostUSD,
 		estimate.EstimatedEBSCostUSD,
+		estimate.EstimatedRDSCostUSD,
+		estimate.EstimatedLBCostUSD,
 		totalCost,
 		"USD",
 		"cleanup-estimate-v1",
@@ -150,6 +174,10 @@ func recordCleanupCostEstimate(estimate *cleanupCostEstimate) error {
 		estimate.VolumeCount,
 		estimate.VolumeType,
 		estimate.VolumeSizeGiB,
+		estimate.DBInstanceCount,
+		estimate.DBInstanceClass,
+		estimate.LoadBalancerCount,
+		estimate.LoadBalancerType,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to record cleanup cost estimate: %w", err)
@@ -200,7 +228,7 @@ func discoverCostHistory() panelCostHistoryState {
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`SELECT run_id, slot_id, owner, aws_prefix, region, finished_at, total_runtime_hours, ec2_cost_usd, ebs_cost_usd, total_cost_usd, currency, source FROM cost_estimates ORDER BY finished_at DESC LIMIT 200`)
+	rows, err := db.Query(`SELECT run_id, slot_id, owner, aws_prefix, region, finished_at, total_runtime_hours, ec2_cost_usd, ebs_cost_usd, rds_cost_usd, load_balancer_cost_usd, total_cost_usd, currency, source FROM cost_estimates ORDER BY finished_at DESC LIMIT 200`)
 	if err != nil {
 		state.Error = err.Error()
 		return state
@@ -222,6 +250,8 @@ func discoverCostHistory() panelCostHistoryState {
 			&entry.TotalRuntimeHours,
 			&entry.EC2CostUSD,
 			&entry.EBSCostUSD,
+			&entry.RDSCostUSD,
+			&entry.LoadBalancerCostUSD,
 			&entry.TotalCostUSD,
 			&entry.Currency,
 			&entry.Source,

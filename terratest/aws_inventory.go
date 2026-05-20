@@ -22,7 +22,10 @@ import (
 	"github.com/spf13/viper"
 )
 
-const awsManagedByTagValue = "ha-rancher-rke2"
+var awsManagedByTagValues = map[string]bool{
+	"rancher-runway":  true,
+	"ha-rancher-rke2": true,
+}
 
 func (p *localControlPanel) discoverAWSInventory(records []panelRunRecord) panelAWSInventoryState {
 	region := strings.TrimSpace(viper.GetString("tf_vars.aws_region"))
@@ -575,7 +578,7 @@ func (c *awsInventoryCollector) tagsMatch(tags map[string]string) bool {
 	if c.owner != "" {
 		return normalizeAWSOwner(tags["Owner"]) == c.owner
 	}
-	return tags["ManagedBy"] == awsManagedByTagValue
+	return awsManagedByTagValues[tags["ManagedBy"]]
 }
 
 func (c *awsInventoryCollector) route53ValidationNameMatches(name string) bool {

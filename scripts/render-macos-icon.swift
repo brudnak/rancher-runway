@@ -13,7 +13,7 @@ let sourcePNG = outputDir.appendingPathComponent("AppIcon-source.png")
 let iconsetDir = outputDir.appendingPathComponent("AppIcon.iconset")
 let basePNG = outputDir.appendingPathComponent("AppIcon-1024.png")
 let icnsPath = outputDir.appendingPathComponent("AppIcon.icns")
-let pngOutPath = ProcessInfo.processInfo.environment["HA_RANCHER_ICON_PNG_OUT"]
+let pngOutPath = (ProcessInfo.processInfo.environment["RANCHER_RUNWAY_ICON_PNG_OUT"] ?? ProcessInfo.processInfo.environment["HA_RANCHER_ICON_PNG_OUT"])
     .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
 
 try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)

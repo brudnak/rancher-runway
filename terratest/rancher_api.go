@@ -27,7 +27,7 @@ func createRancherAdminToken(rancherURL, bootstrapPassword string) (string, erro
 	}
 
 	loginPayload := map[string]string{
-		"description":  "ha-rancher-rke2-automation",
+		"description":  "rancher-runway-automation",
 		"responseType": "token",
 		"username":     "admin",
 		"password":     bootstrapPassword,
@@ -45,7 +45,7 @@ func createRancherAdminToken(rancherURL, bootstrapPassword string) (string, erro
 	tokenPayload := map[string]interface{}{
 		"type":        "token",
 		"metadata":    struct{}{},
-		"description": "ha-rancher-rke2 automation",
+		"description": "rancher-runway automation",
 		"ttl":         7776000000,
 	}
 	var tokenResp struct {

@@ -23,7 +23,11 @@ func GenAwsVar(
 	customHostnamePrefix,
 	ownerFirstName,
 	ownerLastName,
-	runID string,
+	runID,
+	deploymentType string,
+	totalRancherInstances int,
+	awsRDSPassword,
+	awsEC2InstanceType string,
 	serverCount int) {
 	GenAwsVarFile(
 		"../modules/aws/terraform.tfvars",
@@ -41,6 +45,10 @@ func GenAwsVar(
 		ownerFirstName,
 		ownerLastName,
 		runID,
+		deploymentType,
+		totalRancherInstances,
+		awsRDSPassword,
+		awsEC2InstanceType,
 		serverCount,
 	)
 }
@@ -60,7 +68,11 @@ func GenAwsVarFile(
 	customHostnamePrefix,
 	ownerFirstName,
 	ownerLastName,
-	runID string,
+	runID,
+	deploymentType string,
+	totalRancherInstances int,
+	awsRDSPassword,
+	awsEC2InstanceType string,
 	serverCount int) {
 
 	f := hclwrite.NewEmptyFile()
@@ -93,6 +105,10 @@ func GenAwsVarFile(
 	rootBody.SetAttributeValue("owner_first_name", cty.StringVal(ownerFirstName))
 	rootBody.SetAttributeValue("owner_last_name", cty.StringVal(ownerLastName))
 	rootBody.SetAttributeValue("run_id", cty.StringVal(runID))
+	rootBody.SetAttributeValue("deployment_type", cty.StringVal(deploymentType))
+	rootBody.SetAttributeValue("total_rancher_instances", cty.NumberIntVal(int64(totalRancherInstances)))
+	rootBody.SetAttributeValue("aws_rds_password", cty.StringVal(awsRDSPassword))
+	rootBody.SetAttributeValue("aws_ec2_instance_type", cty.StringVal(awsEC2InstanceType))
 	rootBody.SetAttributeValue("server_count", cty.NumberIntVal(int64(serverCount)))
 
 	_, err = tfVarsFile.Write(f.Bytes())

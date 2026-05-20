@@ -16,7 +16,7 @@ provider "aws" {
 locals {
   common_tags = merge(
     {
-      Project   = "ha-rancher-rke2"
+      Project   = "rancher-runway"
       Purpose   = "terraform-state"
       ManagedBy = "terraform"
     },

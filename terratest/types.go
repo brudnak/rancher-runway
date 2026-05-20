@@ -2,6 +2,8 @@ package test
 
 import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
@@ -39,6 +41,9 @@ type RancherResolvedPlan struct {
 	SupportMatrixURL       string
 	RecommendedRKE2Version string
 	InstallerSHA256        string
+	RecommendedK3SVersion  string
+	K3SInstallerSHA256     string
+	K3SAirgapImageSHA256   string
 	HelmCommands           []string
 	Explanation            []string
 }
@@ -62,6 +67,14 @@ type cleanupCostEstimate struct {
 	EBSMonthlyRateUSD   float64
 	EstimatedEC2CostUSD float64
 	EstimatedEBSCostUSD float64
+	DBInstanceCount     int
+	DBInstanceClass     string
+	RDSHourlyRateUSD    float64
+	EstimatedRDSCostUSD float64
+	LoadBalancerCount   int
+	LoadBalancerType    string
+	LBHourlyRateUSD     float64
+	EstimatedLBCostUSD  float64
 }
 
 type resolvedChartMatch struct {
@@ -72,6 +85,8 @@ type resolvedChartMatch struct {
 }
 
 var (
-	ssmClient *ssm.Client
-	ec2Client *ec2.Client
+	ssmClient   *ssm.Client
+	ec2Client   *ec2.Client
+	rdsClient   *rds.Client
+	elbv2Client *elasticloadbalancingv2.Client
 )

@@ -115,6 +115,8 @@ type clusterView struct {
 	ID                  string    `json:"id"`
 	RunID               string    `json:"runId,omitempty"`
 	Type                string    `json:"type"`
+	DeploymentType      string    `json:"deploymentType,omitempty"`
+	Role                string    `json:"role,omitempty"`
 	HAIndex             int       `json:"haIndex"`
 	Name                string    `json:"name"`
 	Version             string    `json:"version,omitempty"`
@@ -386,9 +388,9 @@ func StartHAControlPanelServer(repoRoot string, opts ControlPanelServerOptions) 
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
-	totalHAs := viper.GetInt("total_has")
+	totalHAs := configuredRancherInstanceCount()
 	if totalHAs < 1 {
-		return nil, fmt.Errorf("total_has must be at least 1")
+		return nil, fmt.Errorf("configured Rancher instance count must be at least 1")
 	}
 
 	originalDir, err := os.Getwd()
@@ -480,9 +482,9 @@ func startHAControlPanel(repoRoot string, opts ControlPanelServerOptions) (*Cont
 		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
-	totalHAs := viper.GetInt("total_has")
+	totalHAs := configuredRancherInstanceCount()
 	if totalHAs < 1 {
-		return nil, fmt.Errorf("total_has must be at least 1")
+		return nil, fmt.Errorf("configured Rancher instance count must be at least 1")
 	}
 
 	originalDir, err := os.Getwd()
@@ -1275,7 +1277,7 @@ func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, ac
 		op.Output = append(op.Output, "[control-panel] Operation process exited before reporting completion; status marked stale.")
 		p.persistOperationsLocked()
 	}
-	recentCleanup := name == panelOperationCleanup && op.FinishedAt != nil && time.Since(*op.FinishedAt) < time.Hour
+	recentCleanup := name == panelOperationCleanup && op.FinishedAt != nil && op.Error == "" && time.Since(*op.FinishedAt) < time.Hour
 	if activeRunIDs != nil && !op.Running && op.RunID != "" && !activeRunIDs[safeRunPathSegment(op.RunID)] && !recentCleanup {
 		return panelOperationSnapshot{Output: []string{}}
 	}
@@ -1321,6 +1323,9 @@ func (p *localControlPanel) discoverClusters() []clusterView {
 
 func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clusterView {
 	outputs, _ := readTerraformFlatOutputsWithModule(p.repoRoot, record.TerraformStatePath, record.TerraformDataDir, record.TerraformModuleDir)
+	if recordDeploymentType(record, outputs) == deploymentTypeHostedTenantK3S {
+		return p.discoverHostedTenantClustersForRun(record, outputs)
+	}
 	versions := record.RancherVersions
 	if len(versions) == 0 {
 		versions = readRequestedRancherVersionsForPanel(p.totalHAs)
@@ -1395,6 +1400,90 @@ func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clus
 	return clusters
 }
 
+func recordDeploymentType(record panelRunRecord, outputs map[string]string) string {
+	if record.DeploymentType != "" {
+		return record.DeploymentType
+	}
+	if hasHostedTenantFlatOutputs(outputs) {
+		return deploymentTypeHostedTenantK3S
+	}
+	return deploymentType()
+}
+
+func (p *localControlPanel) discoverHostedTenantClustersForRun(record panelRunRecord, outputs map[string]string) []clusterView {
+	versions := record.RancherVersions
+	if len(versions) == 0 {
+		versions = readRequestedRancherVersionsForPanel(p.totalHAs)
+	}
+	setupRunning := p.operationRunning(panelOperationSetup)
+	runID := safeRunPathSegment(record.RunID)
+	totalInstances := record.TotalHAs
+	if totalInstances < 1 {
+		totalInstances = configuredRancherInstanceCount()
+	}
+	if totalInstances < 1 {
+		totalInstances = p.totalHAs
+	}
+
+	clusters := make([]clusterView, 0, totalInstances)
+	for i := 1; i <= totalInstances; i++ {
+		instanceDir := p.hostedTenantInstanceDirForRun(record, i)
+		kubeconfigPath := filepath.Join(instanceDir, "kube_config.yaml")
+		kubeconfigExists := pathExists(kubeconfigPath)
+		hasRunSignal := kubeconfigExists ||
+			pathExists(instanceDir) ||
+			hasHostedTenantFlatOutput(outputs, i) ||
+			setupRunning
+		if !hasRunSignal {
+			continue
+		}
+
+		role := "tenant"
+		displayName := fmt.Sprintf("Tenant Rancher %d", i-1)
+		if i == 1 {
+			role = "host"
+			displayName = "Host Rancher"
+		}
+		cluster := clusterView{
+			ID:             hostedTenantClusterIDForRun(runID, i),
+			RunID:          runID,
+			Type:           "local",
+			DeploymentType: deploymentTypeHostedTenantK3S,
+			Role:           role,
+			HAIndex:        i,
+			Name:           runScopedClusterName(runID, displayName),
+			DownloadName:   runScopedDownloadName(runID, fmt.Sprintf("hosted-tenant-%d.yaml", i)),
+			KubeconfigPath: kubeconfigPath,
+		}
+		if len(versions) >= i {
+			cluster.Version = versions[i-1]
+		}
+		if outputs != nil {
+			cluster.RancherURL = clickableURL(outputs[fmt.Sprintf("hosted_%d_rancher_url", i)])
+		}
+		if !kubeconfigExists {
+			if setupRunning {
+				cluster.Provisioning = true
+				cluster.ProvisioningMessage = "Setup is running. Kubeconfig will appear after Terraform and K3s bootstrap complete."
+			}
+			cluster.Error = "kubeconfig not found"
+			clusters = append(clusters, cluster)
+			continue
+		}
+		cluster.Available = true
+		pods, err := fetchLocalRancherPods(cluster.KubeconfigPath)
+		if err != nil {
+			cluster.Error = err.Error()
+			clusters = append(clusters, cluster)
+			continue
+		}
+		cluster.Reachable = true
+		cluster.Pods = pods
+		clusters = append(clusters, cluster)
+	}
+	return clusters
+}
+
 func (p *localControlPanel) operationRunning(name panelOperationName) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -1407,6 +1496,31 @@ func hasHAFlatOutput(outputs map[string]string, instanceNum int) bool {
 	}
 
 	prefix := fmt.Sprintf("ha_%d_", instanceNum)
+	for key, value := range outputs {
+		if strings.HasPrefix(key, prefix) && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHostedTenantFlatOutputs(outputs map[string]string) bool {
+	if outputs == nil {
+		return false
+	}
+	for key, value := range outputs {
+		if strings.HasPrefix(key, "hosted_") && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHostedTenantFlatOutput(outputs map[string]string, instanceNum int) bool {
+	if outputs == nil {
+		return false
+	}
+	prefix := fmt.Sprintf("hosted_%d_", instanceNum)
 	for key, value := range outputs {
 		if strings.HasPrefix(key, prefix) && strings.TrimSpace(value) != "" {
 			return true
@@ -1622,6 +1736,18 @@ func localClusterIDForRun(runID string, instanceNum int) string {
 		return fmt.Sprintf("run-%s-ha-%d-local", runID, instanceNum)
 	}
 	return fmt.Sprintf("ha-%d-local", instanceNum)
+}
+
+func hostedTenantClusterIDForRun(runID string, instanceNum int) string {
+	role := "tenant"
+	if instanceNum == 1 {
+		role = "host"
+	}
+	runID = safeRunPathSegment(runID)
+	if runID != "" && runID != "unknown" {
+		return fmt.Sprintf("run-%s-hosted-%s-%d", runID, role, instanceNum)
+	}
+	return fmt.Sprintf("hosted-%s-%d", role, instanceNum)
 }
 
 func downstreamClusterID(instanceNum int, namespace, name string) string {

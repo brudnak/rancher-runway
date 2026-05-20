@@ -33,10 +33,10 @@ const lines = operations
 const message = `Lifecycle processes are still running:\n${lines}\n\nWait for them to finish before rebuilding and replacing the app.`;
 console.error(message);
 
-if (process.platform === "darwin" && process.env.HA_RANCHER_SKIP_INSTALL_ALERT !== "1") {
+if (process.platform === "darwin" && process.env.RANCHER_RUNWAY_SKIP_INSTALL_ALERT !== "1" && process.env.HA_RANCHER_SKIP_INSTALL_ALERT !== "1") {
   spawnSync(
     "osascript",
-    ["-e", `display alert "Rancher HA RKE2 is busy" message ${JSON.stringify(message)} as warning`],
+    ["-e", `display alert "Rancher Runway is busy" message ${JSON.stringify(message)} as warning`],
     { stdio: "ignore", timeout: 15000 },
   );
 }

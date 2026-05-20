@@ -11,7 +11,7 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:     "Rancher HA RKE2",
+		Title:     "Rancher Runway",
 		Width:     1440,
 		Height:    1000,
 		MinWidth:  980,

@@ -353,6 +353,7 @@ func openBrowser(targetURL string) error {
 
 func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 	sections := []string{"Continue with this Rancher plan?"}
+	hostedTenant := isHostedTenantPlanSet(plans)
 
 	for i, plan := range plans {
 		if plan == nil {
@@ -360,7 +361,7 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 		}
 
 		sectionLines := []string{
-			fmt.Sprintf("HA %d", i+1),
+			resolvedPlanDisplayName(i, hostedTenant),
 		}
 		if plan.RequestedVersion != "" {
 			sectionLines = append(sectionLines, "Requested Rancher: "+plan.RequestedVersion)
@@ -370,6 +371,9 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 		}
 		if plan.RecommendedRKE2Version != "" {
 			sectionLines = append(sectionLines, "Resolved RKE2/K8s: "+plan.RecommendedRKE2Version)
+		}
+		if plan.RecommendedK3SVersion != "" {
+			sectionLines = append(sectionLines, "Resolved K3s/K8s: "+plan.RecommendedK3SVersion)
 		}
 		for commandIndex, helmCommand := range plan.HelmCommands {
 			sectionLines = append(sectionLines, fmt.Sprintf("Helm command %d:", commandIndex+1))
@@ -383,8 +387,10 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 }
 
 func logResolvedPlans(plans []*RancherResolvedPlan) {
+	hostedTenant := isHostedTenantPlanSet(plans)
 	for i, plan := range plans {
-		log.Printf("[resolver] Rancher resolution summary for HA %d:", i+1)
+		displayName := resolvedPlanDisplayName(i, hostedTenant)
+		log.Printf("[resolver] Rancher resolution summary for %s:", displayName)
 		log.Printf("[resolver] Requested version: %s", plan.RequestedVersion)
 		log.Printf("[resolver] Requested distro: %s", plan.RequestedDistro)
 		log.Printf("[resolver] Build type: %s", plan.BuildType)
@@ -400,15 +406,42 @@ func logResolvedPlans(plans []*RancherResolvedPlan) {
 		}
 		log.Printf("[resolver] Compatibility baseline: %s", plan.CompatibilityBaseline)
 		log.Printf("[resolver] Support matrix: %s", plan.SupportMatrixURL)
-		log.Printf("[resolver] Recommended RKE2 version: %s", plan.RecommendedRKE2Version)
-		log.Printf("[resolver] Resolved installer SHA256: %s", plan.InstallerSHA256)
+		if plan.RecommendedK3SVersion != "" {
+			log.Printf("[resolver] Recommended K3s version: %s", plan.RecommendedK3SVersion)
+			log.Printf("[resolver] Resolved K3s installer SHA256: %s", plan.K3SInstallerSHA256)
+			if plan.K3SAirgapImageSHA256 != "" {
+				log.Printf("[resolver] Resolved K3s airgap image SHA256: %s", plan.K3SAirgapImageSHA256)
+			}
+		} else {
+			log.Printf("[resolver] Recommended RKE2 version: %s", plan.RecommendedRKE2Version)
+			log.Printf("[resolver] Resolved RKE2 installer SHA256: %s", plan.InstallerSHA256)
+		}
 		for _, explanation := range plan.Explanation {
 			log.Printf("[resolver] Reason: %s", explanation)
 		}
 		for commandIndex, helmCommand := range plan.HelmCommands {
-			log.Printf("[resolver] Generated Helm command for HA %d.%d:\n%s", i+1, commandIndex+1, sanitizeHelmCommandForLog(helmCommand))
+			log.Printf("[resolver] Generated Helm command for %s.%d:\n%s", displayName, commandIndex+1, sanitizeHelmCommandForLog(helmCommand))
 		}
 	}
+}
+
+func isHostedTenantPlanSet(plans []*RancherResolvedPlan) bool {
+	for _, plan := range plans {
+		if plan != nil && strings.TrimSpace(plan.RecommendedK3SVersion) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedPlanDisplayName(index int, hostedTenant bool) string {
+	if !hostedTenant {
+		return fmt.Sprintf("HA %d", index+1)
+	}
+	if index == 0 {
+		return "Host"
+	}
+	return fmt.Sprintf("Tenant %d", index)
 }
 
 func sanitizeHelmCommandForLog(command string) string {

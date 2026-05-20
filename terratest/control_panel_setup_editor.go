@@ -7,7 +7,6 @@ import (
 	"net/http"
 
 	"github.com/brudnak/ha-rancher-rke2/terratest/ui"
-	"github.com/spf13/viper"
 )
 
 const controlPanelSetupEditorBasePath = "/setup-editor"
@@ -25,7 +24,7 @@ func (p *localControlPanel) newSetupEditor() *interactiveServer {
 				return fmt.Errorf("setup plan must resolve before starting AWS")
 			}
 			viperConfigMu.RLock()
-			p.totalHAs = viper.GetInt("total_has")
+			p.totalHAs = configuredRancherInstanceCount()
 			viperConfigMu.RUnlock()
 			if p.totalHAs < 1 {
 				p.totalHAs = len(plans)

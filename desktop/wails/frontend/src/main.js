@@ -43,7 +43,7 @@ const waitForPanelStatus = async () => {
     }
     await new Promise(resolve => window.setTimeout(resolve, 100));
   }
-  throw new Error("Wails did not expose the Rancher HA panel bridge.");
+  throw new Error("Wails did not expose the Rancher Runway panel bridge.");
 };
 
 const attachPanel = async () => {

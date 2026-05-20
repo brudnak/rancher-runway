@@ -15,7 +15,7 @@ on:
       lock_table_name:
         description: DynamoDB table name for Terraform state locks.
         required: true
-        default: ha-rancher-rke2-terraform-locks
+        default: rancher-runway-terraform-locks
         type: string
       noncurrent_state_version_expiration_days:
         description: Days to retain old noncurrent state versions.

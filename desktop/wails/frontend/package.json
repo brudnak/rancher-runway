@@ -1,5 +1,5 @@
 {
-  "name": "ha-rancher-wails-frontend",
+  "name": "rancher-runway-wails-frontend",
   "private": true,
   "version": "0.0.0",
   "type": "module",

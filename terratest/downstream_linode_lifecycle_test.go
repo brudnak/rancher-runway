@@ -999,5 +999,5 @@ func downstreamClusterNamePrefix(explicitPrefix, runID string) string {
 	if strings.TrimSpace(runID) != "" {
 		return "gha"
 	}
-	return "ha-rancher-rke2"
+	return "rancher-runway"
 }
