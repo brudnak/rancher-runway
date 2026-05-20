@@ -62,6 +62,9 @@ func configuredRancherInstanceCount() int {
 }
 
 func hostedTenantRancherInstanceCount() int {
+	if !isHostedTenantK3SDeployment() {
+		return 0
+	}
 	if total := viper.GetInt("hosted_tenant.total_rancher_instances"); total > 0 {
 		return total
 	}
