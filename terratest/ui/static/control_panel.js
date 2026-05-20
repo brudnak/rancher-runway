@@ -137,6 +137,7 @@ let activeCopyHelmClusterId = ''
 let activeCopyHelmUpgradeClusterId = ''
 let activeOpenKubeconfigPathClusterId = ''
 let activeCopyKubeconfigPathClusterId = ''
+let activeCopyLinodeIPClusterId = ''
 let lastLeaderChangeMessage = ''
 let refreshInFlight = false
 let rawLogText = ''
@@ -202,7 +203,8 @@ const clusterPanel = createClusterPanel({
     activeCopyHelmClusterId,
     activeCopyHelmUpgradeClusterId,
     activeOpenKubeconfigPathClusterId,
-    activeCopyKubeconfigPathClusterId
+    activeCopyKubeconfigPathClusterId,
+    activeCopyLinodeIPClusterId
   }),
   getActiveSelection: () => ({
     runKey: activeClusterRunKey,
@@ -2363,6 +2365,22 @@ const copyKubeconfigPath = async cluster => {
   clusterPanel.flashKubeconfigPathAction(clusterId, 'copy', copied ? 'success' : 'error')
 }
 
+const copyLinodeIP = async cluster => {
+  const clusterId = cluster?.id || ''
+  if (!clusterId || activeCopyLinodeIPClusterId) {
+    return
+  }
+
+  activeCopyLinodeIPClusterId = clusterId
+  if (lastState) {
+    renderClusters(lastState)
+  }
+
+  const copied = await copyTextToClipboard(cluster?.loadBalancer || '', 'Copied Linode IP to clipboard.')
+  activeCopyLinodeIPClusterId = ''
+  clusterPanel.flashKubeconfigPathAction(clusterId, 'copy-linode-ip', copied ? 'success' : 'error')
+}
+
 const copyKubeconfig = async clusterId => {
   if (activeCopyClusterId) {
     return
@@ -2798,6 +2816,12 @@ clustersEl.addEventListener('click', event => {
   if (action === 'copy-kubeconfig-path') {
     const cluster = clusterItems(lastState).find(item => item.id === clusterId)
     copyKubeconfigPath(cluster)
+    return
+  }
+
+  if (action === 'copy-linode-ip') {
+    const cluster = clusterItems(lastState).find(item => item.id === clusterId)
+    copyLinodeIP(cluster)
     return
   }
 

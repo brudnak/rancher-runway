@@ -218,7 +218,9 @@ export const createClusterPanel = ({
     const actionState = getActionState()
     const active = action === 'open'
       ? actionState.activeOpenKubeconfigPathClusterId === clusterId
-      : actionState.activeCopyKubeconfigPathClusterId === clusterId
+      : action === 'copy-linode-ip'
+        ? actionState.activeCopyLinodeIPClusterId === clusterId
+        : actionState.activeCopyKubeconfigPathClusterId === clusterId
     if (active) {
       return `<span class="spinner mr-2 !h-3 !w-3 !border-[1.5px]"></span>${activeLabel}`
     }
@@ -387,6 +389,7 @@ export const createClusterPanel = ({
     const copyingKubeconfigPath = actionState.activeCopyKubeconfigPathClusterId === cluster.id
     const openPathFeedback = kubeconfigPathActionFeedback.get(pathActionKey('open', cluster.id))
     const copyPathFeedback = kubeconfigPathActionFeedback.get(pathActionKey('copy', cluster.id))
+    const copyLinodeIPFeedback = kubeconfigPathActionFeedback.get(pathActionKey('copy-linode-ip', cluster.id))
     const pathButtonBaseClass = 'inline-flex min-h-8 items-center justify-center rounded-md border px-2.5 py-1.5 text-xs font-semibold disabled:cursor-default disabled:opacity-70'
     const openPathToneClass = openPathFeedback === 'error'
       ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200'
@@ -398,6 +401,19 @@ export const createClusterPanel = ({
       : copyPathFeedback === 'success'
         ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200'
         : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]'
+    const copyLinodeIPToneClass = copyLinodeIPFeedback === 'error'
+      ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200'
+      : copyLinodeIPFeedback === 'success'
+        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200'
+        : 'border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]'
+    const networkValue = isLinodeDocker && cluster.loadBalancer
+      ? `
+        <div class="flex flex-wrap items-center gap-2">
+          <span>${escapeHtml(cluster.loadBalancer)}</span>
+          <button type="button" data-action="copy-linode-ip" data-cluster="${escapeHtml(cluster.id)}"${actionState.activeCopyLinodeIPClusterId === cluster.id ? ' disabled' : ''} class="${pathButtonBaseClass} ${copyLinodeIPToneClass}">${kubeconfigPathActionContent(cluster.id, 'copy-linode-ip', 'Copy', 'Copying', 'Copied', 'Copy failed')}</button>
+        </div>
+      `
+      : loadBalancer
     const kubeconfig = isLinodeDocker
       ? ''
       : cluster.kubeconfigPath ? `
@@ -441,7 +457,7 @@ export const createClusterPanel = ({
         ${clusterCollapsed ? '' : `
           <div class="mt-4 grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-[repeat(3,minmax(0,1fr))]">
             ${metaItem('Rancher URL', rancherURL)}
-            ${metaItem(networkLabel, loadBalancer)}
+            ${metaItem(networkLabel, networkValue)}
             ${isLinodeDocker ? '' : metaItem('Kubeconfig', kubeconfig)}
             ${namespace}
             ${clusterID}
