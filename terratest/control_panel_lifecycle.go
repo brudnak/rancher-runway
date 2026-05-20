@@ -325,6 +325,11 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 	var terraformStatePath string
 	var terraformDataDir string
 	var slotID = defaultRunSlotID
+	var runDeploymentType string
+	var runTotalHAs int
+	var runRancherVersions []string
+	var runAWSPrefix string
+	var runRoute53FQDN string
 
 	p.mu.Lock()
 	op := p.operationLocked(operation)
@@ -344,6 +349,11 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 			terraformModuleDir = record.TerraformModuleDir
 			terraformStatePath = record.TerraformStatePath
 			terraformDataDir = record.TerraformDataDir
+			runDeploymentType = record.DeploymentType
+			runTotalHAs = record.TotalHAs
+			runRancherVersions = record.RancherVersions
+			runAWSPrefix = record.AWSPrefix
+			runRoute53FQDN = record.Route53FQDN
 		}
 	}
 	if haOutputRoot == "" {
@@ -354,6 +364,11 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 			terraformModuleDir = record.TerraformModuleDir
 			terraformStatePath = record.TerraformStatePath
 			terraformDataDir = record.TerraformDataDir
+			runDeploymentType = record.DeploymentType
+			runTotalHAs = record.TotalHAs
+			runRancherVersions = record.RancherVersions
+			runAWSPrefix = record.AWSPrefix
+			runRoute53FQDN = record.Route53FQDN
 		}
 	}
 
@@ -375,6 +390,21 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 	}
 	if strings.TrimSpace(terraformDataDir) != "" {
 		env = append(env, terraformDataDirEnv+"="+terraformDataDir)
+	}
+	if strings.TrimSpace(runDeploymentType) != "" {
+		env = append(env, runDeploymentTypeEnv+"="+runDeploymentType)
+	}
+	if runTotalHAs > 0 {
+		env = append(env, runTotalHAsEnv+"="+fmt.Sprintf("%d", runTotalHAs))
+	}
+	if len(runRancherVersions) > 0 {
+		env = append(env, runRancherVersionsEnv+"="+strings.Join(runRancherVersions, ","))
+	}
+	if strings.TrimSpace(runAWSPrefix) != "" {
+		env = append(env, runAWSPrefixEnv+"="+runAWSPrefix)
+	}
+	if strings.TrimSpace(runRoute53FQDN) != "" {
+		env = append(env, runRoute53FQDNEnv+"="+runRoute53FQDN)
 	}
 	return env
 }

@@ -348,6 +348,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/state", p.handleState)
 	mux.HandleFunc("/api/logs", p.handleLogs)
 	mux.HandleFunc("/api/logs/stream", p.handleLogStream)
+	mux.HandleFunc("/api/docker-logs", p.handleDockerLogs)
 	mux.HandleFunc("/api/kubeconfig", p.handleKubeconfigDownload)
 	mux.HandleFunc("/api/kubeconfig/save", p.handleKubeconfigSave)
 	mux.HandleFunc("/api/helm-command", p.handleHelmCommandDownload)
@@ -826,6 +827,48 @@ func (p *localControlPanel) handleLogStream(w http.ResponseWriter, r *http.Reque
 		sendLine("error", string(stderrBytes))
 	}
 	sendLine("end", "stream closed")
+}
+
+func (p *localControlPanel) handleDockerLogs(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedReadOnly(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	clusterID := strings.TrimSpace(r.URL.Query().Get("cluster"))
+	if clusterID == "" {
+		http.Error(w, "cluster is required", http.StatusBadRequest)
+		return
+	}
+	cluster, err := p.clusterByID(clusterID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if cluster.DeploymentType != deploymentTypeLinodeDocker && cluster.Type != "linode" {
+		http.Error(w, "Docker logs are only available for Linode Docker installs", http.StatusBadRequest)
+		return
+	}
+	if !cluster.Available {
+		http.Error(w, "Linode Docker install is not available yet", http.StatusConflict)
+		return
+	}
+
+	output, err := runLinodeDockerSSHCommand(cluster.LoadBalancer, linodeRootPassword(), linodeDockerLogSnapshotCommand(220))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to collect Docker logs over SSH: %v", err), http.StatusBadGateway)
+		return
+	}
+	output = sanitizeDiagnosticOutput(output)
+	output = lastNonEmptyLines(output, 420)
+	if output == "" {
+		output = "(no Docker output)"
+	}
+	writeJSON(w, map[string]string{"text": output})
 }
 
 func (p *localControlPanel) handleKubeconfigDownload(w http.ResponseWriter, r *http.Request) {

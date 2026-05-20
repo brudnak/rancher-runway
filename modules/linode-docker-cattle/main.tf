@@ -53,7 +53,7 @@ resource "linode_instance" "rancher" {
     inline = [
       "sudo apt-get update",
       "sudo curl -fsSL https://releases.rancher.com/install-docker/${var.docker_install_version}.sh | sh",
-      "docker run -d --restart=unless-stopped -p 80:80 -p 443:443 --privileged -e CATTLE_BOOTSTRAP_PASSWORD='${var.rancher_bootstrap_password}' ${var.dockerhub}:${var.rancher_instances[tonumber(each.key) - 1].rancher_version} --acme-domain ${each.value.id}.${var.aws_route53_fqdn}",
+      "docker run -d --name rancher --restart=unless-stopped -p 80:80 -p 443:443 --privileged -e CATTLE_BOOTSTRAP_PASSWORD='${var.rancher_bootstrap_password}' ${var.dockerhub}:${var.rancher_instances[tonumber(each.key) - 1].rancher_version} --acme-domain ${each.value.id}.${var.aws_route53_fqdn}",
     ]
   }
 }

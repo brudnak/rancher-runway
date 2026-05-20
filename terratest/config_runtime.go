@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -49,7 +50,36 @@ func setupConfigE(repoRoot string) error {
 	if err := viper.ReadInConfig(); err != nil {
 		return err
 	}
+	applyRunScopedConfigOverridesFromEnv()
 	return nil
+}
+
+func applyRunScopedConfigOverridesFromEnv() {
+	if value := strings.ToLower(strings.TrimSpace(os.Getenv(runDeploymentTypeEnv))); value != "" {
+		viper.Set("deployment.type", value)
+	}
+	if value := strings.TrimSpace(os.Getenv(runTotalHAsEnv)); value != "" {
+		if total, err := strconv.Atoi(value); err == nil && total > 0 {
+			viper.Set("total_has", total)
+			if deploymentType() == deploymentTypeHostedTenantK3S {
+				viper.Set("total_rancher_instances", total)
+				viper.Set("hosted_tenant.total_rancher_instances", total)
+			}
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(runRancherVersionsEnv)); value != "" {
+		versions := nonEmptyStringSlice(strings.Split(value, ","))
+		if len(versions) > 0 {
+			viper.Set("rancher.version", "")
+			viper.Set("rancher.versions", versions)
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv(runAWSPrefixEnv)); value != "" {
+		viper.Set("tf_vars.aws_prefix", value)
+	}
+	if value := strings.TrimSpace(os.Getenv(runRoute53FQDNEnv)); value != "" {
+		viper.Set("tf_vars.aws_route53_fqdn", value)
+	}
 }
 
 func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
@@ -325,6 +355,9 @@ func terraformAWSPrefixForRun(basePrefix string, runIDValue string) string {
 	}
 	if len(runID) > 8 {
 		runID = runID[:8]
+	}
+	if strings.HasSuffix(basePrefix, "-r"+runID) {
+		return basePrefix
 	}
 	return fmt.Sprintf("%s-r%s", basePrefix, runID)
 }

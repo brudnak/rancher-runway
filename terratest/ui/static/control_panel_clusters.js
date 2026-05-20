@@ -237,7 +237,13 @@ export const createClusterPanel = ({
 
   const renderKubeconfigActions = cluster => {
     if (cluster.deploymentType === 'linode-docker-cattle') {
-      return '<span class="text-sm text-zinc-500 dark:text-zinc-400">No kubeconfig for Docker install</span>'
+      const actionState = getActionState()
+      const loadingDockerLogs = actionState.activeDockerLogsClusterId === cluster.id
+      const dockerLogSpinner = loadingDockerLogs ? '<span class="spinner mr-2"></span>' : ''
+      return `
+        <span class="text-sm text-zinc-500 dark:text-zinc-400">No kubeconfig for Docker install</span>
+        <button type="button" data-action="docker-logs" data-cluster="${escapeHtml(cluster.id)}"${loadingDockerLogs ? ' disabled' : ''} class="inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 disabled:cursor-default disabled:opacity-70 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">${dockerLogSpinner}${loadingDockerLogs ? 'Loading logs' : 'Docker logs'}</button>
+      `
     }
 
     if (!cluster.available) {

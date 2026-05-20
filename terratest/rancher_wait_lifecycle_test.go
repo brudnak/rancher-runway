@@ -112,10 +112,14 @@ func TestLinodeDockerWaitReady(t *testing.T) {
 func waitForLinodeDockerReady(instanceNum int, outputs map[string]string, timeout, initialDelay, settleDelay time.Duration) error {
 	rancherURL := clickableURL(outputs[fmt.Sprintf("linode_%d_rancher_url", instanceNum)])
 	linodeIP := strings.TrimSpace(outputs[fmt.Sprintf("linode_%d_ip", instanceNum)])
+	rootPassword := linodeRootPassword()
 
 	log.Printf("[ready][linode-docker-%d] Waiting for Rancher to become ready at %s", instanceNum, rancherURL)
 	if linodeIP != "" {
-		log.Printf("[ready][linode-docker-%d] Linode IP: %s", instanceNum, linodeIP)
+		log.Printf("[ready][linode-docker-%d] Linode SSH target: root@%s", instanceNum, linodeIP)
+	}
+	if rootPassword == "" {
+		log.Printf("[ready][linode-docker-%d] Linode SSH diagnostics disabled: linode.ssh_root_password is empty", instanceNum)
 	}
 	log.Printf("[ready][linode-docker-%d] Initial delay: %s, timeout: %s", instanceNum, initialDelay, timeout)
 
@@ -131,10 +135,11 @@ func waitForLinodeDockerReady(instanceNum int, outputs map[string]string, timeou
 	for time.Now().Before(deadline) {
 		attempt++
 		httpReady, httpSummary := rancherHTTPReady(client, rancherURL)
+		dockerSummary := linodeDockerReadinessSummary(instanceNum, linodeIP, rootPassword)
 		if httpReady {
 			consecutiveReady++
-			log.Printf("[ready][linode-docker-%d] Attempt %d ready check passed (%d/2): http=%s",
-				instanceNum, attempt, consecutiveReady, httpSummary)
+			log.Printf("[ready][linode-docker-%d] Attempt %d ready check passed (%d/2): http=%s docker=%s",
+				instanceNum, attempt, consecutiveReady, httpSummary, dockerSummary)
 			if consecutiveReady >= 2 {
 				if settleDelay > 0 {
 					log.Printf("[ready][linode-docker-%d] Rancher is ready; settling for %s before continuing", instanceNum, settleDelay)
@@ -145,14 +150,54 @@ func waitForLinodeDockerReady(instanceNum int, outputs map[string]string, timeou
 			}
 		} else {
 			consecutiveReady = 0
-			log.Printf("[ready][linode-docker-%d] Attempt %d not ready yet: http=%s",
-				instanceNum, attempt, httpSummary)
+			log.Printf("[ready][linode-docker-%d] Attempt %d not ready yet: http=%s docker=%s",
+				instanceNum, attempt, httpSummary, dockerSummary)
+			if attempt == 1 || attempt%3 == 0 {
+				logLinodeDockerDiagnostic(instanceNum, linodeIP, rootPassword, "recent Rancher Docker logs", 100, linodeDockerLogsCommand(120))
+			}
 		}
 
 		time.Sleep(20 * time.Second)
 	}
 
+	logLinodeDockerReadinessDiagnostics(instanceNum, linodeIP, rootPassword)
 	return fmt.Errorf("[linode-docker-%d] timed out after %s waiting for Rancher HTTP readiness", instanceNum, timeout)
+}
+
+func linodeDockerReadinessSummary(instanceNum int, linodeIP string, rootPassword string) string {
+	output, err := runLinodeDockerSSHCommand(linodeIP, rootPassword, linodeDockerStatusCommand())
+	if err != nil {
+		return fmt.Sprintf("ssh error: %v", err)
+	}
+	output = sanitizeKubeDiagnosticOutput(output)
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return "no docker status output"
+	}
+	log.Printf("[ready][linode-docker-%d][docker] status:\n%s", instanceNum, lastNonEmptyLines(output, 20))
+	return dockerStatusSummary(output)
+}
+
+func logLinodeDockerReadinessDiagnostics(instanceNum int, linodeIP string, rootPassword string) {
+	log.Printf("[ready][linode-docker-%d][diagnostics] collecting Docker diagnostics over SSH", instanceNum)
+	logLinodeDockerDiagnostic(instanceNum, linodeIP, rootPassword, "docker ps -a", 120, "docker ps -a --no-trunc || true")
+	logLinodeDockerDiagnostic(instanceNum, linodeIP, rootPassword, "docker inspect rancher", 160, linodeDockerInspectCommand())
+	logLinodeDockerDiagnostic(instanceNum, linodeIP, rootPassword, "recent Rancher Docker logs", 240, linodeDockerLogsCommand(300))
+	logLinodeDockerDiagnostic(instanceNum, linodeIP, rootPassword, "docker service logs", 120, "journalctl -u docker --no-pager -n 120 || true")
+}
+
+func logLinodeDockerDiagnostic(instanceNum int, linodeIP string, rootPassword string, title string, maxLines int, command string) {
+	output, err := runLinodeDockerSSHCommand(linodeIP, rootPassword, command)
+	if err != nil {
+		log.Printf("[ready][linode-docker-%d][diagnostics] %s failed: %v", instanceNum, title, err)
+		return
+	}
+	output = sanitizeKubeDiagnosticOutput(output)
+	output = lastNonEmptyLines(output, maxLines)
+	if output == "" {
+		output = "(no output)"
+	}
+	log.Printf("[ready][linode-docker-%d][diagnostics] %s:\n%s", instanceNum, title, output)
 }
 
 func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initialDelay, settleDelay time.Duration) error {
@@ -220,6 +265,31 @@ func TestRancherHTTPReadyRejectsAPIAggregationPlaceholder(t *testing.T) {
 	}
 	if !strings.Contains(summary, "API Aggregation not ready") {
 		t.Fatalf("expected summary to mention API Aggregation placeholder, got %s", summary)
+	}
+}
+
+func TestLinodeDockerDiagnosticCommandsTargetNamedContainer(t *testing.T) {
+	if got := linodeDockerStatusCommand(); !strings.Contains(got, "--filter name=^/rancher$") {
+		t.Fatalf("expected status command to target named rancher container, got %q", got)
+	}
+	if got := linodeDockerInspectCommand(); !strings.Contains(got, "docker inspect") || !strings.Contains(got, "rancher") {
+		t.Fatalf("expected inspect command to target rancher container, got %q", got)
+	}
+	if got := linodeDockerLogsCommand(42); !strings.Contains(got, "docker logs --tail=42 rancher") {
+		t.Fatalf("expected logs command to tail named rancher container, got %q", got)
+	}
+	if got := linodeDockerLogSnapshotCommand(42); !strings.Contains(got, "### docker ps -a") || !strings.Contains(got, "docker logs --tail=42 rancher") {
+		t.Fatalf("expected snapshot command to include Docker status and logs, got %q", got)
+	}
+}
+
+func TestDockerStatusSummary(t *testing.T) {
+	got := dockerStatusSummary("rancher docker.io/rancher/rancher:v2.14.0 Up 2 minutes\nother line")
+	if got != "rancher docker.io/rancher/rancher:v2.14.0 Up 2 minutes" {
+		t.Fatalf("unexpected summary %q", got)
+	}
+	if got := dockerStatusSummary(" \n "); got != "container not listed" {
+		t.Fatalf("expected empty output summary, got %q", got)
 	}
 }
 
@@ -424,32 +494,7 @@ func logKubectlDiagnostic(kubeconfigPath string, instanceNum int, title string, 
 }
 
 func sanitizeKubeDiagnosticOutput(output string) string {
-	replacements := []string{
-		viper.GetString("rancher.bootstrap_password"),
-		os.Getenv("RANCHER_BOOTSTRAP_PASSWORD"),
-		os.Getenv("LINODE_TOKEN"),
-		os.Getenv("DOCKERHUB_PASSWORD"),
-	}
-	for _, value := range replacements {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		output = strings.ReplaceAll(output, value, "***")
-	}
-	return output
-}
-
-func lastNonEmptyLines(output string, maxLines int) string {
-	output = strings.TrimSpace(output)
-	if output == "" || maxLines <= 0 {
-		return output
-	}
-	lines := strings.Split(output, "\n")
-	if len(lines) <= maxLines {
-		return output
-	}
-	return strings.Join(lines[len(lines)-maxLines:], "\n")
+	return sanitizeDiagnosticOutput(output)
 }
 
 func durationFromEnv(name string, fallback time.Duration) time.Duration {

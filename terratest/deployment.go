@@ -15,6 +15,11 @@ const (
 	deploymentTypeLinodeDocker    = "linode-docker-cattle"
 	hostedTenantMinInstances      = 2
 	hostedTenantMaxInstances      = 4
+	runDeploymentTypeEnv          = "HA_RANCHER_RUN_DEPLOYMENT_TYPE"
+	runTotalHAsEnv                = "HA_RANCHER_RUN_TOTAL_HAS"
+	runRancherVersionsEnv         = "HA_RANCHER_RUN_RANCHER_VERSIONS"
+	runAWSPrefixEnv               = "HA_RANCHER_RUN_AWS_PREFIX"
+	runRoute53FQDNEnv             = "HA_RANCHER_RUN_ROUTE53_FQDN"
 )
 
 func deploymentType() string {

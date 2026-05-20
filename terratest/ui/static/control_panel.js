@@ -138,6 +138,7 @@ let activeCopyHelmUpgradeClusterId = ''
 let activeOpenKubeconfigPathClusterId = ''
 let activeCopyKubeconfigPathClusterId = ''
 let activeCopyLinodeIPClusterId = ''
+let activeDockerLogsClusterId = ''
 let lastLeaderChangeMessage = ''
 let refreshInFlight = false
 let rawLogText = ''
@@ -204,7 +205,8 @@ const clusterPanel = createClusterPanel({
     activeCopyHelmUpgradeClusterId,
     activeOpenKubeconfigPathClusterId,
     activeCopyKubeconfigPathClusterId,
-    activeCopyLinodeIPClusterId
+    activeCopyLinodeIPClusterId,
+    activeDockerLogsClusterId
   }),
   getActiveSelection: () => ({
     runKey: activeClusterRunKey,
@@ -567,6 +569,15 @@ const setActiveLogContext = (mode, clusterId, namespace, podName) => {
   logModalKindEl.textContent = 'Pod logs'
   logModalTitleEl.textContent = podName
   logModalSubtitleEl.textContent = `${namespace} • ${clusterId} • ${mode === 'live' ? 'live stream' : 'tail snapshot'}`
+  openLogViewerBtnEl.classList.remove('hidden')
+}
+
+const setDockerLogContext = cluster => {
+  const clusterId = cluster?.id || ''
+  activeLogContext = { mode: 'docker', clusterId, namespace: 'linode', podName: 'rancher' }
+  logModalKindEl.textContent = 'Docker logs'
+  logModalTitleEl.textContent = cluster?.name || 'Rancher container'
+  logModalSubtitleEl.textContent = cluster?.loadBalancer ? `root@${cluster.loadBalancer} • docker logs rancher` : `${clusterId} • docker logs rancher`
   openLogViewerBtnEl.classList.remove('hidden')
 }
 
@@ -2155,6 +2166,65 @@ const fetchPodLogTail = async (clusterId, namespace, podName) => {
   return payload.text || ''
 }
 
+const fetchDockerLogs = async clusterId => {
+  const params = new URLSearchParams({ cluster: clusterId })
+  const response = await fetch(`/api/docker-logs?${params.toString()}`, {
+    headers: {
+      'Accept': 'application/json',
+      'X-Control-Panel-Token': token
+    }
+  })
+  const raw = await response.text()
+  let payload
+
+  try {
+    payload = JSON.parse(raw)
+  } catch (_) {
+    payload = { text: raw }
+  }
+
+  if (!response.ok) {
+    throw new Error(payload.text || raw || 'Failed to load Docker logs')
+  }
+
+  return payload.text || ''
+}
+
+const loadDockerLogs = async cluster => {
+  const clusterId = cluster?.id || ''
+  if (!clusterId || activeDockerLogsClusterId) {
+    return
+  }
+  stopStream({ internal: true })
+  activeDockerLogsClusterId = clusterId
+  setDockerLogContext(cluster)
+  setLiveLogState('idle')
+  openLogModal()
+  rawLogText = ''
+  renderLogViewer()
+  if (lastState) {
+    renderClusters(lastState)
+  }
+  logStatusEl.textContent = `Loading Docker logs for ${cluster?.name || 'Rancher'}...`
+
+  try {
+    rawLogText = await fetchDockerLogs(clusterId)
+    renderLogViewer()
+    logBoxEl.scrollTop = logBoxEl.scrollHeight
+    logStatusEl.textContent = 'Showing recent Docker logs'
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to load Docker logs'
+    logStatusEl.textContent = message
+    rawLogText = `[error] ${message}`
+    renderLogViewer()
+  } finally {
+    activeDockerLogsClusterId = ''
+    if (lastState) {
+      renderClusters(lastState)
+    }
+  }
+}
+
 const loadLogs = async (clusterId, namespace, podName) => {
   stopStream({ internal: true })
   setActiveLogContext('tail', clusterId, namespace, podName)
@@ -2822,6 +2892,12 @@ clustersEl.addEventListener('click', event => {
   if (action === 'copy-linode-ip') {
     const cluster = clusterItems(lastState).find(item => item.id === clusterId)
     copyLinodeIP(cluster)
+    return
+  }
+
+  if (action === 'docker-logs') {
+    const cluster = clusterItems(lastState).find(item => item.id === clusterId)
+    loadDockerLogs(cluster)
     return
   }
 

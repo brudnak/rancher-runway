@@ -581,6 +581,54 @@ func TestTerraformBackendConfigFromEnvBuildsS3Backend(t *testing.T) {
 	}
 }
 
+func TestSetupConfigAppliesRunScopedOverrides(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "tool-config.yml")
+	if err := os.WriteFile(configPath, []byte(`deployment:
+  type: ha-rke2
+total_has: 1
+rancher:
+  version: 2.14-head
+tf_vars:
+  aws_prefix: atb
+  aws_route53_fqdn: current.example.com
+`), 0o600); err != nil {
+		t.Fatalf("failed to write config: %v", err)
+	}
+
+	t.Setenv(runDeploymentTypeEnv, deploymentTypeLinodeDocker)
+	t.Setenv(runTotalHAsEnv, "2")
+	t.Setenv(runRancherVersionsEnv, "2.13-head,2.14.1-alpha3")
+	t.Setenv(runAWSPrefixEnv, "atb-rabc12345")
+	t.Setenv(runRoute53FQDNEnv, "recorded.example.com")
+
+	if err := setupConfigE(tempDir); err != nil {
+		t.Fatalf("setupConfigE failed: %v", err)
+	}
+	if got := deploymentType(); got != deploymentTypeLinodeDocker {
+		t.Fatalf("expected deployment override %q, got %q", deploymentTypeLinodeDocker, got)
+	}
+	if got := configuredRancherInstanceCount(); got != 2 {
+		t.Fatalf("expected total override 2, got %d", got)
+	}
+	if got := linodeRancherVersions(2); len(got) != 2 || got[0] != "2.13-head" || got[1] != "2.14.1-alpha3" {
+		t.Fatalf("expected recorded versions, got %#v", got)
+	}
+	if got := viper.GetString("tf_vars.aws_prefix"); got != "atb-rabc12345" {
+		t.Fatalf("expected recorded prefix, got %q", got)
+	}
+	if got := viper.GetString("tf_vars.aws_route53_fqdn"); got != "recorded.example.com" {
+		t.Fatalf("expected recorded route53 domain, got %q", got)
+	}
+}
+
+func TestTerraformAWSPrefixForRunPreservesRecordedRunPrefix(t *testing.T) {
+	if got := terraformAWSPrefixForRun("atb-rabc12345", "abc12345"); got != "atb-rabc12345" {
+		t.Fatalf("expected recorded run prefix to be preserved, got %q", got)
+	}
+}
+
 func TestTerraformBackendConfigAddsRunSuffixToS3Key(t *testing.T) {
 	t.Setenv("TF_STATE_BUCKET", "bucket")
 	t.Setenv("TF_STATE_LOCK_TABLE", "locks")
