@@ -30,6 +30,7 @@ let deploymentType = normalizeDeploymentType(setupData.deploymentType || config.
 const hostedTenantMinInstances = 2
 const hostedTenantMaxInstances = 4
 const linodeDockerMaxInstances = 6
+const deploymentVersionSets = new Map([[deploymentType, versions.slice()]])
 let customHostnameEnabled = Boolean(setupData.customHostnameEnabled)
 let customHostname = ''
 let submitting = false
@@ -593,6 +594,30 @@ const minimumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMinInstan
 
 const maximumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMaxInstances : isLinodeDockerDeployment() ? linodeDockerMaxInstances : Number.POSITIVE_INFINITY
 
+const saveDeploymentVersions = () => {
+  deploymentVersionSets.set(deploymentType, versions.slice())
+}
+
+const seedVersionsForDeployment = nextDeploymentType => {
+  const firstVersion = versions.find(version => String(version || '').trim()) || versions[0] || ''
+  if (nextDeploymentType === 'hosted-tenant-k3s') {
+    return [firstVersion, '']
+  }
+  return [firstVersion]
+}
+
+const switchDeploymentType = nextDeploymentType => {
+  if (submitting || deploymentType === nextDeploymentType) {
+    return
+  }
+  saveDeploymentVersions()
+  deploymentType = nextDeploymentType
+  versions = (deploymentVersionSets.get(nextDeploymentType) || seedVersionsForDeployment(nextDeploymentType)).slice()
+  clearValidationError()
+  renderDeploymentType()
+  renderCustomHostname()
+}
+
 const ensureDeploymentCompatibleRows = () => {
   const minimumRows = minimumAutoRows()
   while (versions.length < minimumRows) {
@@ -605,6 +630,7 @@ const ensureDeploymentCompatibleRows = () => {
     setupMode = 'auto'
     customHostnameEnabled = false
   }
+  saveDeploymentVersions()
 }
 
 const showValidationError = (message, target) => {
@@ -952,6 +978,7 @@ const renderRows = () => {
   ensureDeploymentCompatibleRows()
   if (customHostnameEnabled && versions.length !== 1) {
     versions = [versions[0] || '']
+    saveDeploymentVersions()
   }
 
   rowsEl.innerHTML = versions.map((version, index) => {
@@ -982,6 +1009,7 @@ const renderRows = () => {
   rowsEl.querySelectorAll('input[data-index]').forEach(input => {
     input.addEventListener('input', event => {
       versions[Number(event.target.getAttribute('data-index'))] = event.target.value
+      saveDeploymentVersions()
       linodeImageSearchResults = []
       linodeImageSearchError = ''
       linodeImageSearchTag = ''
@@ -997,6 +1025,7 @@ const renderRows = () => {
       }
 
       versions.splice(Number(button.getAttribute('data-remove-index')), 1)
+      saveDeploymentVersions()
       renderRows()
     })
   })
@@ -2446,6 +2475,7 @@ addBtnEl.addEventListener('click', () => {
   }
 
   versions.push('')
+  saveDeploymentVersions()
   renderDeploymentType()
   renderRows()
 })
@@ -2560,33 +2590,15 @@ manualModeBtnEl.addEventListener('click', () => {
 })
 
 haRke2DeploymentBtnEl?.addEventListener('click', () => {
-  if (submitting || deploymentType === 'ha-rke2') {
-    return
-  }
-  deploymentType = 'ha-rke2'
-  clearValidationError()
-  renderDeploymentType()
-  renderCustomHostname()
+  switchDeploymentType('ha-rke2')
 })
 
 hostedTenantDeploymentBtnEl?.addEventListener('click', () => {
-  if (submitting || deploymentType === 'hosted-tenant-k3s') {
-    return
-  }
-  deploymentType = 'hosted-tenant-k3s'
-  clearValidationError()
-  renderDeploymentType()
-  renderCustomHostname()
+  switchDeploymentType('hosted-tenant-k3s')
 })
 
 linodeDockerDeploymentBtnEl?.addEventListener('click', () => {
-  if (submitting || deploymentType === 'linode-docker-cattle') {
-    return
-  }
-  deploymentType = 'linode-docker-cattle'
-  clearValidationError()
-  renderDeploymentType()
-  renderCustomHostname()
+  switchDeploymentType('linode-docker-cattle')
 })
 
 resolveInstallerSHAToggleEl.addEventListener('change', event => {
