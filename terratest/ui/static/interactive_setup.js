@@ -155,6 +155,13 @@ const confirmModalTitleEl = byId('confirmModalTitle')
 const confirmModalBodyEl = byId('confirmModalBody')
 const confirmModalConfirmEl = byId('confirmModalConfirm')
 const confirmModalCancelEl = byId('confirmModalCancel')
+const basicAwsSettingsTitleEl = byId('basicAwsSettingsTitle')
+const basicAwsSettingsDescriptionEl = byId('basicAwsSettingsDescription')
+const awsPrefixLabelTextEl = byId('awsPrefixLabelText')
+const awsPrefixHelpTextEl = byId('awsPrefixHelpText')
+const advancedAwsDetailsEl = byId('advancedAwsDetails')
+const advancedAwsSettingsTitleEl = byId('advancedAwsSettingsTitle')
+const advancedAwsSettingsDescriptionEl = byId('advancedAwsSettingsDescription')
 const helmValidationModalEl = byId('helmValidationModal')
 const helmValidationModalBadgeEl = byId('helmValidationModalBadge')
 const helmValidationModalTitleEl = byId('helmValidationModalTitle')
@@ -415,6 +422,9 @@ customHostname = sanitizeDisplayValue(setupData.customHostname || '')
 
 const isHostedTenantDeployment = () => deploymentType === 'hosted-tenant-k3s'
 const isLinodeDockerDeployment = () => deploymentType === 'linode-docker-cattle'
+
+const tfVarInput = key => setupQuery(`input[data-tf-var="${key}"]`)
+const tfVarField = key => tfVarInput(key)?.closest('label')
 
 const linodeDockerHubSelectValue = value => {
   const normalized = String(value || '').trim().toLowerCase()
@@ -870,6 +880,42 @@ const renderDeploymentType = () => {
     if (preloadImagesToggleEl) {
       preloadImagesToggleEl.checked = false
     }
+  }
+  userFirstNameInputEl?.closest('label')?.classList.toggle('hidden', linode)
+  userLastNameInputEl?.closest('label')?.classList.toggle('hidden', linode)
+  tfVarField('aws_prefix')?.classList.toggle('lg:col-span-2', linode)
+  tfVarField('aws_pem_key_name')?.classList.toggle('hidden', linode)
+  if (basicAwsSettingsTitleEl) {
+    basicAwsSettingsTitleEl.textContent = linode ? 'Linode naming' : 'Basic AWS settings'
+  }
+  if (basicAwsSettingsDescriptionEl) {
+    basicAwsSettingsDescriptionEl.textContent = linode
+      ? 'Set the prefix used for Linode labels and Route53 Rancher URLs.'
+      : 'These identify the owner and SSH key for the AWS resources.'
+  }
+  if (awsPrefixLabelTextEl) {
+    awsPrefixLabelTextEl.textContent = linode ? 'AWS/Linode prefix' : 'AWS prefix'
+  }
+  if (awsPrefixHelpTextEl) {
+    awsPrefixHelpTextEl.textContent = linode
+      ? 'Prefix must be 2 or 3 letters. It is used for Linode server labels and Route53 names.'
+      : 'AWS prefix must be 2 or 3 letters, usually your initials.'
+  }
+  const advancedAwsKeys = ['aws_region', 'aws_vpc', 'aws_subnet_a', 'aws_subnet_b', 'aws_subnet_c', 'aws_ami', 'aws_subnet_id', 'aws_security_group_id']
+  advancedAwsKeys.forEach(key => {
+    tfVarField(key)?.classList.toggle('hidden', linode)
+  })
+  tfVarField('aws_route53_fqdn')?.classList.toggle('lg:col-span-2', linode)
+  if (advancedAwsSettingsTitleEl) {
+    advancedAwsSettingsTitleEl.textContent = linode ? 'Route53 DNS' : 'Advanced AWS settings'
+  }
+  if (advancedAwsSettingsDescriptionEl) {
+    advancedAwsSettingsDescriptionEl.textContent = linode
+      ? 'Used to create the Rancher URL DNS record for each Linode Docker install.'
+      : 'Most users should not need to change these. Unlock a field only when you know the AWS value needs to change.'
+  }
+  if (advancedAwsDetailsEl && linode) {
+    advancedAwsDetailsEl.open = true
   }
   if (manualModeBtnEl) {
     manualModeBtnEl.disabled = submitting || hosted || linode
@@ -1559,14 +1605,14 @@ const validateSetup = () => {
   const prefixInput = setupQuery('input[data-tf-var="aws_prefix"]')
   const prefix = normalizedAWSPrefix()
 
-  if (!String(userFirstNameInputEl.value || '').trim()) {
+  if (!isLinodeDockerDeployment() && !String(userFirstNameInputEl.value || '').trim()) {
     return {
       message: 'First name is required for AWS Owner tags.',
       target: userFirstNameInputEl
     }
   }
 
-  if (!String(userLastNameInputEl.value || '').trim()) {
+  if (!isLinodeDockerDeployment() && !String(userLastNameInputEl.value || '').trim()) {
     return {
       message: 'Last name is required for AWS Owner tags.',
       target: userLastNameInputEl
@@ -1575,7 +1621,7 @@ const validateSetup = () => {
 
   if (!/^[a-z]{2,3}$/.test(prefix)) {
     return {
-      message: 'AWS prefix must be 2 or 3 letters, usually your initials.',
+      message: isLinodeDockerDeployment() ? 'AWS/Linode prefix must be 2 or 3 letters.' : 'AWS prefix must be 2 or 3 letters, usually your initials.',
       target: prefixInput
     }
   }

@@ -361,10 +361,10 @@
                 </fieldset>
               </div>
 
-              <div class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+              <div id="basicAwsSettingsPanel" class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
                 <div class="mb-4">
-                  <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Basic AWS settings</h2>
-                  <p class="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">These identify the owner and SSH key for the AWS resources.</p>
+                  <h2 id="basicAwsSettingsTitle" class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Basic AWS settings</h2>
+                  <p id="basicAwsSettingsDescription" class="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">These identify the owner and SSH key for the AWS resources.</p>
                 </div>
                 <div class="grid gap-4 lg:grid-cols-2">
                   <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
@@ -376,7 +376,7 @@
                     <input id="userLastNameInput" name="userLastName" type="text" autocomplete="family-name" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
                   </label>
                   <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                    AWS prefix
+                    <span id="awsPrefixLabelText">AWS prefix</span>
                     <input data-tf-var="aws_prefix" name="tfVars.aws_prefix" type="text" maxlength="3" placeholder="atb" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
                   </label>
                   <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
@@ -384,14 +384,14 @@
                     <input data-tf-var="aws_pem_key_name" name="tfVars.aws_pem_key_name" type="text" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
                   </label>
                 </div>
-                <div class="mt-3 text-sm font-normal text-zinc-500 dark:text-zinc-400">AWS prefix must be 2 or 3 letters, usually your initials.</div>
+                <div id="awsPrefixHelpText" class="mt-3 text-sm font-normal text-zinc-500 dark:text-zinc-400">AWS prefix must be 2 or 3 letters, usually your initials.</div>
               </div>
 
               <details class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]" id="advancedAwsDetails">
                 <summary class="advanced-summary flex cursor-pointer list-none items-start justify-between gap-4 rounded-lg p-1">
                   <span>
-                    <span class="block text-base font-semibold text-zinc-950 dark:text-zinc-100">Advanced AWS settings</span>
-                    <span class="mt-1 block text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400">Most users should not need to change these. Unlock a field only when you know the AWS value needs to change.</span>
+                    <span id="advancedAwsSettingsTitle" class="block text-base font-semibold text-zinc-950 dark:text-zinc-100">Advanced AWS settings</span>
+                    <span id="advancedAwsSettingsDescription" class="mt-1 block text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400">Most users should not need to change these. Unlock a field only when you know the AWS value needs to change.</span>
                   </span>
                   <span aria-hidden="true" class="advanced-toggle-track mt-0.5 h-6 w-11 shrink-0 rounded-full bg-zinc-300 ring-1 ring-zinc-300 transition dark:bg-zinc-800 dark:ring-white/10">
                     <span class="advanced-toggle-knob mt-0.5 ml-0.5 block h-5 w-5 rounded-full bg-white shadow-sm transition-transform"></span>

@@ -170,6 +170,21 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 	update.ServerCount = NormalizeRKE2ServerCount(update.ServerCount)
 	update.UserFirstName = normalizeOwnerNamePart(update.UserFirstName)
 	update.UserLastName = normalizeOwnerNamePart(update.UserLastName)
+	linodeDocker := strings.EqualFold(strings.TrimSpace(update.DeploymentType), "linode-docker-cattle")
+	if linodeDocker {
+		if update.UserFirstName == "" {
+			update.UserFirstName = OwnerFirstName()
+		}
+		if update.UserFirstName == "" {
+			update.UserFirstName = "Linode"
+		}
+		if update.UserLastName == "" {
+			update.UserLastName = OwnerLastName()
+		}
+		if update.UserLastName == "" {
+			update.UserLastName = "Docker"
+		}
+	}
 	if update.UserFirstName == "" {
 		return fmt.Errorf("user.first_name must be set")
 	}
