@@ -31,6 +31,11 @@ const hostedTenantMinInstances = 2
 const hostedTenantMaxInstances = 4
 const linodeDockerMaxInstances = 6
 const deploymentVersionSets = new Map([[deploymentType, versions.slice()]])
+const advancedDetailsOpenByDeployment = new Map([
+  ['ha-rke2', false],
+  ['hosted-tenant-k3s', false],
+  ['linode-docker-cattle', true]
+])
 let customHostnameEnabled = Boolean(setupData.customHostnameEnabled)
 let customHostname = ''
 let submitting = false
@@ -598,6 +603,21 @@ const saveDeploymentVersions = () => {
   deploymentVersionSets.set(deploymentType, versions.slice())
 }
 
+const saveAdvancedDetailsState = () => {
+  if (advancedAwsDetailsEl) {
+    advancedDetailsOpenByDeployment.set(deploymentType, advancedAwsDetailsEl.open)
+  }
+}
+
+const restoreAdvancedDetailsState = () => {
+  if (!advancedAwsDetailsEl) {
+    return
+  }
+  advancedAwsDetailsEl.open = advancedDetailsOpenByDeployment.has(deploymentType)
+    ? advancedDetailsOpenByDeployment.get(deploymentType)
+    : isLinodeDockerDeployment()
+}
+
 const seedVersionsForDeployment = nextDeploymentType => {
   const firstVersion = versions.find(version => String(version || '').trim()) || versions[0] || ''
   if (nextDeploymentType === 'hosted-tenant-k3s') {
@@ -611,6 +631,7 @@ const switchDeploymentType = nextDeploymentType => {
     return
   }
   saveDeploymentVersions()
+  saveAdvancedDetailsState()
   deploymentType = nextDeploymentType
   versions = (deploymentVersionSets.get(nextDeploymentType) || seedVersionsForDeployment(nextDeploymentType)).slice()
   clearValidationError()
@@ -940,9 +961,7 @@ const renderDeploymentType = () => {
       ? 'Used to create the Rancher URL DNS record for each Linode Docker install.'
       : 'Most users should not need to change these. Unlock a field only when you know the AWS value needs to change.'
   }
-  if (advancedAwsDetailsEl && linode) {
-    advancedAwsDetailsEl.open = true
-  }
+  restoreAdvancedDetailsState()
   if (manualModeBtnEl) {
     manualModeBtnEl.disabled = submitting || hosted || linode
     manualModeBtnEl.title = hosted ? 'Hosted tenant K3s setup currently resolves through auto mode.' : linode ? 'Linode Docker setup currently resolves through auto mode.' : ''
@@ -2600,6 +2619,8 @@ hostedTenantDeploymentBtnEl?.addEventListener('click', () => {
 linodeDockerDeploymentBtnEl?.addEventListener('click', () => {
   switchDeploymentType('linode-docker-cattle')
 })
+
+advancedAwsDetailsEl?.addEventListener('toggle', saveAdvancedDetailsState)
 
 resolveInstallerSHAToggleEl.addEventListener('change', event => {
   if (submitting) {
