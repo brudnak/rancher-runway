@@ -101,6 +101,10 @@ const hostedRdsPasswordLockToggleEl = byId('hostedRdsPasswordLockToggle')
 const hostedEc2InstanceTypeInputEl = byId('hostedEc2InstanceTypeInput')
 const hostedEc2InstanceTypeLockToggleEl = byId('hostedEc2InstanceTypeLockToggle')
 const linodeDockerPanelEl = byId('linodeDockerPanel')
+const rancherSettingsPanelEl = byId('rancherSettingsPanel')
+const rancherSettingsTitleEl = byId('rancherSettingsTitle')
+const rancherSettingsDescriptionEl = byId('rancherSettingsDescription')
+const distroFieldEl = byId('distroField')
 const linodeDockerHubSelectEl = byId('linodeDockerHubSelect')
 const linodeCustomImageInputEl = byId('linodeCustomImageInput')
 const linodeCustomImageLockToggleEl = byId('linodeCustomImageLockToggle')
@@ -113,6 +117,7 @@ const linodeSshRootPasswordToggleEl = byId('linodeSshRootPasswordToggle')
 const distroSelectEl = byId('distroSelect')
 const bootstrapPasswordInputEl = byId('bootstrapPasswordInput')
 const bootstrapPasswordToggleEl = byId('bootstrapPasswordToggle')
+const preloadImagesLabelEl = byId('preloadImagesLabel')
 const preloadImagesToggleEl = byId('preloadImagesToggle')
 const preloadImagesTextEl = byId('preloadImagesText')
 const serverCountInputEl = byId('serverCountInput')
@@ -847,6 +852,25 @@ const renderDeploymentType = () => {
   linodeDockerPanelEl?.classList.toggle('hidden', !linode)
   customHostnameBoxEl?.classList.toggle('hidden', hosted || linode)
   rke2ServerLayoutFieldsetEl?.classList.toggle('hidden', hosted || linode)
+  distroFieldEl?.classList.toggle('hidden', linode)
+  preloadImagesLabelEl?.classList.toggle('hidden', linode)
+  rancherSettingsPanelEl?.classList.toggle('hidden', false)
+  if (rancherSettingsTitleEl) {
+    rancherSettingsTitleEl.textContent = linode ? 'Rancher login' : 'Rancher settings'
+  }
+  if (rancherSettingsDescriptionEl) {
+    rancherSettingsDescriptionEl.textContent = linode
+      ? 'Set the initial Rancher bootstrap password for the Docker install.'
+      : 'Choose the build source and bootstrap behavior for this run.'
+  }
+  if (linode) {
+    if (distroSelectEl) {
+      distroSelectEl.value = 'auto'
+    }
+    if (preloadImagesToggleEl) {
+      preloadImagesToggleEl.checked = false
+    }
+  }
   if (manualModeBtnEl) {
     manualModeBtnEl.disabled = submitting || hosted || linode
     manualModeBtnEl.title = hosted ? 'Hosted tenant K3s setup currently resolves through auto mode.' : linode ? 'Linode Docker setup currently resolves through auto mode.' : ''

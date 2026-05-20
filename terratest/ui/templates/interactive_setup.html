@@ -308,13 +308,13 @@
                 </div>
               </div>
 
-              <div class="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+              <div id="rancherSettingsPanel" class="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
                 <div class="mb-4">
-                  <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Rancher settings</h2>
-                  <p class="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">Choose the build source and bootstrap behavior for this run.</p>
+                  <h2 id="rancherSettingsTitle" class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Rancher settings</h2>
+                  <p id="rancherSettingsDescription" class="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">Choose the build source and bootstrap behavior for this run.</p>
                 </div>
                 <div class="grid gap-4 lg:grid-cols-2">
-                  <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                  <label id="distroField" class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
                     Distro
                     <select id="distroSelect" name="distro" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100">
                       <option class="bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100" value="auto">auto</option>
