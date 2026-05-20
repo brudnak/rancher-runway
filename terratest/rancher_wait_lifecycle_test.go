@@ -3,8 +3,10 @@ package test
 import (
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -205,6 +207,22 @@ func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initial
 	return fmt.Errorf("[ha-%d] timed out after %s waiting for Rancher readiness", instanceNum, timeout)
 }
 
+func TestRancherHTTPReadyRejectsAPIAggregationPlaceholder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("API Aggregation not ready"))
+	}))
+	defer server.Close()
+
+	ready, summary := rancherHTTPReady(server.Client(), server.URL)
+	if ready {
+		t.Fatalf("expected API Aggregation placeholder to be not ready, summary=%s", summary)
+	}
+	if !strings.Contains(summary, "API Aggregation not ready") {
+		t.Fatalf("expected summary to mention API Aggregation placeholder, got %s", summary)
+	}
+}
+
 func rancherReadyHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
@@ -219,32 +237,44 @@ func rancherHTTPReady(client *http.Client, rancherURL string) (bool, string) {
 		return false, "missing Rancher URL"
 	}
 
-	rootStatus, rootErr := rancherHTTPStatus(client, rancherURL)
+	rootProbe, rootErr := rancherHTTPProbe(client, rancherURL)
 	if rootErr != nil {
 		return false, fmt.Sprintf("root error: %v", rootErr)
 	}
-	apiStatus, apiErr := rancherHTTPStatus(client, strings.TrimRight(rancherURL, "/")+"/v3")
+	apiProbe, apiErr := rancherHTTPProbe(client, strings.TrimRight(rancherURL, "/")+"/v3")
 	if apiErr != nil {
-		return false, fmt.Sprintf("root=%d api error: %v", rootStatus, apiErr)
+		return false, fmt.Sprintf("root=%d api error: %v", rootProbe.Status, apiErr)
 	}
 
-	if rancherReadyStatus(rootStatus) && rancherReadyStatus(apiStatus) {
-		return true, fmt.Sprintf("root=%d api=%d", rootStatus, apiStatus)
+	if !rancherReadyProbe(rootProbe) {
+		return false, fmt.Sprintf("root=%d %s api=%d", rootProbe.Status, rancherProbeNotReadyReason(rootProbe), apiProbe.Status)
 	}
-	return false, fmt.Sprintf("root=%d api=%d", rootStatus, apiStatus)
+	if !rancherReadyProbe(apiProbe) {
+		return false, fmt.Sprintf("root=%d api=%d %s", rootProbe.Status, apiProbe.Status, rancherProbeNotReadyReason(apiProbe))
+	}
+	return true, fmt.Sprintf("root=%d api=%d", rootProbe.Status, apiProbe.Status)
 }
 
-func rancherHTTPStatus(client *http.Client, target string) (int, error) {
+type rancherHTTPProbeResult struct {
+	Status int
+	Body   string
+}
+
+func rancherHTTPProbe(client *http.Client, target string) (rancherHTTPProbeResult, error) {
 	resp, err := client.Get(target)
 	if err != nil {
-		return 0, err
+		return rancherHTTPProbeResult{}, err
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode, nil
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return rancherHTTPProbeResult{Status: resp.StatusCode, Body: string(body)}, nil
 }
 
-func rancherReadyStatus(status int) bool {
-	switch status {
+func rancherReadyProbe(probe rancherHTTPProbeResult) bool {
+	if rancherProbeAPIAggregationNotReady(probe) {
+		return false
+	}
+	switch probe.Status {
 	case http.StatusOK,
 		http.StatusMovedPermanently,
 		http.StatusFound,
@@ -257,6 +287,17 @@ func rancherReadyStatus(status int) bool {
 	default:
 		return false
 	}
+}
+
+func rancherProbeAPIAggregationNotReady(probe rancherHTTPProbeResult) bool {
+	return strings.Contains(strings.ToLower(probe.Body), "api aggregation not ready")
+}
+
+func rancherProbeNotReadyReason(probe rancherHTTPProbeResult) string {
+	if rancherProbeAPIAggregationNotReady(probe) {
+		return "body=API Aggregation not ready"
+	}
+	return "not ready"
 }
 
 func rancherPodsReady(kubeconfigPath string) (bool, string, error) {

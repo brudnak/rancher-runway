@@ -1490,31 +1490,43 @@ func linodeDockerRancherHTTPReachable(rancherURL string) bool {
 }
 
 func rancherHTTPReadyForPanel(client *http.Client, rancherURL string) (bool, string) {
-	rootStatus, rootErr := rancherHTTPStatusForPanel(client, rancherURL)
+	rootProbe, rootErr := rancherHTTPProbeForPanel(client, rancherURL)
 	if rootErr != nil {
 		return false, fmt.Sprintf("root error: %v", rootErr)
 	}
-	apiStatus, apiErr := rancherHTTPStatusForPanel(client, strings.TrimRight(rancherURL, "/")+"/v3")
+	apiProbe, apiErr := rancherHTTPProbeForPanel(client, strings.TrimRight(rancherURL, "/")+"/v3")
 	if apiErr != nil {
-		return false, fmt.Sprintf("root=%d api error: %v", rootStatus, apiErr)
+		return false, fmt.Sprintf("root=%d api error: %v", rootProbe.Status, apiErr)
 	}
-	if rancherHTTPStatusReadyForPanel(rootStatus) && rancherHTTPStatusReadyForPanel(apiStatus) {
-		return true, fmt.Sprintf("root=%d api=%d", rootStatus, apiStatus)
+	if !rancherHTTPProbeReadyForPanel(rootProbe) {
+		return false, fmt.Sprintf("root=%d %s api=%d", rootProbe.Status, rancherHTTPProbeNotReadyReasonForPanel(rootProbe), apiProbe.Status)
 	}
-	return false, fmt.Sprintf("root=%d api=%d", rootStatus, apiStatus)
+	if !rancherHTTPProbeReadyForPanel(apiProbe) {
+		return false, fmt.Sprintf("root=%d api=%d %s", rootProbe.Status, apiProbe.Status, rancherHTTPProbeNotReadyReasonForPanel(apiProbe))
+	}
+	return true, fmt.Sprintf("root=%d api=%d", rootProbe.Status, apiProbe.Status)
 }
 
-func rancherHTTPStatusForPanel(client *http.Client, target string) (int, error) {
+type rancherHTTPProbeResultForPanel struct {
+	Status int
+	Body   string
+}
+
+func rancherHTTPProbeForPanel(client *http.Client, target string) (rancherHTTPProbeResultForPanel, error) {
 	resp, err := client.Get(target)
 	if err != nil {
-		return 0, err
+		return rancherHTTPProbeResultForPanel{}, err
 	}
 	defer resp.Body.Close()
-	return resp.StatusCode, nil
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return rancherHTTPProbeResultForPanel{Status: resp.StatusCode, Body: string(body)}, nil
 }
 
-func rancherHTTPStatusReadyForPanel(status int) bool {
-	switch status {
+func rancherHTTPProbeReadyForPanel(probe rancherHTTPProbeResultForPanel) bool {
+	if rancherHTTPProbeAPIAggregationNotReadyForPanel(probe) {
+		return false
+	}
+	switch probe.Status {
 	case http.StatusOK,
 		http.StatusMovedPermanently,
 		http.StatusFound,
@@ -1527,6 +1539,17 @@ func rancherHTTPStatusReadyForPanel(status int) bool {
 	default:
 		return false
 	}
+}
+
+func rancherHTTPProbeAPIAggregationNotReadyForPanel(probe rancherHTTPProbeResultForPanel) bool {
+	return strings.Contains(strings.ToLower(probe.Body), "api aggregation not ready")
+}
+
+func rancherHTTPProbeNotReadyReasonForPanel(probe rancherHTTPProbeResultForPanel) string {
+	if rancherHTTPProbeAPIAggregationNotReadyForPanel(probe) {
+		return "body=API Aggregation not ready"
+	}
+	return "not ready"
 }
 
 func (p *localControlPanel) discoverHostedTenantClustersForRun(record panelRunRecord, outputs map[string]string) []clusterView {

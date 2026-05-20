@@ -580,7 +580,7 @@ const setReadinessLogContext = () => {
   activeLogContext = { mode: 'readiness', clusterId: 'local', namespace: 'terratest', podName: 'readiness' }
   logModalKindEl.textContent = 'Readiness logs'
   logModalTitleEl.textContent = 'Readiness'
-  logModalSubtitleEl.textContent = 'go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest'
+  logModalSubtitleEl.textContent = lastState?.readiness?.command || 'go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest'
   openLogViewerBtnEl.classList.remove('hidden')
 }
 
@@ -795,7 +795,7 @@ const renderCommandDeck = state => {
         tone: currentStats.total ? 'emerald' : 'amber',
         eyebrow: 'Current slot',
         title: `Run ${currentRun.runId || 'unknown'}`,
-        detail: `${currentRun.totalHAs || 1} ${currentRun.deploymentType === 'hosted-tenant-k3s' ? 'hosted-tenant Rancher instance' : 'HA target'}${Number(currentRun.totalHAs || 1) === 1 ? '' : 's'} for ${runVersionsLabel(currentRun)}. ${currentStats.total ? `${currentStats.reachable}/${currentStats.total} cluster records reachable.` : 'Cluster records are not visible yet.'}`,
+        detail: `${currentRun.totalHAs || 1} ${currentRun.deploymentType === 'hosted-tenant-k3s' ? 'hosted-tenant Rancher instance' : currentRun.deploymentType === 'linode-docker-cattle' ? 'Docker Rancher instance' : 'HA target'}${Number(currentRun.totalHAs || 1) === 1 ? '' : 's'} for ${runVersionsLabel(currentRun)}. ${currentStats.total ? `${currentStats.reachable}/${currentStats.total} cluster records reachable.` : 'Cluster records are not visible yet.'}`,
         meta: currentRun.status || 'recorded',
         action: currentStats.total ? 'clusters' : 'runs',
         actionLabel: currentStats.total ? 'Open clusters' : 'View slot'
@@ -1124,7 +1124,8 @@ const renderWorkspace = workspace => {
             const isCurrent = currentRunID && sameRunKey(run.runId, currentRunID)
             const linodeRun = runIsLinodeDocker(run)
             const lifecycleBusy = (linodeRun ? linodeLifecycleRunning(lastState) : awsLifecycleRunning(lastState)) || bootStatePending
-            const readinessDisabled = lifecycleBusy || !isCurrent
+            const readinessBusy = Boolean(lastState?.readiness?.running)
+            const readinessDisabled = lifecycleBusy || readinessBusy || !isCurrent
             const setupRunningForRun = lastState?.setup?.running && sameRunKey(lastState.setup.runId, run.runId)
             const linodeSetupRunningForRun = lastState?.linodeSetup?.running && sameRunKey(lastState.linodeSetup.runId, run.runId)
             const readinessRunningForRun = lastState?.readiness?.running && sameRunKey(lastState.readiness.runId, run.runId)
@@ -1133,11 +1134,13 @@ const renderWorkspace = workspace => {
               ? 'Startup safety check is still running.'
               : (linodeRun ? linodeLifecycleRunning(lastState) : awsLifecycleRunning(lastState))
                 ? 'Wait for the active lifecycle operation to finish.'
-                : linodeRun
-                  ? 'Readiness checks are not needed for Docker Rancher runs.'
+                : readinessBusy
+                  ? 'Wait for the active readiness check to finish.'
                 : !isCurrent
                   ? 'Readiness currently runs against the active/current slot only.'
-                  : 'Check readiness for the current run.'
+                  : linodeRun
+                    ? 'Check Docker Rancher readiness for the current run.'
+                    : 'Check readiness for the current run.'
 
             return `
               <article class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]">
@@ -1176,7 +1179,7 @@ const renderWorkspace = workspace => {
                   </div>
                   <div class="run-action-rail flex shrink-0 flex-wrap gap-2 xl:max-w-[26rem]">
                     ${renderRunActionButton({ action: 'view-clusters', runId: run.runId, label: 'View clusters', variant: stats.total ? 'primary' : 'secondary', disabled: !stats.total, title: stats.total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.' })}
-                    ${renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled || linodeRun, title: readinessTitle })}
+                    ${renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled, title: readinessTitle })}
                     ${renderRunActionButton({ action: 'open-run-folder', runId: run.runId, label: 'Open folder', disabled: !runFolderAvailable(run), title: runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.' })}
                     ${renderRunActionButton({ action: 'copy-terraform-path', runId: run.runId, label: 'Copy TF path', disabled: !runTerraformPath(run), title: runTerraformPath(run) ? 'Copy the Terraform module/state path for this run.' : 'Terraform path is not recorded yet.' })}
                     ${renderRunActionButton({ action: 'open-setup-logs', runId: run.runId, label: 'Setup logs' })}

@@ -405,6 +405,7 @@ func TestDiscoverClustersShowsProvisioningHAWhileSetupRuns(t *testing.T) {
 func TestDiscoverLinodeDockerClustersMarksHTTPReachable(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready"))
 	}))
 	defer server.Close()
 
@@ -438,6 +439,36 @@ func TestDiscoverLinodeDockerClustersMarksHTTPReachable(t *testing.T) {
 	}
 	if !clusters[0].Reachable {
 		t.Fatalf("expected HTTP-ready Docker Rancher to be reachable, got %#v", clusters[0])
+	}
+}
+
+func TestDiscoverLinodeDockerClustersRejectsAPIAggregationPlaceholder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("API Aggregation not ready"))
+	}))
+	defer server.Close()
+
+	panel := &localControlPanel{
+		totalHAs:   1,
+		repoRoot:   t.TempDir(),
+		testDir:    t.TempDir(),
+		operations: newPanelOperations(),
+	}
+	clusters := panel.discoverLinodeDockerClustersForRun(panelRunRecord{
+		RunID:          "abc123",
+		TotalHAs:       1,
+		DeploymentType: deploymentTypeLinodeDocker,
+	}, map[string]string{
+		"linode_1_rancher_url": server.URL,
+		"linode_1_ip":          "203.0.113.10",
+	})
+
+	if len(clusters) != 1 {
+		t.Fatalf("expected one Linode Docker cluster, got %#v", clusters)
+	}
+	if clusters[0].Reachable {
+		t.Fatalf("API Aggregation placeholder must not count as reachable, got %#v", clusters[0])
 	}
 }
 

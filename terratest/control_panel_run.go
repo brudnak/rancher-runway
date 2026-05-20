@@ -113,7 +113,6 @@ func (p *localControlPanel) startIsolatedRun() error {
 	}
 	if isLinodeDockerDeployment() {
 		operation = panelOperationLinodeSetup
-		afterSuccess = nil
 	}
 	return p.startPanelCommand(panelCommandSpec{
 		Operation:    operation,
