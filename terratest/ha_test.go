@@ -138,6 +138,8 @@ func TestHACleanup(t *testing.T) {
 	}
 
 	terraformOptions := getTerraformOptions(t, totalHAs)
+	// Cleanup may run after the checkout moved, so keep the recorded backend without migrating state.
+	terraformOptions.Reconfigure = true
 	terraform.Init(t, terraformOptions)
 
 	var costEstimate *cleanupCostEstimate
