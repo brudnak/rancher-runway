@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -399,6 +400,75 @@ func TestDiscoverClustersShowsProvisioningHAWhileSetupRuns(t *testing.T) {
 	}
 	if clusters[0].Available {
 		t.Fatalf("expected setup placeholder to be unavailable until kubeconfig exists, got %#v", clusters[0])
+	}
+}
+
+func TestPanelCommandEnvUsesSelectedRunRecordInsteadOfCurrentFallback(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	repoRoot := filepath.Join(workspace, "repo")
+	testDir := filepath.Join(repoRoot, "terratest")
+	haModuleDir := filepath.Join(testDir, "automation-output", "runs", "ha111111", "terraform", "module")
+	linodeModuleDir := filepath.Join(testDir, "automation-output", "runs", "linode2222", "terraform", "module")
+	if err := os.MkdirAll(haModuleDir, 0o755); err != nil {
+		t.Fatalf("failed to create HA module dir: %v", err)
+	}
+	if err := os.MkdirAll(linodeModuleDir, 0o755); err != nil {
+		t.Fatalf("failed to create Linode module dir: %v", err)
+	}
+
+	panel := &localControlPanel{
+		repoRoot:   repoRoot,
+		testDir:    testDir,
+		operations: newPanelOperations(),
+	}
+	panel.writeRunRecord(panelRunRecord{
+		RunID:              "ha111111",
+		SlotID:             "slot-ha111111",
+		Status:             "setup_complete",
+		TotalHAs:           1,
+		TerraformModuleDir: haModuleDir,
+		TerraformStatePath: filepath.Join(workspace, "ha.tfstate"),
+		RancherVersions:    []string{"2.14-head"},
+		AWSPrefix:          "atb-rha111111",
+		Route53FQDN:        "ha.example.com",
+	})
+	panel.writeRunRecord(panelRunRecord{
+		RunID:              "linode2222",
+		SlotID:             "slot-linode2222",
+		Status:             "setup_complete",
+		DeploymentType:     deploymentTypeLinodeDocker,
+		TotalHAs:           1,
+		TerraformModuleDir: linodeModuleDir,
+		TerraformStatePath: filepath.Join(workspace, "linode.tfstate"),
+		RancherVersions:    []string{"2.13-head"},
+		AWSPrefix:          "atb-rlinode2222",
+		Route53FQDN:        "linode.example.com",
+	})
+	panel.operations[panelOperationCleanup].RunID = "ha111111"
+
+	env := panel.panelCommandEnv(panelOperationCleanup)
+	envValue := func(key string) string {
+		prefix := key + "="
+		for _, item := range env {
+			if strings.HasPrefix(item, prefix) {
+				return strings.TrimPrefix(item, prefix)
+			}
+		}
+		return ""
+	}
+
+	if got := envValue(runIDEnv); got != "ha111111" {
+		t.Fatalf("expected selected HA run id, got %q", got)
+	}
+	if got := envValue(terraformModuleDirEnv); got != haModuleDir {
+		t.Fatalf("expected selected HA module dir, got %q", got)
+	}
+	if got := envValue(runDeploymentTypeEnv); got != deploymentTypeHARKE2 {
+		t.Fatalf("expected legacy HA record to resolve as HA RKE2, got %q", got)
+	}
+	if slices.ContainsFunc(env, func(item string) bool { return strings.Contains(item, "linode2222") }) {
+		t.Fatalf("selected HA cleanup env leaked current Linode record: %#v", env)
 	}
 }
 

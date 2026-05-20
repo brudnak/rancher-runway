@@ -336,6 +336,7 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 	runID = strings.TrimSpace(op.RunID)
 	p.mu.Unlock()
 
+	recordLoaded := false
 	if (operation == panelOperationSetup || operation == panelOperationLinodeSetup) && runID != "" {
 		slotID = panelRunSlotID(runID)
 		haOutputRoot = p.haOutputRootForRun(runID)
@@ -344,19 +345,20 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 		terraformDataDir = p.terraformDataDirForRun(runID)
 	} else if runID != "" {
 		if record, ok := p.readRunRecord(runID); ok {
+			recordLoaded = true
 			slotID = record.SlotID
 			haOutputRoot = record.HAOutputRoot
 			terraformModuleDir = record.TerraformModuleDir
 			terraformStatePath = record.TerraformStatePath
 			terraformDataDir = record.TerraformDataDir
-			runDeploymentType = record.DeploymentType
+			runDeploymentType = deploymentTypeForRunEnv(record)
 			runTotalHAs = record.TotalHAs
 			runRancherVersions = record.RancherVersions
 			runAWSPrefix = record.AWSPrefix
 			runRoute53FQDN = record.Route53FQDN
 		}
 	}
-	if haOutputRoot == "" {
+	if !recordLoaded && haOutputRoot == "" {
 		if record, ok := p.readCurrentRunRecord(); ok {
 			runID = record.RunID
 			slotID = record.SlotID
@@ -364,7 +366,7 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 			terraformModuleDir = record.TerraformModuleDir
 			terraformStatePath = record.TerraformStatePath
 			terraformDataDir = record.TerraformDataDir
-			runDeploymentType = record.DeploymentType
+			runDeploymentType = deploymentTypeForRunEnv(record)
 			runTotalHAs = record.TotalHAs
 			runRancherVersions = record.RancherVersions
 			runAWSPrefix = record.AWSPrefix
@@ -407,6 +409,17 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 		env = append(env, runRoute53FQDNEnv+"="+runRoute53FQDN)
 	}
 	return env
+}
+
+func deploymentTypeForRunEnv(record panelRunRecord) string {
+	if value := strings.TrimSpace(record.DeploymentType); value != "" {
+		return value
+	}
+	moduleDir := filepath.ToSlash(strings.TrimSpace(record.TerraformModuleDir))
+	if strings.Contains(moduleDir, "linode-docker-cattle") {
+		return deploymentTypeLinodeDocker
+	}
+	return deploymentTypeHARKE2
 }
 
 func (p *localControlPanel) capturePanelCommandStream(wg *sync.WaitGroup, operation panelOperationName, reader io.Reader) {

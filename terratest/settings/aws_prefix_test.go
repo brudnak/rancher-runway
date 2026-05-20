@@ -32,6 +32,19 @@ func TestNormalizeAWSPrefixAllowsAutomationSignoffPrefixWithOwnerInitials(t *tes
 	}
 }
 
+func TestNormalizeAWSPrefixAllowsRunScopedPrefix(t *testing.T) {
+	got, err := NormalizeAWSPrefix("ATB-R59958F15")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "atb-r59958f15" {
+		t.Fatalf("expected normalized run-scoped prefix, got %q", got)
+	}
+	if !IsRunScopedAWSPrefix(got) {
+		t.Fatal("expected run-scoped prefix to be detected")
+	}
+}
+
 func TestNormalizeAWSPrefixRejectsArbitraryLongPrefix(t *testing.T) {
 	if _, err := NormalizeAWSPrefix("github-actions"); err == nil {
 		t.Fatal("expected arbitrary long prefix to be rejected")
