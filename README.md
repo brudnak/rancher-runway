@@ -1,8 +1,10 @@
 # Rancher Runway
 
-Deploy disposable Rancher test environments on AWS with RKE2 or hosted-tenant
-K3s, Terraform, and a local control panel. The project can be driven from the
-double-clickable macOS app, the `rancher-runway` CLI, or guarded Go test entrypoints.
+Deploy disposable Rancher test environments with Terraform and a local control
+panel. The main AWS path builds RKE2 or hosted-tenant K3s clusters; the Linode
+path builds standalone Rancher Docker installs with Route53 DNS. The project can
+be driven from the double-clickable macOS app, the `rancher-runway` CLI, or
+guarded Go test entrypoints.
 
 For repository-owned GitHub Actions automation, see [docs/README.md](docs/README.md).
 
@@ -10,10 +12,12 @@ For repository-owned GitHub Actions automation, see [docs/README.md](docs/README
 
 - One or more RKE2 management clusters on AWS: single-server, 3-server HA, or 5-server HA
 - Optional hosted/tenant K3s deployments: one host Rancher plus tenant Ranchers on imported K3s clusters
-- AWS ALB, ACM, and Route53 records in front of Rancher
-- Rancher installed with external TLS termination at the ALB
+- Optional Linode Docker deployments: one standalone Rancher Docker install per requested Rancher version
+- For AWS Kubernetes runs, AWS ALB, ACM, and Route53 records in front of Rancher
+- For AWS Kubernetes runs, Rancher installed with external TLS termination at the ALB
+- For Linode Docker runs, Rancher Docker installs with ACME DNS and Route53 A records
 - Local kubeconfigs, install artifacts, run records, lifecycle logs, and cost history
-- A local-only control panel for setup, readiness, status, logs, AWS inventory, and cleanup
+- A local-only control panel for setup, readiness, status, logs, AWS inventory, Linode details, and cleanup
 
 RKE2 installer scripts and optional image bundles are checksum-verified before
 use. The setup path does not use `curl | bash`.
@@ -45,6 +49,7 @@ Requirements:
 - Node.js with `npm`
 - Terraform, Helm, and kubectl for real lifecycle runs
 - AWS credentials and Route53 inputs for provisioning
+- Linode API token for Linode Docker runs
 
 Install somewhere other than `/Applications`:
 
@@ -66,11 +71,12 @@ Create your local config:
 cp tool-config.auto.example.yml tool-config.yml
 ```
 
-Set the required secrets in your shell:
+Set the required secrets for the mode you plan to run:
 
 ```bash
 export AWS_ACCESS_KEY_ID="your-aws-access-key"
 export AWS_SECRET_ACCESS_KEY="your-aws-secret-key"
+export LINODE_TOKEN="optional-linode-token-for-linode-docker"
 export DOCKERHUB_USERNAME="optional-dockerhub-username"
 export DOCKERHUB_PASSWORD="optional-dockerhub-password"
 ```
@@ -93,6 +99,7 @@ The canonical lifecycle is also available through guarded test entrypoints:
 ```bash
 go test -v -run '^TestHaSetup$' -timeout 60m ./terratest
 go test -v -run '^TestHAWaitReady$' -timeout 35m ./terratest
+go test -v -run '^TestLinodeDockerWaitReady$' -timeout 35m ./terratest
 go test -v -run '^TestHAControlPanel$' -timeout 0 -count=1 ./terratest
 go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
 ```
@@ -112,12 +119,25 @@ in auto mode.
 
 Common local values:
 
-- `deployment.type` chooses the deployment shape. Use `ha-rke2` for the original RKE2 HA flow or `hosted-tenant-k3s` for one host Rancher plus tenant Ranchers on imported K3s clusters.
+- `deployment.type` chooses the deployment shape. Use `ha-rke2` for the
+  original RKE2 HA flow, `hosted-tenant-k3s` for one host Rancher plus tenant
+  Ranchers on imported K3s clusters, or `linode-docker-cattle` for standalone
+  Docker Rancher instances on Linode.
 - `user.first_name` and `user.last_name` tag AWS resources with an owner.
-- `tf_vars.aws_prefix` is the base AWS resource prefix; run slots derive unique per-run prefixes from it.
-- `tf_vars.aws_pem_key_name` is the EC2 key pair name attached to instances for manual break-glass SSH. The tool itself configures nodes through AWS Systems Manager Run Command, not SSH.
+- `tf_vars.aws_prefix` is the base AWS resource prefix; run slots derive unique
+  per-run prefixes from it. In Linode Docker mode, the same prefix is used for
+  Linode labels and Route53 record names.
+- `tf_vars.aws_pem_key_name` is the EC2 key pair name attached to instances for
+  manual break-glass SSH. The tool itself configures nodes through AWS Systems
+  Manager Run Command, not SSH.
 - `tf_vars.aws_route53_fqdn` is the hosted zone/domain used for Rancher records.
-- `tf_vars.custom_hostname_prefix` optionally pins Rancher to a custom DNS label such as `brudnak.example.com`.
+  Linode Docker runs still use AWS credentials for Route53 DNS.
+- `tf_vars.custom_hostname_prefix` optionally pins Rancher to a custom DNS label
+  such as `brudnak.example.com`.
+- `linode.access_token` or `LINODE_TOKEN` supplies the Linode API token for
+  Linode Docker runs.
+- `linode.ssh_root_password` is the root password Terraform gives each Linode
+  while it installs Docker and starts Rancher.
 
 ### Auto Mode
 
@@ -178,6 +198,70 @@ cluster gets:
 RKE2 server nodes are schedulable by default, so a single-server install can run
 Rancher without separate worker nodes.
 
+### Linode Docker Mode
+
+Linode Docker mode is for standalone Rancher Docker installs, not Kubernetes
+management clusters. It creates one Linode per requested Rancher version, starts
+Rancher with Docker, and creates a Route53 A record for each Rancher URL.
+
+Start from `tool-config.auto.example.yml`, then change the deployment type and
+add the Linode block:
+
+```yaml
+deployment:
+  type: linode-docker-cattle
+
+rancher:
+  mode: auto
+  versions:
+    - "2.14.2-alpha3"
+  bootstrap_password: "your-rancher-password"
+  auto_approve: false
+
+total_has: 1
+
+linode:
+  # Optional when LINODE_TOKEN or LINODE_ACCESS_TOKEN is exported.
+  access_token: ""
+  ssh_root_password: "generated-or-local-password"
+  # Optional defaults:
+  region: "us-west"
+  type: "g6-standard-6"
+  image: "linode/ubuntu22.04"
+  dockerhub: "auto"
+
+tf_vars:
+  aws_region: "us-east-2"
+  aws_prefix: "xyz"
+  aws_route53_fqdn: "the.example.com"
+```
+
+Linode Docker setup currently uses auto mode only. Docker image tags are
+normalized with a leading `v` for Rancher image tags, while plain `head` stays
+`head`. For example, `2.14.2-alpha3` is checked and installed as
+`v2.14.2-alpha3`.
+
+The Docker image source can be selected in the setup UI or configured with
+`linode.dockerhub`. Supported built-in selections are:
+
+- `auto`: check known sources and pick the first source containing all requested tags.
+- `dockerhub`: `docker.io/rancher/rancher`.
+- `staging`: `stgregistry.suse.com/rancher/rancher`.
+- `prime`: `registry.rancher.com/rancher/rancher`.
+- `suse`: `registry.suse.com/rancher/rancher`.
+
+You can also use a custom repository such as `devuser/rancher`,
+`docker.io/devuser/rancher`, or `registry.example.com/team/rancher`. The UI has
+a locked custom source field and an image tag search that checks the known
+sources plus the custom source. If you paste an exact custom image with a tag,
+such as `devuser/rancher:dev-build`, the search validates that exact tag for the
+custom row.
+
+Linode Docker readiness is HTTP-based. It waits for the Rancher URL and `/v3`
+to become usable and keeps polling while Rancher returns the early
+`API Aggregation not ready` page. There is no kubeconfig or pod table for these
+Docker installs.
+
 ### Manual Mode
 
 Manual mode lets you provide full Helm commands and RKE2 pinning yourself:
@@ -218,24 +302,30 @@ The control panel treats each setup as a run slot. A slot has isolated Terraform
 state, Terraform data, module files, deployment output, kubeconfigs, logs, AWS
 names, and a run record under `terratest/automation-output/`.
 
+Linode Docker slots use the same slot model, but they do not produce
+kubeconfigs. Cluster details show the Rancher URL and Linode IP instead, with a
+copy action for the IP.
+
 This means one checkout can keep recorded slots visible while starting another
 slot. Setup, readiness, and cleanup are still serialized so Terraform state and
 AWS actions stay unambiguous.
 
-Custom Rancher hostnames are supported for one HA per slot. A custom hostname
-does not block new slots as long as the full hostname is unique. Starting a new
-slot with a duplicate custom hostname is blocked until the existing slot is
-destroyed or the config is changed.
+Custom Rancher hostnames are supported for one HA RKE2 cluster per slot. A
+custom hostname does not block new slots as long as the full hostname is unique.
+Starting a new slot with a duplicate custom hostname is blocked until the
+existing slot is destroyed or the config is changed.
 
 ## Control Panel
 
 The local control panel is bound to `127.0.0.1` only. It provides:
 
 - Local preflight checks for tools, `tool-config.yml`, owner fields, and required environment variables
-- Interactive setup for auto/manual Rancher plans and custom DNS
+- Interactive setup for auto/manual Rancher plans, Linode Docker image source
+  discovery, and custom DNS
 - Guarded lifecycle launchers for setup, readiness, and cleanup
 - Run-slot overview with per-slot logs, Terraform paths, hostnames, and destroy actions
-- Per-cluster Rancher URL, kubeconfig path, reachability, and `cattle-system` visibility
+- Per-cluster Rancher URL, kubeconfig path or Linode IP, reachability, and
+  `cattle-system` visibility when Kubernetes access exists
 - Recent pod logs, live log streaming, and active Rancher leader detection
 - AWS inventory for resources associated with recorded slots and owner tags
 - Cleanup cost estimates and a local cost ledger
@@ -255,9 +345,10 @@ go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
 ```
 
 Cleanup is per run slot. The slot record is removed only after Terraform destroy
-succeeds. Cleanup also prints a best-effort AWS estimate for EC2 runtime, EBS
-root volume cost, and hosted-tenant RDS/Aurora runtime when present. It is not a
-final AWS bill and does not include every charge type.
+succeeds. For Linode Docker slots, cleanup destroys the Linode instance and
+Route53 record for that slot. AWS cleanup also prints a best-effort estimate for
+EC2 runtime, EBS root volume cost, and hosted-tenant RDS/Aurora runtime when
+present. It is not a final AWS bill and does not include every charge type.
 
 After all recorded slots are gone, the panel can clean ignored local run
 residue. This local cleanup does not destroy AWS resources.
@@ -297,13 +388,15 @@ Use anchored patterns:
 ```bash
 go test -v -run '^TestHaSetup$' -timeout 60m ./terratest
 go test -v -run '^TestHAWaitReady$' -timeout 35m ./terratest
+go test -v -run '^TestLinodeDockerWaitReady$' -timeout 35m ./terratest
 go test -v -run '^TestHAControlPanel$' -timeout 0 -count=1 ./terratest
 go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
 ```
 
 For GoLand, configure the package as
 `github.com/brudnak/ha-rancher-rke2/terratest` and use an exact pattern such as
-`^TestHaSetup$`, `^TestHAControlPanel$`, or `^TestHACleanup$`.
+`^TestHaSetup$`, `^TestHAWaitReady$`, `^TestLinodeDockerWaitReady$`,
+`^TestHAControlPanel$`, or `^TestHACleanup$`.
 
 ## Ignored Local State
 
