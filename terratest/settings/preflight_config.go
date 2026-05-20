@@ -68,6 +68,9 @@ type EditablePreflightConfig struct {
 	DeploymentType        string            `json:"deploymentType"`
 	HostedRDSPassword     string            `json:"hostedRDSPassword"`
 	HostedEC2InstanceType string            `json:"hostedEC2InstanceType"`
+	LinodeDockerHub       string            `json:"linodeDockerHub"`
+	LinodeCustomImage     string            `json:"linodeCustomImage"`
+	LinodeSSHRootPassword string            `json:"linodeSSHRootPassword"`
 	UserFirstName         string            `json:"userFirstName"`
 	UserLastName          string            `json:"userLastName"`
 	TFVars                map[string]string `json:"tfVars"`
@@ -120,6 +123,13 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 	if deploymentType == "hosted-tenant-k3s" {
 		preloadImages = viper.GetBool("k3s.preload_images")
 	}
+	linodeDockerHub := strings.TrimSpace(viper.GetString("linode.dockerhub"))
+	linodeCustomImage := ""
+	switch strings.ToLower(linodeDockerHub) {
+	case "", "auto", "dockerhub", "docker.io/rancher/rancher", "rancher/rancher", "staging", "stg", "stgregistry.suse.com/rancher/rancher", "prime", "registry.rancher.com/rancher/rancher", "suse", "registry.suse.com/rancher/rancher":
+	default:
+		linodeCustomImage = linodeDockerHub
+	}
 
 	return EditablePreflightConfig{
 		Distro:                distro,
@@ -129,6 +139,9 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 		DeploymentType:        deploymentType,
 		HostedRDSPassword:     viper.GetString("tf_vars.aws_rds_password"),
 		HostedEC2InstanceType: strings.TrimSpace(viper.GetString("tf_vars.aws_ec2_instance_type")),
+		LinodeDockerHub:       linodeDockerHub,
+		LinodeCustomImage:     linodeCustomImage,
+		LinodeSSHRootPassword: viper.GetString("linode.ssh_root_password"),
 		UserFirstName:         OwnerFirstName(),
 		UserLastName:          OwnerLastName(),
 		TFVars:                tfVars,
@@ -176,7 +189,7 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 		return err
 	}
 	update.TFVars["aws_prefix"] = normalizedPrefix
-	if strings.TrimSpace(update.TFVars["aws_pem_key_name"]) == "" {
+	if strings.ToLower(strings.TrimSpace(update.DeploymentType)) != "linode-docker-cattle" && strings.TrimSpace(update.TFVars["aws_pem_key_name"]) == "" {
 		return fmt.Errorf("tf_vars.aws_pem_key_name must be set")
 	}
 	for _, key := range EditableTFVarKeys {

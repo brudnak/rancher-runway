@@ -12,6 +12,7 @@ import (
 const (
 	deploymentTypeHARKE2          = "ha-rke2"
 	deploymentTypeHostedTenantK3S = "hosted-tenant-k3s"
+	deploymentTypeLinodeDocker    = "linode-docker-cattle"
 	hostedTenantMinInstances      = 2
 	hostedTenantMaxInstances      = 4
 )
@@ -29,15 +30,23 @@ func deploymentType() string {
 
 func validateDeploymentType() error {
 	switch deploymentType() {
-	case deploymentTypeHARKE2, deploymentTypeHostedTenantK3S:
+	case deploymentTypeHARKE2, deploymentTypeHostedTenantK3S, deploymentTypeLinodeDocker:
 		return nil
 	default:
-		return fmt.Errorf("deployment.type must be %s or %s", deploymentTypeHARKE2, deploymentTypeHostedTenantK3S)
+		return fmt.Errorf("deployment.type must be %s, %s, or %s", deploymentTypeHARKE2, deploymentTypeHostedTenantK3S, deploymentTypeLinodeDocker)
 	}
 }
 
 func isHostedTenantK3SDeployment() bool {
 	return deploymentType() == deploymentTypeHostedTenantK3S
+}
+
+func isLinodeDockerDeployment() bool {
+	return deploymentType() == deploymentTypeLinodeDocker
+}
+
+func isLinodeDockerRecord(record panelRunRecord) bool {
+	return strings.TrimSpace(record.DeploymentType) == deploymentTypeLinodeDocker
 }
 
 func configuredRancherInstanceCount() int {

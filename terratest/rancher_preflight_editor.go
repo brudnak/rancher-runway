@@ -721,17 +721,21 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		requestedDeploymentType = deploymentType()
 	}
 	switch requestedDeploymentType {
-	case deploymentTypeHARKE2, deploymentTypeHostedTenantK3S:
+	case deploymentTypeHARKE2, deploymentTypeHostedTenantK3S, deploymentTypeLinodeDocker:
 	default:
-		return fmt.Errorf("deployment.type must be %s or %s", deploymentTypeHARKE2, deploymentTypeHostedTenantK3S)
+		return fmt.Errorf("deployment.type must be %s, %s, or %s", deploymentTypeHARKE2, deploymentTypeHostedTenantK3S, deploymentTypeLinodeDocker)
 	}
 	hostedTenant := requestedDeploymentType == deploymentTypeHostedTenantK3S
+	linodeDocker := requestedDeploymentType == deploymentTypeLinodeDocker
 	mode := strings.ToLower(strings.TrimSpace(update.Mode))
 	if mode == "" {
 		mode = "auto"
 	}
 	if hostedTenant && mode != "auto" {
 		return fmt.Errorf("hosted-tenant-k3s setup editor currently supports auto mode only")
+	}
+	if linodeDocker && mode != "auto" {
+		return fmt.Errorf("linode-docker-cattle setup editor currently supports auto mode only")
 	}
 	var normalizedVersions []string
 	var normalizedHelmCommands []string
@@ -773,6 +777,31 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		if update.HostedEC2InstanceType == "" {
 			update.HostedEC2InstanceType = hostedTenantEC2InstanceType()
 		}
+	}
+	if linodeDocker {
+		update.CustomHostnameEnabled = false
+		update.CustomHostnameInput = ""
+		update.LinodeCustomImage = strings.TrimSpace(update.LinodeCustomImage)
+		if update.LinodeCustomImage != "" {
+			customRepository, _, err := normalizeCustomLinodeDockerImage(update.LinodeCustomImage)
+			if err != nil {
+				return err
+			}
+			update.LinodeDockerHub = customRepository
+		} else {
+			update.LinodeDockerHub = normalizeLinodeDockerHubSelection(update.LinodeDockerHub)
+			if update.LinodeDockerHub == "custom" {
+				return fmt.Errorf("custom Linode Docker image source requires an image path")
+			}
+		}
+		password := strings.TrimSpace(update.LinodeSSHRootPassword)
+		if password == "" {
+			password = linodeRootPassword()
+		}
+		if err := validateLinodeRootPassword(password); err != nil {
+			return err
+		}
+		update.LinodeSSHRootPassword = password
 	}
 	viperConfigMu.RLock()
 	route53FQDN := viper.GetString("tf_vars.aws_route53_fqdn")
@@ -818,7 +847,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		if hostedTenant {
 			k3sNode := ensureMappingValue(root, "k3s")
 			setBoolValue(k3sNode, "preload_images", update.PreloadImages)
-		} else {
+		} else if !linodeDocker {
 			rke2Node := ensureMappingValue(root, "rke2")
 			setBoolValue(rke2Node, "preload_images", update.PreloadImages)
 			setIntValue(rke2Node, "server_count", update.ServerCount)
@@ -858,10 +887,19 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 			setStringValue(tfVarsNode, "aws_rds_password", update.HostedRDSPassword)
 			setStringValue(tfVarsNode, "aws_ec2_instance_type", update.HostedEC2InstanceType)
 		}
+		if linodeDocker {
+			linodeNode := ensureMappingValue(root, "linode")
+			setStringValue(linodeNode, "dockerhub", update.LinodeDockerHub)
+			setStringValue(linodeNode, "ssh_root_password", update.LinodeSSHRootPassword)
+		}
 	} else if hostedTenant {
 		tfVarsNode := ensureMappingValue(root, "tf_vars")
 		setStringValue(tfVarsNode, "aws_rds_password", update.HostedRDSPassword)
 		setStringValue(tfVarsNode, "aws_ec2_instance_type", update.HostedEC2InstanceType)
+	} else if linodeDocker {
+		linodeNode := ensureMappingValue(root, "linode")
+		setStringValue(linodeNode, "dockerhub", update.LinodeDockerHub)
+		setStringValue(linodeNode, "ssh_root_password", update.LinodeSSHRootPassword)
 	}
 	if customHostnamePrefix == "" {
 		if tfVarsNode := mappingValue(root, "tf_vars"); tfVarsNode != nil {
@@ -871,7 +909,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		tfVarsNode := ensureMappingValue(root, "tf_vars")
 		setStringValue(tfVarsNode, "custom_hostname_prefix", customHostnamePrefix)
 	}
-	if hostedTenant {
+	if hostedTenant || linodeDocker {
 		if rke2Node := mappingValue(root, "rke2"); rke2Node != nil {
 			deleteMappingKey(rke2Node, "preload_images")
 			deleteMappingKey(rke2Node, "server_count")
@@ -931,7 +969,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("user.last_name", update.UserLastName)
 		if hostedTenant {
 			viper.Set("k3s.preload_images", update.PreloadImages)
-		} else {
+		} else if !linodeDocker {
 			viper.Set("rke2.preload_images", update.PreloadImages)
 			viper.Set("rke2.server_count", update.ServerCount)
 		}
@@ -942,6 +980,12 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if hostedTenant {
 		viper.Set("tf_vars.aws_rds_password", update.HostedRDSPassword)
 		viper.Set("tf_vars.aws_ec2_instance_type", update.HostedEC2InstanceType)
+		viper.Set("rke2.preload_images", false)
+		viper.Set("rke2.server_count", 0)
+	}
+	if linodeDocker {
+		viper.Set("linode.dockerhub", update.LinodeDockerHub)
+		viper.Set("linode.ssh_root_password", update.LinodeSSHRootPassword)
 		viper.Set("rke2.preload_images", false)
 		viper.Set("rke2.server_count", 0)
 	}

@@ -22,10 +22,14 @@ let config = setupData.config || {
   serverCount: 3,
   tfVars: {}
 }
-const normalizeDeploymentType = value => String(value || '').trim().toLowerCase() === 'hosted-tenant-k3s' ? 'hosted-tenant-k3s' : 'ha-rke2'
+const normalizeDeploymentType = value => {
+  const normalized = String(value || '').trim().toLowerCase()
+  return normalized === 'hosted-tenant-k3s' || normalized === 'linode-docker-cattle' ? normalized : 'ha-rke2'
+}
 let deploymentType = normalizeDeploymentType(setupData.deploymentType || config.deploymentType)
 const hostedTenantMinInstances = 2
 const hostedTenantMaxInstances = 4
+const linodeDockerMaxInstances = 6
 let customHostnameEnabled = Boolean(setupData.customHostnameEnabled)
 let customHostname = ''
 let submitting = false
@@ -36,10 +40,16 @@ let setupStatePollTimer = null
 let panelBooting = embeddedSetup
 let panelLifecycleBusy = false
 let panelLifecycleMessage = ''
+let panelLifecycleDetail = {}
 let manualValidationResults = []
 let manualRKE2Recommendations = []
 let planCommandCopies = []
 let lastResolverFailure = ''
+let linodeImageSearchResults = []
+let linodeImageSearchTag = ''
+let linodeImageSearchError = ''
+let linodeImageSearchPending = false
+let linodeCustomImageLocked = true
 
 const rowClass = 'grid gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center'
 const inputClass = 'w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100'
@@ -52,6 +62,7 @@ const modeInputEl = byId('modeInput')
 const deploymentTypeInputEl = byId('deploymentTypeInput')
 const haRke2DeploymentBtnEl = byId('haRke2DeploymentBtn')
 const hostedTenantDeploymentBtnEl = byId('hostedTenantDeploymentBtn')
+const linodeDockerDeploymentBtnEl = byId('linodeDockerDeploymentBtn')
 const deploymentSummaryEl = byId('deploymentSummary')
 const autoModeBtnEl = byId('autoModeBtn')
 const manualModeBtnEl = byId('manualModeBtn')
@@ -89,6 +100,16 @@ const hostedRdsPasswordToggleEl = byId('hostedRdsPasswordToggle')
 const hostedRdsPasswordLockToggleEl = byId('hostedRdsPasswordLockToggle')
 const hostedEc2InstanceTypeInputEl = byId('hostedEc2InstanceTypeInput')
 const hostedEc2InstanceTypeLockToggleEl = byId('hostedEc2InstanceTypeLockToggle')
+const linodeDockerPanelEl = byId('linodeDockerPanel')
+const linodeDockerHubSelectEl = byId('linodeDockerHubSelect')
+const linodeCustomImageInputEl = byId('linodeCustomImageInput')
+const linodeCustomImageLockToggleEl = byId('linodeCustomImageLockToggle')
+const linodeImageSearchInputEl = byId('linodeImageSearchInput')
+const linodeImageSearchBtnEl = byId('linodeImageSearchBtn')
+const linodeImageSearchResultsEl = byId('linodeImageSearchResults')
+const linodeSshRootPasswordInputEl = byId('linodeSshRootPasswordInput')
+const linodeSshRootPasswordGenerateBtnEl = byId('linodeSshRootPasswordGenerateBtn')
+const linodeSshRootPasswordToggleEl = byId('linodeSshRootPasswordToggle')
 const distroSelectEl = byId('distroSelect')
 const bootstrapPasswordInputEl = byId('bootstrapPasswordInput')
 const bootstrapPasswordToggleEl = byId('bootstrapPasswordToggle')
@@ -207,7 +228,7 @@ const parseResolvedPlanText = planText => {
   lines.forEach(rawLine => {
     const line = String(rawLine || '').replace(/\s+$/, '')
     const trimmed = line.trim()
-    const haMatch = trimmed.match(/^(HA|Tenant)\s+(\d+)$/)
+    const haMatch = trimmed.match(/^(HA|Tenant|Docker Rancher)\s+(\d+)$/)
 
     if (haMatch) {
       finishCurrent()
@@ -271,12 +292,15 @@ const renderPlanCards = planText => {
   const text = String(planText || '').trim()
   const cards = parseResolvedPlanText(text)
   const hosted = text.includes('Resolved K3s/K8s:') || cards.some(card => card.title === 'Host' || card.title.startsWith('Tenant '))
+  const linode = isLinodeDockerDeployment() || cards.some(card => card.title.startsWith('Docker Rancher '))
 
   if (resolvedPlanHeadingEl) {
-    resolvedPlanHeadingEl.textContent = hosted ? 'Resolved hosted tenant install plan' : 'Resolved HA install plan'
+    resolvedPlanHeadingEl.textContent = linode ? 'Resolved Linode Docker install plan' : hosted ? 'Resolved hosted tenant install plan' : 'Resolved HA install plan'
   }
   if (reviewResolverLogSummaryEl) {
-    reviewResolverLogSummaryEl.textContent = hosted
+    reviewResolverLogSummaryEl.textContent = linode
+      ? 'Version, Docker image source, and registry manifest resolution output.'
+      : hosted
       ? 'Version, chart, K3s, and installer resolution output.'
       : 'Version, chart, RKE2, and installer resolution output.'
   }
@@ -298,7 +322,7 @@ const renderPlanCards = planText => {
   planFallbackEl.classList.add('hidden')
   planFallbackEl.textContent = ''
   planCommandCopies = []
-  const emptyLabel = hosted ? 'hosted tenant instance' : 'HA'
+  const emptyLabel = linode ? 'Docker Rancher' : hosted ? 'hosted tenant instance' : 'HA'
   const renderCodeLines = commandText => String(commandText || '').split('\n').map((line, index) => `
     <div class="setup-code-line">
       <span class="setup-code-line-number">${index + 1}</span>
@@ -334,7 +358,9 @@ const renderPlanCards = planText => {
         </div>
       `
       }).join('')
-      : '<div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">No Helm command was emitted for this HA.</div>'
+      : linode
+        ? '<div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">Docker setup will run through Terraform after approval.</div>'
+        : '<div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">No Helm command was emitted for this HA.</div>'
 
     return `
       <details class="setup-ha-card" open>
@@ -344,7 +370,7 @@ const renderPlanCards = planText => {
               <h3 class="text-lg font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(card.title)}</h3>
               <span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700 dark:bg-white/[0.06] dark:text-zinc-200">Ready for approval</span>
             </div>
-            <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">${hosted ? 'Resolved hosted tenant install details for review before AWS setup starts.' : 'Resolved install details for review before AWS setup starts.'}</p>
+            <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">${linode ? 'Resolved Docker image details for review before Linode setup starts.' : hosted ? 'Resolved hosted tenant install details for review before setup starts.' : 'Resolved install details for review before setup starts.'}</p>
           </div>
           <span class="inline-flex shrink-0 items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs font-semibold text-zinc-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200">
             Details
@@ -383,16 +409,174 @@ const sanitizeDisplayValue = value => {
 customHostname = sanitizeDisplayValue(setupData.customHostname || '')
 
 const isHostedTenantDeployment = () => deploymentType === 'hosted-tenant-k3s'
+const isLinodeDockerDeployment = () => deploymentType === 'linode-docker-cattle'
+
+const linodeDockerHubSelectValue = value => {
+  const normalized = String(value || '').trim().toLowerCase()
+  switch (normalized) {
+    case '':
+    case 'auto':
+      return 'auto'
+    case 'dockerhub':
+    case 'docker.io/rancher/rancher':
+    case 'rancher/rancher':
+      return 'dockerhub'
+    case 'staging':
+    case 'stg':
+    case 'stgregistry.suse.com/rancher/rancher':
+      return 'staging'
+    case 'prime':
+    case 'registry.rancher.com/rancher/rancher':
+      return 'prime'
+    case 'suse':
+    case 'registry.suse.com/rancher/rancher':
+      return 'suse'
+    case 'custom':
+      return 'custom'
+    default:
+      return 'custom'
+  }
+}
+
+const setLinodeCustomImageLocked = locked => {
+  if (!linodeCustomImageInputEl || !linodeCustomImageLockToggleEl) {
+    return
+  }
+  linodeCustomImageLocked = locked
+  linodeCustomImageInputEl.readOnly = locked
+  linodeCustomImageLockToggleEl.innerHTML = locked ? lockIcon : unlockIcon
+  linodeCustomImageLockToggleEl.dataset.state = locked ? 'locked' : 'unlocked'
+  linodeCustomImageLockToggleEl.title = locked ? 'Unlock custom image source' : 'Lock custom image source'
+  linodeCustomImageLockToggleEl.setAttribute('aria-label', linodeCustomImageLockToggleEl.title)
+  setLockButtonTone(linodeCustomImageLockToggleEl, locked)
+  setLockedInputTone(linodeCustomImageInputEl, locked)
+}
+
+const linodeImageSearchSeed = () => {
+  const current = String(linodeImageSearchInputEl?.value || '').trim()
+  if (current) {
+    return current
+  }
+  const firstVersion = normalizedVersions().find(version => version)
+  return firstVersion || ''
+}
+
+const renderLinodeImageSearch = () => {
+  if (!linodeImageSearchResultsEl || !linodeImageSearchBtnEl) {
+    return
+  }
+
+  linodeImageSearchBtnEl.disabled = submitting || linodeImageSearchPending
+  linodeImageSearchBtnEl.innerHTML = linodeImageSearchPending
+    ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Searching'
+    : 'Search'
+
+  if (linodeImageSearchError) {
+    linodeImageSearchResultsEl.innerHTML = `<div class="rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm font-medium text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200">${escapeHtml(linodeImageSearchError)}</div>`
+    return
+  }
+
+  if (!linodeImageSearchResults.length) {
+    linodeImageSearchResultsEl.innerHTML = '<div class="text-sm text-zinc-500 dark:text-zinc-400">Search checks Rancher image manifests across Docker Hub, SUSE staging, Prime, SUSE registry, and the unlocked custom source when provided.</div>'
+    return
+  }
+
+  const foundCount = linodeImageSearchResults.filter(result => result.found).length
+  const summaryClass = foundCount > 0
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200'
+    : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200'
+  const summary = `<div class="rounded-lg border px-3.5 py-3 text-sm font-medium ${summaryClass}">${foundCount ? `Found ${foundCount} source${foundCount === 1 ? '' : 's'} for ${escapeHtml(linodeImageSearchTag)}.` : `No known source has ${escapeHtml(linodeImageSearchTag)} yet.`}</div>`
+
+  const rows = linodeImageSearchResults.map(result => {
+    const found = Boolean(result.found)
+    const statusClass = found
+      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+      : result.error
+        ? 'bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
+        : 'bg-zinc-100 text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300'
+    const statusText = found ? 'Found' : result.error ? 'Lookup error' : 'Missing'
+    const action = found
+      ? `<button type="button" data-linode-image-source="${escapeHtml(result.key)}" class="rounded-md border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 dark:border-emerald-500/25 dark:bg-white/[0.06] dark:text-emerald-200 dark:hover:bg-emerald-500/10">Use this source</button>`
+      : ''
+    const detail = result.error ? result.error : result.image
+    return `
+      <div class="grid gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-3 dark:border-white/10 dark:bg-white/[0.03] sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(result.label || result.repository || 'Image source')}</span>
+            <span class="rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass}">${statusText}</span>
+          </div>
+          <div class="mt-1 break-words text-xs font-medium text-zinc-500 [overflow-wrap:anywhere] dark:text-zinc-400">${escapeHtml(detail || '')}</div>
+        </div>
+        ${action}
+      </div>
+    `
+  }).join('')
+
+  linodeImageSearchResultsEl.innerHTML = summary + rows
+}
+
+const searchLinodeImages = async () => {
+  if (linodeImageSearchPending) {
+    return
+  }
+  const version = linodeImageSearchSeed()
+  const customImage = String(linodeCustomImageInputEl?.value || '').trim()
+  if (!version && !customImage) {
+    linodeImageSearchError = 'Enter a Rancher version, image tag, or custom image path to search.'
+    linodeImageSearchResults = []
+    renderLinodeImageSearch()
+    return
+  }
+  if (linodeImageSearchInputEl) {
+    linodeImageSearchInputEl.value = version
+  }
+
+  linodeImageSearchPending = true
+  linodeImageSearchError = ''
+  linodeImageSearchResults = []
+  linodeImageSearchTag = ''
+  renderLinodeImageSearch()
+
+  try {
+    const response = await fetch(setupEndpoint(`/api/linode-image-search?token=${encodeURIComponent(token)}`), {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        version,
+        customImage
+      })
+    })
+    if (!response.ok) {
+      throw new Error(await response.text() || 'Image search failed.')
+    }
+    const payload = await response.json()
+    linodeImageSearchTag = payload.tag || ''
+    linodeImageSearchResults = Array.isArray(payload.results) ? payload.results : []
+  } catch (error) {
+    linodeImageSearchError = error instanceof Error ? error.message : 'Image search failed.'
+  } finally {
+    linodeImageSearchPending = false
+    renderLinodeImageSearch()
+  }
+}
 
 const autoRowLabel = index => isHostedTenantDeployment()
   ? index === 0 ? 'Host' : `Tenant ${index}`
-  : `HA ${index + 1}`
+  : isLinodeDockerDeployment()
+    ? `Docker Rancher ${index + 1}`
+    : `HA ${index + 1}`
 
-const activeInstanceLabel = () => isHostedTenantDeployment() ? 'Rancher instances' : 'HAs'
+const activeInstanceLabel = () => isHostedTenantDeployment() || isLinodeDockerDeployment() ? 'Rancher instances' : 'HAs'
 
 const minimumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMinInstances : 1
 
-const maximumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMaxInstances : Number.POSITIVE_INFINITY
+const maximumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMaxInstances : isLinodeDockerDeployment() ? linodeDockerMaxInstances : Number.POSITIVE_INFINITY
 
 const ensureDeploymentCompatibleRows = () => {
   const minimumRows = minimumAutoRows()
@@ -402,7 +586,7 @@ const ensureDeploymentCompatibleRows = () => {
   if (versions.length > maximumAutoRows()) {
     versions = versions.slice(0, maximumAutoRows())
   }
-  if (isHostedTenantDeployment()) {
+  if (isHostedTenantDeployment() || isLinodeDockerDeployment()) {
     setupMode = 'auto'
     customHostnameEnabled = false
   }
@@ -617,6 +801,23 @@ const renderEditableConfig = () => {
   if (hostedEc2InstanceTypeInputEl) {
     hostedEc2InstanceTypeInputEl.value = config.hostedEC2InstanceType || 'm5.large'
   }
+  if (linodeDockerHubSelectEl) {
+    linodeDockerHubSelectEl.value = linodeDockerHubSelectValue(config.linodeDockerHub)
+  }
+  if (linodeCustomImageInputEl) {
+    linodeCustomImageInputEl.value = config.linodeCustomImage || (linodeDockerHubSelectEl?.value === 'custom' ? config.linodeDockerHub || '' : '')
+    setLinodeCustomImageLocked(!String(linodeCustomImageInputEl.value || '').trim())
+  }
+  if (linodeImageSearchInputEl && !String(linodeImageSearchInputEl.value || '').trim()) {
+    linodeImageSearchInputEl.value = normalizedVersions().find(version => version) || ''
+  }
+  if (linodeSshRootPasswordInputEl) {
+    linodeSshRootPasswordInputEl.value = config.linodeSSHRootPassword || ''
+    linodeSshRootPasswordInputEl.type = 'password'
+    if (linodeSshRootPasswordToggleEl) {
+      linodeSshRootPasswordToggleEl.textContent = 'Show'
+    }
+  }
 
   tfVarInputEls.forEach(input => {
     const key = input.getAttribute('data-tf-var')
@@ -627,44 +828,54 @@ const renderEditableConfig = () => {
   setHostedRDSPasswordLocked(true)
   setHostedEC2InstanceTypeLocked(true)
   renderHostedRDSPasswordGenerateState()
+  renderLinodeSshRootPasswordGenerateState()
+  renderLinodeImageSearch()
   renderServerTopology()
 }
 
 const renderDeploymentType = () => {
   ensureDeploymentCompatibleRows()
   const hosted = isHostedTenantDeployment()
+  const linode = isLinodeDockerDeployment()
   if (deploymentTypeInputEl) {
     deploymentTypeInputEl.value = deploymentType
   }
-  haRke2DeploymentBtnEl?.setAttribute('aria-pressed', hosted ? 'false' : 'true')
+  haRke2DeploymentBtnEl?.setAttribute('aria-pressed', !hosted && !linode ? 'true' : 'false')
   hostedTenantDeploymentBtnEl?.setAttribute('aria-pressed', hosted ? 'true' : 'false')
+  linodeDockerDeploymentBtnEl?.setAttribute('aria-pressed', linode ? 'true' : 'false')
   hostedTenantPanelEl?.classList.toggle('hidden', !hosted)
-  customHostnameBoxEl?.classList.toggle('hidden', hosted)
-  rke2ServerLayoutFieldsetEl?.classList.toggle('hidden', hosted)
+  linodeDockerPanelEl?.classList.toggle('hidden', !linode)
+  customHostnameBoxEl?.classList.toggle('hidden', hosted || linode)
+  rke2ServerLayoutFieldsetEl?.classList.toggle('hidden', hosted || linode)
   if (manualModeBtnEl) {
-    manualModeBtnEl.disabled = submitting || hosted
-    manualModeBtnEl.title = hosted ? 'Hosted tenant K3s setup currently resolves through auto mode.' : ''
-    manualModeBtnEl.classList.toggle('cursor-not-allowed', hosted)
-    manualModeBtnEl.classList.toggle('opacity-50', hosted)
+    manualModeBtnEl.disabled = submitting || hosted || linode
+    manualModeBtnEl.title = hosted ? 'Hosted tenant K3s setup currently resolves through auto mode.' : linode ? 'Linode Docker setup currently resolves through auto mode.' : ''
+    manualModeBtnEl.classList.toggle('cursor-not-allowed', hosted || linode)
+    manualModeBtnEl.classList.toggle('opacity-50', hosted || linode)
   }
   if (addBtnEl) {
-    addBtnEl.textContent = hosted ? 'Add tenant' : 'Add HA'
+    addBtnEl.textContent = hosted ? 'Add tenant' : linode ? 'Add Rancher' : 'Add HA'
   }
   if (manualAddBtnEl) {
-    manualAddBtnEl.textContent = hosted ? 'Add tenant' : 'Add HA'
+    manualAddBtnEl.textContent = hosted ? 'Add tenant' : linode ? 'Add Rancher' : 'Add HA'
   }
   if (totalInstancesLabelEl) {
-    totalInstancesLabelEl.textContent = hosted ? 'Total Rancher instances for this run:' : 'Total HAs for this run:'
+    totalInstancesLabelEl.textContent = hosted || linode ? 'Total Rancher instances for this run:' : 'Total HAs for this run:'
   }
   if (deploymentSummaryEl) {
     deploymentSummaryEl.textContent = hosted
       ? 'Hosted tenant K3s creates one host Rancher first, then one to three tenant Ranchers backed by RDS/Aurora MySQL.'
+      : linode
+        ? 'Linode Docker creates standalone Rancher Docker installs on Linode with Route53 DNS records. It can run while the AWS lane is busy.'
       : 'HA RKE2 creates standalone Rancher management clusters using the RKE2 server layout below.'
   }
   if (preloadImagesTextEl) {
-    preloadImagesTextEl.textContent = hosted ? 'Preload K3s images' : 'Preload RKE2 images'
+    preloadImagesTextEl.textContent = hosted ? 'Preload K3s images' : linode ? 'No preload needed for Docker Rancher' : 'Preload RKE2 images'
   }
   renderHostedRDSPasswordGenerateState()
+  renderLinodeSshRootPasswordGenerateState()
+  setResponseActionPending('')
+  setPanelLifecycleState(panelLifecycleDetail)
 }
 
 const renderRows = () => {
@@ -694,11 +905,17 @@ const renderRows = () => {
   addBtnEl.classList.toggle('opacity-50', addDisabled)
   addBtnEl.title = isHostedTenantDeployment() && versions.length >= hostedTenantMaxInstances
     ? 'Hosted tenant K3s supports up to 4 total Rancher instances: 1 host plus 3 tenants.'
+    : isLinodeDockerDeployment() && versions.length >= linodeDockerMaxInstances
+      ? 'Linode Docker setup supports up to 6 Rancher instances per run.'
     : ''
 
   rowsEl.querySelectorAll('input[data-index]').forEach(input => {
     input.addEventListener('input', event => {
       versions[Number(event.target.getAttribute('data-index'))] = event.target.value
+      linodeImageSearchResults = []
+      linodeImageSearchError = ''
+      linodeImageSearchTag = ''
+      renderLinodeImageSearch()
       clearValidationError()
     })
   })
@@ -752,7 +969,7 @@ const renderServerTopology = () => {
 }
 
 const renderMode = () => {
-  if (isHostedTenantDeployment()) {
+  if (isHostedTenantDeployment() || isLinodeDockerDeployment()) {
     setupMode = 'auto'
   }
   setupMode = setupMode === 'manual' ? 'manual' : 'auto'
@@ -769,6 +986,8 @@ const renderMode = () => {
   if (modeSummaryEl) {
     modeSummaryEl.textContent = isHostedTenantDeployment()
       ? 'Hosted tenant K3s uses auto mode so the host and tenant Rancher plans can resolve before the AWS run starts.'
+      : isLinodeDockerDeployment()
+        ? 'Linode Docker uses auto mode to map each Rancher version to one Docker install on its own Linode.'
       : setupMode === 'manual'
       ? 'Manual mode saves one editable Helm command and one RKE2 version per HA, then validates the Helm render before AWS starts.'
       : 'Auto mode resolves Rancher chart, image, RKE2 version, and installer SHA256 from the requested Rancher versions.'
@@ -780,9 +999,9 @@ const renderMode = () => {
     renderRows()
   }
   if (manualAddBtnEl) {
-    manualAddBtnEl.disabled = submitting || customHostnameEnabled || isHostedTenantDeployment()
-    manualAddBtnEl.classList.toggle('cursor-not-allowed', customHostnameEnabled || isHostedTenantDeployment())
-    manualAddBtnEl.classList.toggle('opacity-50', customHostnameEnabled || isHostedTenantDeployment())
+    manualAddBtnEl.disabled = submitting || customHostnameEnabled || isHostedTenantDeployment() || isLinodeDockerDeployment()
+    manualAddBtnEl.classList.toggle('cursor-not-allowed', customHostnameEnabled || isHostedTenantDeployment() || isLinodeDockerDeployment())
+    manualAddBtnEl.classList.toggle('opacity-50', customHostnameEnabled || isHostedTenantDeployment() || isLinodeDockerDeployment())
   }
   totalInstancesValueEl.textContent = String(activeHACount())
   setSubmittingState(submitting)
@@ -1131,6 +1350,80 @@ const generateHostedRDSPassword = () => {
   return Array.from(chars, value => hostedRDSPasswordAlphabet[value % hostedRDSPasswordAlphabet.length]).join('')
 }
 
+const linodeRootPasswordGroups = [
+  'ABCDEFGHJKLMNPQRSTUVWXYZ',
+  'abcdefghijkmnopqrstuvwxyz',
+  '23456789',
+  '!#$%&()*+,-.:;<=>?[]^_{|}~'
+]
+const linodeRootPasswordAlphabet = linodeRootPasswordGroups.join('')
+
+const randomAlphabetChar = alphabet => {
+  const chars = new Uint32Array(1)
+  if (window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(chars)
+  } else {
+    chars[0] = Math.floor(Math.random() * alphabet.length)
+  }
+  return alphabet[chars[0] % alphabet.length]
+}
+
+const shufflePasswordChars = chars => {
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const random = new Uint32Array(1)
+    if (window.crypto?.getRandomValues) {
+      window.crypto.getRandomValues(random)
+    } else {
+      random[0] = Math.floor(Math.random() * (i + 1))
+    }
+    const j = random[0] % (i + 1)
+    ;[chars[i], chars[j]] = [chars[j], chars[i]]
+  }
+  return chars
+}
+
+const generateLinodeRootPassword = () => {
+  const length = 32
+  const chars = linodeRootPasswordGroups.map(group => randomAlphabetChar(group))
+  while (chars.length < length) {
+    chars.push(randomAlphabetChar(linodeRootPasswordAlphabet))
+  }
+  return shufflePasswordChars(chars).join('')
+}
+
+const linodeRootPasswordValidationMessage = value => {
+  const password = String(value || '').trim()
+  if (password.length < 7) {
+    return 'Linode root SSH password must be at least 7 characters.'
+  }
+  if (password.length > 128) {
+    return 'Linode root SSH password must be 128 characters or fewer.'
+  }
+  let upper = false
+  let lower = false
+  let digit = false
+  let punct = false
+  for (let i = 0; i < password.length; i += 1) {
+    const code = password.charCodeAt(i)
+    const char = password[i]
+    if (/[A-Z]/.test(char)) {
+      upper = true
+    } else if (/[a-z]/.test(char)) {
+      lower = true
+    } else if (/[0-9]/.test(char)) {
+      digit = true
+    } else if (code === 9 || (code >= 32 && code <= 47) || (code >= 58 && code <= 64) || (code >= 91 && code <= 96) || (code >= 123 && code <= 126)) {
+      punct = true
+    } else {
+      return 'Linode root SSH password must use alphanumeric, punctuation, space, or tab characters only.'
+    }
+  }
+  if ([upper, lower, digit, punct].filter(Boolean).length < 2) {
+    return 'Linode root SSH password must contain at least two of uppercase letters, lowercase letters, digits, and punctuation.'
+  }
+  return ''
+}
+
 const normalizedAWSPrefix = () => {
   const input = setupQuery('input[data-tf-var="aws_prefix"]')
   return String((input && input.value) || '').trim().toLowerCase()
@@ -1175,6 +1468,19 @@ const validateSetup = () => {
     const passwordMessage = hostedRDSPasswordValidationMessage(hostedRdsPasswordInputEl?.value || '')
     if (passwordMessage) {
       return { message: passwordMessage, target: hostedRdsPasswordInputEl }
+    }
+  }
+
+  if (isLinodeDockerDeployment()) {
+    if (setupMode !== 'auto') {
+      return { message: 'Linode Docker setup currently supports auto mode only.', target: autoModeBtnEl }
+    }
+    if (linodeDockerHubSelectEl?.value === 'custom' && !String(linodeCustomImageInputEl?.value || '').trim()) {
+      return { message: 'Custom image source is selected, but no image path is set.', target: linodeCustomImageInputEl }
+    }
+    const passwordMessage = linodeRootPasswordValidationMessage(linodeSshRootPasswordInputEl?.value || '')
+    if (passwordMessage) {
+      return { message: passwordMessage, target: linodeSshRootPasswordInputEl }
     }
   }
 
@@ -1252,7 +1558,7 @@ const validateSetup = () => {
 
   const pemKeyInput = setupQuery('input[data-tf-var="aws_pem_key_name"]')
 
-  if (!String((pemKeyInput && pemKeyInput.value) || '').trim()) {
+  if (!isLinodeDockerDeployment() && !String((pemKeyInput && pemKeyInput.value) || '').trim()) {
     return {
       message: 'AWS PEM key name is required.',
       target: pemKeyInput,
@@ -1347,6 +1653,26 @@ const renderHostedRDSPasswordGenerateState = () => {
   hostedRdsPasswordGenerateBtnEl.title = empty ? '' : 'Clear the RDS password before generating a new one.'
 }
 
+const renderLinodeSshRootPasswordGenerateState = () => {
+  if (!linodeSshRootPasswordGenerateBtnEl || !linodeSshRootPasswordInputEl) {
+    return
+  }
+  const empty = !String(linodeSshRootPasswordInputEl.value || '').trim()
+  linodeSshRootPasswordGenerateBtnEl.disabled = submitting || !empty
+  linodeSshRootPasswordGenerateBtnEl.classList.toggle('cursor-not-allowed', !empty)
+  linodeSshRootPasswordGenerateBtnEl.classList.toggle('opacity-50', !empty)
+  linodeSshRootPasswordGenerateBtnEl.title = empty ? '' : 'Clear the root SSH password before generating a new one.'
+}
+
+const toggleLinodeSshRootPasswordVisibility = () => {
+  if (!linodeSshRootPasswordInputEl || !linodeSshRootPasswordToggleEl) {
+    return
+  }
+  const showing = linodeSshRootPasswordInputEl.type === 'text'
+  linodeSshRootPasswordInputEl.type = showing ? 'password' : 'text'
+  linodeSshRootPasswordToggleEl.textContent = showing ? 'Show' : 'Hide'
+}
+
 const setHostedEC2InstanceTypeLocked = locked => {
   if (!hostedEc2InstanceTypeInputEl || !hostedEc2InstanceTypeLockToggleEl) {
     return
@@ -1383,7 +1709,7 @@ const toggleSecretFieldVisibility = key => {
 
 const completionCopy = shouldContinue => shouldContinue
   ? {
-      title: 'AWS setup started',
+      title: isLinodeDockerDeployment() ? 'Linode setup started' : 'Setup started',
       body: 'The isolated run has been handed to the Lifecycle tab.',
       detail: 'Terraform state and run records are being tracked under a dedicated run slot.',
       accentClass: 'flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
@@ -1452,17 +1778,21 @@ const setSubmittingState = nextSubmitting => {
     button.classList.toggle('opacity-60', actionDisabled)
     button.classList.toggle('grayscale', actionDisabled)
   })
-  ;[manualAddBtnEl, validateHelmBtnEl, recommendRKE2BtnEl, autoModeBtnEl, manualModeBtnEl, haRke2DeploymentBtnEl, hostedTenantDeploymentBtnEl, hostedRdsPasswordGenerateBtnEl, hostedRdsPasswordLockToggleEl, hostedEc2InstanceTypeLockToggleEl].forEach(button => {
+  ;[manualAddBtnEl, validateHelmBtnEl, recommendRKE2BtnEl, autoModeBtnEl, manualModeBtnEl, haRke2DeploymentBtnEl, hostedTenantDeploymentBtnEl, linodeDockerDeploymentBtnEl, hostedRdsPasswordGenerateBtnEl, hostedRdsPasswordLockToggleEl, hostedEc2InstanceTypeLockToggleEl, linodeSshRootPasswordGenerateBtnEl, linodeSshRootPasswordToggleEl].forEach(button => {
     if (!button) {
       return
     }
-    button.disabled = actionDisabled || (button === manualAddBtnEl && customHostnameEnabled) || (button === manualModeBtnEl && isHostedTenantDeployment())
-    button.classList.toggle('cursor-not-allowed', actionDisabled)
-    button.classList.toggle('opacity-60', actionDisabled)
-    button.classList.toggle('grayscale', actionDisabled)
+    const deploymentButton = button === haRke2DeploymentBtnEl || button === hostedTenantDeploymentBtnEl || button === linodeDockerDeploymentBtnEl
+    const disabled = deploymentButton
+      ? nextSubmitting || panelBooting
+      : actionDisabled || (button === manualAddBtnEl && customHostnameEnabled) || (button === manualModeBtnEl && (isHostedTenantDeployment() || isLinodeDockerDeployment()))
+    button.disabled = disabled
+    button.classList.toggle('cursor-not-allowed', disabled)
+    button.classList.toggle('opacity-60', disabled)
+    button.classList.toggle('grayscale', disabled)
   })
-  customHostnameToggleEl.disabled = nextSubmitting || isHostedTenantDeployment()
-  customHostnameInputEl.disabled = nextSubmitting || isHostedTenantDeployment()
+  customHostnameToggleEl.disabled = nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment()
+  customHostnameInputEl.disabled = nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment()
   if (hostedRdsPasswordInputEl) {
     hostedRdsPasswordInputEl.disabled = nextSubmitting || panelBooting || panelLifecycleBusy
   }
@@ -1472,16 +1802,20 @@ const setSubmittingState = nextSubmitting => {
   if (hostedEc2InstanceTypeInputEl) {
     hostedEc2InstanceTypeInputEl.disabled = nextSubmitting || panelBooting || panelLifecycleBusy
   }
+  if (linodeSshRootPasswordInputEl) {
+    linodeSshRootPasswordInputEl.disabled = nextSubmitting || panelBooting || panelLifecycleBusy
+  }
   renderHostedRDSPasswordGenerateState()
+  renderLinodeSshRootPasswordGenerateState()
   resolveInstallerSHAToggleEl.disabled = nextSubmitting
   distroSelectEl.disabled = nextSubmitting
   bootstrapPasswordInputEl.disabled = nextSubmitting
   bootstrapPasswordToggleEl.disabled = nextSubmitting
   preloadImagesToggleEl.disabled = nextSubmitting
   serverCountButtonEls.forEach(button => {
-    button.disabled = nextSubmitting || isHostedTenantDeployment()
-    button.classList.toggle('cursor-not-allowed', nextSubmitting || isHostedTenantDeployment())
-    button.classList.toggle('opacity-60', nextSubmitting || isHostedTenantDeployment())
+    button.disabled = nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment()
+    button.classList.toggle('cursor-not-allowed', nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment())
+    button.classList.toggle('opacity-60', nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment())
   })
   userFirstNameInputEl.disabled = nextSubmitting
   userLastNameInputEl.disabled = nextSubmitting
@@ -1519,11 +1853,20 @@ const setPanelBootingState = booting => {
   setResponseButtonsDisabled(responseSubmitting)
 }
 
-const setPanelLifecycleState = (busy, message = '') => {
+const deploymentLifecycleBusy = detail => {
+  const busyByDeployment = detail?.busyByDeployment || {}
+  if (Object.prototype.hasOwnProperty.call(busyByDeployment, deploymentType)) {
+    return Boolean(busyByDeployment[deploymentType])
+  }
+  return Boolean(detail?.busy)
+}
+
+const setPanelLifecycleState = detail => {
   const previousMessage = panelLifecycleMessage
-  panelLifecycleBusy = Boolean(busy)
+  panelLifecycleDetail = detail || {}
+  panelLifecycleBusy = deploymentLifecycleBusy(panelLifecycleDetail)
   panelLifecycleMessage = panelLifecycleBusy
-    ? message || 'A lifecycle operation is running. New setup actions are locked until it finishes.'
+    ? panelLifecycleDetail.message || 'A lifecycle operation is running. New setup actions are locked until it finishes.'
     : ''
   if (panelLifecycleBusy && editorStatusBoxEl && !submitting) {
     editorStatusBoxEl.textContent = panelLifecycleMessage
@@ -1623,7 +1966,9 @@ const beginResolutionUI = () => {
   if (resolvingSummaryEl) {
     resolvingSummaryEl.textContent = isHostedTenantDeployment()
       ? 'No AWS resources are being created yet. This step fetches Helm repos, SUSE support data, K3s patch releases, and installer SHA256 hashes, then shows the final hosted tenant plan for approval.'
-      : 'No AWS resources are being created yet. This step fetches Helm repos, SUSE support data, RKE2 patch releases, and installer SHA256 hashes, then shows the final plan for approval.'
+      : isLinodeDockerDeployment()
+        ? 'No Linode instances are being created yet. This step checks Rancher Docker image manifests across the selected registry sources, then shows the final Docker plan for approval.'
+        : 'No AWS resources are being created yet. This step fetches Helm repos, SUSE support data, RKE2 patch releases, and installer SHA256 hashes, then shows the final plan for approval.'
   }
   logPanelEl.innerHTML = '<span class="text-zinc-400 dark:text-zinc-500">Waiting for resolver output...</span>'
   if (reviewLogPanelEl) {
@@ -1703,8 +2048,10 @@ const prepareSetupSubmit = async event => {
   const tfVars = collectTFVars()
 
   const prefixConfirmed = await showConfirmModal({
-    title: 'Confirm AWS prefix',
-    body: `AWS prefix is "${tfVars.aws_prefix}". This should be your initials and will be used to label AWS resources.`,
+    title: 'Confirm run prefix',
+    body: isLinodeDockerDeployment()
+      ? `Run prefix is "${tfVars.aws_prefix}". This should be your initials and will be used for Linode labels and Route53 names.`
+      : `AWS prefix is "${tfVars.aws_prefix}". This should be your initials and will be used to label AWS resources.`,
     confirmText: 'Use this prefix'
   })
 
@@ -1712,11 +2059,13 @@ const prepareSetupSubmit = async event => {
     return
   }
 
-  const pemConfirmed = await showConfirmModal({
-    title: 'Confirm PEM key name',
-    body: `AWS PEM key name is "${tfVars.aws_pem_key_name}". This must match the EC2 key pair you want the run to use.`,
-    confirmText: 'Use this key'
-  })
+  const pemConfirmed = isLinodeDockerDeployment()
+    ? true
+    : await showConfirmModal({
+        title: 'Confirm PEM key name',
+        body: `AWS PEM key name is "${tfVars.aws_pem_key_name}". This must match the EC2 key pair you want the run to use.`,
+        confirmText: 'Use this key'
+      })
 
   if (!pemConfirmed) {
     return
@@ -1788,12 +2137,14 @@ const setResponseActionPending = action => {
     return
   }
 
+  const startLabel = isLinodeDockerDeployment() ? 'Start Linode setup' : isHostedTenantDeployment() ? 'Start hosted tenant setup' : 'Start AWS setup'
+  const pendingLabel = isLinodeDockerDeployment() ? 'Starting Linode setup...' : isHostedTenantDeployment() ? 'Starting hosted tenant setup...' : 'Starting AWS setup...'
   respondActionsEl.querySelectorAll('button[data-response-action]').forEach(button => {
     const buttonAction = button.getAttribute('data-response-action')
     if (action && buttonAction === action) {
-      button.innerHTML = `<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>${action === 'continue' ? 'Starting AWS setup...' : 'Canceling...'}`
+      button.innerHTML = `<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>${action === 'continue' ? pendingLabel : 'Canceling...'}`
     } else if (!action) {
-      button.textContent = buttonAction === 'continue' ? 'Start AWS setup' : 'Cancel'
+      button.textContent = buttonAction === 'continue' ? startLabel : 'Cancel'
     }
   })
 }
@@ -1805,11 +2156,11 @@ const sendResponse = async action => {
 
   const shouldContinue = action === 'continue'
   if (shouldContinue && panelBooting) {
-    responseErrorBox().textContent = 'Still checking local state. AWS setup actions will unlock after the panel reads the first state snapshot.'
+    responseErrorBox().textContent = 'Still checking local state. Setup actions will unlock after the panel reads the first state snapshot.'
     return
   }
   if (shouldContinue && panelLifecycleBusy) {
-    responseErrorBox().textContent = panelLifecycleMessage || 'A lifecycle operation is running. AWS setup actions will unlock after it finishes.'
+    responseErrorBox().textContent = panelLifecycleMessage || 'A lifecycle operation is running. Setup actions will unlock after it finishes.'
     return
   }
 
@@ -2122,10 +2473,12 @@ manualModeBtnEl.addEventListener('click', () => {
   if (submitting || setupMode === 'manual') {
     return
   }
-  if (isHostedTenantDeployment()) {
+  if (isHostedTenantDeployment() || isLinodeDockerDeployment()) {
     showNoticeModal({
-      title: 'Hosted tenant uses auto mode',
-      body: 'Hosted tenant K3s needs the resolver to build the host and tenant plans before setup, so this path currently stays in auto mode.',
+      title: isLinodeDockerDeployment() ? 'Linode Docker uses auto mode' : 'Hosted tenant uses auto mode',
+      body: isLinodeDockerDeployment()
+        ? 'Linode Docker maps each Rancher version to one Docker install, so this path currently stays in auto mode.'
+        : 'Hosted tenant K3s needs the resolver to build the host and tenant plans before setup, so this path currently stays in auto mode.',
       confirmText: 'Got it'
     })
     return
@@ -2151,6 +2504,16 @@ hostedTenantDeploymentBtnEl?.addEventListener('click', () => {
     return
   }
   deploymentType = 'hosted-tenant-k3s'
+  clearValidationError()
+  renderDeploymentType()
+  renderCustomHostname()
+})
+
+linodeDockerDeploymentBtnEl?.addEventListener('click', () => {
+  if (submitting || deploymentType === 'linode-docker-cattle') {
+    return
+  }
+  deploymentType = 'linode-docker-cattle'
   clearValidationError()
   renderDeploymentType()
   renderCustomHostname()
@@ -2218,6 +2581,86 @@ hostedRdsPasswordGenerateBtnEl?.addEventListener('click', () => {
   renderHostedRDSPasswordGenerateState()
   clearValidationError()
   editorStatusBoxEl.textContent = 'Generated an RDS MySQL password that fits AWS character and length rules.'
+})
+linodeSshRootPasswordInputEl?.addEventListener('input', clearValidationError)
+linodeSshRootPasswordInputEl?.addEventListener('input', renderLinodeSshRootPasswordGenerateState)
+linodeDockerHubSelectEl?.addEventListener('change', () => {
+  if (linodeDockerHubSelectEl.value === 'custom') {
+    setLinodeCustomImageLocked(false)
+    linodeCustomImageInputEl?.focus()
+  } else if (linodeCustomImageInputEl) {
+    linodeCustomImageInputEl.value = ''
+    setLinodeCustomImageLocked(true)
+  }
+  clearValidationError()
+})
+linodeCustomImageLockToggleEl?.addEventListener('click', () => {
+  setLinodeCustomImageLocked(!linodeCustomImageLocked)
+  if (!linodeCustomImageLocked) {
+    linodeDockerHubSelectEl.value = 'custom'
+    linodeCustomImageInputEl?.focus()
+  }
+})
+linodeCustomImageInputEl?.addEventListener('input', () => {
+  if (String(linodeCustomImageInputEl.value || '').trim()) {
+    linodeDockerHubSelectEl.value = 'custom'
+  }
+  linodeImageSearchError = ''
+  linodeImageSearchResults = []
+  linodeImageSearchTag = ''
+  renderLinodeImageSearch()
+  clearValidationError()
+})
+linodeImageSearchInputEl?.addEventListener('input', () => {
+  linodeImageSearchError = ''
+  linodeImageSearchResults = []
+  linodeImageSearchTag = ''
+  renderLinodeImageSearch()
+  clearValidationError()
+})
+linodeImageSearchInputEl?.addEventListener('keydown', event => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    searchLinodeImages()
+  }
+})
+linodeImageSearchBtnEl?.addEventListener('click', searchLinodeImages)
+linodeImageSearchResultsEl?.addEventListener('click', event => {
+  const button = event.target.closest('button[data-linode-image-source]')
+  if (!button || !linodeDockerHubSelectEl) {
+    return
+  }
+  const source = button.getAttribute('data-linode-image-source')
+  const row = button.closest('div.grid')
+  const selectedResult = linodeImageSearchResults.find(result => result.key === source)
+  linodeDockerHubSelectEl.value = linodeDockerHubSelectValue(source)
+  if (source === 'custom' && selectedResult && linodeCustomImageInputEl) {
+    linodeCustomImageInputEl.value = selectedResult.repository || ''
+    setLinodeCustomImageLocked(false)
+  } else if (source !== 'custom' && linodeCustomImageInputEl) {
+    linodeCustomImageInputEl.value = ''
+    setLinodeCustomImageLocked(true)
+  }
+  editorStatusBoxEl.textContent = `Selected ${row?.querySelector('.text-sm')?.textContent || 'image source'} for Linode Docker.`
+  clearValidationError()
+})
+linodeSshRootPasswordToggleEl?.addEventListener('click', toggleLinodeSshRootPasswordVisibility)
+linodeSshRootPasswordGenerateBtnEl?.addEventListener('click', () => {
+  if (submitting || !linodeSshRootPasswordInputEl) {
+    return
+  }
+  if (String(linodeSshRootPasswordInputEl.value || '').trim()) {
+    renderLinodeSshRootPasswordGenerateState()
+    return
+  }
+  linodeSshRootPasswordInputEl.value = generateLinodeRootPassword()
+  linodeSshRootPasswordInputEl.type = 'password'
+  if (linodeSshRootPasswordToggleEl) {
+    linodeSshRootPasswordToggleEl.textContent = 'Show'
+  }
+  renderLinodeSshRootPasswordGenerateState()
+  clearValidationError()
+  editorStatusBoxEl.textContent = 'Generated a Linode root SSH password that fits Linode length and character-class rules.'
 })
 hostedRdsPasswordLockToggleEl?.addEventListener('mousedown', event => {
   event.preventDefault()
@@ -2371,7 +2814,7 @@ setupRootEl.addEventListener('rancher-control-panel-booting', event => {
 })
 
 setupRootEl.addEventListener('rancher-control-panel-lifecycle', event => {
-  setPanelLifecycleState(Boolean(event.detail?.busy), event.detail?.message || '')
+  setPanelLifecycleState(event.detail || {})
 })
 
 renderEditableConfig()

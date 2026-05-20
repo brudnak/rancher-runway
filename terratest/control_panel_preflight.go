@@ -58,7 +58,11 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 		blockers = append(blockers, err.Error())
 	}
 	totalInstances := configuredRancherInstanceCount()
-	if isHostedTenantK3SDeployment() {
+	if isLinodeDockerDeployment() {
+		if totalInstances < 1 {
+			blockers = append(blockers, "total_has must be at least 1")
+		}
+	} else if isHostedTenantK3SDeployment() {
 		if totalInstances < hostedTenantMinInstances {
 			blockers = append(blockers, "total_rancher_instances must be at least 2")
 		} else if totalInstances > hostedTenantMaxInstances {
@@ -73,7 +77,11 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 	case "auto":
 		blockers = append(blockers, panelAutoModeConfigBlockers(totalInstances)...)
 	case "manual":
-		blockers = append(blockers, panelManualModeConfigBlockers(totalInstances)...)
+		if isLinodeDockerDeployment() {
+			blockers = append(blockers, "rancher.mode must be auto for linode-docker-cattle")
+		} else {
+			blockers = append(blockers, panelManualModeConfigBlockers(totalInstances)...)
+		}
 	default:
 		blockers = append(blockers, fmt.Sprintf("rancher.mode must be auto or manual, got %q", mode))
 	}
@@ -86,7 +94,7 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 	if err := settings.ValidateOwnerConfig(); err != nil {
 		blockers = append(blockers, err.Error())
 	}
-	if !isHostedTenantK3SDeployment() {
+	if !isHostedTenantK3SDeployment() && !isLinodeDockerDeployment() {
 		if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
 			blockers = append(blockers, err.Error())
 		}
@@ -99,19 +107,34 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 		}
 	}
 
-	for _, key := range []string{
-		"tf_vars.aws_vpc",
-		"tf_vars.aws_subnet_a",
-		"tf_vars.aws_subnet_b",
-		"tf_vars.aws_subnet_c",
-		"tf_vars.aws_ami",
-		"tf_vars.aws_subnet_id",
-		"tf_vars.aws_security_group_id",
-		"tf_vars.aws_pem_key_name",
+	requiredTFVars := []string{
 		"tf_vars.aws_route53_fqdn",
-	} {
+	}
+	if !isLinodeDockerDeployment() {
+		requiredTFVars = append(requiredTFVars,
+			"tf_vars.aws_vpc",
+			"tf_vars.aws_subnet_a",
+			"tf_vars.aws_subnet_b",
+			"tf_vars.aws_subnet_c",
+			"tf_vars.aws_ami",
+			"tf_vars.aws_subnet_id",
+			"tf_vars.aws_security_group_id",
+			"tf_vars.aws_pem_key_name",
+		)
+	}
+	for _, key := range requiredTFVars {
 		if strings.TrimSpace(viper.GetString(key)) == "" {
 			blockers = append(blockers, key)
+		}
+	}
+	if isLinodeDockerDeployment() {
+		if strings.TrimSpace(linodeAccessToken()) == "" {
+			blockers = append(blockers, "LINODE_TOKEN or linode.access_token")
+		}
+		if password := strings.TrimSpace(linodeRootPassword()); password == "" {
+			blockers = append(blockers, "linode.ssh_root_password")
+		} else if err := validateLinodeRootPassword(password); err != nil {
+			blockers = append(blockers, err.Error())
 		}
 	}
 

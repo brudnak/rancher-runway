@@ -17,6 +17,10 @@ func TestHaSetup(t *testing.T) {
 	if err := validateDeploymentType(); err != nil {
 		t.Fatalf("Deployment config preflight failed: %v", err)
 	}
+	if isLinodeDockerDeployment() {
+		runLinodeDockerSetup(t)
+		return
+	}
 	if isHostedTenantK3SDeployment() {
 		runHostedTenantSetup(t)
 		return
@@ -144,7 +148,9 @@ func TestHACleanup(t *testing.T) {
 
 	var costEstimate *cleanupCostEstimate
 	outputs, outputsErr := getTerraformOutputsE(t, terraformOptions)
-	if outputsErr != nil {
+	if isLinodeDockerDeployment() {
+		log.Printf("[cleanup] Skipping AWS runtime cost estimate for Linode Docker Rancher run")
+	} else if outputsErr != nil {
 		log.Printf("[cleanup] Terraform outputs unavailable before destroy, likely no infrastructure was applied yet: %v", outputsErr)
 		var estimateErr error
 		costEstimate, estimateErr = estimateCurrentRunCostFromRecordedAWSResources()
@@ -162,7 +168,9 @@ func TestHACleanup(t *testing.T) {
 		t.Fatalf("Terraform destroy failed: %v", err)
 	}
 
-	if isHostedTenantK3SDeployment() {
+	if isLinodeDockerDeployment() {
+		log.Printf("[cleanup] Linode Docker run destroyed; no local HA kubeconfigs to remove")
+	} else if isHostedTenantK3SDeployment() {
 		cleanupHostedTenantInstances(totalHAs)
 	} else {
 		for i := 1; i <= totalHAs; i++ {

@@ -170,9 +170,11 @@ func InspectLocalWorkspace(repoRoot string) (LocalWorkspaceStatus, error) {
 		Preflight:  localWorkspacePreflight(preflight),
 		Clusters:   localWorkspaceClusters(clusters),
 		Operations: map[string]LocalWorkspaceOperation{
-			string(panelOperationSetup):     localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationSetup, activeRunIDs)),
-			string(panelOperationReadiness): localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs)),
-			string(panelOperationCleanup):   localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs)),
+			string(panelOperationSetup):         localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationSetup, activeRunIDs)),
+			string(panelOperationReadiness):     localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs)),
+			string(panelOperationCleanup):       localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs)),
+			string(panelOperationLinodeSetup):   localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationLinodeSetup, activeRunIDs)),
+			string(panelOperationLinodeCleanup): localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationLinodeCleanup, activeRunIDs)),
 		},
 	}, nil
 }

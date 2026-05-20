@@ -40,6 +40,9 @@ func terraformModuleDir() string {
 	if dir := strings.TrimSpace(os.Getenv(terraformModuleDirEnv)); dir != "" {
 		return dir
 	}
+	if isLinodeDockerDeployment() {
+		return "../modules/linode-docker-cattle"
+	}
 	return "../modules/aws"
 }
 

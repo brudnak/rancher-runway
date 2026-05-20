@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 //go:embed system_readiness.json
@@ -57,7 +59,7 @@ type systemReadinessItem struct {
 
 func collectSystemReadiness(configPath string) systemReadinessState {
 	cfg := loadSystemReadinessConfig()
-	items := make([]systemReadinessItem, 0, len(cfg.Tools)+len(cfg.RequiredEnv)+len(cfg.OptionalEnvPairs)+1)
+	items := make([]systemReadinessItem, 0, len(cfg.Tools)+len(cfg.RequiredEnv)+len(cfg.OptionalEnvPairs)+3)
 
 	for _, tool := range cfg.Tools {
 		items = append(items, checkSystemReadinessTool(tool))
@@ -73,6 +75,7 @@ func collectSystemReadiness(configPath string) systemReadinessState {
 	for _, pair := range cfg.OptionalEnvPairs {
 		items = append(items, checkOptionalEnvPairReadiness(pair))
 	}
+	items = append(items, deploymentSecretReadinessItems()...)
 
 	ready := true
 	warnings := 0
@@ -279,6 +282,48 @@ func checkOptionalEnvPairReadiness(pair systemReadinessEnvPairConfig) systemRead
 	default:
 		item.Status = "warning"
 		item.Detail = fmt.Sprintf("Partially set. Either set all or none: %s. Values are hidden.", strings.Join(pair.Keys, ", "))
+	}
+	return item
+}
+
+func deploymentSecretReadinessItems() []systemReadinessItem {
+	if !isLinodeDockerDeployment() {
+		return nil
+	}
+	return []systemReadinessItem{
+		checkSecretSourceReadiness(
+			"Linode API token",
+			[]string{"LINODE_TOKEN", "LINODE_ACCESS_TOKEN"},
+			[]string{"linode.access_token"},
+			"Set export LINODE_TOKEN=... in ~/.zprofile, or set linode.access_token in tool-config.yml.",
+		),
+	}
+}
+
+func checkSecretSourceReadiness(name string, envKeys []string, configKeys []string, missingDetail string) systemReadinessItem {
+	item := systemReadinessItem{Name: name}
+	checked := append([]string{}, envKeys...)
+	checked = append(checked, configKeys...)
+
+	for _, key := range envKeys {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			item.Status = "ok"
+			item.Detail = fmt.Sprintf("Set. Value is hidden. Checked %s.", strings.Join(checked, ", "))
+			return item
+		}
+	}
+	for _, key := range configKeys {
+		if strings.TrimSpace(viper.GetString(key)) != "" {
+			item.Status = "ok"
+			item.Detail = fmt.Sprintf("Set in config. Value is hidden. Checked %s.", strings.Join(checked, ", "))
+			return item
+		}
+	}
+
+	item.Status = "error"
+	item.Detail = strings.TrimSpace(missingDetail)
+	if item.Detail == "" {
+		item.Detail = fmt.Sprintf("Missing. Set one of %s. Value will not be displayed.", strings.Join(checked, ", "))
 	}
 	return item
 }

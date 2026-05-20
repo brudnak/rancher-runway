@@ -106,7 +106,7 @@ func resolveRancherSetup() ([]*RancherResolvedPlan, error) {
 	if totalHAs < 1 {
 		return nil, fmt.Errorf("configured Rancher instance count must be at least 1")
 	}
-	if !isHostedTenantK3SDeployment() {
+	if !isHostedTenantK3SDeployment() && !isLinodeDockerDeployment() {
 		if err := settings.ValidateCustomHostnameConfig(totalHAs); err != nil {
 			return nil, err
 		}
@@ -116,6 +116,8 @@ func resolveRancherSetup() ([]*RancherResolvedPlan, error) {
 	var err error
 	if isHostedTenantK3SDeployment() {
 		plans, err = prepareHostedTenantRancherConfiguration(totalHAs)
+	} else if isLinodeDockerDeployment() {
+		plans, err = prepareLinodeDockerPlans(totalHAs)
 	} else {
 		plans, err = prepareRancherConfiguration(totalHAs)
 	}
@@ -292,6 +294,34 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 		}
 		writeJSON(w, map[string]any{
 			"results": recommendManualRKE2Versions(req.HelmCommands),
+		})
+	})
+
+	mux.HandleFunc(interactiveSetupPath(basePath, "/api/linode-image-search"), func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed: "+r.Method, http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Version     string `json:"version"`
+			CustomImage string `json:"customImage"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		tag, results, err := searchLinodeDockerImageSources(req.Version, req.CustomImage)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"tag":     tag,
+			"results": results,
 		})
 	})
 
@@ -660,6 +690,9 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 		ServerCount:           parseHTMLInt(r.FormValue("serverCount")),
 		HostedRDSPassword:     r.FormValue("hostedRDSPassword"),
 		HostedEC2InstanceType: r.FormValue("hostedEC2InstanceType"),
+		LinodeDockerHub:       r.FormValue("linodeDockerHub"),
+		LinodeCustomImage:     r.FormValue("linodeCustomImage"),
+		LinodeSSHRootPassword: r.FormValue("linodeSSHRootPassword"),
 		UserFirstName:         r.FormValue("userFirstName"),
 		UserLastName:          r.FormValue("userLastName"),
 		TFVars:                tfVars,
@@ -699,13 +732,15 @@ func (s *interactiveServer) runResolution() {
 
 	totalHAs := configuredRancherInstanceCount()
 	var err error
-	if !isHostedTenantK3SDeployment() {
+	if !isHostedTenantK3SDeployment() && !isLinodeDockerDeployment() {
 		err = settings.ValidateCustomHostnameConfig(totalHAs)
 	}
 	var plans []*RancherResolvedPlan
 	if err == nil {
 		if isHostedTenantK3SDeployment() {
 			plans, err = prepareHostedTenantRancherConfiguration(totalHAs)
+		} else if isLinodeDockerDeployment() {
+			plans, err = prepareLinodeDockerPlans(totalHAs)
 		} else {
 			plans, err = prepareRancherConfiguration(totalHAs)
 		}

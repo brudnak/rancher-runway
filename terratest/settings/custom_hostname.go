@@ -28,6 +28,9 @@ type PreflightConfigUpdate struct {
 	ServerCount           int               `json:"serverCount"`
 	HostedRDSPassword     string            `json:"hostedRDSPassword"`
 	HostedEC2InstanceType string            `json:"hostedEC2InstanceType"`
+	LinodeDockerHub       string            `json:"linodeDockerHub"`
+	LinodeCustomImage     string            `json:"linodeCustomImage"`
+	LinodeSSHRootPassword string            `json:"linodeSSHRootPassword"`
 	UserFirstName         string            `json:"userFirstName"`
 	UserLastName          string            `json:"userLastName"`
 	TFVars                map[string]string `json:"tfVars"`

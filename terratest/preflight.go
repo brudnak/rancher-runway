@@ -527,6 +527,8 @@ func loadSecretEnvironmentFromZProfile() {
 	desiredVars := []string{
 		"AWS_ACCESS_KEY_ID",
 		"AWS_SECRET_ACCESS_KEY",
+		"LINODE_TOKEN",
+		"LINODE_ACCESS_TOKEN",
 		"DOCKERHUB_USERNAME",
 		"DOCKERHUB_PASSWORD",
 	}

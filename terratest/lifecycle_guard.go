@@ -13,6 +13,7 @@ var explicitLifecycleTests = []string{
 	"TestHAOverrideDownstreamWebhook",
 	"TestHAWaitWebhookChartVersion",
 	"TestHAWaitReady",
+	"TestLinodeDockerWaitReady",
 	"TestHAUpgradeRancher",
 	"TestHaSetup",
 	"TestHACleanup",

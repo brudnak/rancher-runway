@@ -3,6 +3,7 @@ package test
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,14 +67,16 @@ type ControlPanelServer struct {
 }
 
 type panelState struct {
-	Panel     panelSessionState      `json:"panel"`
-	Workspace panelWorkspaceState    `json:"workspace"`
-	Setup     panelOperationSnapshot `json:"setup"`
-	Readiness panelOperationSnapshot `json:"readiness"`
-	Clusters  panelClusterState      `json:"clusters"`
-	AWS       panelAWSInventoryState `json:"aws"`
-	Cleanup   panelOperationSnapshot `json:"cleanup"`
-	Costs     panelCostHistoryState  `json:"costs"`
+	Panel         panelSessionState      `json:"panel"`
+	Workspace     panelWorkspaceState    `json:"workspace"`
+	Setup         panelOperationSnapshot `json:"setup"`
+	Readiness     panelOperationSnapshot `json:"readiness"`
+	LinodeSetup   panelOperationSnapshot `json:"linodeSetup"`
+	LinodeCleanup panelOperationSnapshot `json:"linodeCleanup"`
+	Clusters      panelClusterState      `json:"clusters"`
+	AWS           panelAWSInventoryState `json:"aws"`
+	Cleanup       panelOperationSnapshot `json:"cleanup"`
+	Costs         panelCostHistoryState  `json:"costs"`
 }
 
 type panelSessionState struct {
@@ -162,9 +165,11 @@ type panelOperationSnapshot struct {
 type panelOperationName string
 
 const (
-	panelOperationSetup     panelOperationName = "setup"
-	panelOperationReadiness panelOperationName = "readiness"
-	panelOperationCleanup   panelOperationName = "cleanup"
+	panelOperationSetup         panelOperationName = "setup"
+	panelOperationReadiness     panelOperationName = "readiness"
+	panelOperationCleanup       panelOperationName = "cleanup"
+	panelOperationLinodeSetup   panelOperationName = "linodeSetup"
+	panelOperationLinodeCleanup panelOperationName = "linodeCleanup"
 )
 
 type panelOperationState struct {
@@ -1075,9 +1080,9 @@ func (p *localControlPanel) handleAbortOperation(w http.ResponseWriter, r *http.
 
 	operation := panelOperationName(strings.TrimSpace(strings.ToLower(req.Operation)))
 	switch operation {
-	case panelOperationSetup, panelOperationReadiness, panelOperationCleanup:
+	case panelOperationSetup, panelOperationReadiness, panelOperationCleanup, panelOperationLinodeSetup, panelOperationLinodeCleanup:
 	default:
-		http.Error(w, "operation must be setup, readiness, or cleanup", http.StatusBadRequest)
+		http.Error(w, "operation must be setup, readiness, cleanup, linodeSetup, or linodeCleanup", http.StatusBadRequest)
 		return
 	}
 
@@ -1247,9 +1252,11 @@ func (p *localControlPanel) buildState() panelState {
 			StarterConfigCreated: p.starterConfigCreated,
 			Build:                buildinfo.Current(),
 		},
-		Workspace: workspace,
-		Setup:     p.snapshotOperationForRuns(panelOperationSetup, activeRunIDs),
-		Readiness: p.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs),
+		Workspace:     workspace,
+		Setup:         p.snapshotOperationForRuns(panelOperationSetup, activeRunIDs),
+		Readiness:     p.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs),
+		LinodeSetup:   p.snapshotOperationForRuns(panelOperationLinodeSetup, activeRunIDs),
+		LinodeCleanup: p.snapshotOperationForRuns(panelOperationLinodeCleanup, activeRunIDs),
 		Clusters: panelClusterState{
 			Items: clusters,
 		},
@@ -1277,7 +1284,7 @@ func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, ac
 		op.Output = append(op.Output, "[control-panel] Operation process exited before reporting completion; status marked stale.")
 		p.persistOperationsLocked()
 	}
-	recentCleanup := name == panelOperationCleanup && op.FinishedAt != nil && op.Error == "" && time.Since(*op.FinishedAt) < time.Hour
+	recentCleanup := (name == panelOperationCleanup || name == panelOperationLinodeCleanup) && op.FinishedAt != nil && op.Error == "" && time.Since(*op.FinishedAt) < time.Hour
 	if activeRunIDs != nil && !op.Running && op.RunID != "" && !activeRunIDs[safeRunPathSegment(op.RunID)] && !recentCleanup {
 		return panelOperationSnapshot{Output: []string{}}
 	}
@@ -1323,8 +1330,11 @@ func (p *localControlPanel) discoverClusters() []clusterView {
 
 func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clusterView {
 	outputs, _ := readTerraformFlatOutputsWithModule(p.repoRoot, record.TerraformStatePath, record.TerraformDataDir, record.TerraformModuleDir)
-	if recordDeploymentType(record, outputs) == deploymentTypeHostedTenantK3S {
+	switch recordDeploymentType(record, outputs) {
+	case deploymentTypeHostedTenantK3S:
 		return p.discoverHostedTenantClustersForRun(record, outputs)
+	case deploymentTypeLinodeDocker:
+		return p.discoverLinodeDockerClustersForRun(record, outputs)
 	}
 	versions := record.RancherVersions
 	if len(versions) == 0 {
@@ -1408,6 +1418,115 @@ func recordDeploymentType(record panelRunRecord, outputs map[string]string) stri
 		return deploymentTypeHostedTenantK3S
 	}
 	return deploymentType()
+}
+
+func (p *localControlPanel) discoverLinodeDockerClustersForRun(record panelRunRecord, outputs map[string]string) []clusterView {
+	versions := record.RancherVersions
+	if len(versions) == 0 {
+		versions = readRequestedRancherVersionsForPanel(p.totalHAs)
+	}
+	setupRunning := p.operationRunning(panelOperationLinodeSetup)
+	runID := safeRunPathSegment(record.RunID)
+	total := record.TotalHAs
+	if total < 1 {
+		total = len(versions)
+	}
+	if total < 1 {
+		total = 1
+	}
+
+	clusters := make([]clusterView, 0, total)
+	for i := 1; i <= total; i++ {
+		rancherURL := ""
+		ip := ""
+		if outputs != nil {
+			rancherURL = clickableURL(outputs[fmt.Sprintf("linode_%d_rancher_url", i)])
+			ip = outputs[fmt.Sprintf("linode_%d_ip", i)]
+		}
+		if rancherURL == "" && ip == "" && !setupRunning {
+			continue
+		}
+		cluster := clusterView{
+			ID:             runScopedClusterName(runID, fmt.Sprintf("linode-docker-%d", i)),
+			RunID:          runID,
+			Type:           "linode",
+			DeploymentType: deploymentTypeLinodeDocker,
+			Role:           "docker",
+			HAIndex:        i,
+			Name:           runScopedClusterName(runID, fmt.Sprintf("Docker Rancher %d", i)),
+			RancherURL:     rancherURL,
+			LoadBalancer:   ip,
+			Available:      rancherURL != "" || ip != "",
+		}
+		if len(versions) >= i {
+			cluster.Version = versions[i-1]
+		}
+		if setupRunning && !cluster.Available {
+			cluster.Provisioning = true
+			cluster.ProvisioningMessage = "Linode setup is running. The Rancher URL will appear after Terraform apply completes."
+			cluster.Error = "waiting for Linode output"
+		}
+		if cluster.Available && rancherURL != "" && linodeDockerRancherHTTPReachable(rancherURL) {
+			cluster.Reachable = true
+		}
+		clusters = append(clusters, cluster)
+	}
+	return clusters
+}
+
+func linodeDockerRancherHTTPReachable(rancherURL string) bool {
+	rancherURL = strings.TrimSpace(rancherURL)
+	if rancherURL == "" {
+		return false
+	}
+	client := &http.Client{
+		Timeout: 1500 * time.Millisecond,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	ready, _ := rancherHTTPReadyForPanel(client, rancherURL)
+	return ready
+}
+
+func rancherHTTPReadyForPanel(client *http.Client, rancherURL string) (bool, string) {
+	rootStatus, rootErr := rancherHTTPStatusForPanel(client, rancherURL)
+	if rootErr != nil {
+		return false, fmt.Sprintf("root error: %v", rootErr)
+	}
+	apiStatus, apiErr := rancherHTTPStatusForPanel(client, strings.TrimRight(rancherURL, "/")+"/v3")
+	if apiErr != nil {
+		return false, fmt.Sprintf("root=%d api error: %v", rootStatus, apiErr)
+	}
+	if rancherHTTPStatusReadyForPanel(rootStatus) && rancherHTTPStatusReadyForPanel(apiStatus) {
+		return true, fmt.Sprintf("root=%d api=%d", rootStatus, apiStatus)
+	}
+	return false, fmt.Sprintf("root=%d api=%d", rootStatus, apiStatus)
+}
+
+func rancherHTTPStatusForPanel(client *http.Client, target string) (int, error) {
+	resp, err := client.Get(target)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+func rancherHTTPStatusReadyForPanel(status int) bool {
+	switch status {
+	case http.StatusOK,
+		http.StatusMovedPermanently,
+		http.StatusFound,
+		http.StatusTemporaryRedirect,
+		http.StatusPermanentRedirect,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusNotFound:
+		return true
+	default:
+		return false
+	}
 }
 
 func (p *localControlPanel) discoverHostedTenantClustersForRun(record panelRunRecord, outputs map[string]string) []clusterView {

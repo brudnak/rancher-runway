@@ -60,6 +60,99 @@ func TestHAWaitReady(t *testing.T) {
 	}
 }
 
+func TestLinodeDockerWaitReady(t *testing.T) {
+	requireExplicitLifecycleTest(t, "TestLinodeDockerWaitReady")
+	setupConfig(t)
+	if !isLinodeDockerDeployment() {
+		t.Skip("deployment.type is not linode-docker-cattle")
+	}
+
+	totalInstances := configuredRancherInstanceCount()
+	if totalInstances < 1 {
+		t.Fatal("linode-docker-cattle requires at least one Rancher instance")
+	}
+
+	terraformOptions := getTerraformOptions(t, totalInstances)
+	outputs := getTerraformOutputs(t, terraformOptions)
+	if len(outputs) == 0 {
+		t.Fatal("No outputs received from terraform")
+	}
+
+	timeout := durationFromEnv("RANCHER_READY_TIMEOUT", 25*time.Minute)
+	initialDelay := durationFromEnv("RANCHER_READY_INITIAL_DELAY", 30*time.Second)
+	settleDelay := durationFromEnv("RANCHER_READY_SETTLE_DELAY", 30*time.Second)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, totalInstances)
+	for i := 1; i <= totalInstances; i++ {
+		instanceNum := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := waitForLinodeDockerReady(instanceNum, outputs, timeout, initialDelay, settleDelay); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	var failures []string
+	for err := range errCh {
+		failures = append(failures, err.Error())
+	}
+	if len(failures) > 0 {
+		t.Fatalf("Linode Docker Rancher readiness failed:\n%s", strings.Join(failures, "\n"))
+	}
+}
+
+func waitForLinodeDockerReady(instanceNum int, outputs map[string]string, timeout, initialDelay, settleDelay time.Duration) error {
+	rancherURL := clickableURL(outputs[fmt.Sprintf("linode_%d_rancher_url", instanceNum)])
+	linodeIP := strings.TrimSpace(outputs[fmt.Sprintf("linode_%d_ip", instanceNum)])
+
+	log.Printf("[ready][linode-docker-%d] Waiting for Rancher to become ready at %s", instanceNum, rancherURL)
+	if linodeIP != "" {
+		log.Printf("[ready][linode-docker-%d] Linode IP: %s", instanceNum, linodeIP)
+	}
+	log.Printf("[ready][linode-docker-%d] Initial delay: %s, timeout: %s", instanceNum, initialDelay, timeout)
+
+	if initialDelay > 0 {
+		time.Sleep(initialDelay)
+	}
+
+	client := rancherReadyHTTPClient()
+	deadline := time.Now().Add(timeout)
+	attempt := 0
+	consecutiveReady := 0
+
+	for time.Now().Before(deadline) {
+		attempt++
+		httpReady, httpSummary := rancherHTTPReady(client, rancherURL)
+		if httpReady {
+			consecutiveReady++
+			log.Printf("[ready][linode-docker-%d] Attempt %d ready check passed (%d/2): http=%s",
+				instanceNum, attempt, consecutiveReady, httpSummary)
+			if consecutiveReady >= 2 {
+				if settleDelay > 0 {
+					log.Printf("[ready][linode-docker-%d] Rancher is ready; settling for %s before continuing", instanceNum, settleDelay)
+					time.Sleep(settleDelay)
+				}
+				log.Printf("[ready][linode-docker-%d] Rancher readiness confirmed", instanceNum)
+				return nil
+			}
+		} else {
+			consecutiveReady = 0
+			log.Printf("[ready][linode-docker-%d] Attempt %d not ready yet: http=%s",
+				instanceNum, attempt, httpSummary)
+		}
+
+		time.Sleep(20 * time.Second)
+	}
+
+	return fmt.Errorf("[linode-docker-%d] timed out after %s waiting for Rancher HTTP readiness", instanceNum, timeout)
+}
+
 func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initialDelay, settleDelay time.Duration) error {
 	haOutputs := getHAOutputs(instanceNum, outputs)
 	rancherURL := clickableURL(haOutputs.RancherURL)

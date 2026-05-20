@@ -533,14 +533,14 @@ const logFilename = () => {
     return `readiness${filter}.log`
   }
 
-  if (activeLogContext?.mode === 'setup') {
+  if (activeLogContext?.mode === 'setup' || activeLogContext?.mode === 'linodeSetup') {
     const filter = logSearchEl.value.trim() ? '-filtered' : ''
-    return `setup${filter}.log`
+    return `${activeLogContext.mode === 'linodeSetup' ? 'linode-setup' : 'setup'}${filter}.log`
   }
 
-  if (activeLogContext?.mode === 'cleanup') {
+  if (activeLogContext?.mode === 'cleanup' || activeLogContext?.mode === 'linodeCleanup') {
     const filter = logSearchEl.value.trim() ? '-filtered' : ''
-    return `cleanup${filter}.log`
+    return `${activeLogContext.mode === 'linodeCleanup' ? 'linode-cleanup' : 'cleanup'}${filter}.log`
   }
 
   const pod = activeLogContext?.podName || 'pod'
@@ -568,10 +568,10 @@ const setActiveLogContext = (mode, clusterId, namespace, podName) => {
   openLogViewerBtnEl.classList.remove('hidden')
 }
 
-const setSetupLogContext = () => {
-  activeLogContext = { mode: 'setup', clusterId: 'local', namespace: 'terratest', podName: 'setup' }
-  logModalKindEl.textContent = 'Setup logs'
-  logModalTitleEl.textContent = 'Setup'
+const setSetupLogContext = (linode = false) => {
+  activeLogContext = { mode: linode ? 'linodeSetup' : 'setup', clusterId: linode ? 'linode' : 'local', namespace: 'terratest', podName: 'setup' }
+  logModalKindEl.textContent = linode ? 'Linode setup logs' : 'Setup logs'
+  logModalTitleEl.textContent = linode ? 'Linode setup' : 'Setup'
   logModalSubtitleEl.textContent = 'go test -v -run ^TestHaSetup$ -timeout 90m -count=1 ./terratest'
   openLogViewerBtnEl.classList.remove('hidden')
 }
@@ -584,10 +584,10 @@ const setReadinessLogContext = () => {
   openLogViewerBtnEl.classList.remove('hidden')
 }
 
-const setCleanupLogContext = () => {
-  activeLogContext = { mode: 'cleanup', clusterId: 'local', namespace: 'terratest', podName: 'cleanup' }
-  logModalKindEl.textContent = 'Destroy logs'
-  logModalTitleEl.textContent = 'Destroy run'
+const setCleanupLogContext = (linode = false) => {
+  activeLogContext = { mode: linode ? 'linodeCleanup' : 'cleanup', clusterId: linode ? 'linode' : 'local', namespace: 'terratest', podName: 'cleanup' }
+  logModalKindEl.textContent = linode ? 'Linode destroy logs' : 'Destroy logs'
+  logModalTitleEl.textContent = linode ? 'Linode destroy run' : 'Destroy run'
   logModalSubtitleEl.textContent = 'go test -v -run TestHACleanup -timeout 20m ./terratest'
   openLogViewerBtnEl.classList.remove('hidden')
 }
@@ -646,7 +646,9 @@ const operationSummaryForState = state => {
   const operations = [
     ['setup', 'Setup', state?.setup],
     ['readiness', 'Readiness', state?.readiness],
-    ['cleanup', 'Destroy', state?.cleanup]
+    ['cleanup', 'Destroy', state?.cleanup],
+    ['linodeSetup', 'Linode setup', state?.linodeSetup],
+    ['linodeCleanup', 'Linode destroy', state?.linodeCleanup]
   ]
   const active = operations.find(([, , operation]) => operation?.running)
   if (active) {
@@ -708,7 +710,7 @@ const renderPanelTabBadges = state => {
   const clusters = clusterItems(state)
   const awsItems = Array.isArray(state?.aws?.items) ? state.aws.items : []
   const values = {
-    setup: state?.setup?.running ? 'Running' : '',
+    setup: state?.setup?.running ? 'AWS' : state?.linodeSetup?.running ? 'Linode' : '',
     runs: runs.length ? String(runs.length) : '',
     clusters: clusters.length ? String(clusters.length) : '',
     aws: awsItems.length ? String(awsItems.length) : '',
@@ -1120,15 +1122,19 @@ const renderWorkspace = workspace => {
             const stats = runClusterStats(run, lastState)
             const updated = run.updatedAt ? new Date(run.updatedAt).toLocaleTimeString() : ''
             const isCurrent = currentRunID && sameRunKey(run.runId, currentRunID)
-            const lifecycleBusy = lifecycleRunning(lastState) || bootStatePending
+            const linodeRun = runIsLinodeDocker(run)
+            const lifecycleBusy = (linodeRun ? linodeLifecycleRunning(lastState) : awsLifecycleRunning(lastState)) || bootStatePending
             const readinessDisabled = lifecycleBusy || !isCurrent
             const setupRunningForRun = lastState?.setup?.running && sameRunKey(lastState.setup.runId, run.runId)
+            const linodeSetupRunningForRun = lastState?.linodeSetup?.running && sameRunKey(lastState.linodeSetup.runId, run.runId)
             const readinessRunningForRun = lastState?.readiness?.running && sameRunKey(lastState.readiness.runId, run.runId)
             const failedRun = runHasFailure(run)
             const readinessTitle = bootStatePending
               ? 'Startup safety check is still running.'
-              : lifecycleRunning(lastState)
+              : (linodeRun ? linodeLifecycleRunning(lastState) : awsLifecycleRunning(lastState))
                 ? 'Wait for the active lifecycle operation to finish.'
+                : linodeRun
+                  ? 'Readiness checks are not needed for Docker Rancher runs.'
                 : !isCurrent
                   ? 'Readiness currently runs against the active/current slot only.'
                   : 'Check readiness for the current run.'
@@ -1170,12 +1176,12 @@ const renderWorkspace = workspace => {
                   </div>
                   <div class="run-action-rail flex shrink-0 flex-wrap gap-2 xl:max-w-[26rem]">
                     ${renderRunActionButton({ action: 'view-clusters', runId: run.runId, label: 'View clusters', variant: stats.total ? 'primary' : 'secondary', disabled: !stats.total, title: stats.total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.' })}
-                    ${renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled, title: readinessTitle })}
+                    ${renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled || linodeRun, title: readinessTitle })}
                     ${renderRunActionButton({ action: 'open-run-folder', runId: run.runId, label: 'Open folder', disabled: !runFolderAvailable(run), title: runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.' })}
                     ${renderRunActionButton({ action: 'copy-terraform-path', runId: run.runId, label: 'Copy TF path', disabled: !runTerraformPath(run), title: runTerraformPath(run) ? 'Copy the Terraform module/state path for this run.' : 'Terraform path is not recorded yet.' })}
                     ${renderRunActionButton({ action: 'open-setup-logs', runId: run.runId, label: 'Setup logs' })}
                     ${renderRunActionButton({ action: 'open-readiness-logs', runId: run.runId, label: 'Readiness logs' })}
-                    ${setupRunningForRun ? renderRunActionButton({ action: 'stop-setup-open-destroy', runId: run.runId, label: 'Stop setup, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping setup and opening Destroy.' }) : ''}
+                    ${setupRunningForRun || linodeSetupRunningForRun ? renderRunActionButton({ action: 'stop-setup-open-destroy', runId: run.runId, label: 'Stop setup, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping setup and opening Destroy.' }) : ''}
                     ${readinessRunningForRun ? renderRunActionButton({ action: 'stop-readiness-open-destroy', runId: run.runId, label: 'Stop readiness, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping readiness and opening Destroy.' }) : ''}
                     ${renderRunActionButton({ action: 'open-destroy', runId: run.runId, label: failedRun ? 'Destroy failed run' : 'Destroy', variant: 'danger', disabled: lifecycleBusy, title: lifecycleBusy ? 'Wait for the active lifecycle operation to finish.' : 'Open the Destroy tab for this slot.' })}
                   </div>
@@ -1198,10 +1204,12 @@ const renderDestroySlots = workspace => {
 
   const runs = Array.isArray(workspace?.runs) ? workspace.runs : []
   const cleanup = lastState?.cleanup || {}
+  const linodeCleanup = lastState?.linodeCleanup || {}
   const cleanupRunning = Boolean(cleanup.running)
+  const linodeCleanupRunning = Boolean(linodeCleanup.running)
   const setupRunning = Boolean(lastState?.setup?.running)
+  const linodeSetupRunning = Boolean(lastState?.linodeSetup?.running)
   const readinessRunning = Boolean(lastState?.readiness?.running)
-  const lifecycleBusy = bootStatePending || setupRunning || readinessRunning || cleanupRunning
 
   if (!runs.length) {
     if (bootStatePending) {
@@ -1221,8 +1229,12 @@ const renderDestroySlots = workspace => {
   }
 
   const cards = runs.map(run => {
+    const linodeRun = runIsLinodeDocker(run)
+    const runSetupRunning = linodeRun ? linodeSetupRunning : setupRunning
+    const runCleanupRunning = linodeRun ? linodeCleanupRunning : cleanupRunning
+    const runCleanup = linodeRun ? linodeCleanup : cleanup
     const pendingDestroy = cleanupStarting && selectedCleanupRunId === run.runId
-    const destroying = cleanupRunning && cleanup.runId === run.runId
+    const destroying = runCleanupRunning && runCleanup.runId === run.runId
     const selected = selectedCleanupRunId && sameRunKey(selectedCleanupRunId, run.runId)
     const versions = Array.isArray(run.rancherVersions) && run.rancherVersions.length
       ? run.rancherVersions.join(', ')
@@ -1237,21 +1249,21 @@ const renderDestroySlots = workspace => {
           ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Starting destroy'
           : bootStatePending
             ? 'Checking state'
-            : setupRunning
+            : runSetupRunning
               ? 'Setup running'
-              : readinessRunning
+              : !linodeRun && readinessRunning
                 ? 'Readiness running'
-                : cleanupRunning
+                : runCleanupRunning
                   ? 'Destroy running'
                   : 'Destroy this slot'
-    const disabled = lifecycleBusy || cleanupStarting
+    const disabled = bootStatePending || runSetupRunning || (!linodeRun && readinessRunning) || runCleanupRunning || cleanupStarting
     const disabledTitle = bootStatePending
       ? 'Startup safety check is still loading run slots and operation state.'
-      : setupRunning
+      : runSetupRunning
       ? 'Wait for setup to finish before destroying a run slot.'
-      : readinessRunning
+      : !linodeRun && readinessRunning
         ? 'Wait for readiness checks to finish before destroying a run slot.'
-        : cleanupRunning
+        : runCleanupRunning
           ? 'Wait for the current destroy to finish before starting another one.'
           : cleanupStarting
             ? 'Destroy request is being submitted.'
@@ -1307,31 +1319,83 @@ const renderDestroySlots = workspace => {
   `
 }
 
-const lifecycleRunning = state => Boolean(state?.setup?.running || state?.readiness?.running || state?.cleanup?.running)
+const awsLifecycleRunning = state => Boolean(state?.setup?.running || state?.readiness?.running || state?.cleanup?.running)
+const linodeLifecycleRunning = state => Boolean(state?.linodeSetup?.running || state?.linodeCleanup?.running)
+const lifecycleRunning = state => Boolean(awsLifecycleRunning(state) || linodeLifecycleRunning(state))
+const runIsLinodeDocker = run => run?.deploymentType === 'linode-docker-cattle'
+const runDestroyBlocked = run => runIsLinodeDocker(run) ? linodeLifecycleRunning(lastState) : awsLifecycleRunning(lastState)
 
 const lifecycleBusyDetail = state => {
   if (state?.setup?.running) {
     return {
       busy: true,
       operation: 'setup',
-      message: 'Setup is running. New setup actions are locked until the current AWS lifecycle operation finishes.'
+      message: 'Setup is running. New AWS setup actions are locked, but Linode Docker setup can run in parallel.',
+      busyByDeployment: {
+        'ha-rke2': true,
+        'hosted-tenant-k3s': true,
+        'linode-docker-cattle': linodeLifecycleRunning(state)
+      }
     }
   }
   if (state?.readiness?.running) {
     return {
       busy: true,
       operation: 'readiness',
-      message: 'Readiness checks are running. New setup actions are locked until the current lifecycle operation finishes.'
+      message: 'Readiness checks are running. AWS actions are locked, but Linode Docker setup can run in parallel.',
+      busyByDeployment: {
+        'ha-rke2': true,
+        'hosted-tenant-k3s': true,
+        'linode-docker-cattle': linodeLifecycleRunning(state)
+      }
     }
   }
   if (state?.cleanup?.running) {
     return {
       busy: true,
       operation: 'destroy',
-      message: 'Destroy is running. New setup actions are locked until the current lifecycle operation finishes.'
+      message: 'Destroy is running. AWS actions are locked, but Linode Docker setup can run in parallel.',
+      busyByDeployment: {
+        'ha-rke2': true,
+        'hosted-tenant-k3s': true,
+        'linode-docker-cattle': linodeLifecycleRunning(state)
+      }
     }
   }
-  return { busy: false, operation: '', message: '' }
+  if (state?.linodeSetup?.running) {
+    return {
+      busy: true,
+      operation: 'linodeSetup',
+      message: 'Linode setup is running. AWS setup and destroy can still run in their own lane.',
+      busyByDeployment: {
+        'ha-rke2': awsLifecycleRunning(state),
+        'hosted-tenant-k3s': awsLifecycleRunning(state),
+        'linode-docker-cattle': true
+      }
+    }
+  }
+  if (state?.linodeCleanup?.running) {
+    return {
+      busy: true,
+      operation: 'linodeCleanup',
+      message: 'Linode destroy is running. AWS setup and destroy can still run in their own lane.',
+      busyByDeployment: {
+        'ha-rke2': awsLifecycleRunning(state),
+        'hosted-tenant-k3s': awsLifecycleRunning(state),
+        'linode-docker-cattle': true
+      }
+    }
+  }
+  return {
+    busy: false,
+    operation: '',
+    message: '',
+    busyByDeployment: {
+      'ha-rke2': awsLifecycleRunning(state),
+      'hosted-tenant-k3s': awsLifecycleRunning(state),
+      'linode-docker-cattle': linodeLifecycleRunning(state)
+    }
+  }
 }
 
 const dispatchSetupLifecycleState = state => {
@@ -1950,10 +2014,10 @@ const renderCleanup = cleanup => {
 
   renderCleanupCost(cleanup, output)
 
-  if (activeLogContext?.mode === 'cleanup') {
+  if (activeLogContext?.mode === 'cleanup' || activeLogContext?.mode === 'linodeCleanup') {
     const wasNearBottom = logBoxEl.scrollHeight - logBoxEl.scrollTop - logBoxEl.clientHeight < 80
     rawLogText = output.join('\n')
-    setLiveLogState(cleanup?.running ? 'cleanupRunning' : cleanup?.error ? 'cleanupError' : cleanup?.finishedAt ? 'cleanupDone' : 'idle')
+    setLiveLogState(cleanup?.running ? (activeLogContext.mode === 'linodeCleanup' ? 'linodeCleanupRunning' : 'cleanupRunning') : cleanup?.error ? 'cleanupError' : cleanup?.finishedAt ? 'cleanupDone' : 'idle')
     renderLogViewer()
     if (wasNearBottom && !logSearchEl.value.trim()) {
       logBoxEl.scrollTop = logBoxEl.scrollHeight
@@ -1994,7 +2058,7 @@ const refresh = async () => {
     if (pendingAbortOperation && !state?.[pendingAbortOperation]?.running) {
       pendingAbortOperation = ''
     }
-    if (cleanupStarting && state?.cleanup?.running) {
+    if (cleanupStarting && (state?.cleanup?.running || state?.linodeCleanup?.running)) {
       cleanupStarting = false
     }
     if (bootStatePending) {
@@ -2010,7 +2074,7 @@ const refresh = async () => {
     renderAWSInventory(state.aws)
     renderSetup(state.setup)
     renderReadiness(state.readiness)
-    renderCleanup(state.cleanup)
+    renderCleanup(state.linodeCleanup?.running || state.linodeCleanup?.finishedAt || state.linodeCleanup?.error ? state.linodeCleanup : state.cleanup)
     renderCostHistory(state.costs)
     updateStopPanelState(state)
     refreshStatusEl.textContent = lastLeaderChangeMessage
@@ -2407,13 +2471,13 @@ const downloadLogs = () => {
   logStatusEl.textContent = `Downloaded ${link.download}`
 }
 
-const openSetupLogs = () => {
+const openSetupLogs = (linode = false) => {
   stopStream({ internal: true })
-  setSetupLogContext()
-  const setup = lastState?.setup || {}
+  setSetupLogContext(linode)
+  const setup = linode ? lastState?.linodeSetup || {} : lastState?.setup || {}
   const output = operationOutput(setup)
   rawLogText = output.join('\n')
-  setLiveLogState(setup.running ? 'setupRunning' : setup.error ? 'setupError' : setup.finishedAt ? 'setupDone' : 'idle')
+  setLiveLogState(setup.running ? (linode ? 'linodeSetupRunning' : 'setupRunning') : setup.error ? 'setupError' : setup.finishedAt ? 'setupDone' : 'idle')
   renderLogViewer()
   openLogModal()
   logBoxEl.scrollTop = logBoxEl.scrollHeight
@@ -2431,13 +2495,13 @@ const openReadinessLogs = () => {
   logBoxEl.scrollTop = logBoxEl.scrollHeight
 }
 
-const openCleanupLogs = () => {
+const openCleanupLogs = (linode = false) => {
   stopStream({ internal: true })
-  setCleanupLogContext()
-  const cleanup = lastState?.cleanup || {}
+  setCleanupLogContext(linode)
+  const cleanup = linode ? lastState?.linodeCleanup || {} : lastState?.cleanup || {}
   const output = operationOutput(cleanup)
   rawLogText = output.join('\n')
-  setLiveLogState(cleanup.running ? 'cleanupRunning' : cleanup.error ? 'cleanupError' : cleanup.finishedAt ? 'cleanupDone' : 'idle')
+  setLiveLogState(cleanup.running ? (linode ? 'linodeCleanupRunning' : 'cleanupRunning') : cleanup.error ? 'cleanupError' : cleanup.finishedAt ? 'cleanupDone' : 'idle')
   renderLogViewer()
   openLogModal()
   logBoxEl.scrollTop = logBoxEl.scrollHeight
@@ -2453,8 +2517,8 @@ const runSetup = async () => {
 const abortOperation = async (operation, runId = '', options = {}) => {
   if (!options.skipConfirmation) {
     const confirmed = await requestTypedConfirmation({
-      title: operation === 'setup' ? 'Stop setup process?' : `Stop ${operation}?`,
-      body: operation === 'setup'
+      title: operation === 'setup' || operation === 'linodeSetup' ? 'Stop setup process?' : `Stop ${operation}?`,
+      body: operation === 'setup' || operation === 'linodeSetup'
         ? 'This asks the local setup test process to stop and preserves Terraform state plus the run record. It does not destroy AWS resources.'
         : 'This asks the local operation process to stop and preserves Terraform state plus run records. It does not destroy AWS resources.',
       typedValue: 'stop',
@@ -2466,7 +2530,7 @@ const abortOperation = async (operation, runId = '', options = {}) => {
   }
 
   pendingAbortOperation = operation
-  if (lastState?.[operation]) {
+  if (lastState?.[operation] && (operation === 'setup' || operation === 'readiness')) {
     renderOperation(lastState[operation], operation === 'setup' ? setupOperationConfig : readinessOperationConfig)
   }
   refreshStatusEl.textContent = `Requesting stop for ${operation}...`
@@ -2562,19 +2626,28 @@ const runCleanup = async (runId = selectedCleanupRunId) => {
     return
   }
 
-  if (cleanupStarting || lastState?.cleanup?.running || lastState?.setup?.running || lastState?.readiness?.running) {
+  const targetRun = (lastState?.workspace?.runs || []).find(run => sameRunKey(run.runId, targetRunId))
+  const linodeRun = runIsLinodeDocker(targetRun)
+  const destroyBlocked = linodeRun
+    ? lastState?.linodeCleanup?.running || lastState?.linodeSetup?.running
+    : lastState?.cleanup?.running || lastState?.setup?.running || lastState?.readiness?.running
+  if (cleanupStarting || destroyBlocked) {
     cleanupStatusEl.className = 'inline-flex items-center justify-center rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-200'
-    cleanupStatusEl.textContent = lastState?.setup?.running
-      ? 'Setup is running'
-      : lastState?.readiness?.running
-        ? 'Readiness is running'
-        : 'Destroy is running'
+    cleanupStatusEl.textContent = linodeRun
+      ? lastState?.linodeSetup?.running ? 'Linode setup is running' : 'Linode destroy is running'
+      : lastState?.setup?.running
+        ? 'Setup is running'
+        : lastState?.readiness?.running
+          ? 'Readiness is running'
+          : 'Destroy is running'
     return
   }
 
   const confirmed = await requestTypedConfirmation({
     title: `Destroy run ${targetRunId}?`,
-    body: 'This runs Terraform destroy from the selected run state. It is intended to delete AWS resources for that run, then remove the run slot only after destroy succeeds.',
+    body: linodeRun
+      ? 'This runs Terraform destroy from the selected Linode run state. It deletes the Linode instance and its AWS Route53 record, then removes the run slot only after destroy succeeds.'
+      : 'This runs Terraform destroy from the selected run state. It is intended to delete AWS resources for that run, then remove the run slot only after destroy succeeds.',
     typedValue: 'destroy',
     confirmText: 'Start destroy',
     accentText: 'AWS destroy confirmation'
@@ -2609,8 +2682,8 @@ const runCleanup = async (runId = selectedCleanupRunId) => {
   cleanupStatusEl.textContent = 'Destroy requested...'
   lastState = {
     ...(lastState || {}),
-    cleanup: {
-      ...(lastState?.cleanup || {}),
+    [linodeRun ? 'linodeCleanup' : 'cleanup']: {
+      ...(lastState?.[linodeRun ? 'linodeCleanup' : 'cleanup'] || {}),
       running: true,
       runId: targetRunId,
       output: ['[control-panel] Destroy requested...'],
@@ -2620,8 +2693,8 @@ const runCleanup = async (runId = selectedCleanupRunId) => {
   dispatchSetupLifecycleState(lastState)
   renderClusters(lastState)
   renderCleanup(lastState.cleanup)
-  setCleanupLogContext()
-  setLiveLogState('cleanupRunning')
+  setCleanupLogContext(linodeRun)
+  setLiveLogState(linodeRun ? 'linodeCleanupRunning' : 'cleanupRunning')
   rawLogText = '[control-panel] Destroy requested...'
   renderLogViewer()
   openLogModal()
@@ -2782,7 +2855,7 @@ workspaceRunMetaEl?.addEventListener('click', event => {
     return
   }
   if (action === 'open-setup-logs') {
-    openSetupLogs()
+    openSetupLogs(runIsLinodeDocker(run))
     return
   }
   if (action === 'open-readiness-logs') {
@@ -2790,7 +2863,7 @@ workspaceRunMetaEl?.addEventListener('click', event => {
     return
   }
   if (action === 'open-cleanup-logs') {
-    openCleanupLogs()
+    openCleanupLogs(runIsLinodeDocker(run))
     return
   }
   if (action === 'open-destroy') {
@@ -2805,7 +2878,7 @@ workspaceRunMetaEl?.addEventListener('click', event => {
     return
   }
   if (action === 'stop-setup-open-destroy') {
-    stopOperationThenOpenDestroy('setup', runId)
+    stopOperationThenOpenDestroy(runIsLinodeDocker(run) ? 'linodeSetup' : 'setup', runId)
     return
   }
   if (action === 'stop-readiness') {

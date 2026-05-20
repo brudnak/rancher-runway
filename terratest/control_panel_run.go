@@ -107,11 +107,16 @@ func (p *localControlPanel) startIsolatedRun() error {
 		return fmt.Errorf("isolated run blocked: %s", reason)
 	}
 	afterSuccess := p.startReadinessAfterSetup
+	operation := panelOperationSetup
 	if isHostedTenantK3SDeployment() {
 		afterSuccess = nil
 	}
+	if isLinodeDockerDeployment() {
+		operation = panelOperationLinodeSetup
+		afterSuccess = nil
+	}
 	return p.startPanelCommand(panelCommandSpec{
-		Operation:    panelOperationSetup,
+		Operation:    operation,
 		DisplayName:  "setup",
 		TestName:     "TestHaSetup",
 		Timeout:      "90m",
@@ -125,8 +130,16 @@ func (p *localControlPanel) isolatedRunStartStatus() (bool, string) {
 	if blockers := p.sharedWorkspaceResidueBlockers(); len(blockers) > 0 {
 		return false, "cleanup shared workspace residue first: " + compactPathList(blockers, 3)
 	}
-	if p.anyOperationRunning() {
-		return false, "lifecycle operation is already running"
+	operation := panelOperationSetup
+	if isLinodeDockerDeployment() {
+		operation = panelOperationLinodeSetup
+	}
+	p.mu.Lock()
+	conflicting := p.conflictingOperationRunningLocked(operation)
+	runningName := p.runningConflictingOperationNameLocked(operation)
+	p.mu.Unlock()
+	if conflicting {
+		return false, fmt.Sprintf("%s is already running", runningName)
 	}
 	preflight := p.collectPanelPreflightForRunSlotStart()
 	if !preflight.Ready {
@@ -139,6 +152,9 @@ func (p *localControlPanel) isolatedRunStartStatus() (bool, string) {
 }
 
 func (p *localControlPanel) customHostnameAvailableForIsolatedRun() (bool, string) {
+	if isLinodeDockerDeployment() {
+		return true, ""
+	}
 	prefix, err := settings.ConfiguredCustomHostnamePrefix()
 	if err != nil {
 		return false, err.Error()
@@ -177,6 +193,9 @@ func (p *localControlPanel) createCurrentRunRecord(runID string, now time.Time) 
 	moduleDir := p.terraformModuleDirForRun(runID)
 	slotID := panelRunSlotID(runID)
 	customHostnamePrefix, _ := settings.ConfiguredCustomHostnamePrefix()
+	if isLinodeDockerDeployment() {
+		customHostnamePrefix = ""
+	}
 	record := panelRunRecord{
 		RunID:                runID,
 		SlotID:               slotID,
@@ -456,7 +475,7 @@ func (p *localControlPanel) terraformModuleDirForRun(runID string) string {
 }
 
 func (p *localControlPanel) prepareTerraformModuleForRun(runID string) error {
-	sourceDir := filepath.Join(p.repoRoot, "modules", "aws")
+	sourceDir := p.terraformSourceModuleDir()
 	targetDir := p.terraformModuleDirForRun(runID)
 	if err := os.RemoveAll(targetDir); err != nil {
 		return fmt.Errorf("failed to clear run Terraform module %s: %w", targetDir, err)
@@ -500,6 +519,13 @@ func (p *localControlPanel) prepareTerraformModuleForRun(runID string) error {
 		}
 		return os.WriteFile(target, data, info.Mode().Perm())
 	})
+}
+
+func (p *localControlPanel) terraformSourceModuleDir() string {
+	if isLinodeDockerDeployment() {
+		return filepath.Join(p.repoRoot, "modules", "linode-docker-cattle")
+	}
+	return filepath.Join(p.repoRoot, "modules", "aws")
 }
 
 func shouldSkipTerraformModuleCopy(rel string, entry os.DirEntry) bool {

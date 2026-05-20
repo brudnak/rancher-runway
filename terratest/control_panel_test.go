@@ -402,6 +402,45 @@ func TestDiscoverClustersShowsProvisioningHAWhileSetupRuns(t *testing.T) {
 	}
 }
 
+func TestDiscoverLinodeDockerClustersMarksHTTPReachable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	panel := &localControlPanel{
+		totalHAs:   1,
+		repoRoot:   t.TempDir(),
+		testDir:    t.TempDir(),
+		operations: newPanelOperations(),
+	}
+	clusters := panel.discoverLinodeDockerClustersForRun(panelRunRecord{
+		RunID:           "abc123",
+		TotalHAs:        1,
+		DeploymentType:  deploymentTypeLinodeDocker,
+		RancherVersions: []string{"2.14.2-alpha3"},
+	}, map[string]string{
+		"linode_1_rancher_url": server.URL,
+		"linode_1_ip":          "203.0.113.10",
+	})
+
+	if len(clusters) != 1 {
+		t.Fatalf("expected one Linode Docker cluster, got %#v", clusters)
+	}
+	if clusters[0].Type != "linode" || clusters[0].DeploymentType != deploymentTypeLinodeDocker {
+		t.Fatalf("expected Linode Docker cluster metadata, got %#v", clusters[0])
+	}
+	if clusters[0].LoadBalancer != "203.0.113.10" {
+		t.Fatalf("expected Linode IP in load balancer field for compatibility, got %#v", clusters[0])
+	}
+	if clusters[0].KubeconfigPath != "" {
+		t.Fatalf("Docker Rancher must not expose a kubeconfig path, got %#v", clusters[0])
+	}
+	if !clusters[0].Reachable {
+		t.Fatalf("expected HTTP-ready Docker Rancher to be reachable, got %#v", clusters[0])
+	}
+}
+
 func TestDiscoverClustersShowsGeneratedHADirectoryAsMissing(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", filepath.Join(workspace, "output"))

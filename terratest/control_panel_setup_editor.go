@@ -21,7 +21,7 @@ func (p *localControlPanel) newSetupEditor() *interactiveServer {
 				return nil
 			}
 			if len(plans) == 0 {
-				return fmt.Errorf("setup plan must resolve before starting AWS")
+				return fmt.Errorf("setup plan must resolve before starting")
 			}
 			viperConfigMu.RLock()
 			p.totalHAs = configuredRancherInstanceCount()

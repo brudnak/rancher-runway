@@ -19,6 +19,9 @@ export const runHostnameLabel = run => {
   if (run.deploymentType === 'hosted-tenant-k3s') {
     return run.awsPrefix && run.route53Fqdn ? `${run.awsPrefix}-t*.${run.route53Fqdn}` : run.route53Fqdn || 'generated per slot'
   }
+  if (run.deploymentType === 'linode-docker-cattle') {
+    return run.awsPrefix && run.route53Fqdn ? `${run.awsPrefix}-*.${run.route53Fqdn}` : run.route53Fqdn || 'generated per slot'
+  }
   if (run.customHostnamePrefix) {
     return `${run.customHostnamePrefix}.${run.route53Fqdn || ''}`.replace(/\.$/, '')
   }
@@ -30,7 +33,9 @@ export const operationForRun = (run, state) => {
   const operations = [
     ['setup', 'Setup', state?.setup],
     ['readiness', 'Readiness', state?.readiness],
-    ['cleanup', 'Destroy', state?.cleanup]
+    ['cleanup', 'Destroy', state?.cleanup],
+    ['linodeSetup', 'Linode setup', state?.linodeSetup],
+    ['linodeCleanup', 'Linode destroy', state?.linodeCleanup]
   ]
   return operations.find(([, , operation]) => operation?.running && sameRunKey(operation.runId, runId)) || null
 }

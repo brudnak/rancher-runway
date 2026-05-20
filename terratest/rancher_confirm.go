@@ -354,6 +354,7 @@ func openBrowser(targetURL string) error {
 func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 	sections := []string{"Continue with this Rancher plan?"}
 	hostedTenant := isHostedTenantPlanSet(plans)
+	linodeDocker := isLinodeDockerPlanSet(plans)
 
 	for i, plan := range plans {
 		if plan == nil {
@@ -361,13 +362,28 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 		}
 
 		sectionLines := []string{
-			resolvedPlanDisplayName(i, hostedTenant),
+			resolvedPlanDisplayName(i, hostedTenant, linodeDocker),
 		}
 		if plan.RequestedVersion != "" {
 			sectionLines = append(sectionLines, "Requested Rancher: "+plan.RequestedVersion)
 		}
+		if plan.ResolvedDistro != "" {
+			sectionLines = append(sectionLines, "Resolved runtime: "+plan.ResolvedDistro)
+		}
 		if plan.ChartRepoAlias != "" && plan.ChartVersion != "" {
 			sectionLines = append(sectionLines, fmt.Sprintf("Selected chart: %s/rancher@%s", plan.ChartRepoAlias, plan.ChartVersion))
+		}
+		if plan.RancherImage != "" {
+			image := plan.RancherImage
+			if plan.RancherImageTag != "" {
+				image += ":" + plan.RancherImageTag
+			}
+			sectionLines = append(sectionLines, "Selected image: "+image)
+		} else if plan.RancherImageTag != "" {
+			sectionLines = append(sectionLines, "Selected image tag: "+plan.RancherImageTag)
+		}
+		if plan.CompatibilityBaseline != "" {
+			sectionLines = append(sectionLines, "Validation: "+plan.CompatibilityBaseline)
 		}
 		if plan.RecommendedRKE2Version != "" {
 			sectionLines = append(sectionLines, "Resolved RKE2/K8s: "+plan.RecommendedRKE2Version)
@@ -388,8 +404,9 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 
 func logResolvedPlans(plans []*RancherResolvedPlan) {
 	hostedTenant := isHostedTenantPlanSet(plans)
+	linodeDocker := isLinodeDockerPlanSet(plans)
 	for i, plan := range plans {
-		displayName := resolvedPlanDisplayName(i, hostedTenant)
+		displayName := resolvedPlanDisplayName(i, hostedTenant, linodeDocker)
 		log.Printf("[resolver] Rancher resolution summary for %s:", displayName)
 		log.Printf("[resolver] Requested version: %s", plan.RequestedVersion)
 		log.Printf("[resolver] Requested distro: %s", plan.RequestedDistro)
@@ -434,7 +451,19 @@ func isHostedTenantPlanSet(plans []*RancherResolvedPlan) bool {
 	return false
 }
 
-func resolvedPlanDisplayName(index int, hostedTenant bool) string {
+func isLinodeDockerPlanSet(plans []*RancherResolvedPlan) bool {
+	for _, plan := range plans {
+		if plan != nil && strings.TrimSpace(plan.Mode) == deploymentTypeLinodeDocker {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvedPlanDisplayName(index int, hostedTenant bool, linodeDocker bool) string {
+	if linodeDocker {
+		return fmt.Sprintf("Docker Rancher %d", index+1)
+	}
 	if !hostedTenant {
 		return fmt.Sprintf("HA %d", index+1)
 	}

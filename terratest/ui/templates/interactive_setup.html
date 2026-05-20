@@ -155,9 +155,10 @@
                   <div>
                     <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Deployment shape</h2>
                   </div>
-                  <div class="grid grid-cols-2 gap-2 rounded-xl bg-white p-1 ring-1 ring-zinc-200 dark:bg-zinc-950/30 dark:ring-white/10" role="group" aria-label="Deployment shape">
+                  <div class="grid grid-cols-3 gap-2 rounded-xl bg-white p-1 ring-1 ring-zinc-200 dark:bg-zinc-950/30 dark:ring-white/10" role="group" aria-label="Deployment shape">
                     <button id="haRke2DeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="true">HA RKE2</button>
                     <button id="hostedTenantDeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false">Hosted tenant K3s</button>
+                    <button id="linodeDockerDeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false">Linode Docker</button>
                   </div>
                 </div>
                 <div id="deploymentSummary" class="text-sm leading-6 text-zinc-600 dark:text-zinc-400"></div>
@@ -212,6 +213,54 @@
                 </div>
                 <div class="mt-3 text-sm font-normal leading-6 text-zinc-500 dark:text-zinc-400">
                   Hosted tenant runs currently resolve through auto mode and support one host plus one to three tenant rows. Each hosted/tenant Rancher uses a fixed two-node K3s cluster with an external MySQL datastore. Generated RDS passwords use the MySQL/Aurora-safe AWS character set.
+                </div>
+              </div>
+
+              <div id="linodeDockerPanel" class="mt-5 hidden rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+                <div class="mb-4">
+                  <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Linode Docker settings</h2>
+                  <p class="mt-1 text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400">Choose where the Rancher Docker image should come from and set the initial root SSH password for the Linode instances in this run.</p>
+                </div>
+                <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                  Rancher image source
+                  <select id="linodeDockerHubSelect" name="linodeDockerHub" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100">
+                    <option value="auto">Auto discover available registry</option>
+                    <option value="dockerhub">Docker Hub: rancher/rancher</option>
+                    <option value="staging">SUSE staging: stgregistry.suse.com</option>
+                    <option value="prime">Rancher Prime: registry.rancher.com</option>
+                    <option value="suse">SUSE registry: registry.suse.com</option>
+                    <option value="custom">Custom image source below</option>
+                  </select>
+                </label>
+                <div class="mt-4 grid gap-3 rounded-lg border border-zinc-200 bg-white p-3 dark:border-white/10 dark:bg-zinc-950/30">
+                  <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                    Custom image source
+                    <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                      <input id="linodeCustomImageInput" name="linodeCustomImage" type="text" placeholder="docker.io/username/rancher or registry.example.com/team/rancher" class="w-full rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2.5 font-medium text-zinc-500 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/30 dark:text-zinc-500" readonly />
+                      <button class="flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700" id="linodeCustomImageLockToggle" data-state="locked" type="button" title="Unlock custom image source" aria-label="Unlock custom image source"></button>
+                    </div>
+                  </label>
+                </div>
+                <div class="mt-4 grid gap-3 rounded-lg border border-zinc-200 bg-white p-3 dark:border-white/10 dark:bg-zinc-950/30">
+                  <div class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                    Search image tag
+                    <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                      <input id="linodeImageSearchInput" type="text" placeholder="2.14.3-alpha2" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
+                      <button id="linodeImageSearchBtn" type="button" class="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-2.5 text-sm font-semibold text-zinc-800 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700">Search</button>
+                    </div>
+                  </div>
+                  <div id="linodeImageSearchResults" class="grid gap-2"></div>
+                </div>
+                <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                  Root SSH password
+                  <div class="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+                    <input id="linodeSshRootPasswordInput" name="linodeSSHRootPassword" type="password" autocomplete="new-password" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
+                    <button class="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-zinc-800 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700" id="linodeSshRootPasswordGenerateBtn" type="button">Generate</button>
+                    <button class="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-zinc-800 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700" id="linodeSshRootPasswordToggle" type="button">Show</button>
+                  </div>
+                </label>
+                <div class="mt-3 text-sm font-normal leading-6 text-zinc-500 dark:text-zinc-400">
+                  Auto mode checks Docker manifests before setup. Docker tags are normalized with a leading v where Rancher images use one, while plain head stays head.
                 </div>
               </div>
 
@@ -435,7 +484,7 @@
                   </div>
                 </div>
                 <div class="mt-3 text-sm text-zinc-500 dark:text-zinc-400">
-                  Missing tools, missing <code>tool-config.yml</code>, or missing required AWS environment variables block plan resolution. Recommended version differences and missing Docker Hub credentials are warnings.
+                  Missing tools, missing <code>tool-config.yml</code>, or missing required provider credentials block plan resolution. Recommended version differences and missing Docker Hub credentials are warnings.
                 </div>
               </details>
 
@@ -464,7 +513,7 @@
             <div class="spinner mt-1" aria-hidden="true"></div>
             <div>
               <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50 sm:text-3xl">Resolving Rancher plan</h1>
-              <p id="resolvingSummary" class="mt-2 max-w-4xl text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400 sm:text-base">No AWS resources are being created yet. This step fetches Helm repos, SUSE support data, RKE2 patch releases, and installer SHA256 hashes, then shows the final plan for approval.</p>
+              <p id="resolvingSummary" class="mt-2 max-w-4xl text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400 sm:text-base">No cloud resources are being created yet. This step resolves the Rancher plan and shows it for approval.</p>
             </div>
           </div>
           <div class="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 dark:border-white/10 dark:bg-zinc-950/40">
@@ -478,7 +527,7 @@
       <section data-section="review">
         <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/30 sm:p-6">
           <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50 sm:text-3xl">Approve this Rancher Runway plan?</h1>
-          <p class="mt-3 max-w-4xl text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400 sm:text-base">This is the final sign-off gate before Terraform can create AWS resources. Review the resolved Helm/install plan below. Bootstrap passwords are redacted.</p>
+          <p class="mt-3 max-w-4xl text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400 sm:text-base">This is the final sign-off gate before Terraform can create resources. Review the resolved install plan below. Bootstrap passwords are redacted.</p>
           <details id="reviewResolverLogDetails" open class="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 dark:border-white/10 dark:bg-zinc-950/30">
             <summary class="advanced-summary flex cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-4 py-3">
               <span>
@@ -498,7 +547,7 @@
           <div class="mt-5">
             <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h2 id="resolvedPlanHeading" class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Resolved HA install plan</h2>
-              <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">AWS has not started</span>
+              <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">Terraform has not started</span>
             </div>
             <div id="planCards" class="grid gap-4"></div>
             <pre id="planFallback" class="mt-4 hidden whitespace-pre-wrap break-words rounded-xl border border-zinc-200 bg-zinc-50 p-5 font-mono text-xs leading-6 text-zinc-800 dark:border-white/10 dark:bg-zinc-950/40 dark:text-zinc-200"></pre>
@@ -506,7 +555,7 @@
           <div class="min-h-6 whitespace-pre-wrap text-sm font-medium text-rose-600 dark:text-rose-300" id="reviewErrorBox"></div>
           <div class="sticky bottom-0 -mx-5 mt-5 flex flex-wrap justify-end gap-3 border-t border-zinc-200 bg-white/95 px-5 pt-5 pb-1 backdrop-blur dark:border-white/10 dark:bg-zinc-900/95" id="respondActions">
             <button type="button" data-response-action="cancel" class="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 font-semibold text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700">Cancel</button>
-            <button type="button" data-response-action="continue" class="rounded-lg bg-emerald-500 px-4 py-2.5 font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400 disabled:cursor-default disabled:opacity-60">Start AWS setup</button>
+            <button type="button" data-response-action="continue" class="rounded-lg bg-emerald-500 px-4 py-2.5 font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400 disabled:cursor-default disabled:opacity-60">Start setup</button>
           </div>
         </div>
       </section>

@@ -53,24 +53,38 @@ func setupConfigE(repoRoot string) error {
 }
 
 func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
-	if err := settings.ValidateAWSPrefixConfig(); err != nil {
-		t.Fatalf("AWS prefix preflight failed: %v", err)
-	}
-	if err := settings.ValidateAWSPemKeyNameConfig(); err != nil {
-		t.Fatalf("AWS PEM key preflight failed: %v", err)
-	}
-	if err := settings.ValidateOwnerConfig(); err != nil {
-		t.Fatalf("Owner preflight failed: %v", err)
-	}
-	if !isHostedTenantK3SDeployment() {
-		if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
-			t.Fatalf("RKE2 server layout preflight failed: %v", err)
+	if isLinodeDockerDeployment() {
+		if err := validateLinodeDockerConfig(totalHAs); err != nil {
+			t.Fatalf("Linode Docker preflight failed: %v", err)
+		}
+	} else {
+		if err := settings.ValidateAWSPrefixConfig(); err != nil {
+			t.Fatalf("AWS prefix preflight failed: %v", err)
+		}
+		if err := settings.ValidateAWSPemKeyNameConfig(); err != nil {
+			t.Fatalf("AWS PEM key preflight failed: %v", err)
+		}
+		if err := settings.ValidateOwnerConfig(); err != nil {
+			t.Fatalf("Owner preflight failed: %v", err)
+		}
+		if !isHostedTenantK3SDeployment() {
+			if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
+				t.Fatalf("RKE2 server layout preflight failed: %v", err)
+			}
 		}
 	}
-	generateAwsVars()
-	customHostnamePrefix, err := settings.ConfiguredCustomHostnamePrefix()
-	if err != nil {
-		t.Fatalf("Invalid custom Rancher hostname: %v", err)
+	if isLinodeDockerDeployment() {
+		cleanupTerraformVarFile()
+	} else {
+		generateAwsVars()
+	}
+	customHostnamePrefix := ""
+	if !isLinodeDockerDeployment() {
+		var err error
+		customHostnamePrefix, err = settings.ConfiguredCustomHostnamePrefix()
+		if err != nil {
+			t.Fatalf("Invalid custom Rancher hostname: %v", err)
+		}
 	}
 
 	backendConfig, err := terraformBackendConfigFromEnv()
@@ -81,28 +95,7 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 		t.Fatalf("Failed to sync Terraform backend file: %v", err)
 	}
 
-	rawVars := map[string]interface{}{
-		"total_has":               totalHAs,
-		"deployment_type":         deploymentType(),
-		"total_rancher_instances": hostedTenantRancherInstanceCount(),
-		"aws_prefix":              terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
-		"aws_vpc":                 viper.GetString("tf_vars.aws_vpc"),
-		"aws_subnet_a":            viper.GetString("tf_vars.aws_subnet_a"),
-		"aws_subnet_b":            viper.GetString("tf_vars.aws_subnet_b"),
-		"aws_subnet_c":            viper.GetString("tf_vars.aws_subnet_c"),
-		"aws_ami":                 viper.GetString("tf_vars.aws_ami"),
-		"aws_subnet_id":           viper.GetString("tf_vars.aws_subnet_id"),
-		"aws_security_group_id":   viper.GetString("tf_vars.aws_security_group_id"),
-		"aws_pem_key_name":        viper.GetString("tf_vars.aws_pem_key_name"),
-		"aws_rds_password":        hostedTenantRDSPassword(),
-		"aws_ec2_instance_type":   hostedTenantEC2InstanceType(),
-		"server_count":            settings.CurrentRKE2ServerCount(),
-		"aws_route53_fqdn":        viper.GetString("tf_vars.aws_route53_fqdn"),
-		"custom_hostname_prefix":  customHostnamePrefix,
-		"owner_first_name":        settings.OwnerFirstName(),
-		"owner_last_name":         settings.OwnerLastName(),
-		"run_id":                  currentTerraformRunID(),
-	}
+	rawVars := terraformVars(totalHAs, customHostnamePrefix)
 	if isHostedTenantK3SDeployment() {
 		delete(rawVars, "server_count")
 	} else {
@@ -128,6 +121,48 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 	}
 
 	return options
+}
+
+func terraformVars(totalHAs int, customHostnamePrefix string) map[string]interface{} {
+	if isLinodeDockerDeployment() {
+		return map[string]interface{}{
+			"aws_region":                 linodeDockerAWSRegion(),
+			"aws_route53_fqdn":           viper.GetString("tf_vars.aws_route53_fqdn"),
+			"label_prefix":               terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
+			"linode_access_token":        linodeAccessToken(),
+			"linode_ssh_root_password":   linodeRootPassword(),
+			"linode_region":              linodeRegion(),
+			"linode_type":                linodeInstanceType(),
+			"linode_image":               linodeImage(),
+			"linode_tags":                linodeTags(),
+			"rancher_bootstrap_password": viper.GetString("rancher.bootstrap_password"),
+			"dockerhub":                  linodeDockerHub(),
+			"docker_install_version":     linodeDockerInstallVersion(),
+			"rancher_instances":          linodeRancherInstances(totalHAs),
+		}
+	}
+	return map[string]interface{}{
+		"total_has":               totalHAs,
+		"deployment_type":         deploymentType(),
+		"total_rancher_instances": hostedTenantRancherInstanceCount(),
+		"aws_prefix":              terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
+		"aws_vpc":                 viper.GetString("tf_vars.aws_vpc"),
+		"aws_subnet_a":            viper.GetString("tf_vars.aws_subnet_a"),
+		"aws_subnet_b":            viper.GetString("tf_vars.aws_subnet_b"),
+		"aws_subnet_c":            viper.GetString("tf_vars.aws_subnet_c"),
+		"aws_ami":                 viper.GetString("tf_vars.aws_ami"),
+		"aws_subnet_id":           viper.GetString("tf_vars.aws_subnet_id"),
+		"aws_security_group_id":   viper.GetString("tf_vars.aws_security_group_id"),
+		"aws_pem_key_name":        viper.GetString("tf_vars.aws_pem_key_name"),
+		"aws_rds_password":        hostedTenantRDSPassword(),
+		"aws_ec2_instance_type":   hostedTenantEC2InstanceType(),
+		"server_count":            settings.CurrentRKE2ServerCount(),
+		"aws_route53_fqdn":        viper.GetString("tf_vars.aws_route53_fqdn"),
+		"custom_hostname_prefix":  customHostnamePrefix,
+		"owner_first_name":        settings.OwnerFirstName(),
+		"owner_last_name":         settings.OwnerLastName(),
+		"run_id":                  currentTerraformRunID(),
+	}
 }
 
 var terraformVariableBlockPattern = regexp.MustCompile(`(?m)^\s*variable\s+"([^"]+)"`)
@@ -314,6 +349,13 @@ func syncTerraformBackendFile(backendConfig map[string]interface{}) error {
   backend "s3" {}
 }
 `), 0644)
+}
+
+func cleanupTerraformVarFile() {
+	path := filepath.Join(terraformModuleDir(), "terraform.tfvars")
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("failed to remove stale Terraform var file %s: %v", path, err)
+	}
 }
 
 func generateAwsVars() {
