@@ -563,6 +563,10 @@ jobs:
         id: lane_receipt
         if: always()
         env:
+          TARGET_RANCHER_VERSION: ${{ inputs.rancher_version }}
+          PREVIOUS_RANCHER_VERSION: ${{ github.event.inputs.previous_rancher_version || '' }}
+          WEBHOOK_IMAGE: ${{ github.event.inputs.webhook_image || '' }}
+          SIGNING_POLICY: ${{ inputs.signing_policy }}
           SETUP_OUTCOME: ${{ steps.setup.outcome }}
           READY_OUTCOME: ${{ steps.ready.outcome }}
           LOCAL_SUITE_ENV_OUTCOME: ${{ steps.local_suite_env.outcome }}
@@ -578,7 +582,33 @@ jobs:
           set -euo pipefail
 
           mkdir -p automation-output/public
-          lane_plan="$(jq -c --arg lane "${{ inputs.lane }}" '.lanes[] | select(.name == $lane)' signoff-plan.json)"
+          plan_json='{}'
+          lane_plan='{}'
+          if [ -s signoff-plan.json ]; then
+            plan_json="$(jq -c '.' signoff-plan.json)"
+            lane_plan="$(jq -c --arg lane "${{ inputs.lane }}" '((.lanes // []) | map(select(.name == $lane)) | first) // {}' signoff-plan.json)"
+          else
+            target_json='{}'
+            if [ -s signoff-targets.json ]; then
+              target_json="$(jq -c --arg version "$TARGET_RANCHER_VERSION" '
+                ((.targets // [])
+                  | map(select(.rancher_version == $version))
+                  | first) // {}
+              ' signoff-targets.json)"
+            fi
+            plan_json="$(jq -n -c \
+              --argjson target "$target_json" \
+              --arg target_version "$TARGET_RANCHER_VERSION" \
+              --arg previous_version "$PREVIOUS_RANCHER_VERSION" \
+              --arg webhook_image "$WEBHOOK_IMAGE" \
+              --arg signing_policy "$SIGNING_POLICY" \
+              '{
+                target_version: ($target.rancher_version // $target_version),
+                previous_version: (if $previous_version != "" then $previous_version else ($target.previous_rancher_version // null) end),
+                webhook_image: (if $webhook_image != "" then $webhook_image else ($target.webhook_image // null) end),
+                signing_policy: (if $signing_policy != "" and $signing_policy != "auto" then $signing_policy else ($target.signing_policy // $signing_policy) end)
+              }')"
+          fi
           tests_json='[]'
           if [ -s automation-output/rancher-test-results.json ]; then
             tests_json="$(jq -c '.results // [] | map({
@@ -589,7 +619,7 @@ jobs:
           fi
 
           jq -n \
-            --slurpfile plan signoff-plan.json \
+            --argjson plan "$plan_json" \
             --argjson lane_plan "$lane_plan" \
             --argjson tests "$tests_json" \
             --arg lane "${{ inputs.lane }}" \
@@ -608,13 +638,13 @@ jobs:
             --arg delete_downstream "$DELETE_DOWNSTREAM_OUTCOME" \
             --arg cleanup "$CLEANUP_OUTCOME" \
             '{
-              target_version: $plan[0].target_version,
-              previous_version: $plan[0].previous_version,
+              target_version: ($plan.target_version // ""),
+              previous_version: ($plan.previous_version // null),
               lane: $lane,
               status: $status,
               completed_at: $completed_at,
               rke2_server_count: ($rke2_server_count | tonumber),
-              webhook_image: $plan[0].webhook_image,
+              webhook_image: ($plan.webhook_image // null),
               terraform_state_key: ($lane_plan.terraform_state_key // ""),
               aws_prefix: ($lane_plan.aws_prefix // ""),
               steps: {
