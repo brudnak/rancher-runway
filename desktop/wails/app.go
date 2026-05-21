@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,19 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		DefaultButton: "OK",
 	})
 	return true
+}
+
+func (a *App) SystemTheme() string {
+	switch runtime.GOOS {
+	case "darwin":
+		output, err := exec.Command("defaults", "read", "-g", "AppleInterfaceStyle").CombinedOutput()
+		if err == nil && strings.EqualFold(strings.TrimSpace(string(output)), "dark") {
+			return "dark"
+		}
+		return "light"
+	default:
+		return ""
+	}
 }
 
 func lifecycleCloseBlockedDialog(operation string) (string, string) {

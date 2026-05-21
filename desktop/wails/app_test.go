@@ -81,3 +81,10 @@ func TestLifecycleCloseBlockedDialog(t *testing.T) {
 		})
 	}
 }
+
+func TestSystemThemeReturnsKnownValue(t *testing.T) {
+	theme := NewApp().SystemTheme()
+	if theme != "" && theme != "dark" && theme != "light" {
+		t.Fatalf("unexpected system theme %q", theme)
+	}
+}

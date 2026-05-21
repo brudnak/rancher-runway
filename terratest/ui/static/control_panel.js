@@ -15,6 +15,7 @@ import {
   createTypedConfirmation
 } from './control_panel_modals.js'
 import {
+  activeOperations,
   operationBadgeHTML,
   operationForRun,
   readinessFailedRun,
@@ -24,7 +25,6 @@ import {
   runFolderPath,
   runHasFailure,
   runHostnameLabel,
-  runStatusClasses,
   runTerraformPath,
   runTimelineHTML,
   runTone,
@@ -338,10 +338,12 @@ window.addEventListener('message', event => {
   }
 })
 
-const setTheme = theme => {
+const setTheme = (theme, persist = true) => {
   document.documentElement.classList.toggle('dark', theme === 'dark')
   document.body.classList.toggle('dark', theme === 'dark')
-  localStorage.setItem('rancherControlPanelTheme', theme)
+  if (persist) {
+    localStorage.setItem('rancherControlPanelTheme', theme)
+  }
 
   themeSunIconEl.classList.toggle('hidden', theme !== 'dark')
   themeMoonIconEl.classList.toggle('hidden', theme !== 'light')
@@ -1023,11 +1025,7 @@ const renderWorkspace = workspace => {
   const runs = Array.isArray(workspace.runs) ? workspace.runs : []
   const totalHAs = runs.reduce((total, run) => total + Number(run.totalHAs || 1), 0)
   const currentRunID = workspace.currentRun?.runId || ''
-  const activeOperation = [
-    ['setup', 'Setup', lastState?.setup],
-    ['readiness', 'Readiness', lastState?.readiness],
-    ['cleanup', 'Destroy', lastState?.cleanup]
-  ].find(([, , operation]) => operation?.running)
+  const activeOperationList = activeOperations(lastState)
 
   workspaceModeEl.textContent = mode
   if (workspaceSlotTitleEl) {
@@ -1036,8 +1034,8 @@ const renderWorkspace = workspace => {
       : 'No recorded runs'
   }
   if (workspaceSlotSummaryEl) {
-    workspaceSlotSummaryEl.textContent = activeOperation
-      ? `${activeOperation[1]} is active. Setup, readiness, and destroy stay serialized so Terraform state and AWS actions remain unambiguous.`
+    workspaceSlotSummaryEl.textContent = activeOperationList.length
+      ? `${activeOperationList.length} lifecycle operation${activeOperationList.length === 1 ? '' : 's'} active: ${activeOperationList.map(([, label]) => label).join(', ')}. Each provider lane stays serialized against its own state.`
       : runs.length
         ? 'Every slot below has isolated Terraform state, deployment output, kubeconfigs, AWS names, logs, and a dedicated destroy target.'
         : 'Use Setup to resolve and approve a Rancher Runway plan. The run will appear here before AWS resources are created.'
@@ -1051,22 +1049,22 @@ const renderWorkspace = workspace => {
     const awsResources = Array.isArray(lastState?.aws?.items) ? lastState.aws.items.length : 0
     const canStart = workspace.canStartIsolatedRun && !lifecycleRunning(lastState) && !bootStatePending
     workspaceSlotGridEl.innerHTML = `
-      <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]">
-        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Slots</div>
-        <div class="mt-1 text-xl font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(String(runs.length))}</div>
-        <div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">${escapeHtml(totalHAs)} HA target${totalHAs === 1 ? '' : 's'}</div>
+      <div class="run-summary-stat">
+        <div class="run-summary-label">Slots</div>
+        <div class="run-summary-value">${escapeHtml(String(runs.length))}</div>
+        <div class="run-summary-help">${escapeHtml(totalHAs)} HA target${totalHAs === 1 ? '' : 's'}</div>
       </div>
-      <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]">
-        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Discovered</div>
-        <div class="mt-1 text-xl font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(String(liveClusters))}</div>
-        <div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">cluster records</div>
+      <div class="run-summary-stat">
+        <div class="run-summary-label">Discovered</div>
+        <div class="run-summary-value">${escapeHtml(String(liveClusters))}</div>
+        <div class="run-summary-help">cluster records</div>
       </div>
-      <div class="rounded-lg border ${canStart ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200' : 'border-zinc-200 bg-zinc-50 text-zinc-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-300'} px-3 py-3">
-        <div class="text-xs font-semibold uppercase tracking-wide opacity-75">Next setup</div>
-        <div class="mt-1 text-sm font-semibold">${escapeHtml(canStart ? 'Ready' : bootStatePending ? 'Checking state' : lifecycleRunning(lastState) ? 'Lifecycle running' : workspace.isolatedRunBlockedReason || 'Locked')}</div>
-        <div class="mt-1 text-xs opacity-75">${escapeHtml(awsResources)} AWS resource${awsResources === 1 ? '' : 's'} visible</div>
+      <div class="run-summary-stat" data-tone="${canStart ? 'ready' : 'locked'}">
+        <div class="run-summary-label">Next setup</div>
+        <div class="run-summary-value">${escapeHtml(canStart ? 'Ready' : bootStatePending ? 'Checking state' : lifecycleRunning(lastState) ? 'Running' : 'Locked')}</div>
+        <div class="run-summary-help">${escapeHtml(awsResources)} AWS resource${awsResources === 1 ? '' : 's'} visible</div>
       </div>
-      ${sharedPaths.length && !runs.length ? `<div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]"><div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Workspace guard</div><div class="mt-1 text-sm font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(String(sharedPaths.length))} watched paths</div></div>` : ''}
+      ${sharedPaths.length && !runs.length ? `<div class="run-summary-stat"><div class="run-summary-label">Workspace guard</div><div class="run-summary-value">${escapeHtml(String(sharedPaths.length))}</div><div class="run-summary-help">watched paths</div></div>` : ''}
     `
   }
 
@@ -1085,28 +1083,55 @@ const renderWorkspace = workspace => {
       `
     } else {
       const failedReadinessRun = readinessFailedRun(runs, lastState)
-      const banner = activeOperation ? (() => {
-        const [mode, label, snapshot] = activeOperation
-        const started = snapshot?.startedAt ? `Started ${new Date(snapshot.startedAt).toLocaleTimeString()}` : 'Starting now'
-        const runText = snapshot?.runId ? `Run ${snapshot.runId}` : 'Run state publishing'
-        const logAction = mode === 'setup' ? 'open-setup-logs' : mode === 'readiness' ? 'open-readiness-logs' : 'open-cleanup-logs'
-        const stopAction = mode === 'readiness'
-          ? renderRunActionButton({ action: 'stop-readiness-open-destroy', runId: snapshot?.runId || '', label: 'Stop readiness, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping readiness and opening Destroy.' })
-          : mode === 'setup'
-            ? renderRunActionButton({ action: 'stop-setup-open-destroy', runId: snapshot?.runId || '', label: 'Stop setup, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping setup and opening Destroy.' })
-            : ''
+      const banner = activeOperationList.length ? (() => {
+        const operationLogAction = mode => {
+          if (mode === 'readiness') {
+            return 'open-readiness-logs'
+          }
+          if (mode === 'cleanup' || mode === 'linodeCleanup') {
+            return 'open-cleanup-logs'
+          }
+          return 'open-setup-logs'
+        }
+        const operationStopAction = (mode, runId) => {
+          if (!runId) {
+            return ''
+          }
+          if (mode === 'readiness') {
+            return renderRunActionButton({ action: 'stop-readiness-open-destroy', runId, label: 'Stop, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping readiness and opening Destroy.' })
+          }
+          if (mode === 'setup' || mode === 'linodeSetup') {
+            return renderRunActionButton({ action: 'stop-setup-open-destroy', runId, label: 'Stop, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping setup and opening Destroy.' })
+          }
+          return ''
+        }
         return `
           <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 dark:border-sky-500/25 dark:bg-sky-500/10">
-            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div class="min-w-0">
-                <div class="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 shadow-sm dark:bg-white/[0.08] dark:text-sky-200"><span class="spinner mr-1.5 !h-3 !w-3 !border-[1.5px]"></span>${escapeHtml(label)} running</div>
-                <h3 class="mt-2 text-base font-semibold text-sky-950 dark:text-sky-100">${escapeHtml(runText)}</h3>
-                <p class="mt-1 text-sm leading-6 text-sky-800/80 dark:text-sky-100/75">${escapeHtml(started)}. New setup, readiness, and destroy actions are locked until this operation finishes.</p>
+                <div class="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 shadow-sm dark:bg-white/[0.08] dark:text-sky-200"><span class="spinner mr-1.5 !h-3 !w-3 !border-[1.5px]"></span>${escapeHtml(String(activeOperationList.length))} lifecycle op${activeOperationList.length === 1 ? '' : 's'} running</div>
+                <h3 class="mt-2 text-base font-semibold text-sky-950 dark:text-sky-100">Active run work</h3>
+                <p class="mt-1 text-sm leading-6 text-sky-800/80 dark:text-sky-100/75">Setup, readiness, and destroy actions stay locked only where they would collide with active state.</p>
               </div>
-              <div class="flex shrink-0 flex-wrap gap-2">
-                ${renderRunActionButton({ action: logAction, label: 'Open logs' })}
-                ${stopAction}
-              </div>
+            </div>
+            <div class="mt-3 grid gap-2 xl:grid-cols-2">
+              ${activeOperationList.map(([mode, label, snapshot]) => {
+                const started = snapshot?.startedAt ? `Started ${new Date(snapshot.startedAt).toLocaleTimeString()}` : 'Starting now'
+                const runText = snapshot?.runId ? `Run ${snapshot.runId}` : 'Run state publishing'
+                const runId = snapshot?.runId || ''
+                return `
+                  <div class="flex flex-col gap-3 rounded-lg border border-sky-200/80 bg-white/70 p-3 dark:border-sky-400/20 dark:bg-black/10 md:flex-row md:items-center md:justify-between">
+                    <div class="min-w-0">
+                      <div class="text-sm font-semibold text-sky-950 dark:text-sky-100">${escapeHtml(label)} · ${escapeHtml(runText)}</div>
+                      <div class="mt-1 text-xs text-sky-800/70 dark:text-sky-100/65">${escapeHtml(started)}</div>
+                    </div>
+                    <div class="flex shrink-0 flex-wrap gap-2">
+                      ${renderRunActionButton({ action: operationLogAction(mode), runId, label: 'Logs' })}
+                      ${operationStopAction(mode, runId)}
+                    </div>
+                  </div>
+                `
+              }).join('')}
             </div>
           </div>
         `
@@ -1154,54 +1179,65 @@ const renderWorkspace = workspace => {
                   : linodeRun
                     ? 'Check Docker Rancher readiness for the current run.'
                     : 'Check readiness for the current run.'
+            const readinessAction = (isCurrent || readinessRunningForRun)
+              ? renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled, title: readinessTitle })
+              : ''
+            const lifecycleAction = setupRunningForRun || linodeSetupRunningForRun
+              ? renderRunActionButton({ action: 'stop-setup-open-destroy', runId: run.runId, label: 'Stop, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping setup and opening Destroy.' })
+              : readinessRunningForRun
+                ? renderRunActionButton({ action: 'stop-readiness-open-destroy', runId: run.runId, label: 'Stop, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping readiness and opening Destroy.' })
+                : renderRunActionButton({ action: 'open-destroy', runId: run.runId, label: failedRun ? 'Destroy failed run' : 'Destroy', variant: failedRun ? 'danger' : 'secondary', disabled: lifecycleBusy, title: lifecycleBusy ? 'Wait for the active lifecycle operation to finish.' : 'Open the Destroy tab for this slot.' })
+            const utilityActions = [
+              renderRunActionButton({ action: 'open-run-folder', runId: run.runId, label: 'Folder', variant: 'utility', disabled: !runFolderAvailable(run), title: runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.' }),
+              renderRunActionButton({ action: 'copy-terraform-path', runId: run.runId, label: 'TF path', variant: 'utility', disabled: !runTerraformPath(run), title: runTerraformPath(run) ? 'Copy the Terraform module/state path for this run.' : 'Terraform path is not recorded yet.' }),
+              renderRunActionButton({ action: 'open-setup-logs', runId: run.runId, label: 'Setup log', variant: 'utility' }),
+              renderRunActionButton({ action: 'open-readiness-logs', runId: run.runId, label: 'Ready log', variant: 'utility' })
+            ].join('')
 
             return `
-              <article class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03]">
-                <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                  <div class="min-w-0">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <h3 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Run ${escapeHtml(run.runId || 'unknown')}</h3>
-                      <span class="rounded-full border px-2.5 py-1 text-xs font-semibold ${runStatusClasses(tone)}">${escapeHtml((operation ? 'running' : run.status || 'recorded').replaceAll('_', ' '))}</span>
-                      ${isCurrent ? '<span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">current slot</span>' : ''}
+              <article class="run-row" data-tone="${escapeHtml(tone)}">
+                <div class="run-row-main">
+                    <div class="run-row-titlebar">
+                      <h3 class="run-title">Run ${escapeHtml(run.runId || 'unknown')}</h3>
+                      <span class="run-status-pill" data-tone="${escapeHtml(tone)}">${escapeHtml((operation ? 'running' : run.status || 'recorded').replaceAll('_', ' '))}</span>
+                      ${isCurrent ? '<span class="run-current-pill">current slot</span>' : ''}
                       ${operationBadgeHTML(operation)}
                     </div>
-                    ${updated ? `<div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Updated ${escapeHtml(updated)}</div>` : ''}
+                    ${updated ? `<div class="run-muted run-updated">Updated ${escapeHtml(updated)}</div>` : ''}
                     ${runTimelineHTML(run, lastState)}
-                    <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                      <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950/30">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Rancher</div>
-                        <div class="mt-1 truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50" title="${escapeHtml(runVersionsLabel(run))}">${escapeHtml(runVersionsLabel(run))}</div>
+                    <div class="run-kpi-grid">
+                      <div class="run-kpi">
+                        <div class="run-kpi-label">Rancher</div>
+                        <div class="run-kpi-value" title="${escapeHtml(runVersionsLabel(run))}">${escapeHtml(runVersionsLabel(run))}</div>
                       </div>
-                      <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950/30">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Clusters</div>
-                        <div class="mt-1 text-sm font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(String(stats.management))} management, ${escapeHtml(String(stats.downstream))} downstream</div>
+                      <div class="run-kpi">
+                        <div class="run-kpi-label">Clusters</div>
+                        <div class="run-kpi-value">${escapeHtml(String(stats.management))} management, ${escapeHtml(String(stats.downstream))} downstream</div>
                       </div>
-                      <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950/30">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">AWS prefix</div>
-                        <div class="mt-1 truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(run.awsPrefix || 'not recorded')}</div>
+                      <div class="run-kpi">
+                        <div class="run-kpi-label">AWS prefix</div>
+                        <div class="run-kpi-value">${escapeHtml(run.awsPrefix || 'not recorded')}</div>
                       </div>
-                      <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2.5 dark:border-white/10 dark:bg-zinc-950/30">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Owner</div>
-                        <div class="mt-1 truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(run.owner || 'not recorded')}</div>
+                      <div class="run-kpi">
+                        <div class="run-kpi-label">Owner</div>
+                        <div class="run-kpi-value">${escapeHtml(run.owner || 'not recorded')}</div>
                       </div>
                     </div>
-                    <div class="mt-3 grid gap-2 text-sm text-zinc-600 dark:text-zinc-400 md:grid-cols-2">
-                      <div><span class="font-semibold text-zinc-800 dark:text-zinc-200">Hostname:</span> ${escapeHtml(runHostnameLabel(run))}</div>
-                      <div><span class="font-semibold text-zinc-800 dark:text-zinc-200">Terraform:</span> <span title="${escapeHtml(run.terraformStatePath || run.terraformBackend || '')}">${escapeHtml(compactPath(run.terraformStatePath || run.terraformBackend || 'not recorded'))}</span></div>
+                    <div class="run-footline">
+                      <div><strong>Hostname:</strong> ${escapeHtml(runHostnameLabel(run))}</div>
+                      <div><strong>Terraform:</strong> <span title="${escapeHtml(run.terraformStatePath || run.terraformBackend || '')}">${escapeHtml(compactPath(run.terraformStatePath || run.terraformBackend || 'not recorded'))}</span></div>
                     </div>
                   </div>
-                  <div class="run-action-rail flex shrink-0 flex-wrap gap-2 xl:max-w-[26rem]">
-                    ${renderRunActionButton({ action: 'view-clusters', runId: run.runId, label: 'View clusters', variant: stats.total ? 'primary' : 'secondary', disabled: !stats.total, title: stats.total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.' })}
-                    ${renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled, title: readinessTitle })}
-                    ${renderRunActionButton({ action: 'open-run-folder', runId: run.runId, label: 'Open folder', disabled: !runFolderAvailable(run), title: runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.' })}
-                    ${renderRunActionButton({ action: 'copy-terraform-path', runId: run.runId, label: 'Copy TF path', disabled: !runTerraformPath(run), title: runTerraformPath(run) ? 'Copy the Terraform module/state path for this run.' : 'Terraform path is not recorded yet.' })}
-                    ${renderRunActionButton({ action: 'open-setup-logs', runId: run.runId, label: 'Setup logs' })}
-                    ${renderRunActionButton({ action: 'open-readiness-logs', runId: run.runId, label: 'Readiness logs' })}
-                    ${setupRunningForRun || linodeSetupRunningForRun ? renderRunActionButton({ action: 'stop-setup-open-destroy', runId: run.runId, label: 'Stop setup, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping setup and opening Destroy.' }) : ''}
-                    ${readinessRunningForRun ? renderRunActionButton({ action: 'stop-readiness-open-destroy', runId: run.runId, label: 'Stop readiness, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping readiness and opening Destroy.' }) : ''}
-                    ${renderRunActionButton({ action: 'open-destroy', runId: run.runId, label: failedRun ? 'Destroy failed run' : 'Destroy', variant: 'danger', disabled: lifecycleBusy, title: lifecycleBusy ? 'Wait for the active lifecycle operation to finish.' : 'Open the Destroy tab for this slot.' })}
+                  <div class="run-command-panel">
+                    <div class="run-primary-actions">
+                      ${renderRunActionButton({ action: 'view-clusters', runId: run.runId, label: 'View clusters', variant: stats.total ? 'primary' : 'secondary', disabled: !stats.total, title: stats.total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.' })}
+                      ${readinessAction}
+                      ${lifecycleAction}
+                    </div>
+                    <div class="run-utility-strip" aria-label="Run utilities">
+                      ${utilityActions}
+                    </div>
                   </div>
-                </div>
               </article>
             `
           }).join('')}
@@ -3131,7 +3167,7 @@ document.addEventListener('keydown', event => {
 document.addEventListener('fullscreenchange', syncFullscreenButton)
 
 setLiveLogState('idle')
-setTheme(currentTheme())
+setTheme(currentTheme(), false)
 syncFullscreenButton()
 setActivePanelTab(activePanelTab)
 setActiveDestroyTab(activeDestroyTab)

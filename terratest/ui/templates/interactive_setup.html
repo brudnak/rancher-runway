@@ -13,7 +13,7 @@
       document.documentElement.classList.add('embedded-setup')
     }
     const savedTheme = setupEmbedded ? setupSearchParams.get('theme') : localStorage.getItem('rancherSetupTheme')
-    const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
     document.documentElement.classList.toggle('dark', savedTheme ? savedTheme === 'dark' : systemDark)
   </script>
   <script src="https://cdn.tailwindcss.com"></script>

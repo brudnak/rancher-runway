@@ -35,6 +35,29 @@ const setBuildBadge = build => {
   buildBadge.title = titleParts.length ? titleParts.join("\n") : "No build commit was embedded in this binary.";
 };
 
+const browserSystemTheme = () => window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "dark" : "light";
+
+const nativeSystemTheme = async () => {
+  try {
+    const theme = await window.go?.main?.App?.SystemTheme?.();
+    if (theme === "dark" || theme === "light") {
+      return theme;
+    }
+  } catch (_) {
+    // Fall back to browser media detection below.
+  }
+  return browserSystemTheme();
+};
+
+const panelURLWithSystemTheme = async url => {
+  if (localStorage.getItem("rancherControlPanelTheme")) {
+    return url;
+  }
+  const panelURL = new URL(url, window.location.href);
+  panelURL.searchParams.set("systemTheme", await nativeSystemTheme());
+  return panelURL.toString();
+};
+
 const waitForPanelStatus = async () => {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const panelStatus = window.go?.main?.App?.PanelStatus;
@@ -65,7 +88,7 @@ const attachPanel = async () => {
       loadingShell.hidden = true;
       frame.hidden = false;
     }, { once: true });
-    frame.src = result.url;
+    frame.src = await panelURLWithSystemTheme(result.url);
     setStatus("Opening the control panel.");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
