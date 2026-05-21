@@ -399,12 +399,31 @@ jobs:
             done
           fi
 
+          probe_image="${shell_image:-rancher/shell:v0.7.0}"
+          case "$probe_image" in
+            rancher/shell:*|docker.io/rancher/shell:*|index.docker.io/rancher/shell:*)
+              shell_tag="${probe_image##*:}"
+              for candidate in "registry.rancher.com/rancher/shell:${shell_tag}" "stgregistry.suse.com/rancher/shell:${shell_tag}"; do
+                if docker manifest inspect "$candidate" >/dev/null 2>&1; then
+                  echo "Using non-Docker-Hub Rancher shell helper image for CI: $candidate"
+                  curl --fail --silent --show-error --insecure \
+                    -X PUT "https://${RANCHER_HOST}/v3/settings/shell-image" \
+                    -H "Authorization: Bearer ${RANCHER_ADMIN_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    --data-binary "{\"name\":\"shell-image\",\"value\":\"${candidate}\"}"
+                  shell_image="$candidate"
+                  probe_image="$candidate"
+                  break
+                fi
+              done
+              ;;
+          esac
+
           local_kubeconfig="${HA_RANCHER_HA_OUTPUT_ROOT}/high-availability-1/kube_config.yaml"
           if [ ! -s "$local_kubeconfig" ]; then
             echo "Expected local kubeconfig for shell helper probe at $local_kubeconfig"
             exit 1
           fi
-          probe_image="${shell_image:-rancher/shell:v0.7.0}"
           probe_base="rr-shell-probe-${HA_RANCHER_RUN_ID:-${{ github.run_id }}}"
           probe_base="$(printf '%s' "$probe_base" | tr -c 'a-zA-Z0-9-' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-45)"
           probe_ok=0

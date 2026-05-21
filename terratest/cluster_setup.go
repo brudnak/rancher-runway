@@ -1,7 +1,7 @@
 package test
 
 import (
-	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -328,18 +328,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 	if dockerUsername != "" && dockerPassword != "" {
 		log.Printf("[setupFirstServerNode] Configuring Docker Hub authentication...")
 
-		authString := fmt.Sprintf("%s:%s", dockerUsername, dockerPassword)
-		encodedAuth := base64.StdEncoding.EncodeToString([]byte(authString))
-		maskGitHubActionsValue(encodedAuth)
-
-		registriesConfig := fmt.Sprintf(`configs:
-  "registry-1.docker.io":
-    auth:
-      auth: %s
-  "docker.io":
-    auth:
-      auth: %s`, encodedAuth, encodedAuth)
-
+		registriesConfig := rke2RegistriesConfigContent(dockerUsername, dockerPassword)
 		cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/registries.yaml << EOL\n%s\nEOL'", registriesConfig)
 		if err := runRemoteSetupStep("setupFirstServerNode/write-registries", ip, cmd); err != nil {
 			log.Printf("[setupFirstServerNode] FAILED to create registries.yaml: %v", err)
@@ -526,6 +515,35 @@ func logRemoteRKE2Diagnostics(label, ip, unit string) {
 	log.Printf("[%s] RKE2 diagnostics for %s:\n%s", label, ip, output)
 }
 
+func rke2RegistriesConfigContent(username, password string) string {
+	quotedUsername := yamlJSONString(username)
+	quotedPassword := yamlJSONString(password)
+	return fmt.Sprintf(`configs:
+  "docker.io":
+    auth:
+      username: %s
+      password: %s
+  "registry-1.docker.io":
+    auth:
+      username: %s
+      password: %s
+  "index.docker.io":
+    auth:
+      username: %s
+      password: %s`,
+		quotedUsername, quotedPassword,
+		quotedUsername, quotedPassword,
+		quotedUsername, quotedPassword)
+}
+
+func yamlJSONString(value string) string {
+	quoted, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%q", value)
+	}
+	return string(quoted)
+}
+
 func configureRKE2IngressForExternalTLS(ip string) error {
 	log.Printf("[rke2-ingress] Enabling forwarded headers for external TLS termination on %s", ip)
 
@@ -622,17 +640,7 @@ tls-san:
 	if dockerUsername != "" && dockerPassword != "" {
 		log.Printf("[setupAdditionalServerNode] Configuring Docker Hub authentication for %s...", ip)
 
-		authString := fmt.Sprintf("%s:%s", dockerUsername, dockerPassword)
-		encodedAuth := base64.StdEncoding.EncodeToString([]byte(authString))
-
-		registriesConfig := fmt.Sprintf(`configs:
-  "registry-1.docker.io":
-    auth:
-      auth: %s
-  "docker.io":
-    auth:
-      auth: %s`, encodedAuth, encodedAuth)
-
+		registriesConfig := rke2RegistriesConfigContent(dockerUsername, dockerPassword)
 		cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/registries.yaml << EOL\n%s\nEOL'", registriesConfig)
 		if err := runRemoteSetupStep("setupAdditionalServerNode/write-registries", ip, cmd); err != nil {
 			log.Printf("[setupAdditionalServerNode] FAILED to create registries.yaml: %v", err)
@@ -745,18 +753,9 @@ node-label:
 	dockerUsername := strings.TrimSpace(os.Getenv("DOCKERHUB_USERNAME"))
 	dockerPassword := strings.TrimSpace(os.Getenv("DOCKERHUB_PASSWORD"))
 	if dockerUsername != "" && dockerPassword != "" {
-		authString := fmt.Sprintf("%s:%s", dockerUsername, dockerPassword)
-		encodedAuth := base64.StdEncoding.EncodeToString([]byte(authString))
-		maskGitHubActionsValue(encodedAuth)
-
-		registriesConfig := fmt.Sprintf(`configs:
-  "registry-1.docker.io":
-    auth:
-      auth: %s
-  "docker.io":
-    auth:
-      auth: %s`, encodedAuth, encodedAuth)
-
+		maskGitHubActionsValue(dockerUsername)
+		maskGitHubActionsValue(dockerPassword)
+		registriesConfig := rke2RegistriesConfigContent(dockerUsername, dockerPassword)
 		cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/registries.yaml << EOL\n%s\nEOL'", registriesConfig)
 		if err := runRemoteSetupStep("setupGPUWorkerNode/write-registries", ip, cmd); err != nil {
 			return fmt.Errorf("failed to create registries.yaml: %w", err)
