@@ -65,6 +65,7 @@ type EditablePreflightConfig struct {
 	BootstrapPassword     string            `json:"bootstrapPassword"`
 	PreloadImages         bool              `json:"preloadImages"`
 	ServerCount           int               `json:"serverCount"`
+	GPUWorker             GPUWorkerConfig   `json:"gpuWorker"`
 	DeploymentType        string            `json:"deploymentType"`
 	HostedRDSPassword     string            `json:"hostedRDSPassword"`
 	HostedEC2InstanceType string            `json:"hostedEC2InstanceType"`
@@ -74,6 +75,14 @@ type EditablePreflightConfig struct {
 	UserFirstName         string            `json:"userFirstName"`
 	UserLastName          string            `json:"userLastName"`
 	TFVars                map[string]string `json:"tfVars"`
+}
+
+type GPUWorkerConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Profile      string `json:"profile"`
+	InstanceType string `json:"instanceType"`
+	AMI          string `json:"ami"`
+	SubnetID     string `json:"subnetId"`
 }
 
 func CurrentRKE2ServerCount() int {
@@ -99,6 +108,41 @@ func ValidateRKE2ServerCountConfig() error {
 		return nil
 	default:
 		return fmt.Errorf("rke2.server_count must be 1, 3, or 5")
+	}
+}
+
+func CurrentGPUWorkerConfig() GPUWorkerConfig {
+	profile := NormalizeGPUWorkerProfile(viper.GetString("gpu_worker.profile"))
+	instanceType := strings.TrimSpace(viper.GetString("gpu_worker.instance_type"))
+	if instanceType == "" {
+		instanceType = GPUWorkerInstanceType(profile)
+	}
+	return GPUWorkerConfig{
+		Enabled:      viper.GetBool("gpu_worker.enabled"),
+		Profile:      profile,
+		InstanceType: instanceType,
+		AMI:          strings.TrimSpace(viper.GetString("gpu_worker.ami")),
+		SubnetID:     strings.TrimSpace(viper.GetString("gpu_worker.subnet_id")),
+	}
+}
+
+func NormalizeGPUWorkerProfile(profile string) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "", "standard", "small":
+		return "standard"
+	case "large":
+		return "large"
+	default:
+		return "standard"
+	}
+}
+
+func GPUWorkerInstanceType(profile string) string {
+	switch NormalizeGPUWorkerProfile(profile) {
+	case "large":
+		return "p5.4xlarge"
+	default:
+		return "g5.xlarge"
 	}
 }
 
@@ -136,6 +180,7 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 		BootstrapPassword:     viper.GetString("rancher.bootstrap_password"),
 		PreloadImages:         preloadImages,
 		ServerCount:           CurrentRKE2ServerCount(),
+		GPUWorker:             CurrentGPUWorkerConfig(),
 		DeploymentType:        deploymentType,
 		HostedRDSPassword:     viper.GetString("tf_vars.aws_rds_password"),
 		HostedEC2InstanceType: strings.TrimSpace(viper.GetString("tf_vars.aws_ec2_instance_type")),
@@ -168,6 +213,9 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 		return fmt.Errorf("rancher.bootstrap_password must be set")
 	}
 	update.ServerCount = NormalizeRKE2ServerCount(update.ServerCount)
+	update.GPUWorkerProfile = NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
+	update.GPUWorkerAMI = strings.TrimSpace(update.GPUWorkerAMI)
+	update.GPUWorkerSubnetID = strings.TrimSpace(update.GPUWorkerSubnetID)
 	update.UserFirstName = normalizeOwnerNamePart(update.UserFirstName)
 	update.UserLastName = normalizeOwnerNamePart(update.UserLastName)
 	linodeDocker := strings.EqualFold(strings.TrimSpace(update.DeploymentType), "linode-docker-cattle")

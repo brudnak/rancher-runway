@@ -124,6 +124,16 @@ const panelNoticeEl = document.getElementById('panelNotice')
 const panelNoticeTitleEl = document.getElementById('panelNoticeTitle')
 const panelNoticeBodyEl = document.getElementById('panelNoticeBody')
 const panelNoticeCloseEl = document.getElementById('panelNoticeClose')
+const gpuReminderStatusEl = document.getElementById('gpuReminderStatus')
+const gpuReminderDetailEl = document.getElementById('gpuReminderDetail')
+const gpuReminderIntervalEls = Array.from(document.querySelectorAll('[data-gpu-reminder-interval]'))
+const gpuReminderEnableBtnEl = document.getElementById('gpuReminderEnableBtn')
+const gpuReminderDisableBtnEl = document.getElementById('gpuReminderDisableBtn')
+const gpuReminderModalEl = document.getElementById('gpuReminderModal')
+const gpuReminderBodyEl = document.getElementById('gpuReminderBody')
+const gpuReminderSettingsBtnEl = document.getElementById('gpuReminderSettingsBtn')
+const gpuReminderDismissBtnEl = document.getElementById('gpuReminderDismissBtn')
+const gpuReminderCleanupBtnEl = document.getElementById('gpuReminderCleanupBtn')
 const upgradeCommandModalEl = document.getElementById('upgradeCommandModal')
 const upgradeCommandModalCloseEl = document.getElementById('upgradeCommandModalClose')
 
@@ -164,6 +174,23 @@ if (activePanelTab === 'lifecycle') {
 }
 let activeDestroyTab = localStorage.getItem('rancherDestroyTab') || 'slots'
 let bootStatePending = true
+
+const gpuReminderSettingsKey = 'rancherGpuReminderSettings'
+const gpuReminderIntervals = [15, 30, 60]
+const loadGPUReminderSettings = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(gpuReminderSettingsKey) || '{}')
+    const intervalMinutes = gpuReminderIntervals.includes(Number(parsed.intervalMinutes)) ? Number(parsed.intervalMinutes) : 15
+    return {
+      intervalMinutes,
+      disabled: Boolean(parsed.disabled),
+      lastReminderAt: Number(parsed.lastReminderAt || 0)
+    }
+  } catch {
+    return { intervalMinutes: 15, disabled: false, lastReminderAt: 0 }
+  }
+}
+let gpuReminderSettings = loadGPUReminderSettings()
 
 const requestTypedConfirmation = createTypedConfirmation({
   modalEl: dangerConfirmModalEl,
@@ -681,6 +708,104 @@ const operationSummaryForState = state => {
   return { label: 'Operation', value: 'Idle', tone: 'zinc', running: false }
 }
 
+const activeGPUClusters = state => clusterItems(state).filter(cluster =>
+  cluster?.type === 'local' && (cluster.gpuWorkerIp || cluster.gpuWorkerPrivateIp)
+)
+
+const gpuReminderIntervalLabel = minutes => minutes === 60 ? '1 hour' : `${minutes} minutes`
+
+const saveGPUReminderSettings = () => {
+  localStorage.setItem(gpuReminderSettingsKey, JSON.stringify(gpuReminderSettings))
+}
+
+const renderGPUReminderSettings = () => {
+  const disabled = Boolean(gpuReminderSettings.disabled)
+  if (gpuReminderStatusEl) {
+    gpuReminderStatusEl.textContent = disabled ? 'GPU reminders off' : 'GPU reminders on'
+    gpuReminderStatusEl.className = disabled
+      ? 'inline-flex items-center justify-center rounded-full bg-rose-100 px-3 py-1.5 text-xs font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
+      : 'inline-flex items-center justify-center rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+  }
+  if (gpuReminderDetailEl) {
+    gpuReminderDetailEl.textContent = disabled
+      ? `Reminders disabled. Last interval: ${gpuReminderIntervalLabel(gpuReminderSettings.intervalMinutes)}. Close-time GPU warnings still remain active.`
+      : `Reminder interval: ${gpuReminderIntervalLabel(gpuReminderSettings.intervalMinutes)}.`
+  }
+  gpuReminderIntervalEls.forEach(button => {
+    const active = Number(button.dataset.gpuReminderInterval) === gpuReminderSettings.intervalMinutes
+    button.disabled = disabled
+    button.className = active && !disabled
+      ? 'gpu-reminder-interval rounded-lg bg-rose-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400'
+      : 'gpu-reminder-interval rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-500/25 dark:bg-white/[0.06] dark:text-rose-200 dark:hover:bg-rose-500/10'
+  })
+  if (gpuReminderEnableBtnEl) {
+    gpuReminderEnableBtnEl.hidden = !disabled
+  }
+  if (gpuReminderDisableBtnEl) {
+    gpuReminderDisableBtnEl.hidden = disabled
+  }
+}
+
+const hideGPUReminderModal = () => {
+  gpuReminderModalEl?.classList.add('hidden')
+  gpuReminderModalEl?.classList.remove('flex')
+  document.body.classList.remove('overflow-hidden')
+}
+
+const showGPUReminderModal = clusters => {
+  if (!gpuReminderModalEl || gpuReminderSettings.disabled) {
+    return
+  }
+  const count = clusters.length
+  const instanceTypes = [...new Set(clusters.map(cluster => cluster.gpuWorkerInstanceType).filter(Boolean))]
+  const instanceText = instanceTypes.length === 1 ? ` (${instanceTypes[0]})` : ''
+  if (gpuReminderBodyEl) {
+    gpuReminderBodyEl.textContent = count === 1
+      ? `Reminder: 1 GPU worker node${instanceText} is active. Are you still using it?`
+      : `Reminder: ${count} GPU worker nodes${instanceText} are active. Are you still using them?`
+  }
+  gpuReminderSettings.lastReminderAt = Date.now()
+  saveGPUReminderSettings()
+  renderGPUReminderSettings()
+  gpuReminderModalEl.classList.remove('hidden')
+  gpuReminderModalEl.classList.add('flex')
+  document.body.classList.add('overflow-hidden')
+}
+
+const maybeShowGPUReminder = state => {
+  const clusters = activeGPUClusters(state)
+  const lifecycleBusy = Boolean(state?.setup?.running || state?.readiness?.running || state?.cleanup?.running || cleanupStarting || setupLaunchPendingUntil > Date.now())
+  if (lifecycleBusy) {
+    hideGPUReminderModal()
+    return
+  }
+  if (!clusters.length || gpuReminderSettings.disabled || bootStatePending) {
+    return
+  }
+  if (gpuReminderModalEl && !gpuReminderModalEl.classList.contains('hidden')) {
+    return
+  }
+  const intervalMs = gpuReminderSettings.intervalMinutes * 60 * 1000
+  if (Date.now() - gpuReminderSettings.lastReminderAt < intervalMs) {
+    return
+  }
+  showGPUReminderModal(clusters)
+}
+
+const gpuSummaryChip = state => {
+  const clusters = activeGPUClusters(state)
+  if (!clusters.length) {
+    return null
+  }
+  const instanceTypes = [...new Set(clusters.map(cluster => cluster.gpuWorkerInstanceType).filter(Boolean))]
+  return {
+    label: clusters.length === 1 ? 'GPU node deployed' : 'GPU nodes deployed',
+    value: instanceTypes.length === 1 ? `${clusters.length} ${instanceTypes[0]}` : `${clusters.length} deployed`,
+    tone: 'rose',
+    running: false
+  }
+}
+
 const headerChipClasses = tone => ({
   emerald: 'panel-chip-tone-emerald',
   sky: 'panel-chip-tone-sky',
@@ -699,10 +824,12 @@ const renderHeaderSummary = state => {
   const reachable = clusters.filter(cluster => cluster.reachable).length
   const awsItems = Array.isArray(state?.aws?.items) ? state.aws.items : []
   const operation = operationSummaryForState(state)
+  const gpuChip = gpuSummaryChip(state)
   const freshness = new Date().toLocaleTimeString()
   const chips = [
     { label: 'Runs', value: `${runs.length} slot${runs.length === 1 ? '' : 's'} / ${totalHAs} HA`, tone: runs.length ? 'emerald' : 'zinc' },
     { label: 'Clusters', value: clusters.length ? `${reachable}/${clusters.length} reachable` : 'None yet', tone: clusters.length ? (reachable === clusters.length ? 'emerald' : 'amber') : 'zinc' },
+    gpuChip,
     { label: 'AWS view', value: awsItems.length ? `${awsItems.length} resources` : 'No resources shown', tone: awsItems.length ? 'amber' : 'zinc' },
     { label: operation.label, value: operation.value, tone: operation.tone, running: operation.running },
     { label: 'Refreshed', value: freshness, tone: 'zinc' }
@@ -1227,6 +1354,11 @@ const renderWorkspace = workspace => {
                       <div><strong>Hostname:</strong> ${escapeHtml(runHostnameLabel(run))}</div>
                       <div><strong>Terraform:</strong> <span title="${escapeHtml(run.terraformStatePath || run.terraformBackend || '')}">${escapeHtml(compactPath(run.terraformStatePath || run.terraformBackend || 'not recorded'))}</span></div>
                     </div>
+                    ${run.gpuWorkerEnabled ? `
+                      <div class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm font-semibold text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
+                        GPU worker node${Number(run.totalHAs || 1) === 1 ? '' : 's'} requested: ${escapeHtml(String(run.totalHAs || 1))} x ${escapeHtml(run.gpuWorkerInstanceType || 'GPU instance')}. Do not leave running unused.
+                      </div>
+                    ` : ''}
                   </div>
                   <div class="run-command-panel">
                     <div class="run-primary-actions">
@@ -2128,6 +2260,8 @@ const refresh = async () => {
     renderReadiness(state.readiness)
     renderCleanup(state.linodeCleanup?.running || state.linodeCleanup?.finishedAt || state.linodeCleanup?.error ? state.linodeCleanup : state.cleanup)
     renderCostHistory(state.costs)
+    renderGPUReminderSettings()
+    maybeShowGPUReminder(state)
     updateStopPanelState(state)
     refreshStatusEl.textContent = lastLeaderChangeMessage
       ? `${lastLeaderChangeMessage} • ${new Date().toLocaleTimeString()}`
@@ -2903,6 +3037,20 @@ clustersEl.addEventListener('click', event => {
     return
   }
 
+  if (action === 'toggle-gpu-commands') {
+    clusterPanel.toggleGPUCommands(clusterId)
+    return
+  }
+
+  if (action === 'copy-gpu-command') {
+    const commandIndex = button.dataset.commandIndex || ''
+    const commandText = button.closest('[data-gpu-command-row]')?.querySelector('code[data-gpu-command-text]')?.textContent || ''
+    copyTextToClipboard(commandText, 'Copied GPU setup command to clipboard.').then(copied => {
+      clusterPanel.flashGPUCommandCopy(clusterId, commandIndex, copied ? 'success' : 'error')
+    })
+    return
+  }
+
   if (action === 'download') {
     downloadKubeconfig(clusterId)
     return
@@ -3058,6 +3206,73 @@ cleanupSlotsEl?.addEventListener('click', event => {
 resetCostLedgerBtnEl?.addEventListener('click', resetCostLedger)
 cleanLocalArtifactsBtnEl?.addEventListener('click', cleanLocalArtifacts)
 
+gpuReminderIntervalEls.forEach(button => {
+  button.addEventListener('click', () => {
+    gpuReminderSettings = {
+      ...gpuReminderSettings,
+      disabled: false,
+      intervalMinutes: Number(button.dataset.gpuReminderInterval) || 15,
+      lastReminderAt: Date.now()
+    }
+    saveGPUReminderSettings()
+    renderGPUReminderSettings()
+    showPanelNotice('GPU reminders updated', `Reminder interval set to ${gpuReminderIntervalLabel(gpuReminderSettings.intervalMinutes)}.`)
+  })
+})
+
+gpuReminderEnableBtnEl?.addEventListener('click', () => {
+  gpuReminderSettings = {
+    ...gpuReminderSettings,
+    disabled: false,
+    lastReminderAt: Date.now()
+  }
+  saveGPUReminderSettings()
+  renderGPUReminderSettings()
+  showPanelNotice('GPU reminders enabled', `Next reminder after ${gpuReminderIntervalLabel(gpuReminderSettings.intervalMinutes)} if GPU infrastructure remains active.`)
+})
+
+gpuReminderDisableBtnEl?.addEventListener('click', async () => {
+  const confirmed = await requestTypedConfirmation({
+    title: 'Disable GPU reminders?',
+    body: 'GPU worker nodes can create meaningful cloud cost when left running. Close-time GPU warnings still appear, but timed reminders will stop until you enable them again.',
+    typedValue: 'disable gpu reminders',
+    confirmText: 'Disable reminders',
+    accentText: 'GPU cost warning'
+  })
+  if (!confirmed) {
+    return
+  }
+  gpuReminderSettings = {
+    ...gpuReminderSettings,
+    disabled: true,
+    lastReminderAt: Date.now()
+  }
+  saveGPUReminderSettings()
+  hideGPUReminderModal()
+  renderGPUReminderSettings()
+  showPanelNotice('GPU reminders disabled', 'Close-time GPU warnings remain active.')
+})
+
+gpuReminderDismissBtnEl?.addEventListener('click', hideGPUReminderModal)
+
+gpuReminderCleanupBtnEl?.addEventListener('click', () => {
+  hideGPUReminderModal()
+  setActivePanelTab('destroy')
+  setActiveDestroyTab('slots')
+  cleanupSlotsEl?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+})
+
+gpuReminderSettingsBtnEl?.addEventListener('click', () => {
+  hideGPUReminderModal()
+  setActivePanelTab('settings')
+})
+
+gpuReminderModalEl?.addEventListener('click', event => {
+  if (event.target === gpuReminderModalEl) {
+    hideGPUReminderModal()
+  }
+})
+
 upgradeCommandModalEl?.addEventListener('click', event => {
   if (event.target === upgradeCommandModalEl) {
     closeUpgradeCommandModal()
@@ -3066,6 +3281,9 @@ upgradeCommandModalEl?.addEventListener('click', event => {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && upgradeCommandModalEl && !upgradeCommandModalEl.classList.contains('hidden')) {
     closeUpgradeCommandModal()
+  }
+  if (event.key === 'Escape' && gpuReminderModalEl && !gpuReminderModalEl.classList.contains('hidden')) {
+    hideGPUReminderModal()
   }
 })
 
@@ -3171,6 +3389,7 @@ setTheme(currentTheme(), false)
 syncFullscreenButton()
 setActivePanelTab(activePanelTab)
 setActiveDestroyTab(activeDestroyTab)
+renderGPUReminderSettings()
 setBootState(true, 'Checking local config, run slots, Terraform state, lifecycle processes, clusters, and AWS inventory before enabling actions.')
 if ('scrollRestoration' in history) {
   history.scrollRestoration = 'manual'

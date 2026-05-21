@@ -38,6 +38,11 @@ type DesktopPanelStatus struct {
 var bundledRepoRoot string
 var desktopEnvOnce sync.Once
 
+const (
+	gpuCloseCancelButton = "Cancel close"
+	gpuCloseAnywayButton = "Close anyway"
+)
+
 func NewApp() *App {
 	return &App{}
 }
@@ -67,7 +72,7 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	a.mu.Unlock()
 
 	if server == nil || !server.LifecycleRunning() {
-		return false
+		return a.confirmCloseWithGPUInfrastructure(ctx, server)
 	}
 
 	title, message := lifecycleCloseBlockedDialog(server.RunningOperation())
@@ -78,6 +83,40 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		Buttons:       []string{"OK"},
 		DefaultButton: "OK",
 	})
+	return true
+}
+
+func (a *App) confirmCloseWithGPUInfrastructure(ctx context.Context, server *harancher.ControlPanelServer) bool {
+	summary := harancher.GPUInfrastructureSummary{}
+	if server != nil {
+		summary = server.GPUInfrastructure()
+	}
+	if !summary.Active {
+		a.mu.Lock()
+		repoRoot := a.repoRoot
+		a.mu.Unlock()
+		if repoRoot != "" {
+			if inspected, err := harancher.InspectGPUInfrastructure(repoRoot); err == nil {
+				summary = inspected
+			}
+		}
+	}
+	if !summary.Active {
+		return false
+	}
+
+	title, message := gpuCloseWarningDialog(summary)
+	selection, err := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{
+		Type:          wailsruntime.WarningDialog,
+		Title:         title,
+		Message:       message,
+		Buttons:       []string{gpuCloseCancelButton, gpuCloseAnywayButton},
+		DefaultButton: gpuCloseCancelButton,
+		CancelButton:  gpuCloseCancelButton,
+	})
+	if err != nil || selection == gpuCloseAnywayButton {
+		return false
+	}
 	return true
 }
 
@@ -92,6 +131,17 @@ func (a *App) SystemTheme() string {
 	default:
 		return ""
 	}
+}
+
+func gpuCloseWarningDialog(summary harancher.GPUInfrastructureSummary) (string, string) {
+	count := summary.Count
+	if count < 1 {
+		count = len(summary.Details)
+	}
+	if count == 1 {
+		return "GPU infrastructure is active", "One GPU worker node appears to be deployed. GPU instances can be expensive; consider reopening the app and using Destroy to clean up the run slot soon."
+	}
+	return "GPU infrastructure is active", fmt.Sprintf("%d GPU worker nodes appear to be deployed. GPU instances can be expensive; consider reopening the app and using Destroy to clean up run slots soon.", count)
 }
 
 func lifecycleCloseBlockedDialog(operation string) (string, string) {

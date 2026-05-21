@@ -15,6 +15,16 @@ rke2:
   server_count: 3
   preload_images: true
 
+gpu_worker:
+  # Optional HA RKE2-only GPU worker node per Rancher cluster.
+  # GPU instances are expensive; destroy the run as soon as testing is done.
+  enabled: false
+  # standard = g5.xlarge, 24 GB GPU memory; large = p5.4xlarge, 80 GB GPU memory.
+  profile: standard
+  instance_type: g5.xlarge
+  ami: ""       # Optional override; empty discovers the latest AWS Deep Learning Base GPU AMI.
+  subnet_id: "" # Optional override; empty spreads GPU workers across HA subnets.
+
 total_has: 2
 
 user:

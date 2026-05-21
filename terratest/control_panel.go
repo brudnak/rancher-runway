@@ -66,6 +66,20 @@ type ControlPanelServer struct {
 	cleanupOnce sync.Once
 }
 
+type GPUInfrastructureSummary struct {
+	Active  bool                      `json:"active"`
+	Count   int                       `json:"count"`
+	Details []GPUInfrastructureDetail `json:"details,omitempty"`
+}
+
+type GPUInfrastructureDetail struct {
+	RunID        string `json:"runId,omitempty"`
+	HAIndex      int    `json:"haIndex,omitempty"`
+	IP           string `json:"ip,omitempty"`
+	PrivateIP    string `json:"privateIp,omitempty"`
+	InstanceType string `json:"instanceType,omitempty"`
+}
+
 type panelState struct {
 	Panel         panelSessionState      `json:"panel"`
 	Workspace     panelWorkspaceState    `json:"workspace"`
@@ -115,26 +129,31 @@ type awsResourceView struct {
 }
 
 type clusterView struct {
-	ID                  string    `json:"id"`
-	RunID               string    `json:"runId,omitempty"`
-	Type                string    `json:"type"`
-	DeploymentType      string    `json:"deploymentType,omitempty"`
-	Role                string    `json:"role,omitempty"`
-	HAIndex             int       `json:"haIndex"`
-	Name                string    `json:"name"`
-	Version             string    `json:"version,omitempty"`
-	RancherURL          string    `json:"rancherUrl,omitempty"`
-	LoadBalancer        string    `json:"loadBalancer,omitempty"`
-	Namespace           string    `json:"namespace,omitempty"`
-	ManagementClusterID string    `json:"managementClusterId,omitempty"`
-	KubeconfigPath      string    `json:"kubeconfigPath,omitempty"`
-	DownloadName        string    `json:"downloadName,omitempty"`
-	Provisioning        bool      `json:"provisioning,omitempty"`
-	ProvisioningMessage string    `json:"provisioningMessage,omitempty"`
-	Available           bool      `json:"available"`
-	Reachable           bool      `json:"reachable"`
-	Error               string    `json:"error,omitempty"`
-	Pods                []podView `json:"pods"`
+	ID                    string    `json:"id"`
+	RunID                 string    `json:"runId,omitempty"`
+	Type                  string    `json:"type"`
+	DeploymentType        string    `json:"deploymentType,omitempty"`
+	Role                  string    `json:"role,omitempty"`
+	HAIndex               int       `json:"haIndex"`
+	Name                  string    `json:"name"`
+	Version               string    `json:"version,omitempty"`
+	RancherURL            string    `json:"rancherUrl,omitempty"`
+	LoadBalancer          string    `json:"loadBalancer,omitempty"`
+	GPUWorkerIP           string    `json:"gpuWorkerIp,omitempty"`
+	GPUWorkerPrivateIP    string    `json:"gpuWorkerPrivateIp,omitempty"`
+	GPUWorkerInstanceType string    `json:"gpuWorkerInstanceType,omitempty"`
+	GPUWorkerAMI          string    `json:"gpuWorkerAmi,omitempty"`
+	GPUWorkerSubnetID     string    `json:"gpuWorkerSubnetId,omitempty"`
+	Namespace             string    `json:"namespace,omitempty"`
+	ManagementClusterID   string    `json:"managementClusterId,omitempty"`
+	KubeconfigPath        string    `json:"kubeconfigPath,omitempty"`
+	DownloadName          string    `json:"downloadName,omitempty"`
+	Provisioning          bool      `json:"provisioning,omitempty"`
+	ProvisioningMessage   string    `json:"provisioningMessage,omitempty"`
+	Available             bool      `json:"available"`
+	Reachable             bool      `json:"reachable"`
+	Error                 string    `json:"error,omitempty"`
+	Pods                  []podView `json:"pods"`
 }
 
 type podView struct {
@@ -561,6 +580,13 @@ func (s *ControlPanelServer) RunningOperation() string {
 		return ""
 	}
 	return s.panel.runningOperationNameLocked()
+}
+
+func (s *ControlPanelServer) GPUInfrastructure() GPUInfrastructureSummary {
+	if s == nil || s.panel == nil {
+		return GPUInfrastructureSummary{}
+	}
+	return s.panel.gpuInfrastructure()
 }
 
 func (s *ControlPanelServer) Wait() error {
@@ -1371,6 +1397,65 @@ func (p *localControlPanel) discoverClusters() []clusterView {
 	return clusters
 }
 
+func (p *localControlPanel) gpuInfrastructure() GPUInfrastructureSummary {
+	runRecords := p.listRunRecords()
+	if len(runRecords) == 0 {
+		if record, ok := p.readCurrentRunRecord(); ok {
+			runRecords = []panelRunRecord{record}
+		}
+	}
+	if len(runRecords) == 0 {
+		runRecords = []panelRunRecord{{
+			RunID:    "",
+			TotalHAs: p.totalHAs,
+		}}
+	}
+
+	var details []GPUInfrastructureDetail
+	for _, record := range runRecords {
+		details = append(details, p.gpuInfrastructureForRun(record)...)
+	}
+	return GPUInfrastructureSummary{
+		Active:  len(details) > 0,
+		Count:   len(details),
+		Details: details,
+	}
+}
+
+func (p *localControlPanel) gpuInfrastructureForRun(record panelRunRecord) []GPUInfrastructureDetail {
+	outputs, err := readTerraformFlatOutputsWithModule(p.repoRoot, record.TerraformStatePath, record.TerraformDataDir, record.TerraformModuleDir)
+	if err != nil {
+		return nil
+	}
+
+	totalHAs := record.TotalHAs
+	if totalHAs < 1 {
+		totalHAs = p.totalHAs
+	}
+	runID := safeRunPathSegment(record.RunID)
+	details := make([]GPUInfrastructureDetail, 0, totalHAs)
+	for i := 1; i <= totalHAs; i++ {
+		prefix := fmt.Sprintf("ha_%d", i)
+		ip := strings.TrimSpace(outputs[fmt.Sprintf("%s_gpu_worker_ip", prefix)])
+		privateIP := strings.TrimSpace(outputs[fmt.Sprintf("%s_gpu_worker_private_ip", prefix)])
+		if ip == "" && privateIP == "" {
+			continue
+		}
+		instanceType := strings.TrimSpace(outputs[fmt.Sprintf("%s_gpu_worker_instance_type", prefix)])
+		if instanceType == "" {
+			instanceType = strings.TrimSpace(record.GPUWorkerInstanceType)
+		}
+		details = append(details, GPUInfrastructureDetail{
+			RunID:        runID,
+			HAIndex:      i,
+			IP:           ip,
+			PrivateIP:    privateIP,
+			InstanceType: instanceType,
+		})
+	}
+	return details
+}
+
 func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clusterView {
 	outputs, _ := readTerraformFlatOutputsWithModule(p.repoRoot, record.TerraformStatePath, record.TerraformDataDir, record.TerraformModuleDir)
 	switch recordDeploymentType(record, outputs) {
@@ -1423,6 +1508,11 @@ func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clus
 		if outputs != nil {
 			cluster.RancherURL = clickableURL(outputs[fmt.Sprintf("ha_%d_rancher_url", i)])
 			cluster.LoadBalancer = outputs[fmt.Sprintf("ha_%d_aws_lb", i)]
+			cluster.GPUWorkerIP = outputs[fmt.Sprintf("ha_%d_gpu_worker_ip", i)]
+			cluster.GPUWorkerPrivateIP = outputs[fmt.Sprintf("ha_%d_gpu_worker_private_ip", i)]
+			cluster.GPUWorkerInstanceType = outputs[fmt.Sprintf("ha_%d_gpu_worker_instance_type", i)]
+			cluster.GPUWorkerAMI = outputs[fmt.Sprintf("ha_%d_gpu_worker_ami", i)]
+			cluster.GPUWorkerSubnetID = outputs[fmt.Sprintf("ha_%d_gpu_worker_subnet_id", i)]
 		}
 
 		if !kubeconfigExists {

@@ -816,6 +816,9 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if customHostnamePrefix != "" && ((mode == "auto" && len(normalizedVersions) != 1) || (mode == "manual" && len(normalizedHelmCommands) != 1)) {
 		return fmt.Errorf("custom Rancher URL can only be used with one HA")
 	}
+	if !hostedTenant && !linodeDocker && update.GPUWorkerEnabled && ((mode == "auto" && len(normalizedVersions) != 1) || (mode == "manual" && len(normalizedHelmCommands) != 1)) {
+		return fmt.Errorf("GPU worker runs are limited to one Rancher HA per run slot")
+	}
 
 	content, err := os.ReadFile(configPath)
 	if err != nil {
@@ -851,6 +854,13 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 			rke2Node := ensureMappingValue(root, "rke2")
 			setBoolValue(rke2Node, "preload_images", update.PreloadImages)
 			setIntValue(rke2Node, "server_count", update.ServerCount)
+			gpuWorkerNode := ensureMappingValue(root, "gpu_worker")
+			gpuWorkerProfile := settings.NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
+			setBoolValue(gpuWorkerNode, "enabled", update.GPUWorkerEnabled)
+			setStringValue(gpuWorkerNode, "profile", gpuWorkerProfile)
+			setStringValue(gpuWorkerNode, "instance_type", settings.GPUWorkerInstanceType(gpuWorkerProfile))
+			setStringValue(gpuWorkerNode, "ami", strings.TrimSpace(update.GPUWorkerAMI))
+			setStringValue(gpuWorkerNode, "subnet_id", strings.TrimSpace(update.GPUWorkerSubnetID))
 		}
 	}
 	setStringValue(rancherNode, "mode", mode)
@@ -917,6 +927,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 				deleteMappingKey(root, "rke2")
 			}
 		}
+		deleteMappingKey(root, "gpu_worker")
 	}
 
 	var output bytes.Buffer
@@ -972,6 +983,11 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		} else if !linodeDocker {
 			viper.Set("rke2.preload_images", update.PreloadImages)
 			viper.Set("rke2.server_count", update.ServerCount)
+			viper.Set("gpu_worker.enabled", update.GPUWorkerEnabled)
+			viper.Set("gpu_worker.profile", settings.NormalizeGPUWorkerProfile(update.GPUWorkerProfile))
+			viper.Set("gpu_worker.instance_type", settings.GPUWorkerInstanceType(update.GPUWorkerProfile))
+			viper.Set("gpu_worker.ami", strings.TrimSpace(update.GPUWorkerAMI))
+			viper.Set("gpu_worker.subnet_id", strings.TrimSpace(update.GPUWorkerSubnetID))
 		}
 		for _, key := range settings.EditableTFVarKeys {
 			viper.Set("tf_vars."+key, update.TFVars[key])
@@ -982,12 +998,14 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("tf_vars.aws_ec2_instance_type", update.HostedEC2InstanceType)
 		viper.Set("rke2.preload_images", false)
 		viper.Set("rke2.server_count", 0)
+		viper.Set("gpu_worker.enabled", false)
 	}
 	if linodeDocker {
 		viper.Set("linode.dockerhub", update.LinodeDockerHub)
 		viper.Set("linode.ssh_root_password", update.LinodeSSHRootPassword)
 		viper.Set("rke2.preload_images", false)
 		viper.Set("rke2.server_count", 0)
+		viper.Set("gpu_worker.enabled", false)
 	}
 	viper.Set(settings.CustomHostnameConfigKey, customHostnamePrefix)
 

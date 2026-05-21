@@ -171,27 +171,35 @@ func terraformVars(totalHAs int, customHostnamePrefix string) map[string]interfa
 			"rancher_instances":          linodeRancherInstances(totalHAs),
 		}
 	}
+	gpuWorker := settings.CurrentGPUWorkerConfig()
+	if isHostedTenantK3SDeployment() {
+		gpuWorker.Enabled = false
+	}
 	return map[string]interface{}{
-		"total_has":               totalHAs,
-		"deployment_type":         deploymentType(),
-		"total_rancher_instances": hostedTenantRancherInstanceCount(),
-		"aws_prefix":              terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
-		"aws_vpc":                 viper.GetString("tf_vars.aws_vpc"),
-		"aws_subnet_a":            viper.GetString("tf_vars.aws_subnet_a"),
-		"aws_subnet_b":            viper.GetString("tf_vars.aws_subnet_b"),
-		"aws_subnet_c":            viper.GetString("tf_vars.aws_subnet_c"),
-		"aws_ami":                 viper.GetString("tf_vars.aws_ami"),
-		"aws_subnet_id":           viper.GetString("tf_vars.aws_subnet_id"),
-		"aws_security_group_id":   viper.GetString("tf_vars.aws_security_group_id"),
-		"aws_pem_key_name":        viper.GetString("tf_vars.aws_pem_key_name"),
-		"aws_rds_password":        hostedTenantRDSPassword(),
-		"aws_ec2_instance_type":   hostedTenantEC2InstanceType(),
-		"server_count":            settings.CurrentRKE2ServerCount(),
-		"aws_route53_fqdn":        viper.GetString("tf_vars.aws_route53_fqdn"),
-		"custom_hostname_prefix":  customHostnamePrefix,
-		"owner_first_name":        settings.OwnerFirstName(),
-		"owner_last_name":         settings.OwnerLastName(),
-		"run_id":                  currentTerraformRunID(),
+		"total_has":                totalHAs,
+		"deployment_type":          deploymentType(),
+		"total_rancher_instances":  hostedTenantRancherInstanceCount(),
+		"aws_prefix":               terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
+		"aws_vpc":                  viper.GetString("tf_vars.aws_vpc"),
+		"aws_subnet_a":             viper.GetString("tf_vars.aws_subnet_a"),
+		"aws_subnet_b":             viper.GetString("tf_vars.aws_subnet_b"),
+		"aws_subnet_c":             viper.GetString("tf_vars.aws_subnet_c"),
+		"aws_ami":                  viper.GetString("tf_vars.aws_ami"),
+		"aws_subnet_id":            viper.GetString("tf_vars.aws_subnet_id"),
+		"aws_security_group_id":    viper.GetString("tf_vars.aws_security_group_id"),
+		"aws_pem_key_name":         viper.GetString("tf_vars.aws_pem_key_name"),
+		"aws_rds_password":         hostedTenantRDSPassword(),
+		"aws_ec2_instance_type":    hostedTenantEC2InstanceType(),
+		"server_count":             settings.CurrentRKE2ServerCount(),
+		"gpu_worker_enabled":       gpuWorker.Enabled,
+		"gpu_worker_instance_type": gpuWorker.InstanceType,
+		"gpu_worker_ami":           gpuWorker.AMI,
+		"gpu_worker_subnet_id":     gpuWorker.SubnetID,
+		"aws_route53_fqdn":         viper.GetString("tf_vars.aws_route53_fqdn"),
+		"custom_hostname_prefix":   customHostnamePrefix,
+		"owner_first_name":         settings.OwnerFirstName(),
+		"owner_last_name":          settings.OwnerLastName(),
+		"run_id":                   currentTerraformRunID(),
 	}
 }
 
@@ -462,21 +470,26 @@ func maskTerraformOutputs(outputs map[string]string) {
 func getHAOutputs(instanceNum int, outputs map[string]string) TerraformOutputs {
 	prefix := fmt.Sprintf("ha_%d", instanceNum)
 	haOutputs := TerraformOutputs{
-		ServerCount:      parseTerraformIntOutput(outputs[fmt.Sprintf("%s_server_count", prefix)]),
-		ServerIPs:        parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_ips", prefix)]),
-		ServerPrivateIPs: parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_private_ips", prefix)]),
-		Server1IP:        outputs[fmt.Sprintf("%s_server1_ip", prefix)],
-		Server2IP:        outputs[fmt.Sprintf("%s_server2_ip", prefix)],
-		Server3IP:        outputs[fmt.Sprintf("%s_server3_ip", prefix)],
-		Server4IP:        outputs[fmt.Sprintf("%s_server4_ip", prefix)],
-		Server5IP:        outputs[fmt.Sprintf("%s_server5_ip", prefix)],
-		Server1PrivateIP: outputs[fmt.Sprintf("%s_server1_private_ip", prefix)],
-		Server2PrivateIP: outputs[fmt.Sprintf("%s_server2_private_ip", prefix)],
-		Server3PrivateIP: outputs[fmt.Sprintf("%s_server3_private_ip", prefix)],
-		Server4PrivateIP: outputs[fmt.Sprintf("%s_server4_private_ip", prefix)],
-		Server5PrivateIP: outputs[fmt.Sprintf("%s_server5_private_ip", prefix)],
-		LoadBalancerDNS:  outputs[fmt.Sprintf("%s_aws_lb", prefix)],
-		RancherURL:       outputs[fmt.Sprintf("%s_rancher_url", prefix)],
+		ServerCount:           parseTerraformIntOutput(outputs[fmt.Sprintf("%s_server_count", prefix)]),
+		ServerIPs:             parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_ips", prefix)]),
+		ServerPrivateIPs:      parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_private_ips", prefix)]),
+		Server1IP:             outputs[fmt.Sprintf("%s_server1_ip", prefix)],
+		Server2IP:             outputs[fmt.Sprintf("%s_server2_ip", prefix)],
+		Server3IP:             outputs[fmt.Sprintf("%s_server3_ip", prefix)],
+		Server4IP:             outputs[fmt.Sprintf("%s_server4_ip", prefix)],
+		Server5IP:             outputs[fmt.Sprintf("%s_server5_ip", prefix)],
+		Server1PrivateIP:      outputs[fmt.Sprintf("%s_server1_private_ip", prefix)],
+		Server2PrivateIP:      outputs[fmt.Sprintf("%s_server2_private_ip", prefix)],
+		Server3PrivateIP:      outputs[fmt.Sprintf("%s_server3_private_ip", prefix)],
+		Server4PrivateIP:      outputs[fmt.Sprintf("%s_server4_private_ip", prefix)],
+		Server5PrivateIP:      outputs[fmt.Sprintf("%s_server5_private_ip", prefix)],
+		LoadBalancerDNS:       outputs[fmt.Sprintf("%s_aws_lb", prefix)],
+		RancherURL:            outputs[fmt.Sprintf("%s_rancher_url", prefix)],
+		GPUWorkerIP:           outputs[fmt.Sprintf("%s_gpu_worker_ip", prefix)],
+		GPUWorkerPrivateIP:    outputs[fmt.Sprintf("%s_gpu_worker_private_ip", prefix)],
+		GPUWorkerInstanceType: outputs[fmt.Sprintf("%s_gpu_worker_instance_type", prefix)],
+		GPUWorkerAMI:          outputs[fmt.Sprintf("%s_gpu_worker_ami", prefix)],
+		GPUWorkerSubnetID:     outputs[fmt.Sprintf("%s_gpu_worker_subnet_id", prefix)],
 	}
 	if len(haOutputs.ServerIPs) == 0 {
 		haOutputs.ServerIPs = nonEmptyStrings(haOutputs.Server1IP, haOutputs.Server2IP, haOutputs.Server3IP, haOutputs.Server4IP, haOutputs.Server5IP)
@@ -510,6 +523,8 @@ func maskHAOutputs(haOutputs TerraformOutputs) {
 	maskGitHubActionsValue(haOutputs.Server5PrivateIP)
 	maskGitHubActionsValue(haOutputs.LoadBalancerDNS)
 	maskGitHubActionsURL(haOutputs.RancherURL)
+	maskGitHubActionsValue(haOutputs.GPUWorkerIP)
+	maskGitHubActionsValue(haOutputs.GPUWorkerPrivateIP)
 }
 
 func parseTerraformCSVOutput(value string) []string {

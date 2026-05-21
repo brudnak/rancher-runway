@@ -45,6 +45,16 @@ rke2:
     v1.34.6+rke2r1: "2d24db2184dd6b1a5e281fa45cc9a8234c889394721746f89b5fe953fdaaf40a"
   preload_images: true
 
+gpu_worker:
+  # Optional HA RKE2-only GPU worker node per Rancher cluster.
+  # GPU instances are expensive; destroy the run as soon as testing is done.
+  enabled: false
+  # standard = g5.xlarge, 24 GB GPU memory; large = p5.4xlarge, 80 GB GPU memory.
+  profile: standard
+  instance_type: g5.xlarge
+  ami: ""
+  subnet_id: ""
+
 tf_vars:
   aws_region: "us-east-2"
   aws_prefix: "xyz" # 2 or 3 letters, usually your initials

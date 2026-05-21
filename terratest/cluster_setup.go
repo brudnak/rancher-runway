@@ -27,7 +27,11 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 
 	ips := append([]string{}, haOutputs.ServerIPs...)
 	ips = append(ips, haOutputs.ServerPrivateIPs...)
+	ips = append(ips, haOutputs.GPUWorkerIP, haOutputs.GPUWorkerPrivateIP)
 	for _, ip := range ips {
+		if strings.TrimSpace(ip) == "" {
+			continue
+		}
 		if CheckIPAddress(ip) != "valid" {
 			return fmt.Errorf("invalid IP address: %s", ip)
 		}
@@ -81,6 +85,20 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 				setupErrMutex.Unlock()
 			}
 		}(ip, nodeNum)
+	}
+
+	if strings.TrimSpace(haOutputs.GPUWorkerIP) != "" {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+
+			log.Printf("Setting up GPU worker node with IP %s", ip)
+			if err := setupGPUWorkerNode(ip, token, haOutputs, resolvedPlan); err != nil {
+				setupErrMutex.Lock()
+				setupErr = fmt.Errorf("failed to setup GPU worker node: %w", err)
+				setupErrMutex.Unlock()
+			}
+		}(haOutputs.GPUWorkerIP)
 	}
 
 	wg.Wait()
@@ -629,6 +647,115 @@ tls-san:
 	}
 
 	return fmt.Errorf("timeout waiting for RKE2 to initialize on %s", ip)
+}
+
+func setupGPUWorkerNode(ip, token string, haOutputs TerraformOutputs, resolvedPlan *RancherResolvedPlan) error {
+	rke2K8sVersion := viper.GetString("k8s.version")
+	expectedInstallerSHA256 := viper.GetString("rke2.install_script_sha256")
+	if resolvedPlan != nil {
+		rke2K8sVersion = resolvedPlan.RecommendedRKE2Version
+		expectedInstallerSHA256 = resolvedPlan.InstallerSHA256
+	}
+
+	cmd := "sudo mkdir -p /etc/rancher/rke2"
+	if _, err := RunCommand(cmd, ip); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	firstServerIP := haOutputs.Server1IP
+	if len(haOutputs.ServerIPs) > 0 {
+		firstServerIP = haOutputs.ServerIPs[0]
+	}
+	instanceType := strings.TrimSpace(haOutputs.GPUWorkerInstanceType)
+	if instanceType == "" {
+		instanceType = "unknown"
+	}
+	configContent := fmt.Sprintf(`server: https://%s:9345
+token: %s
+node-label:
+  - "ha-rancher-rke2/gpu-worker=true"
+  - "ha-rancher-rke2/rancher-ai=true"
+  - "ha-rancher-rke2/gpu-instance-type=%s"`,
+		firstServerIP,
+		token,
+		instanceType)
+
+	cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/config.yaml << EOL\n%s\nEOL'", configContent)
+	if _, err := RunCommand(cmd, ip); err != nil {
+		return fmt.Errorf("failed to create config file: %w", err)
+	}
+
+	if viper.GetBool("rke2.preload_images") {
+		log.Printf("[setupGPUWorkerNode] Pre-downloading RKE2 images for %s...", ip)
+
+		cmd = "sudo mkdir -p /var/lib/rancher/rke2/agent/images"
+		if _, err := RunCommand(cmd, ip); err != nil {
+			return fmt.Errorf("failed to create images directory: %w", err)
+		}
+
+		cmd = buildRKE2ImagesDownloadCommand(rke2K8sVersion)
+		if _, err := RunCommand(cmd, ip); err != nil {
+			return fmt.Errorf("failed to download/validate RKE2 images: %w", err)
+		}
+
+		cmd = "sudo mv /tmp/rke2-images.linux-amd64.tar.zst /var/lib/rancher/rke2/agent/images/"
+		if _, err := RunCommand(cmd, ip); err != nil {
+			return fmt.Errorf("failed to move images: %w", err)
+		}
+	}
+
+	dockerUsername := strings.TrimSpace(os.Getenv("DOCKERHUB_USERNAME"))
+	dockerPassword := strings.TrimSpace(os.Getenv("DOCKERHUB_PASSWORD"))
+	if dockerUsername != "" && dockerPassword != "" {
+		authString := fmt.Sprintf("%s:%s", dockerUsername, dockerPassword)
+		encodedAuth := base64.StdEncoding.EncodeToString([]byte(authString))
+		maskGitHubActionsValue(encodedAuth)
+
+		registriesConfig := fmt.Sprintf(`configs:
+  "registry-1.docker.io":
+    auth:
+      auth: %s
+  "docker.io":
+    auth:
+      auth: %s`, encodedAuth, encodedAuth)
+
+		cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/registries.yaml << EOL\n%s\nEOL'", registriesConfig)
+		if _, err := RunCommand(cmd, ip); err != nil {
+			return fmt.Errorf("failed to create registries.yaml: %w", err)
+		}
+	}
+
+	log.Printf("[setupGPUWorkerNode] Installing RKE2 agent version %s on %s...", rke2K8sVersion, ip)
+	cmd, err := buildRKE2InstallCommand("agent", rke2K8sVersion, expectedInstallerSHA256)
+	if err != nil {
+		return fmt.Errorf("failed to build RKE2 install command: %w", err)
+	}
+	if _, err := RunCommand(cmd, ip); err != nil {
+		return fmt.Errorf("failed to install RKE2 agent: %w", err)
+	}
+
+	cmd = "sudo systemctl enable rke2-agent.service"
+	if _, err := RunCommand(cmd, ip); err != nil {
+		return fmt.Errorf("failed to enable RKE2 agent: %w", err)
+	}
+
+	cmd = "sudo systemctl start rke2-agent.service"
+	if _, err := RunCommand(cmd, ip); err != nil {
+		return fmt.Errorf("failed to start RKE2 agent: %w", err)
+	}
+
+	maxRetries := 30
+	for i := 0; i < maxRetries; i++ {
+		cmd = "sudo systemctl is-active --quiet rke2-agent && echo 'active' || echo 'inactive'"
+		status, err := RunCommand(cmd, ip)
+		if err == nil && strings.TrimSpace(status) == "active" {
+			log.Printf("[setupGPUWorkerNode] RKE2 agent is active on GPU worker %s", ip)
+			return nil
+		}
+		time.Sleep(10 * time.Second)
+	}
+
+	return fmt.Errorf("timeout waiting for RKE2 agent to initialize on GPU worker %s", ip)
 }
 
 func getAndSaveKubeconfig(serverIP string, haDir string) error {

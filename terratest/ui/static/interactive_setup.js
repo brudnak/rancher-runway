@@ -20,6 +20,13 @@ let config = setupData.config || {
   bootstrapPassword: '',
   preloadImages: false,
   serverCount: 3,
+  gpuWorker: {
+    enabled: false,
+    profile: 'standard',
+    instanceType: 'g5.xlarge',
+    ami: '',
+    subnetId: ''
+  },
   tfVars: {}
 }
 const normalizeDeploymentType = value => {
@@ -56,6 +63,10 @@ let linodeImageSearchTag = ''
 let linodeImageSearchError = ''
 let linodeImageSearchPending = false
 let linodeCustomImageLocked = true
+let gpuWorkerOverridesUnlocked = false
+let gpuWorkerPriceLookup = null
+let gpuWorkerPriceLookupPending = false
+let gpuWorkerPriceLookupError = ''
 
 const rowClass = 'grid gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center'
 const inputClass = 'w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100'
@@ -130,6 +141,21 @@ const serverCountInputEl = byId('serverCountInput')
 const serverCountButtonEls = setupQueryAll('button[data-server-count]')
 const rke2ServerLayoutFieldsetEl = byId('rke2ServerLayoutFieldset')
 const serverTopologyHintEl = byId('serverTopologyHint')
+const gpuWorkerBoxEl = byId('gpuWorkerBox')
+const gpuWorkerToggleEl = byId('gpuWorkerToggle')
+const gpuWorkerOptionsEl = byId('gpuWorkerOptions')
+const gpuWorkerProfileInputEl = byId('gpuWorkerProfileInput')
+const gpuWorkerProfileButtonEls = setupQueryAll('button[data-gpu-profile]')
+const gpuWorkerHeaderHintEl = byId('gpuWorkerHeaderHint')
+const gpuWorkerPriceBoxEl = byId('gpuWorkerPriceBox')
+const gpuWorkerAmiInputEl = byId('gpuWorkerAmiInput')
+const gpuWorkerSubnetInputEl = byId('gpuWorkerSubnetInput')
+const gpuWorkerAdvancedToggleEl = byId('gpuWorkerAdvancedToggle')
+const gpuWorkerAdvancedPanelEl = byId('gpuWorkerAdvancedPanel')
+const gpuWorkerAdvancedSummaryEl = byId('gpuWorkerAdvancedSummary')
+const gpuWorkerLargeWarningEl = byId('gpuWorkerLargeWarning')
+const gpuWorkerPriceLookupBtnEl = byId('gpuWorkerPriceLookupBtn')
+const gpuWorkerPriceLookupSummaryEl = byId('gpuWorkerPriceLookupSummary')
 const totalInstancesLabelEl = byId('totalInstancesLabel')
 const userFirstNameInputEl = byId('userFirstNameInput')
 const userLastNameInputEl = byId('userLastNameInput')
@@ -597,7 +623,13 @@ const activeInstanceLabel = () => isHostedTenantDeployment() || isLinodeDockerDe
 
 const minimumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMinInstances : 1
 
-const maximumAutoRows = () => isHostedTenantDeployment() ? hostedTenantMaxInstances : isLinodeDockerDeployment() ? linodeDockerMaxInstances : Number.POSITIVE_INFINITY
+const maximumAutoRows = () => isHostedTenantDeployment()
+  ? hostedTenantMaxInstances
+  : isLinodeDockerDeployment()
+    ? linodeDockerMaxInstances
+    : gpuWorkerEnabled()
+      ? 1
+      : Number.POSITIVE_INFINITY
 
 const saveDeploymentVersions = () => {
   deploymentVersionSets.set(deploymentType, versions.slice())
@@ -851,6 +883,19 @@ const renderEditableConfig = () => {
   if (serverCountInputEl) {
     serverCountInputEl.value = String(normalizeServerCount(config.serverCount))
   }
+  if (gpuWorkerToggleEl) {
+    gpuWorkerToggleEl.checked = Boolean(config.gpuWorker?.enabled)
+  }
+  if (gpuWorkerProfileInputEl) {
+    gpuWorkerProfileInputEl.value = normalizeGPUWorkerProfile(config.gpuWorker?.profile)
+  }
+  if (gpuWorkerAmiInputEl) {
+    gpuWorkerAmiInputEl.value = config.gpuWorker?.ami || ''
+  }
+  if (gpuWorkerSubnetInputEl) {
+    gpuWorkerSubnetInputEl.value = config.gpuWorker?.subnetId || ''
+  }
+  gpuWorkerOverridesUnlocked = Boolean(config.gpuWorker?.ami || config.gpuWorker?.subnetId)
   userFirstNameInputEl.value = config.userFirstName || ''
   userLastNameInputEl.value = config.userLastName || ''
   if (hostedRdsPasswordInputEl) {
@@ -893,6 +938,7 @@ const renderEditableConfig = () => {
   renderLinodeSshRootPasswordGenerateState()
   renderLinodeImageSearch()
   renderServerTopology()
+  renderGPUWorkerOptions()
 }
 
 const renderDeploymentType = () => {
@@ -909,6 +955,7 @@ const renderDeploymentType = () => {
   linodeDockerPanelEl?.classList.toggle('hidden', !linode)
   customHostnameBoxEl?.classList.toggle('hidden', hosted || linode)
   rke2ServerLayoutFieldsetEl?.classList.toggle('hidden', hosted || linode)
+  gpuWorkerBoxEl?.classList.toggle('hidden', hosted || linode)
   distroFieldEl?.classList.toggle('hidden', linode)
   preloadImagesLabelEl?.classList.toggle('hidden', linode)
   rancherSettingsPanelEl?.classList.toggle('hidden', false)
@@ -926,6 +973,11 @@ const renderDeploymentType = () => {
     }
     if (preloadImagesToggleEl) {
       preloadImagesToggleEl.checked = false
+    }
+  }
+  if (hosted || linode) {
+    if (gpuWorkerToggleEl) {
+      gpuWorkerToggleEl.checked = false
     }
   }
   userFirstNameInputEl?.closest('label')?.classList.toggle('hidden', linode)
@@ -989,19 +1041,20 @@ const renderDeploymentType = () => {
   }
   renderHostedRDSPasswordGenerateState()
   renderLinodeSshRootPasswordGenerateState()
+  renderGPUWorkerOptions()
   setResponseActionPending('')
   setPanelLifecycleState(panelLifecycleDetail)
 }
 
 const renderRows = () => {
   ensureDeploymentCompatibleRows()
-  if (customHostnameEnabled && versions.length !== 1) {
+  if (singleHARunLocked() && versions.length !== 1) {
     versions = [versions[0] || '']
     saveDeploymentVersions()
   }
 
   rowsEl.innerHTML = versions.map((version, index) => {
-    const removeDisabled = customHostnameEnabled || versions.length <= minimumAutoRows() ? ' disabled' : ''
+    const removeDisabled = singleHARunLocked() || versions.length <= minimumAutoRows() ? ' disabled' : ''
     const label = autoRowLabel(index)
 
     return [
@@ -1014,7 +1067,7 @@ const renderRows = () => {
   }).join('')
 
   totalInstancesValueEl.textContent = String(versions.length)
-  const addDisabled = customHostnameEnabled || versions.length >= maximumAutoRows()
+  const addDisabled = singleHARunLocked() || versions.length >= maximumAutoRows()
   addBtnEl.disabled = submitting || addDisabled
   addBtnEl.setAttribute('aria-disabled', addDisabled ? 'true' : 'false')
   addBtnEl.classList.toggle('cursor-not-allowed', addDisabled)
@@ -1023,7 +1076,11 @@ const renderRows = () => {
     ? 'Hosted tenant K3s supports up to 4 total Rancher instances: 1 host plus 3 tenants.'
     : isLinodeDockerDeployment() && versions.length >= linodeDockerMaxInstances
       ? 'Linode Docker setup supports up to 6 Rancher instances per run.'
-    : ''
+      : gpuWorkerEnabled()
+        ? 'GPU worker runs are limited to one HA per run slot.'
+        : customHostnameEnabled
+          ? 'Custom Rancher URL is limited to one HA.'
+          : ''
 
   rowsEl.querySelectorAll('input[data-index]').forEach(input => {
     input.addEventListener('input', event => {
@@ -1039,7 +1096,7 @@ const renderRows = () => {
 
   rowsEl.querySelectorAll('button[data-remove-index]').forEach(button => {
     button.addEventListener('click', () => {
-      if (versions.length <= minimumAutoRows() || submitting || customHostnameEnabled) {
+      if (versions.length <= minimumAutoRows() || submitting || singleHARunLocked()) {
         return
       }
 
@@ -1086,6 +1143,243 @@ const renderServerTopology = () => {
   }
 }
 
+const normalizeGPUWorkerProfile = value => {
+  const normalized = String(value || '').trim().toLowerCase()
+  return normalized === 'large' ? 'large' : 'standard'
+}
+
+const gpuWorkerInstanceType = profile => {
+  switch (normalizeGPUWorkerProfile(profile)) {
+    case 'large':
+      return 'p5.4xlarge'
+    default:
+      return 'g5.xlarge'
+  }
+}
+
+const gpuWorkerProfileLabel = profile => normalizeGPUWorkerProfile(profile) === 'large'
+  ? 'Large p5.4xlarge (1x NVIDIA H100, 80 GB GPU memory)'
+  : 'Standard g5.xlarge (1x NVIDIA A10G, 24 GB GPU memory)'
+
+const gpuWorkerModelName = profile => normalizeGPUWorkerProfile(profile) === 'large' ? 'gpt-oss:120b' : 'gpt-oss:20b'
+
+const gpuWorkerEnabled = () => Boolean(gpuWorkerToggleEl?.checked) && !isHostedTenantDeployment() && !isLinodeDockerDeployment()
+
+const singleHARunLocked = () => customHostnameEnabled || gpuWorkerEnabled()
+
+const currentGPUWorkerProfile = () => normalizeGPUWorkerProfile(gpuWorkerProfileInputEl?.value || config.gpuWorker?.profile)
+
+const currentAWSRegion = () => String(tfVarInput('aws_region')?.value || config.tfVars?.aws_region || '').trim()
+
+const formatUSD = value => {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) {
+    return ''
+  }
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: amount >= 10 ? 2 : 4,
+    maximumFractionDigits: amount >= 10 ? 2 : 4
+  }).format(amount)
+}
+
+const renderGPUWorkerPriceLookup = () => {
+  const enabled = gpuWorkerEnabled()
+  const profile = currentGPUWorkerProfile()
+  const instanceType = gpuWorkerInstanceType(profile)
+  const region = currentAWSRegion()
+  if (gpuWorkerPriceLookupBtnEl) {
+    gpuWorkerPriceLookupBtnEl.disabled = submitting || !enabled || gpuWorkerPriceLookupPending
+    gpuWorkerPriceLookupBtnEl.innerHTML = gpuWorkerPriceLookupPending
+      ? '<span class="spinner mr-2 !h-3 !w-3 !border-[1.5px]"></span>Looking up'
+      : 'Lookup AWS price'
+    gpuWorkerPriceLookupBtnEl.classList.toggle('opacity-60', !enabled)
+    gpuWorkerPriceLookupBtnEl.classList.toggle('cursor-not-allowed', !enabled)
+  }
+  if (!gpuWorkerPriceLookupSummaryEl) {
+    return
+  }
+  gpuWorkerPriceLookupSummaryEl.className = 'mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400'
+  if (!enabled) {
+    gpuWorkerPriceLookupSummaryEl.textContent = 'Turn GPU on to look up the current Linux on-demand hourly price.'
+    return
+  }
+  if (gpuWorkerPriceLookupPending) {
+    gpuWorkerPriceLookupSummaryEl.textContent = `Checking AWS Pricing for ${instanceType} in ${region || 'the configured AWS region'}...`
+    return
+  }
+  if (gpuWorkerPriceLookupError) {
+    gpuWorkerPriceLookupSummaryEl.textContent = gpuWorkerPriceLookupError
+    gpuWorkerPriceLookupSummaryEl.className = 'mt-1 text-xs font-medium leading-5 text-rose-600 dark:text-rose-300'
+    return
+  }
+  if (gpuWorkerPriceLookup && gpuWorkerPriceLookup.instanceType === instanceType && gpuWorkerPriceLookup.region === region) {
+    gpuWorkerPriceLookupSummaryEl.textContent = `${formatUSD(gpuWorkerPriceLookup.hourlyUSD)}/hr on-demand Linux in ${region}. About ${formatUSD(gpuWorkerPriceLookup.fourHourUSD)} for 4h or ${formatUSD(gpuWorkerPriceLookup.dayUSD)} for 24h, before EBS and other resources.`
+    return
+  }
+  gpuWorkerPriceLookupSummaryEl.textContent = `Use ${region || 'the configured AWS region'} to look up the current ${instanceType} Linux on-demand hourly price.`
+}
+
+const lookupGPUWorkerPrice = async () => {
+  if (gpuWorkerPriceLookupPending || !gpuWorkerEnabled()) {
+    return
+  }
+  const instanceType = gpuWorkerInstanceType(currentGPUWorkerProfile())
+  const region = currentAWSRegion()
+  if (!region) {
+    gpuWorkerPriceLookupError = 'Set AWS region before looking up GPU pricing.'
+    renderGPUWorkerPriceLookup()
+    return
+  }
+
+  gpuWorkerPriceLookupPending = true
+  gpuWorkerPriceLookupError = ''
+  renderGPUWorkerPriceLookup()
+
+  try {
+    const response = await fetch(setupEndpoint(`/api/gpu-price?token=${encodeURIComponent(token)}`), {
+      method: 'POST',
+      cache: 'no-store',
+      credentials: 'same-origin',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        instanceType,
+        region
+      })
+    })
+    if (!response.ok) {
+      throw new Error(await response.text() || 'GPU price lookup failed.')
+    }
+    gpuWorkerPriceLookup = await response.json()
+    editorStatusBoxEl.textContent = `AWS price lookup returned ${formatUSD(gpuWorkerPriceLookup.hourlyUSD)}/hr for ${gpuWorkerPriceLookup.instanceType} in ${gpuWorkerPriceLookup.region}.`
+  } catch (error) {
+    gpuWorkerPriceLookup = null
+    gpuWorkerPriceLookupError = error instanceof Error ? error.message : 'GPU price lookup failed.'
+  } finally {
+    gpuWorkerPriceLookupPending = false
+    renderGPUWorkerPriceLookup()
+  }
+}
+
+const enforceSingleHAForGPU = () => {
+  if (!gpuWorkerEnabled()) {
+    return
+  }
+  if (versions.length > 1) {
+    versions = [versions[0] || '']
+    saveDeploymentVersions()
+  }
+  if (manualCommands.length > 1) {
+    manualCommands = [manualCommands[0] || buildSeedHelmCommand(0)]
+    k8sVersions = [k8sVersions[0] || defaultK8SVersion(0)]
+    installerSHA256s = [installerSHA256s[0] || '']
+    manualValidationResults = []
+    manualRKE2Recommendations = []
+  }
+}
+
+const renderGPUWorkerOptions = () => {
+  const hidden = isHostedTenantDeployment() || isLinodeDockerDeployment()
+  gpuWorkerBoxEl?.classList.toggle('hidden', hidden)
+  if (hidden) {
+    if (gpuWorkerToggleEl) {
+      gpuWorkerToggleEl.checked = false
+    }
+    return
+  }
+
+  const enabled = gpuWorkerEnabled()
+  const profile = currentGPUWorkerProfile()
+  const large = profile === 'large'
+  const overridesLocked = !gpuWorkerOverridesUnlocked || !enabled
+  gpuWorkerBoxEl?.classList.toggle('border-rose-300', enabled && large)
+  gpuWorkerBoxEl?.classList.toggle('border-amber-300', enabled && !large)
+  gpuWorkerBoxEl?.classList.toggle('border-zinc-200', !enabled)
+  gpuWorkerBoxEl?.classList.toggle('bg-rose-50/60', enabled && large)
+  gpuWorkerBoxEl?.classList.toggle('bg-amber-50/70', enabled && !large)
+  gpuWorkerBoxEl?.classList.toggle('bg-white', !enabled)
+  gpuWorkerBoxEl?.classList.toggle('dark:border-rose-500/30', enabled && large)
+  gpuWorkerBoxEl?.classList.toggle('dark:border-amber-500/25', enabled && !large)
+  gpuWorkerBoxEl?.classList.toggle('dark:border-white/10', !enabled)
+  gpuWorkerBoxEl?.classList.toggle('dark:bg-rose-500/10', enabled && large)
+  gpuWorkerBoxEl?.classList.toggle('dark:bg-amber-500/10', enabled && !large)
+  gpuWorkerBoxEl?.classList.toggle('dark:bg-black/20', !enabled)
+  if (gpuWorkerOptionsEl) {
+    gpuWorkerOptionsEl.classList.toggle('hidden', !enabled)
+  }
+  gpuWorkerProfileButtonEls.forEach(button => {
+    const buttonProfile = normalizeGPUWorkerProfile(button.dataset.gpuProfile)
+    const active = buttonProfile === profile
+    const activeLarge = active && buttonProfile === 'large'
+    const activeStandard = active && buttonProfile === 'standard'
+    button.setAttribute('aria-checked', active ? 'true' : 'false')
+    button.classList.toggle('border-emerald-300', activeStandard)
+    button.classList.toggle('bg-emerald-50', activeStandard)
+    button.classList.toggle('dark:border-emerald-500/30', activeStandard)
+    button.classList.toggle('dark:bg-emerald-500/15', activeStandard)
+    button.classList.toggle('border-rose-300', activeLarge)
+    button.classList.toggle('bg-rose-50', activeLarge)
+    button.classList.toggle('dark:border-rose-500/30', activeLarge)
+    button.classList.toggle('dark:bg-rose-500/15', activeLarge)
+    button.classList.toggle('border-zinc-200', !active)
+    button.classList.toggle('bg-white', !active)
+    button.classList.toggle('dark:border-white/10', !active)
+    button.classList.toggle('dark:bg-black/20', !active)
+    button.disabled = submitting || !enabled
+  })
+  if (gpuWorkerHeaderHintEl) {
+    gpuWorkerHeaderHintEl.textContent = enabled
+      ? `Enabled: this slot is limited to one HA and will add one ${gpuWorkerInstanceType(profile)} RKE2 agent/worker node. Destroy promptly when testing is done.`
+      : 'Off by default. When enabled, this run slot is limited to one Rancher HA and gets one worker-only GPU node for local Ollama/Liz testing.'
+  }
+  gpuWorkerLargeWarningEl?.classList.toggle('hidden', !enabled || !large)
+  if (gpuWorkerAdvancedToggleEl) {
+    gpuWorkerAdvancedToggleEl.disabled = submitting || !enabled
+    gpuWorkerAdvancedToggleEl.textContent = gpuWorkerOverridesUnlocked && enabled ? 'Lock overrides' : 'Unlock overrides'
+    gpuWorkerAdvancedToggleEl.classList.toggle('opacity-60', !enabled)
+    gpuWorkerAdvancedToggleEl.classList.toggle('cursor-not-allowed', !enabled)
+  }
+  if (gpuWorkerAdvancedPanelEl) {
+    gpuWorkerAdvancedPanelEl.classList.toggle('opacity-60', overridesLocked)
+  }
+  if (gpuWorkerAdvancedSummaryEl) {
+    const ami = String(gpuWorkerAmiInputEl?.value || '').trim()
+    const subnet = String(gpuWorkerSubnetInputEl?.value || '').trim()
+    gpuWorkerAdvancedSummaryEl.textContent = overridesLocked
+      ? 'Auto-chosen unless you unlock: latest GPU-ready Ubuntu 22.04 AMI and automatic subnet placement.'
+      : ami || subnet
+        ? 'Overrides are unlocked. These values replace the auto-selected GPU AMI or subnet.'
+        : 'Overrides are unlocked, but blank fields still use the auto-selected AMI and subnet.'
+  }
+  if (gpuWorkerPriceBoxEl) {
+    gpuWorkerPriceBoxEl.textContent = enabled
+      ? large
+        ? `High spend warning: this creates one ${gpuWorkerProfileLabel(profile)} worker plus EBS for ${gpuWorkerModelName(profile)} testing. p5 capacity is expensive and quota-sensitive; destroy this run as soon as the test is done.`
+        : `Cost warning: this creates one ${gpuWorkerProfileLabel(profile)} worker plus EBS for ${gpuWorkerModelName(profile)} testing. Leave it running only while you are actively testing GPU workloads.`
+      : 'GPU is off. Turn it on only when you are actively testing Liz/Ollama workloads.'
+    gpuWorkerPriceBoxEl.className = enabled
+      ? large
+        ? 'rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold leading-5 text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100'
+        : 'rounded-lg border border-amber-200 bg-white/70 px-3 py-2 text-xs leading-5 text-amber-900 dark:border-amber-500/20 dark:bg-black/20 dark:text-amber-100/80'
+      : 'rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400'
+  }
+  if (gpuWorkerAmiInputEl) {
+    gpuWorkerAmiInputEl.disabled = submitting || !enabled
+    gpuWorkerAmiInputEl.readOnly = overridesLocked
+    setLockedInputTone(gpuWorkerAmiInputEl, overridesLocked)
+  }
+  if (gpuWorkerSubnetInputEl) {
+    gpuWorkerSubnetInputEl.disabled = submitting || !enabled
+    gpuWorkerSubnetInputEl.readOnly = overridesLocked
+    setLockedInputTone(gpuWorkerSubnetInputEl, overridesLocked)
+  }
+  renderGPUWorkerPriceLookup()
+}
+
 const renderMode = () => {
   if (isHostedTenantDeployment() || isLinodeDockerDeployment()) {
     setupMode = 'auto'
@@ -1117,9 +1411,10 @@ const renderMode = () => {
     renderRows()
   }
   if (manualAddBtnEl) {
-    manualAddBtnEl.disabled = submitting || customHostnameEnabled || isHostedTenantDeployment() || isLinodeDockerDeployment()
-    manualAddBtnEl.classList.toggle('cursor-not-allowed', customHostnameEnabled || isHostedTenantDeployment() || isLinodeDockerDeployment())
-    manualAddBtnEl.classList.toggle('opacity-50', customHostnameEnabled || isHostedTenantDeployment() || isLinodeDockerDeployment())
+    const manualAddLocked = singleHARunLocked() || isHostedTenantDeployment() || isLinodeDockerDeployment()
+    manualAddBtnEl.disabled = submitting || manualAddLocked
+    manualAddBtnEl.classList.toggle('cursor-not-allowed', manualAddLocked)
+    manualAddBtnEl.classList.toggle('opacity-50', manualAddLocked)
   }
   totalInstancesValueEl.textContent = String(activeHACount())
   setSubmittingState(submitting)
@@ -1232,8 +1527,11 @@ const openHelmValidationModal = () => {
 
 const renderManualRows = () => {
   ensureManualRows()
+  if (gpuWorkerEnabled() && manualCommands.length > 1) {
+    enforceSingleHAForGPU()
+  }
   manualRowsEl.innerHTML = manualCommands.map((command, index) => {
-    const removeDisabled = customHostnameEnabled || manualCommands.length <= 1 ? ' disabled' : ''
+    const removeDisabled = singleHARunLocked() || manualCommands.length <= 1 ? ' disabled' : ''
     return `
       <div class="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none">
         <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -1310,7 +1608,7 @@ const renderManualRows = () => {
   })
   manualRowsEl.querySelectorAll('button[data-manual-remove-index]').forEach(button => {
     button.addEventListener('click', () => {
-      if (manualCommands.length <= 1 || submitting || customHostnameEnabled) {
+      if (manualCommands.length <= 1 || submitting || singleHARunLocked()) {
         return
       }
       const index = Number(button.getAttribute('data-manual-remove-index'))
@@ -1408,7 +1706,7 @@ const ensureManualRows = () => {
   if (!manualCommands.length) {
     manualCommands = [buildSeedHelmCommand(0)]
   }
-  if (customHostnameEnabled && manualCommands.length !== 1) {
+  if (singleHARunLocked() && manualCommands.length !== 1) {
     manualCommands = [manualCommands[0] || buildSeedHelmCommand(0)]
     k8sVersions = [k8sVersions[0] || defaultK8SVersion(0)]
     installerSHA256s = [installerSHA256s[0] || '']
@@ -1650,6 +1948,10 @@ const validateSetup = () => {
     }
   }
 
+  if (gpuWorkerEnabled() && activeHACount() !== 1) {
+    return { message: 'GPU worker runs are limited to one Rancher HA per run slot.', target: gpuWorkerToggleEl }
+  }
+
   const prefixInput = setupQuery('input[data-tf-var="aws_prefix"]')
   const prefix = normalizedAWSPrefix()
 
@@ -1681,6 +1983,17 @@ const validateSetup = () => {
       message: 'AWS PEM key name is required.',
       target: pemKeyInput,
       notice: true
+    }
+  }
+
+  if (gpuWorkerEnabled()) {
+    const ami = String(gpuWorkerAmiInputEl?.value || '').trim()
+    const subnet = String(gpuWorkerSubnetInputEl?.value || '').trim()
+    if (ami && !/^ami-[a-zA-Z0-9]+$/.test(ami)) {
+      return { message: 'GPU AMI override must look like ami-xxxxxxxx, or be left blank for auto-discovery.', target: gpuWorkerAmiInputEl }
+    }
+    if (subnet && !/^subnet-[a-zA-Z0-9]+$/.test(subnet)) {
+      return { message: 'GPU subnet override must look like subnet-xxxxxxxx, or be left blank for automatic placement.', target: gpuWorkerSubnetInputEl }
     }
   }
 
@@ -1903,7 +2216,7 @@ const setSubmittingState = nextSubmitting => {
     const deploymentButton = button === haRke2DeploymentBtnEl || button === hostedTenantDeploymentBtnEl || button === linodeDockerDeploymentBtnEl
     const disabled = deploymentButton
       ? nextSubmitting || panelBooting
-      : actionDisabled || (button === manualAddBtnEl && customHostnameEnabled) || (button === manualModeBtnEl && (isHostedTenantDeployment() || isLinodeDockerDeployment()))
+      : actionDisabled || (button === manualAddBtnEl && singleHARunLocked()) || (button === manualModeBtnEl && (isHostedTenantDeployment() || isLinodeDockerDeployment()))
     button.disabled = disabled
     button.classList.toggle('cursor-not-allowed', disabled)
     button.classList.toggle('opacity-60', disabled)
@@ -1930,6 +2243,12 @@ const setSubmittingState = nextSubmitting => {
   bootstrapPasswordInputEl.disabled = nextSubmitting
   bootstrapPasswordToggleEl.disabled = nextSubmitting
   preloadImagesToggleEl.disabled = nextSubmitting
+  if (gpuWorkerToggleEl) {
+    gpuWorkerToggleEl.disabled = nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment()
+  }
+  if (gpuWorkerAdvancedToggleEl) {
+    gpuWorkerAdvancedToggleEl.disabled = nextSubmitting || !gpuWorkerEnabled()
+  }
   serverCountButtonEls.forEach(button => {
     button.disabled = nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment()
     button.classList.toggle('cursor-not-allowed', nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment())
@@ -1937,6 +2256,7 @@ const setSubmittingState = nextSubmitting => {
   })
   userFirstNameInputEl.disabled = nextSubmitting
   userLastNameInputEl.disabled = nextSubmitting
+  renderGPUWorkerOptions()
 
   tfVarInputEls.forEach(input => {
     input.disabled = nextSubmitting
@@ -1952,11 +2272,11 @@ const setSubmittingState = nextSubmitting => {
 
   rowsEl.querySelectorAll('input, button[data-remove-index]').forEach(element => {
     element.disabled = nextSubmitting || (panelBooting && element.hasAttribute('data-remove-index')) ||
-      (element.hasAttribute('data-remove-index') && (customHostnameEnabled || versions.length <= minimumAutoRows()))
+      (element.hasAttribute('data-remove-index') && (singleHARunLocked() || versions.length <= minimumAutoRows()))
   })
   manualRowsEl.querySelectorAll('textarea, input, button').forEach(element => {
     element.disabled = nextSubmitting || panelBooting || panelLifecycleBusy ||
-      (element.hasAttribute('data-manual-remove-index') && manualCommands.length <= 1)
+      (element.hasAttribute('data-manual-remove-index') && (singleHARunLocked() || manualCommands.length <= 1))
   })
 }
 
@@ -2187,6 +2507,28 @@ const prepareSetupSubmit = async event => {
 
   if (!pemConfirmed) {
     return
+  }
+
+  if (gpuWorkerEnabled()) {
+    const profile = currentGPUWorkerProfile()
+    const large = profile === 'large'
+    const instanceType = gpuWorkerInstanceType(profile)
+    const region = currentAWSRegion()
+    const priceLine = gpuWorkerPriceLookup && gpuWorkerPriceLookup.instanceType === instanceType && gpuWorkerPriceLookup.region === region
+      ? ` Latest lookup: ${formatUSD(gpuWorkerPriceLookup.hourlyUSD)}/hr on-demand Linux in ${region}, before EBS and other resources.`
+      : ' Use "Lookup AWS price" in the GPU section if you want the current on-demand rate before continuing.'
+    const gpuConfirmed = await showConfirmModal({
+      title: large ? 'Confirm H100 GPU spend' : 'Confirm GPU worker spend',
+      body: large
+        ? `This will add one ${gpuWorkerProfileLabel(profile)} worker node to this single HA RKE2 run for Liz AI assistant testing. p5.4xlarge H100 capacity has materially higher on-demand cost and may require AWS quota or regional capacity. Destroy this run as soon as GPU testing is done.${priceLine}`
+        : `This will add one ${gpuWorkerProfileLabel(profile)} worker node to this single HA RKE2 run for Liz AI assistant testing. GPU instances can get expensive quickly. Destroy this run as soon as GPU testing is done.${priceLine}`,
+      confirmText: large ? 'Use H100 GPU' : 'Add GPU worker',
+      cancelText: 'Go back'
+    })
+
+    if (!gpuConfirmed) {
+      return
+    }
   }
 
   if (isHostedTenantDeployment()) {
@@ -2475,6 +2817,15 @@ addBtnEl.addEventListener('click', () => {
     return
   }
 
+  if (gpuWorkerEnabled()) {
+    showNoticeModal({
+      title: 'GPU runs use one HA',
+      body: 'A GPU worker run is limited to one Rancher HA per slot so setup cannot accidentally create multiple GPU worker nodes. Turn GPU off if you want to add more HAs.',
+      confirmText: 'Got it'
+    })
+    return
+  }
+
   if (customHostnameEnabled) {
     showNoticeModal({
       title: 'Custom URL is limited to one HA',
@@ -2500,8 +2851,14 @@ addBtnEl.addEventListener('click', () => {
 })
 
 manualAddBtnEl.addEventListener('click', () => {
-  if (submitting || customHostnameEnabled) {
-    if (customHostnameEnabled) {
+  if (submitting || singleHARunLocked()) {
+    if (gpuWorkerEnabled()) {
+      showNoticeModal({
+        title: 'GPU runs use one HA',
+        body: 'A GPU worker run is limited to one Rancher HA per slot so setup cannot accidentally create multiple GPU worker nodes. Turn GPU off if you want to add more HAs.',
+        confirmText: 'Got it'
+      })
+    } else if (customHostnameEnabled) {
       showNoticeModal({
         title: 'Custom URL is limited to one HA',
         body: 'A custom Rancher URL creates exactly one HA because the DNS name must be unique. Turn off "Use a custom Rancher URL" if you want to add more than one HA.',
@@ -2640,6 +2997,63 @@ serverCountButtonEls.forEach(button => {
     clearValidationError()
     renderServerTopology()
   })
+})
+
+gpuWorkerToggleEl?.addEventListener('change', () => {
+  clearValidationError()
+  if (gpuWorkerEnabled()) {
+    enforceSingleHAForGPU()
+    renderRows()
+    renderManualRows()
+    showNoticeModal({
+      title: 'GPU runs use one HA',
+      body: 'This run slot is now limited to one Rancher HA so setup creates only one GPU worker node. Turn GPU off if you want multiple HAs in this slot.',
+      confirmText: 'Got it'
+    })
+  } else {
+    gpuWorkerOverridesUnlocked = Boolean(String(gpuWorkerAmiInputEl?.value || '').trim() || String(gpuWorkerSubnetInputEl?.value || '').trim())
+  }
+  renderGPUWorkerOptions()
+})
+
+gpuWorkerProfileButtonEls.forEach(button => {
+  button.addEventListener('click', () => {
+    if (button.disabled || !gpuWorkerProfileInputEl) {
+      return
+    }
+    gpuWorkerProfileInputEl.value = normalizeGPUWorkerProfile(button.dataset.gpuProfile)
+    gpuWorkerPriceLookup = null
+    gpuWorkerPriceLookupError = ''
+    clearValidationError()
+    if (normalizeGPUWorkerProfile(button.dataset.gpuProfile) === 'large') {
+      showNoticeModal({
+        title: 'Large GPU is high spend',
+        body: 'p5.4xlarge uses H100 capacity for gpt-oss:120b testing. It is materially more expensive than the standard g5.xlarge option and may fail if AWS quota or regional capacity is unavailable.',
+        confirmText: 'I understand'
+      })
+    }
+    renderGPUWorkerOptions()
+  })
+})
+
+gpuWorkerAdvancedToggleEl?.addEventListener('click', () => {
+  if (submitting || !gpuWorkerEnabled()) {
+    return
+  }
+  gpuWorkerOverridesUnlocked = !gpuWorkerOverridesUnlocked
+  renderGPUWorkerOptions()
+})
+
+gpuWorkerPriceLookupBtnEl?.addEventListener('click', lookupGPUWorkerPrice)
+
+gpuWorkerAmiInputEl?.addEventListener('input', () => {
+  clearValidationError()
+  renderGPUWorkerOptions()
+})
+
+gpuWorkerSubnetInputEl?.addEventListener('input', () => {
+  clearValidationError()
+  renderGPUWorkerOptions()
 })
 
 bootstrapPasswordToggleEl.addEventListener('click', toggleBootstrapPasswordVisibility)
@@ -2826,6 +3240,15 @@ lockToggleEls.forEach(button => {
 })
 
 lockedFieldInputEls.forEach(input => {
+  input.addEventListener('input', () => {
+    clearValidationError()
+    if (input.getAttribute('data-tf-var') === 'aws_region') {
+      gpuWorkerPriceLookup = null
+      gpuWorkerPriceLookupError = ''
+      renderGPUWorkerPriceLookup()
+    }
+  })
+
   input.addEventListener('blur', () => {
     if (submitting) {
       return

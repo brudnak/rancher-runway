@@ -26,6 +26,10 @@ type PreflightConfigUpdate struct {
 	BootstrapPassword     string            `json:"bootstrapPassword"`
 	PreloadImages         bool              `json:"preloadImages"`
 	ServerCount           int               `json:"serverCount"`
+	GPUWorkerEnabled      bool              `json:"gpuWorkerEnabled"`
+	GPUWorkerProfile      string            `json:"gpuWorkerProfile"`
+	GPUWorkerAMI          string            `json:"gpuWorkerAmi"`
+	GPUWorkerSubnetID     string            `json:"gpuWorkerSubnetId"`
 	HostedRDSPassword     string            `json:"hostedRDSPassword"`
 	HostedEC2InstanceType string            `json:"hostedEC2InstanceType"`
 	LinodeDockerHub       string            `json:"linodeDockerHub"`

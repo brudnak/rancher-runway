@@ -359,6 +359,81 @@
                     Choose 1 for a lightweight single-server install, or 3/5 when you want HA-style server redundancy.
                   </p>
                 </fieldset>
+
+                <section id="gpuWorkerBox" class="mt-5 grid gap-4 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-black/20">
+                  <label class="flex cursor-pointer items-start justify-between gap-4">
+                    <span>
+                      <span class="flex flex-wrap items-center gap-2">
+                        <span class="block text-sm font-semibold text-zinc-950 dark:text-zinc-100">Add one GPU worker for Liz AI assistant</span>
+                        <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">RKE2 only</span>
+                      </span>
+                      <span id="gpuWorkerHeaderHint" class="mt-1 block text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400">
+                        Off by default. When enabled, this run slot is limited to one Rancher HA and gets one worker-only GPU node for local Ollama/Liz testing.
+                      </span>
+                    </span>
+                    <input id="gpuWorkerToggle" name="gpuWorkerEnabled" value="true" type="checkbox" class="peer sr-only" />
+                    <span aria-hidden="true" class="mt-0.5 h-6 w-11 rounded-full bg-zinc-300 ring-1 ring-zinc-300 transition peer-checked:bg-rose-500 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-rose-400 after:mt-0.5 after:ml-0.5 after:block after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition peer-checked:after:translate-x-5 dark:bg-zinc-800 dark:ring-white/10"></span>
+                  </label>
+                  <div id="gpuWorkerOptions" class="grid gap-4">
+                    <input id="gpuWorkerProfileInput" name="gpuWorkerProfile" type="hidden" value="standard" />
+                    <div class="grid gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm leading-6 text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100">
+                      <div class="font-semibold">GPU runs are intentionally one HA per slot.</div>
+                      <div>Choosing GPU locks the Rancher version list to one HA so a single setup cannot accidentally create multiple GPU workers.</div>
+                    </div>
+                    <div class="grid gap-3 lg:grid-cols-2" role="radiogroup" aria-label="GPU worker size">
+                      <button type="button" data-gpu-profile="standard" role="radio" aria-checked="true" class="gpu-profile-btn rounded-lg border border-amber-300 bg-amber-100/70 p-3 text-left shadow-sm transition dark:border-amber-500/30 dark:bg-amber-500/15">
+                        <span class="flex flex-wrap items-center gap-2">
+                          <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Standard g5.xlarge</span>
+                          <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-200">Recommended</span>
+                        </span>
+                        <span class="mt-1 block text-xs leading-5 text-zinc-600 dark:text-zinc-400">1x NVIDIA A10G, 24 GB GPU memory. Use for gpt-oss:20b Liz testing.</span>
+                      </button>
+                      <button type="button" data-gpu-profile="large" role="radio" aria-checked="false" class="gpu-profile-btn rounded-lg border border-zinc-200 bg-white p-3 text-left shadow-sm transition hover:bg-zinc-50 dark:border-white/10 dark:bg-black/20 dark:hover:bg-white/[0.06]">
+                        <span class="flex flex-wrap items-center gap-2">
+                          <span class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Large p5.4xlarge</span>
+                          <span class="rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-rose-800 dark:bg-rose-500/15 dark:text-rose-200">High spend</span>
+                        </span>
+                        <span class="mt-1 block text-xs leading-5 text-zinc-600 dark:text-zinc-400">1x NVIDIA H100, 80 GB GPU memory. Only pick this for gpt-oss:120b work.</span>
+                      </button>
+                    </div>
+                    <div id="gpuWorkerLargeWarning" class="hidden rounded-lg border border-rose-300 bg-rose-50 px-3.5 py-3 text-sm font-medium leading-6 text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100">
+                      Large uses p5.4xlarge H100 capacity. Expect materially higher hourly cost, possible quota failures, and tighter regional availability. Use Standard unless the test specifically needs gpt-oss:120b.
+                    </div>
+                    <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+                      <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">GPU infrastructure defaults</div>
+                          <div id="gpuWorkerAdvancedSummary" class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">AMI and subnet are auto-selected. Unlock only for a specific test image or placement.</div>
+                        </div>
+                        <button id="gpuWorkerAdvancedToggle" type="button" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">Unlock overrides</button>
+                      </div>
+                    </div>
+                    <div id="gpuWorkerAdvancedPanel" class="grid gap-3 lg:grid-cols-2">
+                      <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                        GPU AMI override
+                        <input id="gpuWorkerAmiInput" name="gpuWorkerAmi" type="text" placeholder="Auto-chosen: latest GPU-ready Ubuntu 22.04 AMI" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-amber-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
+                        <span class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">Auto uses the latest AWS Deep Learning Base OSS Nvidia Driver GPU AMI.</span>
+                      </label>
+                      <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
+                        GPU subnet override
+                        <input id="gpuWorkerSubnetInput" name="gpuWorkerSubnetId" type="text" placeholder="Auto: prefer subnet B/C" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-amber-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
+                        <span class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">Auto chooses placement from the configured AWS subnets.</span>
+                      </label>
+                    </div>
+                    <div class="rounded-lg border border-zinc-200 bg-white p-3 dark:border-white/10 dark:bg-black/20">
+                      <div class="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">AWS on-demand price</div>
+                          <div id="gpuWorkerPriceLookupSummary" class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">Use the configured AWS region to look up the current Linux on-demand hourly price.</div>
+                        </div>
+                        <button id="gpuWorkerPriceLookupBtn" type="button" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">Lookup AWS price</button>
+                      </div>
+                    </div>
+                    <p id="gpuWorkerPriceBox" class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs leading-5 text-zinc-600 dark:border-white/10 dark:bg-white/[0.03] dark:text-zinc-400">
+                      GPU is off. Turn it on only when you are actively testing Liz/Ollama workloads.
+                    </p>
+                  </div>
+                </section>
               </div>
 
               <div id="basicAwsSettingsPanel" class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">

@@ -1,5 +1,5 @@
 {
   "targets": [
-    { "rancher_version": "v2.14.2-alpha2" }
+    { "rancher_version": "v2.14.2-alpha5" }
   ]
 }

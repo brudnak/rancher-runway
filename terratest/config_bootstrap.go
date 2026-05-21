@@ -18,7 +18,15 @@ deployment:
   type: ha-rke2
 
 rke2:
+  server_count: 3
   preload_images: true
+
+gpu_worker:
+  enabled: false
+  profile: standard
+  instance_type: g5.xlarge
+  ami: ""
+  subnet_id: ""
 
 total_has: 1
 

@@ -198,6 +198,24 @@ cluster gets:
 RKE2 server nodes are schedulable by default, so a single-server install can run
 Rancher without separate worker nodes.
 
+### Optional RKE2 GPU Worker
+
+HA RKE2 can add one worker-only GPU EC2 node per Rancher cluster for Liz/Rancher
+AI testing. This is off by default because GPU instances can become expensive if
+left running.
+
+```yaml
+gpu_worker:
+  enabled: false
+  profile: standard # standard=g5.xlarge, large=p5.4xlarge
+  instance_type: g5.xlarge
+  ami: ""       # Empty auto-selects the latest AWS Deep Learning Base OSS Nvidia Driver GPU AMI.
+  subnet_id: "" # Empty spreads GPU workers across the HA subnets.
+```
+
+Use `standard` for the 24 GB A10G class and `large` only when you explicitly
+need the 80 GB H100 class. Destroy the run slot as soon as GPU testing is done.
+
 ### Linode Docker Mode
 
 Linode Docker mode is for standalone Rancher Docker installs, not Kubernetes

@@ -325,6 +325,50 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 		})
 	})
 
+	mux.HandleFunc(interactiveSetupPath(basePath, "/api/gpu-price"), func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed: "+r.Method, http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			InstanceType string `json:"instanceType"`
+			Region       string `json:"region"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		instanceType := settings.GPUWorkerInstanceType(req.InstanceType)
+		if strings.EqualFold(strings.TrimSpace(req.InstanceType), "p5.4xlarge") {
+			instanceType = "p5.4xlarge"
+		}
+		region := strings.TrimSpace(req.Region)
+		if region == "" {
+			region = strings.TrimSpace(viper.GetString("tf_vars.aws_region"))
+		}
+		if region == "" {
+			http.Error(w, "AWS region is required for GPU price lookup", http.StatusBadRequest)
+			return
+		}
+		hourly, err := lookupEC2OnDemandHourlyPriceUSD(region, instanceType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"instanceType": instanceType,
+			"region":       region,
+			"hourlyUSD":    hourly,
+			"fourHourUSD":  hourly * 4,
+			"dayUSD":       hourly * 24,
+			"source":       "AWS Pricing API Linux On-Demand",
+		})
+	})
+
 	mux.HandleFunc(interactiveSetupPath(basePath, "/submit"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
@@ -688,6 +732,10 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 		BootstrapPassword:     r.FormValue("bootstrapPassword"),
 		PreloadImages:         parseHTMLBool(r.FormValue("preloadImages")),
 		ServerCount:           parseHTMLInt(r.FormValue("serverCount")),
+		GPUWorkerEnabled:      parseHTMLBool(r.FormValue("gpuWorkerEnabled")),
+		GPUWorkerProfile:      r.FormValue("gpuWorkerProfile"),
+		GPUWorkerAMI:          r.FormValue("gpuWorkerAmi"),
+		GPUWorkerSubnetID:     r.FormValue("gpuWorkerSubnetId"),
 		HostedRDSPassword:     r.FormValue("hostedRDSPassword"),
 		HostedEC2InstanceType: r.FormValue("hostedEC2InstanceType"),
 		LinodeDockerHub:       r.FormValue("linodeDockerHub"),
