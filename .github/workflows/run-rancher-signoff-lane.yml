@@ -381,6 +381,108 @@ jobs:
             "https://${RANCHER_HOST}/v3" >/dev/null
           echo "Verified Rancher API access for rancher/tests"
 
+          shell_image="$(
+            curl --fail --silent --show-error --insecure \
+              -H "Authorization: Bearer ${RANCHER_ADMIN_TOKEN}" \
+              "https://${RANCHER_HOST}/v3/settings/shell-image" | jq -r '.value // ""'
+          )"
+          echo "Rancher shell-image setting: ${shell_image:-<empty>}"
+          shell_tag="${shell_image##*:}"
+          if [ -n "$shell_image" ] && [ "$shell_image" != "$shell_tag" ]; then
+            if docker manifest inspect "$shell_image" >/dev/null 2>&1; then
+              echo "Rancher shell-image manifest is reachable from the GitHub runner"
+            else
+              echo "Rancher shell-image manifest was not reachable from the GitHub runner"
+            fi
+            for candidate in "stgregistry.suse.com/rancher/shell:${shell_tag}" "registry.rancher.com/rancher/shell:${shell_tag}" "docker.io/rancher/shell:${shell_tag}"; do
+              docker manifest inspect "$candidate" >/dev/null 2>&1 && echo "Available shell helper candidate: $candidate"
+            done
+          fi
+
+          local_kubeconfig="${HA_RANCHER_HA_OUTPUT_ROOT}/high-availability-1/kube_config.yaml"
+          if [ ! -s "$local_kubeconfig" ]; then
+            echo "Expected local kubeconfig for shell helper probe at $local_kubeconfig"
+            exit 1
+          fi
+          probe_image="${shell_image:-rancher/shell:v0.7.0}"
+          probe_base="rr-shell-probe-${HA_RANCHER_RUN_ID:-${{ github.run_id }}}"
+          probe_base="$(printf '%s' "$probe_base" | tr -c 'a-zA-Z0-9-' '-' | tr '[:upper:]' '[:lower:]' | cut -c1-45)"
+          probe_ok=0
+          for probe_attempt in 1 2 3; do
+            probe="${probe_base}-${probe_attempt}"
+            probe_sa="${probe}-sa"
+            probe_crb="${probe}-crb"
+            echo "Probing Rancher shell helper pod startup with $probe_image (attempt $probe_attempt/3)"
+            kubectl --kubeconfig "$local_kubeconfig" delete job "$probe" -n kube-system --ignore-not-found=true >/dev/null 2>&1 || true
+            kubectl --kubeconfig "$local_kubeconfig" delete clusterrolebinding "$probe_crb" --ignore-not-found=true >/dev/null 2>&1 || true
+            kubectl --kubeconfig "$local_kubeconfig" delete serviceaccount "$probe_sa" -n kube-system --ignore-not-found=true >/dev/null 2>&1 || true
+            cat <<EOF | kubectl --kubeconfig "$local_kubeconfig" apply -f -
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: ${probe_sa}
+            namespace: kube-system
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: ${probe_crb}
+          subjects:
+          - kind: ServiceAccount
+            name: ${probe_sa}
+            namespace: kube-system
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cluster-admin
+          ---
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: ${probe}
+            namespace: kube-system
+          spec:
+            ttlSecondsAfterFinished: 300
+            backoffLimit: 0
+            template:
+              metadata:
+                labels:
+                  app: ${probe}
+              spec:
+                serviceAccountName: ${probe_sa}
+                restartPolicy: Never
+                containers:
+                - name: ${probe}
+                  image: ${probe_image}
+                  imagePullPolicy: Always
+                  securityContext:
+                    runAsUser: 0
+                    runAsGroup: 0
+                  command: ["kubectl", "get", "ns", "kube-system"]
+          EOF
+            if kubectl --kubeconfig "$local_kubeconfig" wait --for=condition=complete --timeout=180s "job/${probe}" -n kube-system; then
+              kubectl --kubeconfig "$local_kubeconfig" logs "job/${probe}" -n kube-system --all-containers=true || true
+              probe_ok=1
+              kubectl --kubeconfig "$local_kubeconfig" delete job "$probe" -n kube-system --ignore-not-found=true >/dev/null 2>&1 || true
+              kubectl --kubeconfig "$local_kubeconfig" delete clusterrolebinding "$probe_crb" --ignore-not-found=true >/dev/null 2>&1 || true
+              kubectl --kubeconfig "$local_kubeconfig" delete serviceaccount "$probe_sa" -n kube-system --ignore-not-found=true >/dev/null 2>&1 || true
+              break
+            fi
+            echo "Shell helper probe attempt $probe_attempt did not complete"
+            kubectl --kubeconfig "$local_kubeconfig" get pods -n kube-system -l "app=${probe}" -o wide || true
+            kubectl --kubeconfig "$local_kubeconfig" describe pod -n kube-system -l "app=${probe}" || true
+            kubectl --kubeconfig "$local_kubeconfig" logs "job/${probe}" -n kube-system --all-containers=true || true
+            kubectl --kubeconfig "$local_kubeconfig" get events -n kube-system --sort-by=.lastTimestamp | grep -E "${probe}|Pulling|Pulled|Failed|BackOff|ErrImage|ImagePull|PodInitializing" | tail -80 || true
+            kubectl --kubeconfig "$local_kubeconfig" delete job "$probe" -n kube-system --ignore-not-found=true >/dev/null 2>&1 || true
+            kubectl --kubeconfig "$local_kubeconfig" delete clusterrolebinding "$probe_crb" --ignore-not-found=true >/dev/null 2>&1 || true
+            kubectl --kubeconfig "$local_kubeconfig" delete serviceaccount "$probe_sa" -n kube-system --ignore-not-found=true >/dev/null 2>&1 || true
+            sleep 45
+          done
+          if [ "$probe_ok" -ne 1 ]; then
+            echo "Rancher shell helper probe failed after 3 attempts"
+            exit 1
+          fi
+
           mkdir -p automation-output
           mkdir -p test-results
 
@@ -498,18 +600,31 @@ jobs:
             esac
 
             junit="$GITHUB_WORKSPACE/test-results/${junit_name}.xml"
+            suite_log="$GITHUB_WORKSPACE/test-results/${junit_name}.log"
             echo "Running rancher/tests $package -run $test_run against cluster $CLUSTER_NAME"
+            run_suite() {
+              (
+                cd "$tests_dir"
+                CATTLE_TEST_CONFIG="$config_path" gotestsum \
+                  --format standard-verbose \
+                  --junitfile "$junit" \
+                  -- \
+                  -v "${timeout_args[@]}" -tags="$tags" "$package" -run "$test_run" 2>&1 | tee "$suite_log"
+                exit "${PIPESTATUS[0]}"
+              )
+            }
             set +e
-            (
-              cd "$tests_dir"
-              CATTLE_TEST_CONFIG="$config_path" gotestsum \
-                --format standard-verbose \
-                --junitfile "$junit" \
-                -- \
-                -v "${timeout_args[@]}" -tags="$tags" "$package" -run "$test_run"
-            )
+            run_suite
             exit_code=$?
             set -e
+            if [ "$exit_code" -ne 0 ] && grep -Eq "error streaming pod logs for pod .*kubectl-|image can't be pulled|PodInitializing" "$suite_log"; then
+              echo "Detected Rancher shell helper pod startup failure in $suite; waiting 90s and retrying once"
+              sleep 90
+              set +e
+              run_suite
+              exit_code=$?
+              set -e
+            fi
 
             conclusion="success"
             if [ "$exit_code" -ne 0 ]; then
