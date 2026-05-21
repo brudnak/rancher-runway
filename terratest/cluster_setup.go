@@ -256,12 +256,11 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 
 	log.Printf("[setupFirstServerNode] Creating config directory...")
 	cmd := "sudo mkdir -p /etc/rancher/rke2"
-	output, err := RunCommand(cmd, ip)
-	if err != nil {
+	if err := runRemoteSetupStep("setupFirstServerNode/create-config-dir", ip, cmd); err != nil {
 		log.Printf("[setupFirstServerNode] FAILED to create config directory: %v", err)
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
-	log.Printf("[setupFirstServerNode] Config directory created. Output: %s", output)
+	log.Printf("[setupFirstServerNode] Config directory created")
 
 	configContent := fmt.Sprintf("tls-san:\n%s", rke2ConfigListLines(rke2TLSSANs(haOutputs)))
 
@@ -271,16 +270,15 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 		log.Printf("[setupFirstServerNode] Creating config file with content:\n%s", configContent)
 	}
 	cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/config.yaml << EOL\n%s\nEOL'", configContent)
-	output, err = RunCommand(cmd, ip)
-	if err != nil {
+	if err := runRemoteSetupStep("setupFirstServerNode/write-config", ip, cmd); err != nil {
 		log.Printf("[setupFirstServerNode] FAILED to create config file: %v", err)
 		return fmt.Errorf("failed to create config file: %w", err)
 	}
-	log.Printf("[setupFirstServerNode] Config file created. Output: %s", output)
+	log.Printf("[setupFirstServerNode] Config file created")
 
 	log.Printf("[setupFirstServerNode] Verifying config file...")
 	cmd = "sudo cat /etc/rancher/rke2/config.yaml"
-	output, err = RunCommand(cmd, ip)
+	output, err := RunCommand(cmd, ip)
 	if err != nil {
 		log.Printf("[setupFirstServerNode] WARNING: Could not read config file: %v", err)
 	} else {
@@ -297,8 +295,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 		log.Printf("[setupFirstServerNode] Pre-downloading RKE2 images to avoid Docker Hub rate limiting...")
 
 		cmd = "sudo mkdir -p /var/lib/rancher/rke2/agent/images"
-		output, err = RunCommand(cmd, ip)
-		if err != nil {
+		if err := runRemoteSetupStep("setupFirstServerNode/create-images-dir", ip, cmd); err != nil {
 			log.Printf("[setupFirstServerNode] FAILED to create images directory: %v", err)
 			return fmt.Errorf("failed to create images directory: %w", err)
 		}
@@ -314,8 +311,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 		log.Printf("[setupFirstServerNode] Images downloaded and checksum validated successfully")
 
 		cmd = "sudo mv /tmp/rke2-images.linux-amd64.tar.zst /var/lib/rancher/rke2/agent/images/"
-		output, err = RunCommand(cmd, ip)
-		if err != nil {
+		if err := runRemoteSetupStep("setupFirstServerNode/move-images", ip, cmd); err != nil {
 			log.Printf("[setupFirstServerNode] FAILED to move images: %v", err)
 			return fmt.Errorf("failed to move images: %w", err)
 		}
@@ -345,8 +341,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
       auth: %s`, encodedAuth, encodedAuth)
 
 		cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/registries.yaml << EOL\n%s\nEOL'", registriesConfig)
-		output, err = RunCommand(cmd, ip)
-		if err != nil {
+		if err := runRemoteSetupStep("setupFirstServerNode/write-registries", ip, cmd); err != nil {
 			log.Printf("[setupFirstServerNode] FAILED to create registries.yaml: %v", err)
 			return fmt.Errorf("failed to create registries.yaml: %w", err)
 		}
@@ -486,20 +481,65 @@ func getNodeToken(ip string) (string, error) {
 	return token, nil
 }
 
+func runRemoteSetupStep(label, ip, cmd string) error {
+	const attempts = 2
+	var lastErr error
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 {
+			log.Printf("[%s] Retrying remote setup step on %s (attempt %d/%d)", label, ip, attempt, attempts)
+		}
+
+		if _, err := RunCommandWithTimeout(cmd, ip, 90, 24); err != nil {
+			lastErr = err
+			log.Printf("[%s] Remote setup step failed on %s (attempt %d/%d): %v", label, ip, attempt, attempts, err)
+			if attempt < attempts {
+				logRemoteSetupDiagnostics(label, ip)
+				time.Sleep(10 * time.Second)
+			}
+			continue
+		}
+
+		return nil
+	}
+
+	return lastErr
+}
+
+func logRemoteSetupDiagnostics(label, ip string) {
+	cmd := "printf 'cloud-init: '; cloud-init status --long || true; printf '\\nsystem: '; systemctl is-system-running || true; printf '\\nssm: '; systemctl is-active amazon-ssm-agent snap.amazon-ssm-agent.amazon-ssm-agent 2>/dev/null || true; printf '\\ndisk:\\n'; df -h / /var || true"
+	output, err := RunCommandWithTimeout(cmd, ip, 30, 12)
+	if err != nil {
+		log.Printf("[%s] Could not collect remote setup diagnostics from %s: %v", label, ip, err)
+		return
+	}
+	log.Printf("[%s] Remote setup diagnostics for %s:\n%s", label, ip, output)
+}
+
+func logRemoteRKE2Diagnostics(label, ip, unit string) {
+	cmd := fmt.Sprintf("sudo systemctl status %s --no-pager || true; printf '\\n--- journal ---\\n'; sudo journalctl -u %s --no-pager -n 80 || true", unit, unit)
+	output, err := RunCommandWithTimeout(cmd, ip, 60, 18)
+	if err != nil {
+		log.Printf("[%s] Could not collect RKE2 diagnostics from %s: %v", label, ip, err)
+		return
+	}
+	log.Printf("[%s] RKE2 diagnostics for %s:\n%s", label, ip, output)
+}
+
 func configureRKE2IngressForExternalTLS(ip string) error {
 	log.Printf("[rke2-ingress] Enabling forwarded headers for external TLS termination on %s", ip)
 
 	cmd := "sudo mkdir -p /var/lib/rancher/rke2/server/manifests"
-	if output, err := RunCommand(cmd, ip); err != nil {
+	if err := runRemoteSetupStep("rke2-ingress/create-manifests-dir", ip, cmd); err != nil {
 		log.Printf("[rke2-ingress] FAILED to create manifests directory on %s: %v", ip, err)
-		return fmt.Errorf("failed to create manifests directory: %w; output: %s", err, output)
+		return fmt.Errorf("failed to create manifests directory: %w", err)
 	}
 
 	manifest := rke2IngressNginxConfigManifest()
 	cmd = fmt.Sprintf("sudo bash -c 'cat > /var/lib/rancher/rke2/server/manifests/rke2-ingress-nginx-config.yaml << EOL\n%s\nEOL'", manifest)
-	if output, err := RunCommand(cmd, ip); err != nil {
+	if err := runRemoteSetupStep("rke2-ingress/write-config", ip, cmd); err != nil {
 		log.Printf("[rke2-ingress] FAILED to write forwarded headers config on %s: %v", ip, err)
-		return fmt.Errorf("failed to write rke2 ingress config: %w; output: %s", err, output)
+		return fmt.Errorf("failed to write rke2 ingress config: %w", err)
 	}
 
 	return nil
@@ -525,10 +565,10 @@ func setupAdditionalServerNode(ip, token string, haOutputs TerraformOutputs, res
 		rke2K8sVersion = resolvedPlan.RecommendedRKE2Version
 		expectedInstallerSHA256 = resolvedPlan.InstallerSHA256
 	}
+	var err error
 
 	cmd := "sudo mkdir -p /etc/rancher/rke2"
-	_, err := RunCommand(cmd, ip)
-	if err != nil {
+	if err := runRemoteSetupStep("setupAdditionalServerNode/create-config-dir", ip, cmd); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -545,8 +585,7 @@ tls-san:
 		rke2ConfigListLines(rke2TLSSANs(haOutputs)))
 
 	cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/config.yaml << EOL\n%s\nEOL'", configContent)
-	_, err = RunCommand(cmd, ip)
-	if err != nil {
+	if err := runRemoteSetupStep("setupAdditionalServerNode/write-config", ip, cmd); err != nil {
 		return fmt.Errorf("failed to create config file: %w", err)
 	}
 
@@ -556,8 +595,7 @@ tls-san:
 		log.Printf("[setupAdditionalServerNode] Pre-downloading RKE2 images for %s...", ip)
 
 		cmd = "sudo mkdir -p /var/lib/rancher/rke2/agent/images"
-		_, err = RunCommand(cmd, ip)
-		if err != nil {
+		if err := runRemoteSetupStep("setupAdditionalServerNode/create-images-dir", ip, cmd); err != nil {
 			log.Printf("[setupAdditionalServerNode] FAILED to create images directory: %v", err)
 			return fmt.Errorf("failed to create images directory: %w", err)
 		}
@@ -571,8 +609,7 @@ tls-san:
 		}
 
 		cmd = "sudo mv /tmp/rke2-images.linux-amd64.tar.zst /var/lib/rancher/rke2/agent/images/"
-		_, err = RunCommand(cmd, ip)
-		if err != nil {
+		if err := runRemoteSetupStep("setupAdditionalServerNode/move-images", ip, cmd); err != nil {
 			log.Printf("[setupAdditionalServerNode] FAILED to move images: %v", err)
 			return fmt.Errorf("failed to move images: %w", err)
 		}
@@ -597,8 +634,7 @@ tls-san:
       auth: %s`, encodedAuth, encodedAuth)
 
 		cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/registries.yaml << EOL\n%s\nEOL'", registriesConfig)
-		_, err = RunCommand(cmd, ip)
-		if err != nil {
+		if err := runRemoteSetupStep("setupAdditionalServerNode/write-registries", ip, cmd); err != nil {
 			log.Printf("[setupAdditionalServerNode] FAILED to create registries.yaml: %v", err)
 			return fmt.Errorf("failed to create registries.yaml: %w", err)
 		}
@@ -630,6 +666,7 @@ tls-san:
 	cmd = "sudo systemctl start rke2-server.service"
 	_, err = RunCommand(cmd, ip)
 	if err != nil {
+		logRemoteRKE2Diagnostics("setupAdditionalServerNode/start-rke2", ip, "rke2-server.service")
 		return fmt.Errorf("failed to start RKE2 server: %w", err)
 	}
 
@@ -646,6 +683,7 @@ tls-san:
 		time.Sleep(10 * time.Second)
 	}
 
+	logRemoteRKE2Diagnostics("setupAdditionalServerNode/wait-rke2", ip, "rke2-server.service")
 	return fmt.Errorf("timeout waiting for RKE2 to initialize on %s", ip)
 }
 
@@ -658,7 +696,7 @@ func setupGPUWorkerNode(ip, token string, haOutputs TerraformOutputs, resolvedPl
 	}
 
 	cmd := "sudo mkdir -p /etc/rancher/rke2"
-	if _, err := RunCommand(cmd, ip); err != nil {
+	if err := runRemoteSetupStep("setupGPUWorkerNode/create-config-dir", ip, cmd); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -681,7 +719,7 @@ node-label:
 		instanceType)
 
 	cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/config.yaml << EOL\n%s\nEOL'", configContent)
-	if _, err := RunCommand(cmd, ip); err != nil {
+	if err := runRemoteSetupStep("setupGPUWorkerNode/write-config", ip, cmd); err != nil {
 		return fmt.Errorf("failed to create config file: %w", err)
 	}
 
@@ -689,7 +727,7 @@ node-label:
 		log.Printf("[setupGPUWorkerNode] Pre-downloading RKE2 images for %s...", ip)
 
 		cmd = "sudo mkdir -p /var/lib/rancher/rke2/agent/images"
-		if _, err := RunCommand(cmd, ip); err != nil {
+		if err := runRemoteSetupStep("setupGPUWorkerNode/create-images-dir", ip, cmd); err != nil {
 			return fmt.Errorf("failed to create images directory: %w", err)
 		}
 
@@ -699,7 +737,7 @@ node-label:
 		}
 
 		cmd = "sudo mv /tmp/rke2-images.linux-amd64.tar.zst /var/lib/rancher/rke2/agent/images/"
-		if _, err := RunCommand(cmd, ip); err != nil {
+		if err := runRemoteSetupStep("setupGPUWorkerNode/move-images", ip, cmd); err != nil {
 			return fmt.Errorf("failed to move images: %w", err)
 		}
 	}
@@ -720,7 +758,7 @@ node-label:
       auth: %s`, encodedAuth, encodedAuth)
 
 		cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/registries.yaml << EOL\n%s\nEOL'", registriesConfig)
-		if _, err := RunCommand(cmd, ip); err != nil {
+		if err := runRemoteSetupStep("setupGPUWorkerNode/write-registries", ip, cmd); err != nil {
 			return fmt.Errorf("failed to create registries.yaml: %w", err)
 		}
 	}

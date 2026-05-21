@@ -7,6 +7,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -138,6 +139,10 @@ func waitForSSMAgent(instanceID string, maxSeconds int) error {
 }
 
 func runCommandSSM(cmd string, instanceID string) (string, error) {
+	return runCommandSSMWithTimeout(cmd, instanceID, 600, 120)
+}
+
+func runCommandSSMWithTimeout(cmd string, instanceID string, executionTimeoutSeconds int32, maxAttempts int) (string, error) {
 	maskGitHubActionsValue(instanceID)
 	if err := initAWSClients(); err != nil {
 		return "", err
@@ -150,7 +155,8 @@ func runCommandSSM(cmd string, instanceID string) (string, error) {
 		InstanceIds:  []string{instanceID},
 		DocumentName: aws.String("AWS-RunShellScript"),
 		Parameters: map[string][]string{
-			"commands": {cmd},
+			"commands":         {cmd},
+			"executionTimeout": {strconv.Itoa(int(executionTimeoutSeconds))},
 		},
 		TimeoutSeconds: aws.Int32(600),
 	}
@@ -166,7 +172,6 @@ func runCommandSSM(cmd string, instanceID string) (string, error) {
 	}
 	log.Printf("[SSM] Command sent with ID: %s", *commandID)
 
-	maxAttempts := 120
 	for i := 0; i < maxAttempts; i++ {
 		time.Sleep(5 * time.Second)
 
@@ -217,10 +222,25 @@ func runCommandSSM(cmd string, instanceID string) (string, error) {
 		}
 	}
 
+	getInput := &ssm.GetCommandInvocationInput{
+		CommandId:  commandID,
+		InstanceId: aws.String(instanceID),
+	}
+	if getOutput, err := ssmClient.GetCommandInvocation(ctx, getInput); err == nil {
+		stdout := aws.ToString(getOutput.StandardOutputContent)
+		stderr := aws.ToString(getOutput.StandardErrorContent)
+		log.Printf("[SSM] Command polling timed out with remote status %s", getOutput.Status)
+		log.Printf("[SSM] Last output sizes: stdout=%d bytes stderr=%d bytes", len(stdout), len(stderr))
+	}
+
 	return "", fmt.Errorf("command timed out after %d attempts", maxAttempts)
 }
 
 func RunCommand(cmd string, pubIP string) (string, error) {
+	return RunCommandWithTimeout(cmd, pubIP, 600, 120)
+}
+
+func RunCommandWithTimeout(cmd string, pubIP string, executionTimeoutSeconds int32, maxAttempts int) (string, error) {
 	maskGitHubActionsValue(pubIP)
 	log.Printf("[RunCommand] Starting command execution for IP %s", pubIP)
 
@@ -233,7 +253,7 @@ func RunCommand(cmd string, pubIP string) (string, error) {
 		return "", fmt.Errorf("SSM agent not ready for instance %s: %w", instanceID, err)
 	}
 
-	result, err := runCommandSSM(cmd, instanceID)
+	result, err := runCommandSSMWithTimeout(cmd, instanceID, executionTimeoutSeconds, maxAttempts)
 	if err != nil {
 		log.Printf("[RunCommand] Command failed: %v", err)
 		return "", err
