@@ -13,20 +13,9 @@ import {
   createTypedConfirmation
 } from './control_panel_modals.js'
 import {
-  activeOperations,
-  operationBadgeHTML,
-  operationForRun,
-  readinessFailedRun,
-  renderRunActionButton,
-  runClusterStats,
   runFolderAvailable,
   runFolderPath,
-  runHasFailure,
-  runHostnameLabel,
   runTerraformPath,
-  runTimelineHTML,
-  runTone,
-  runVersionsLabel,
   sameRunKey
 } from './control_panel_runs.js'
 import {
@@ -41,10 +30,6 @@ const bootStatusEl = document.getElementById('bootStatus')
 const bootStatusDetailEl = document.getElementById('bootStatusDetail')
 const panelTabsEl = document.getElementById('panelTabs')
 const tabPanelEls = Array.from(document.querySelectorAll('[data-tab-panel]'))
-const workspaceModeEl = document.getElementById('workspaceMode')
-const workspaceSlotTitleEl = document.getElementById('workspaceSlotTitle')
-const workspaceSlotSummaryEl = document.getElementById('workspaceSlotSummary')
-const workspaceSlotGridEl = document.getElementById('workspaceSlotGrid')
 const workspaceRunMetaEl = document.getElementById('workspaceRunMeta')
 const clustersSectionEl = document.getElementById('clustersSection')
 const clustersEl = document.getElementById('clusters')
@@ -63,8 +48,6 @@ const liveLogStateIconEl = document.getElementById('liveLogStateIcon')
 const liveLogStateLabelEl = document.getElementById('liveLogStateLabel')
 const openLogViewerBtnEl = document.getElementById('openLogViewerBtn')
 const stopStreamBtnEl = document.getElementById('stopStreamBtn')
-const preflightStatusEl = document.getElementById('preflightStatus')
-const preflightItemsEl = document.getElementById('preflightItems')
 const refreshPreflightBtnEl = document.getElementById('refreshPreflightBtn')
 const setupStatusEl = document.getElementById('setupStatus')
 const setupMetaEl = document.getElementById('setupMeta')
@@ -113,8 +96,6 @@ const panelNoticeEl = document.getElementById('panelNotice')
 const panelNoticeTitleEl = document.getElementById('panelNoticeTitle')
 const panelNoticeBodyEl = document.getElementById('panelNoticeBody')
 const panelNoticeCloseEl = document.getElementById('panelNoticeClose')
-const gpuReminderStatusEl = document.getElementById('gpuReminderStatus')
-const gpuReminderDetailEl = document.getElementById('gpuReminderDetail')
 const gpuReminderIntervalEls = Array.from(document.querySelectorAll('[data-gpu-reminder-interval]'))
 const gpuReminderEnableBtnEl = document.getElementById('gpuReminderEnableBtn')
 const gpuReminderDisableBtnEl = document.getElementById('gpuReminderDisableBtn')
@@ -180,6 +161,7 @@ const loadGPUReminderSettings = () => {
   }
 }
 let gpuReminderSettings = loadGPUReminderSettings()
+window.rancherGpuReminderSettings = gpuReminderSettings
 
 const requestTypedConfirmation = createTypedConfirmation({
   modalEl: dangerConfirmModalEl,
@@ -666,32 +648,11 @@ const saveGPUReminderSettings = () => {
   localStorage.setItem(gpuReminderSettingsKey, JSON.stringify(gpuReminderSettings))
 }
 
-const renderGPUReminderSettings = () => {
-  const disabled = Boolean(gpuReminderSettings.disabled)
-  if (gpuReminderStatusEl) {
-    gpuReminderStatusEl.textContent = disabled ? 'GPU reminders off' : 'GPU reminders on'
-    gpuReminderStatusEl.className = disabled
-      ? 'inline-flex items-center justify-center rounded-full bg-rose-100 px-3 py-1.5 text-xs font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300'
-      : 'inline-flex items-center justify-center rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
-  }
-  if (gpuReminderDetailEl) {
-    gpuReminderDetailEl.textContent = disabled
-      ? `Reminders disabled. Last interval: ${gpuReminderIntervalLabel(gpuReminderSettings.intervalMinutes)}. Close-time GPU warnings still remain active.`
-      : `Reminder interval: ${gpuReminderIntervalLabel(gpuReminderSettings.intervalMinutes)}.`
-  }
-  gpuReminderIntervalEls.forEach(button => {
-    const active = Number(button.dataset.gpuReminderInterval) === gpuReminderSettings.intervalMinutes
-    button.disabled = disabled
-    button.className = active && !disabled
-      ? 'gpu-reminder-interval rounded-lg bg-rose-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400'
-      : 'gpu-reminder-interval rounded-lg border border-rose-200 bg-white px-3.5 py-2 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-500/25 dark:bg-white/[0.06] dark:text-rose-200 dark:hover:bg-rose-500/10'
-  })
-  if (gpuReminderEnableBtnEl) {
-    gpuReminderEnableBtnEl.hidden = !disabled
-  }
-  if (gpuReminderDisableBtnEl) {
-    gpuReminderDisableBtnEl.hidden = disabled
-  }
+const publishGPUReminderSettings = () => {
+  window.rancherGpuReminderSettings = gpuReminderSettings
+  window.dispatchEvent(new CustomEvent('rancher-control-panel:gpu-reminders', {
+    detail: { settings: gpuReminderSettings }
+  }))
 }
 
 const hideGPUReminderModal = () => {
@@ -714,7 +675,7 @@ const showGPUReminderModal = clusters => {
   }
   gpuReminderSettings.lastReminderAt = Date.now()
   saveGPUReminderSettings()
-  renderGPUReminderSettings()
+  publishGPUReminderSettings()
   gpuReminderModalEl.classList.remove('hidden')
   gpuReminderModalEl.classList.add('flex')
   document.body.classList.add('overflow-hidden')
@@ -774,242 +735,11 @@ const fetchState = async () => {
   return response.json()
 }
 
-const renderWorkspace = workspace => {
-  if (!workspaceModeEl || !workspace) {
-    return
-  }
-
-  const mode = workspace.mode || 'single-run workspace'
-  const sharedPaths = Array.isArray(workspace.sharedPathLabels) ? workspace.sharedPathLabels : []
-  const runs = Array.isArray(workspace.runs) ? workspace.runs : []
-  const totalHAs = runs.reduce((total, run) => total + Number(run.totalHAs || 1), 0)
-  const currentRunID = workspace.currentRun?.runId || ''
-  const activeOperationList = activeOperations(lastState)
-
-  workspaceModeEl.textContent = mode
-  if (workspaceSlotTitleEl) {
-    workspaceSlotTitleEl.textContent = runs.length
-      ? `${runs.length} recorded run slot${runs.length === 1 ? '' : 's'}`
-      : 'No recorded runs'
-  }
-  if (workspaceSlotSummaryEl) {
-    workspaceSlotSummaryEl.textContent = activeOperationList.length
-      ? `${activeOperationList.length} lifecycle operation${activeOperationList.length === 1 ? '' : 's'} active: ${activeOperationList.map(([, label]) => label).join(', ')}. Each provider lane stays serialized against its own state.`
-      : runs.length
-        ? 'Every slot below has isolated Terraform state, deployment output, kubeconfigs, AWS names, logs, and a dedicated destroy target.'
-        : 'Use Setup to resolve and approve a Rancher Runway plan. The run will appear here before AWS resources are created.'
-  }
+const syncWorkspace = workspace => {
+  const runs = Array.isArray(workspace?.runs) ? workspace.runs : []
   if (selectedCleanupRunId && !runs.some(run => run.runId === selectedCleanupRunId)) {
     selectedCleanupRunId = ''
   }
-
-  if (workspaceSlotGridEl) {
-    const liveClusters = clusterItems(lastState).length
-    const awsResources = Array.isArray(lastState?.aws?.items) ? lastState.aws.items.length : 0
-    const canStart = workspace.canStartIsolatedRun && !lifecycleRunning(lastState) && !bootStatePending
-    workspaceSlotGridEl.innerHTML = `
-      <div class="run-summary-stat">
-        <div class="run-summary-label">Slots</div>
-        <div class="run-summary-value">${escapeHtml(String(runs.length))}</div>
-        <div class="run-summary-help">${escapeHtml(totalHAs)} HA target${totalHAs === 1 ? '' : 's'}</div>
-      </div>
-      <div class="run-summary-stat">
-        <div class="run-summary-label">Discovered</div>
-        <div class="run-summary-value">${escapeHtml(String(liveClusters))}</div>
-        <div class="run-summary-help">cluster records</div>
-      </div>
-      <div class="run-summary-stat" data-tone="${canStart ? 'ready' : 'locked'}">
-        <div class="run-summary-label">Next setup</div>
-        <div class="run-summary-value">${escapeHtml(canStart ? 'Ready' : bootStatePending ? 'Checking state' : lifecycleRunning(lastState) ? 'Running' : 'Locked')}</div>
-        <div class="run-summary-help">${escapeHtml(awsResources)} AWS resource${awsResources === 1 ? '' : 's'} visible</div>
-      </div>
-      ${sharedPaths.length && !runs.length ? `<div class="run-summary-stat"><div class="run-summary-label">Workspace guard</div><div class="run-summary-value">${escapeHtml(String(sharedPaths.length))}</div><div class="run-summary-help">watched paths</div></div>` : ''}
-    `
-  }
-
-  if (workspaceRunMetaEl) {
-    if (!runs.length) {
-      workspaceRunMetaEl.innerHTML = `
-        <div class="rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-white/10 dark:bg-white/[0.03]">
-          <h3 class="text-base font-semibold text-zinc-950 dark:text-zinc-50">No run slots yet</h3>
-          <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Setup is the only place that can create a new AWS run. Resolve the plan there, review the Helm commands, then approve AWS setup.
-          </p>
-          <div class="mt-4">
-            ${renderRunActionButton({ action: 'open-setup', label: 'Open setup', variant: 'primary', disabled: bootStatePending || lifecycleRunning(lastState), title: bootStatePending ? 'Startup safety check is still running.' : lifecycleRunning(lastState) ? 'Wait for the active lifecycle operation to finish.' : '' })}
-          </div>
-        </div>
-      `
-    } else {
-      const failedReadinessRun = readinessFailedRun(runs, lastState)
-      const banner = activeOperationList.length ? (() => {
-        const operationLogAction = mode => {
-          if (mode === 'readiness') {
-            return 'open-readiness-logs'
-          }
-          if (mode === 'cleanup' || mode === 'linodeCleanup') {
-            return 'open-cleanup-logs'
-          }
-          return 'open-setup-logs'
-        }
-        const operationStopAction = (mode, runId) => {
-          if (!runId) {
-            return ''
-          }
-          if (mode === 'readiness') {
-            return renderRunActionButton({ action: 'stop-readiness-open-destroy', runId, label: 'Stop, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping readiness and opening Destroy.' })
-          }
-          if (mode === 'setup' || mode === 'linodeSetup') {
-            return renderRunActionButton({ action: 'stop-setup-open-destroy', runId, label: 'Stop, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping setup and opening Destroy.' })
-          }
-          return ''
-        }
-        return `
-          <div class="rounded-xl border border-sky-200 bg-sky-50 p-4 dark:border-sky-500/25 dark:bg-sky-500/10">
-            <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div class="min-w-0">
-                <div class="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-sky-700 shadow-sm dark:bg-white/[0.08] dark:text-sky-200"><span class="spinner mr-1.5 !h-3 !w-3 !border-[1.5px]"></span>${escapeHtml(String(activeOperationList.length))} lifecycle op${activeOperationList.length === 1 ? '' : 's'} running</div>
-                <h3 class="mt-2 text-base font-semibold text-sky-950 dark:text-sky-100">Active run work</h3>
-                <p class="mt-1 text-sm leading-6 text-sky-800/80 dark:text-sky-100/75">Setup, readiness, and destroy actions stay locked only where they would collide with active state.</p>
-              </div>
-            </div>
-            <div class="mt-3 grid gap-2 xl:grid-cols-2">
-              ${activeOperationList.map(([mode, label, snapshot]) => {
-                const started = snapshot?.startedAt ? `Started ${new Date(snapshot.startedAt).toLocaleTimeString()}` : 'Starting now'
-                const runText = snapshot?.runId ? `Run ${snapshot.runId}` : 'Run state publishing'
-                const runId = snapshot?.runId || ''
-                return `
-                  <div class="flex flex-col gap-3 rounded-lg border border-sky-200/80 bg-white/70 p-3 dark:border-sky-400/20 dark:bg-black/10 md:flex-row md:items-center md:justify-between">
-                    <div class="min-w-0">
-                      <div class="text-sm font-semibold text-sky-950 dark:text-sky-100">${escapeHtml(label)} · ${escapeHtml(runText)}</div>
-                      <div class="mt-1 text-xs text-sky-800/70 dark:text-sky-100/65">${escapeHtml(started)}</div>
-                    </div>
-                    <div class="flex shrink-0 flex-wrap gap-2">
-                      ${renderRunActionButton({ action: operationLogAction(mode), runId, label: 'Logs' })}
-                      ${operationStopAction(mode, runId)}
-                    </div>
-                  </div>
-                `
-              }).join('')}
-            </div>
-          </div>
-        `
-      })() : failedReadinessRun ? `
-        <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 dark:border-rose-500/25 dark:bg-rose-500/10">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div class="min-w-0">
-              <div class="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-rose-700 shadow-sm dark:bg-white/[0.08] dark:text-rose-200">Readiness failed</div>
-              <h3 class="mt-2 text-base font-semibold text-rose-950 dark:text-rose-100">Run ${escapeHtml(failedReadinessRun.runId || 'unknown')} did not become ready</h3>
-              <p class="mt-1 text-sm leading-6 text-rose-800/80 dark:text-rose-100/75">If a manual Helm command left Rancher unhealthy, destroy this slot from the recorded Terraform state and start again with a corrected command.</p>
-            </div>
-            <div class="flex shrink-0 flex-wrap gap-2">
-              ${renderRunActionButton({ action: 'open-readiness-logs', runId: failedReadinessRun.runId, label: 'Readiness logs' })}
-              ${renderRunActionButton({ action: 'open-destroy', runId: failedReadinessRun.runId, label: 'Destroy failed run', variant: 'danger' })}
-            </div>
-          </div>
-        </div>
-      ` : ''
-
-      workspaceRunMetaEl.innerHTML = `
-        ${banner}
-        <div class="grid gap-3">
-          ${runs.map(run => {
-            const operation = operationForRun(run, lastState)
-            const tone = runTone(run, operation)
-            const stats = runClusterStats(run, lastState)
-            const updated = run.updatedAt ? new Date(run.updatedAt).toLocaleTimeString() : ''
-            const isCurrent = currentRunID && sameRunKey(run.runId, currentRunID)
-            const linodeRun = runIsLinodeDocker(run)
-            const lifecycleBusy = (linodeRun ? linodeLifecycleRunning(lastState) : awsLifecycleRunning(lastState)) || bootStatePending
-            const readinessBusy = Boolean(lastState?.readiness?.running)
-            const readinessDisabled = lifecycleBusy || readinessBusy || !isCurrent
-            const setupRunningForRun = lastState?.setup?.running && sameRunKey(lastState.setup.runId, run.runId)
-            const linodeSetupRunningForRun = lastState?.linodeSetup?.running && sameRunKey(lastState.linodeSetup.runId, run.runId)
-            const readinessRunningForRun = lastState?.readiness?.running && sameRunKey(lastState.readiness.runId, run.runId)
-            const failedRun = runHasFailure(run)
-            const readinessTitle = bootStatePending
-              ? 'Startup safety check is still running.'
-              : (linodeRun ? linodeLifecycleRunning(lastState) : awsLifecycleRunning(lastState))
-                ? 'Wait for the active lifecycle operation to finish.'
-                : readinessBusy
-                  ? 'Wait for the active readiness check to finish.'
-                : !isCurrent
-                  ? 'Readiness currently runs against the active/current slot only.'
-                  : linodeRun
-                    ? 'Check Docker Rancher readiness for the current run.'
-                    : 'Check readiness for the current run.'
-            const readinessAction = (isCurrent || readinessRunningForRun)
-              ? renderRunActionButton({ action: 'check-readiness', runId: run.runId, label: 'Readiness', variant: 'blue', disabled: readinessDisabled, title: readinessTitle })
-              : ''
-            const lifecycleAction = setupRunningForRun || linodeSetupRunningForRun
-              ? renderRunActionButton({ action: 'stop-setup-open-destroy', runId: run.runId, label: 'Stop, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping setup and opening Destroy.' })
-              : readinessRunningForRun
-                ? renderRunActionButton({ action: 'stop-readiness-open-destroy', runId: run.runId, label: 'Stop, then destroy', variant: 'danger', title: 'Requires typing confirm before stopping readiness and opening Destroy.' })
-                : renderRunActionButton({ action: 'open-destroy', runId: run.runId, label: failedRun ? 'Destroy failed run' : 'Destroy', variant: failedRun ? 'danger' : 'secondary', disabled: lifecycleBusy, title: lifecycleBusy ? 'Wait for the active lifecycle operation to finish.' : 'Open the Destroy tab for this slot.' })
-            const utilityActions = [
-              renderRunActionButton({ action: 'open-run-folder', runId: run.runId, label: 'Folder', variant: 'utility', disabled: !runFolderAvailable(run), title: runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.' }),
-              renderRunActionButton({ action: 'copy-terraform-path', runId: run.runId, label: 'TF path', variant: 'utility', disabled: !runTerraformPath(run), title: runTerraformPath(run) ? 'Copy the Terraform module/state path for this run.' : 'Terraform path is not recorded yet.' }),
-              renderRunActionButton({ action: 'open-setup-logs', runId: run.runId, label: 'Setup log', variant: 'utility' }),
-              renderRunActionButton({ action: 'open-readiness-logs', runId: run.runId, label: 'Ready log', variant: 'utility' })
-            ].join('')
-
-            return `
-              <article class="run-row" data-tone="${escapeHtml(tone)}">
-                <div class="run-row-main">
-                    <div class="run-row-titlebar">
-                      <h3 class="run-title">Run ${escapeHtml(run.runId || 'unknown')}</h3>
-                      <span class="run-status-pill" data-tone="${escapeHtml(tone)}">${escapeHtml((operation ? 'running' : run.status || 'recorded').replaceAll('_', ' '))}</span>
-                      ${isCurrent ? '<span class="run-current-pill">current slot</span>' : ''}
-                      ${operationBadgeHTML(operation)}
-                    </div>
-                    ${updated ? `<div class="run-muted run-updated">Updated ${escapeHtml(updated)}</div>` : ''}
-                    ${runTimelineHTML(run, lastState)}
-                    <div class="run-kpi-grid">
-                      <div class="run-kpi">
-                        <div class="run-kpi-label">Rancher</div>
-                        <div class="run-kpi-value" title="${escapeHtml(runVersionsLabel(run))}">${escapeHtml(runVersionsLabel(run))}</div>
-                      </div>
-                      <div class="run-kpi">
-                        <div class="run-kpi-label">Clusters</div>
-                        <div class="run-kpi-value">${escapeHtml(String(stats.management))} management, ${escapeHtml(String(stats.downstream))} downstream</div>
-                      </div>
-                      <div class="run-kpi">
-                        <div class="run-kpi-label">AWS prefix</div>
-                        <div class="run-kpi-value">${escapeHtml(run.awsPrefix || 'not recorded')}</div>
-                      </div>
-                      <div class="run-kpi">
-                        <div class="run-kpi-label">Owner</div>
-                        <div class="run-kpi-value">${escapeHtml(run.owner || 'not recorded')}</div>
-                      </div>
-                    </div>
-                    <div class="run-footline">
-                      <div><strong>Hostname:</strong> ${escapeHtml(runHostnameLabel(run))}</div>
-                      <div><strong>Terraform:</strong> <span title="${escapeHtml(run.terraformStatePath || run.terraformBackend || '')}">${escapeHtml(compactPath(run.terraformStatePath || run.terraformBackend || 'not recorded'))}</span></div>
-                    </div>
-                    ${run.gpuWorkerEnabled ? `
-                      <div class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm font-semibold text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
-                        GPU worker node${Number(run.totalHAs || 1) === 1 ? '' : 's'} requested: ${escapeHtml(String(run.totalHAs || 1))} x ${escapeHtml(run.gpuWorkerInstanceType || 'GPU instance')}. Do not leave running unused.
-                      </div>
-                    ` : ''}
-                  </div>
-                  <div class="run-command-panel">
-                    <div class="run-primary-actions">
-                      ${renderRunActionButton({ action: 'view-clusters', runId: run.runId, label: 'View clusters', variant: stats.total ? 'primary' : 'secondary', disabled: !stats.total, title: stats.total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.' })}
-                      ${readinessAction}
-                      ${lifecycleAction}
-                    </div>
-                    <div class="run-utility-strip" aria-label="Run utilities">
-                      ${utilityActions}
-                    </div>
-                  </div>
-              </article>
-            `
-          }).join('')}
-        </div>
-      `
-    }
-  }
-
   renderDestroySlots(workspace)
 }
 
@@ -1278,60 +1008,19 @@ const statusClass = tone => {
   return classes[tone] || classes.idle
 }
 
-const preflightItemClass = status => {
-  const classes = {
-    ok: 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200',
-    warning: 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200',
-    blocked: 'border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-200',
-    error: 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200'
-  }
-  return classes[status] || 'border-zinc-200 bg-white text-zinc-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300'
+const publishPreflightState = (checking = false) => {
+  window.rancherControlPanelPreflight = preflightState
+  window.dispatchEvent(new CustomEvent('rancher-control-panel:preflight', {
+    detail: {
+      preflight: preflightState,
+      checking
+    }
+  }))
 }
 
-const renderPreflight = readiness => {
+const setPreflightState = readiness => {
   preflightState = readiness
-  const items = Array.isArray(readiness?.items) ? readiness.items : []
-  const errors = items.filter(item => item.status === 'error').length
-  const blocked = items.filter(item => item.status === 'blocked').length
-  const warnings = items.filter(item => item.status === 'warning').length
-  const badgeClass = tone => statusClass(tone).replace('mt-3 ', '')
-
-  if (errors > 0) {
-    preflightStatusEl.className = badgeClass('error')
-    preflightStatusEl.textContent = `${errors} blocking`
-  } else if (blocked > 0) {
-    preflightStatusEl.className = badgeClass('blocked')
-    preflightStatusEl.textContent = 'Live run active'
-  } else if (warnings > 0) {
-    preflightStatusEl.className = 'inline-flex items-center justify-center rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
-    preflightStatusEl.textContent = `${warnings} warning${warnings === 1 ? '' : 's'}`
-  } else if (readiness?.ready) {
-    preflightStatusEl.className = badgeClass('success')
-    preflightStatusEl.textContent = 'Ready'
-  } else {
-    preflightStatusEl.className = badgeClass('idle')
-    preflightStatusEl.textContent = 'Checking...'
-  }
-
-  if (!items.length) {
-    preflightItemsEl.innerHTML = '<div class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">No preflight results yet.</div>'
-    return
-  }
-
-  const priority = { error: 0, blocked: 1, warning: 2, ok: 3 }
-  const visible = [...items]
-    .sort((left, right) => (priority[left.status] ?? 3) - (priority[right.status] ?? 3) || String(left.name).localeCompare(String(right.name)))
-    .slice(0, 5)
-
-  preflightItemsEl.innerHTML = visible.map(item => `
-    <div class="rounded-lg border px-3 py-2 ${preflightItemClass(item.status)}">
-      <div class="flex items-center justify-between gap-3">
-        <span class="min-w-0 truncate font-semibold">${escapeHtml(item.name)}</span>
-        <span class="shrink-0 text-xs uppercase">${escapeHtml(item.status || 'unknown')}</span>
-      </div>
-      <div class="mt-1 text-xs leading-5 opacity-90">${escapeHtml(item.detail || '')}</div>
-    </div>
-  `).join('')
+  publishPreflightState()
 
   if (lastState?.setup) {
     renderSetup(lastState.setup)
@@ -1344,9 +1033,10 @@ const refreshPreflight = async () => {
   }
 
   preflightInFlight = true
-  preflightStatusEl.className = statusClass('running').replace('mt-3 ', '')
-  preflightStatusEl.innerHTML = '<span class="spinner mr-2"></span>Checking'
-  refreshPreflightBtnEl.disabled = true
+  publishPreflightState(true)
+  if (refreshPreflightBtnEl) {
+    refreshPreflightBtnEl.disabled = true
+  }
 
   try {
     const response = await fetch('/api/preflight', {
@@ -1359,9 +1049,9 @@ const refreshPreflight = async () => {
     if (!response.ok) {
       throw new Error(await response.text() || 'Preflight failed')
     }
-    renderPreflight(await response.json())
+    setPreflightState(await response.json())
   } catch (error) {
-    renderPreflight({
+    setPreflightState({
       ready: false,
       summary: 'Preflight failed',
       items: [{
@@ -1372,7 +1062,10 @@ const refreshPreflight = async () => {
     })
   } finally {
     preflightInFlight = false
-    refreshPreflightBtnEl.disabled = false
+    publishPreflightState(false)
+    if (refreshPreflightBtnEl) {
+      refreshPreflightBtnEl.disabled = false
+    }
   }
 }
 
@@ -1631,7 +1324,7 @@ const cleanLocalArtifacts = async () => {
     costs: payload.costs || lastState?.costs
   }
   const removed = Array.isArray(payload.removed) ? payload.removed.length : 0
-  renderWorkspace(lastState.workspace)
+  syncWorkspace(lastState.workspace)
   renderLocalArtifactCleanup(lastState.workspace)
   publishControlPanelVueState(lastState)
   renderCostControls(lastState.costs)
@@ -1801,14 +1494,14 @@ const refresh = async () => {
       setBootState(false)
     }
     publishControlPanelVueState(state)
-    renderWorkspace(state.workspace)
+    syncWorkspace(state.workspace)
     updateLeaderTracking(state)
     renderClusters(state)
     renderSetup(state.setup)
     renderReadiness(state.readiness)
     renderCleanup(state.linodeCleanup?.running || state.linodeCleanup?.finishedAt || state.linodeCleanup?.error ? state.linodeCleanup : state.cleanup)
     renderCostControls(state.costs)
-    renderGPUReminderSettings()
+    publishGPUReminderSettings()
     maybeShowGPUReminder(state)
     updateStopPanelState(state)
     refreshStatusEl.textContent = lastLeaderChangeMessage
@@ -2763,7 +2456,7 @@ gpuReminderIntervalEls.forEach(button => {
       lastReminderAt: Date.now()
     }
     saveGPUReminderSettings()
-    renderGPUReminderSettings()
+    publishGPUReminderSettings()
     showPanelNotice('GPU reminders updated', `Reminder interval set to ${gpuReminderIntervalLabel(gpuReminderSettings.intervalMinutes)}.`)
   })
 })
@@ -2775,7 +2468,7 @@ gpuReminderEnableBtnEl?.addEventListener('click', () => {
     lastReminderAt: Date.now()
   }
   saveGPUReminderSettings()
-  renderGPUReminderSettings()
+  publishGPUReminderSettings()
   showPanelNotice('GPU reminders enabled', `Next reminder after ${gpuReminderIntervalLabel(gpuReminderSettings.intervalMinutes)} if GPU infrastructure remains active.`)
 })
 
@@ -2797,7 +2490,7 @@ gpuReminderDisableBtnEl?.addEventListener('click', async () => {
   }
   saveGPUReminderSettings()
   hideGPUReminderModal()
-  renderGPUReminderSettings()
+  publishGPUReminderSettings()
   showPanelNotice('GPU reminders disabled', 'Close-time GPU warnings remain active.')
 })
 
@@ -2880,7 +2573,7 @@ window.addEventListener('rancher-setup-started', () => {
 
 document.getElementById('refreshBtn').addEventListener('click', refresh)
 document.getElementById('stopBtn').addEventListener('click', stopPanel)
-refreshPreflightBtnEl.addEventListener('click', refreshPreflight)
+refreshPreflightBtnEl?.addEventListener('click', refreshPreflight)
 setupBtnEl.addEventListener('click', runSetup)
 openSetupLogsBtnEl.addEventListener('click', openSetupLogs)
 readinessBtnEl.addEventListener('click', runReadiness)
@@ -2935,7 +2628,7 @@ setTheme(currentTheme(), false)
 syncFullscreenButton()
 setActivePanelTab(activePanelTab)
 setActiveDestroyTab(activeDestroyTab)
-renderGPUReminderSettings()
+publishGPUReminderSettings()
 setBootState(true, 'Checking local config, run slots, Terraform state, lifecycle processes, clusters, and AWS inventory before enabling actions.')
 if ('scrollRestoration' in history) {
   history.scrollRestoration = 'manual'
