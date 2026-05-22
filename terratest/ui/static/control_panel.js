@@ -814,6 +814,17 @@ const headerChipClasses = tone => ({
   zinc: ''
 })[tone] || ''
 
+const publishControlPanelVueState = state => {
+  window.rancherControlPanelState = state || {}
+  window.dispatchEvent(new CustomEvent('rancher-control-panel:state', {
+    detail: {
+      state: window.rancherControlPanelState,
+      bootPending: bootStatePending,
+      refreshedAt: new Date().toISOString()
+    }
+  }))
+}
+
 const renderHeaderSummary = state => {
   if (!headerSummaryEl) {
     return
@@ -1111,28 +1122,25 @@ const renderBuildVersion = build => {
 }
 
 const renderPanelSession = panel => {
-  if (!panelSessionMetaEl || !panel?.sessionId) {
-    renderBuildVersion(panel?.build)
-    return
-  }
+  renderBuildVersion(panel?.build)
 
-  renderBuildVersion(panel.build)
-
-  const started = panel.startedAt ? new Date(panel.startedAt).toLocaleTimeString() : ''
-  const pieces = [`Panel ${panel.sessionId}`]
-  if (started) {
-    pieces.push(`started ${started}`)
-  }
-  if (panel.repoRoot) {
-    pieces.push(panel.repoRoot)
-  }
-  panelSessionMetaEl.textContent = pieces.join(' • ')
-  if (panel.configPath) {
-    panelSessionMetaEl.title = panel.configPath
+  if (panelSessionMetaEl && panel?.sessionId) {
+    const started = panel.startedAt ? new Date(panel.startedAt).toLocaleTimeString() : ''
+    const pieces = [`Panel ${panel.sessionId}`]
+    if (started) {
+      pieces.push(`started ${started}`)
+    }
+    if (panel.repoRoot) {
+      pieces.push(panel.repoRoot)
+    }
+    panelSessionMetaEl.textContent = pieces.join(' • ')
+    if (panel.configPath) {
+      panelSessionMetaEl.title = panel.configPath
+    }
   }
 
   if (configNoticeEl) {
-    if (panel.starterConfigCreated) {
+    if (panel?.starterConfigCreated) {
       configNoticeEl.classList.remove('hidden')
       configNoticeEl.textContent = `Created starter config at ${panel.configPath}. Fill in the blocked setup values below before starting setup.`
     } else {
@@ -2248,6 +2256,7 @@ const refresh = async () => {
     if (bootStatePending) {
       setBootState(false)
     }
+    publishControlPanelVueState(state)
     renderPanelSession(state.panel)
     renderHeaderSummary(state)
     renderCommandDeck(state)

@@ -7,14 +7,14 @@ APP_PATH := $(INSTALL_DIR)/$(APP_NAME).app
 STATUS_JSON := terratest/automation-output/install-status.json
 WAILS_FRONTEND_DIR := desktop/wails/frontend
 
-.PHONY: help setup install app build node-deps frontend-deps panel-css check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
+.PHONY: help setup install app build node-deps frontend-deps panel-css panel-vue panel-ui check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
 
 help:
 	@printf '%s\n' "Targets:"
 	@printf '  %-20s %s\n' "make setup" "Check local safety, rebuild, and install $(APP_NAME).app"
 	@printf '  %-20s %s\n' "make install" "Alias for setup"
 	@printf '  %-20s %s\n' "make app" "Build the Wails app without installing it"
-	@printf '  %-20s %s\n' "make panel-css" "Rebuild the embedded control-panel CSS"
+	@printf '  %-20s %s\n' "make panel-ui" "Rebuild embedded control-panel CSS and Vue assets"
 	@printf '  %-20s %s\n' "make test" "Run Go tests"
 	@printf '  %-20s %s\n' "make ci" "Run local CI checks"
 
@@ -38,6 +38,12 @@ frontend-deps:
 panel-css: node-deps
 	@npm run build:panel-css
 
+panel-vue: node-deps
+	@npm run build:panel-vue
+
+panel-ui: node-deps
+	@npm run build:panel-ui
+
 test:
 	@go test ./...
 
@@ -46,7 +52,7 @@ ci: ci-go ci-web ci-terraform ci-workflows
 ci-go:
 	@go test ./...
 
-ci-web: panel-css frontend-deps
+ci-web: panel-ui frontend-deps
 	@npm --prefix "$(WAILS_FRONTEND_DIR)" run build
 
 ci-terraform:

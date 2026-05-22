@@ -684,6 +684,10 @@ var controlPanelStaticAssets = map[string]controlPanelStaticAsset{
 		ContentType: "application/javascript; charset=utf-8",
 		Body:        ui.ControlPanelJS,
 	},
+	"/static/control_panel_header_vue.js": {
+		ContentType: "application/javascript; charset=utf-8",
+		Body:        ui.ControlPanelHeaderVueJS,
+	},
 	"/static/control_panel_clusters.js": {
 		ContentType: "application/javascript; charset=utf-8",
 		Body:        ui.ControlPanelClustersJS,

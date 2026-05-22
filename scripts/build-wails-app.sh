@@ -87,10 +87,10 @@ if [[ ! -x "${wails_bin}" ]]; then
   exit 1
 fi
 
-if [[ ! -x "${repo_root}/node_modules/.bin/tailwindcss" ]]; then
+if [[ ! -x "${repo_root}/node_modules/.bin/tailwindcss" || ! -x "${repo_root}/node_modules/.bin/vite" || ! -d "${repo_root}/node_modules/vue" ]]; then
   (cd "${repo_root}" && npm install)
 fi
-(cd "${repo_root}" && npm run build:panel-css)
+(cd "${repo_root}" && npm run build:panel-ui)
 
 printf '%s\n' "${repo_root}" > "${repo_root}/desktop/wails/repo_hint.txt"
 

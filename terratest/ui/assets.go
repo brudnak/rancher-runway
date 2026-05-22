@@ -14,6 +14,9 @@ var ControlPanelHTML string
 //go:embed static/control_panel.js
 var ControlPanelJS string
 
+//go:embed static/control_panel_header_vue.js
+var ControlPanelHeaderVueJS string
+
 //go:embed static/control_panel_utils.js
 var ControlPanelUtilsJS string
 

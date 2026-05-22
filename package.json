@@ -1,10 +1,17 @@
 {
   "scripts": {
     "build:panel-css": "BROWSERSLIST_IGNORE_OLD_DATA=1 tailwindcss -c tailwind.config.cjs -i terratest/ui/static/control_panel.tailwind.css -o terratest/ui/static/control_panel.css --minify",
+    "build:panel-vue": "vite build --config terratest/ui/vue/vite.config.mjs",
+    "build:panel-ui": "npm run build:panel-css && npm run build:panel-vue",
     "build:wails": "scripts/build-wails-app.sh",
     "install:wails": "scripts/install.sh"
   },
   "devDependencies": {
-    "tailwindcss": "3.4.17"
+    "@vitejs/plugin-vue": "^5.2.4",
+    "tailwindcss": "3.4.17",
+    "vite": "^5.4.21"
+  },
+  "dependencies": {
+    "vue": "^3.5.34"
   }
 }
