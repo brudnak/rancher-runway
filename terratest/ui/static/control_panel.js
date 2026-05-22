@@ -901,7 +901,7 @@ const commandTileHTML = ({ tone = 'zinc', eyebrow, title, detail, meta = '', act
 `
 
 const renderCommandDeck = state => {
-  if (!commandDeckEl) {
+  if (!commandDeckEl || commandDeckEl.dataset.vueOwned === 'true') {
     return
   }
   const runs = Array.isArray(state?.workspace?.runs) ? state.workspace.runs : []
