@@ -636,8 +636,16 @@ jobs:
             run_suite
             exit_code=$?
             set -e
+            transient_retry_reason=""
             if [ "$exit_code" -ne 0 ] && grep -Eq "error streaming pod logs for pod .*kubectl-|image can't be pulled|PodInitializing" "$suite_log"; then
-              echo "Detected Rancher shell helper pod startup failure in $suite; waiting 90s and retrying once"
+              transient_retry_reason="Rancher shell helper pod startup failure"
+            elif [ "$exit_code" -ne 0 ] &&
+              grep -Fq 'expected: "404"' "$suite_log" &&
+              grep -Fq 'actual  : "503"' "$suite_log"; then
+              transient_retry_reason="schema endpoint returned a temporary 503 while waiting for CRD deletion to settle"
+            fi
+            if [ -n "$transient_retry_reason" ]; then
+              echo "Detected $transient_retry_reason in $suite; waiting 90s and retrying once"
               sleep 90
               set +e
               run_suite
