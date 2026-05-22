@@ -5,8 +5,9 @@ APP_NAME ?= Rancher Runway
 INSTALL_DIR ?= /Applications
 APP_PATH := $(INSTALL_DIR)/$(APP_NAME).app
 STATUS_JSON := terratest/automation-output/install-status.json
+WAILS_FRONTEND_DIR := desktop/wails/frontend
 
-.PHONY: help setup install app build panel-css check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
+.PHONY: help setup install app build node-deps frontend-deps panel-css check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
 
 help:
 	@printf '%s\n' "Targets:"
@@ -28,7 +29,13 @@ app:
 
 build: app
 
-panel-css:
+node-deps:
+	@npm install
+
+frontend-deps:
+	@npm --prefix "$(WAILS_FRONTEND_DIR)" install
+
+panel-css: node-deps
 	@npm run build:panel-css
 
 test:
@@ -39,8 +46,8 @@ ci: ci-go ci-web ci-terraform ci-workflows
 ci-go:
 	@go test ./...
 
-ci-web: panel-css
-	@npm --prefix desktop/wails/frontend run build
+ci-web: panel-css frontend-deps
+	@npm --prefix "$(WAILS_FRONTEND_DIR)" run build
 
 ci-terraform:
 	@terraform -chdir=modules/aws fmt -check -recursive

@@ -6,19 +6,7 @@
     <title>Rancher Runway</title>
   </head>
   <body>
-    <iframe id="panelFrame" title="Rancher Runway Control Panel" hidden></iframe>
-    <main id="loadingShell" class="shell">
-      <section class="mark" aria-hidden="true">
-        <span class="mark-ring"></span>
-      </section>
-      <section class="copy">
-        <p class="eyebrow">Rancher Runway</p>
-        <h1>Opening the local control panel</h1>
-        <p id="buildBadge" class="build-badge">Build unknown</p>
-        <p id="status">Starting the local Go panel and attaching this native window.</p>
-        <button id="retryButton" class="retry-button" type="button" hidden>Try again</button>
-      </section>
-    </main>
+    <div id="app"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

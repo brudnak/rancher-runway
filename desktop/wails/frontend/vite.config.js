@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -14,7 +15,7 @@ const cleanGeneratedDist = () => ({
 });
 
 export default defineConfig({
-  plugins: [cleanGeneratedDist()],
+  plugins: [vue(), cleanGeneratedDist()],
   build: {
     emptyOutDir: false,
   },
