@@ -1,9 +1,7 @@
 import {
-  badge,
   clusterItems,
   compactPath,
   escapeHtml,
-  formatUSD,
   highlightLogLine,
   lineMatchesLogLevel,
   operationOutput,
@@ -92,11 +90,6 @@ const resetCostLedgerBtnEl = document.getElementById('resetCostLedgerBtn')
 const costResetStatusEl = document.getElementById('costResetStatus')
 const cleanLocalArtifactsBtnEl = document.getElementById('cleanLocalArtifactsBtn')
 const localArtifactsStatusEl = document.getElementById('localArtifactsStatus')
-const costHistorySummaryEl = document.getElementById('costHistorySummary')
-const costHistoryTableEl = document.getElementById('costHistoryTable')
-const awsInventorySummaryEl = document.getElementById('awsInventorySummary')
-const awsInventoryMetaEl = document.getElementById('awsInventoryMeta')
-const awsInventoryEl = document.getElementById('awsInventory')
 const fullscreenToggleEl = document.getElementById('fullscreenToggle')
 const fullscreenEnterIconEl = document.getElementById('fullscreenEnterIcon')
 const fullscreenExitIconEl = document.getElementById('fullscreenExitIcon')
@@ -779,90 +772,6 @@ const fetchState = async () => {
     throw new Error(await response.text() || 'Failed to load panel state.')
   }
   return response.json()
-}
-
-const renderAWSInventory = inventory => {
-  if (!awsInventoryEl || !awsInventorySummaryEl) {
-    return
-  }
-
-  const items = Array.isArray(inventory?.items) ? inventory.items : []
-  const updated = inventory?.updatedAt ? new Date(inventory.updatedAt).toLocaleTimeString() : ''
-  const queries = Array.isArray(inventory?.queries) ? inventory.queries : []
-  const queryText = queries.length ? queries.join(' • ') : 'No scoped AWS query yet'
-  const owner = inventory?.owner ? `Owner ${inventory.owner}` : 'Owner tag not configured'
-  const region = inventory?.region || 'region unavailable'
-
-  awsInventoryMetaEl.textContent = updated ? `Updated ${updated}` : ''
-  awsInventorySummaryEl.textContent = `${items.length} matching AWS resource${items.length === 1 ? '' : 's'} in ${region}. ${owner}. ${queryText}.`
-
-  if (inventory?.error) {
-    awsInventoryEl.innerHTML = `
-      <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-        ${escapeHtml(inventory.error)}
-      </div>
-    `
-    if (!items.length) {
-      return
-    }
-  }
-
-  if (!items.length) {
-    awsInventoryEl.innerHTML = '<div class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">No matching AWS resources found for the recorded run prefixes or Owner tag.</div>'
-    return
-  }
-
-  const counts = items.reduce((acc, item) => {
-    acc[item.type || 'AWS resource'] = (acc[item.type || 'AWS resource'] || 0) + 1
-    return acc
-  }, {})
-  const countBadges = Object.entries(counts)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([type, count]) => badge(`${type}: ${count}`))
-    .join('')
-
-  awsInventoryEl.innerHTML = `
-    <div class="flex flex-wrap gap-2">${countBadges}</div>
-    <div class="overflow-hidden rounded-xl border border-zinc-200 dark:border-white/10">
-      <table class="w-full table-fixed border-collapse text-left">
-        <colgroup>
-          <col class="w-[11rem]" />
-          <col class="w-[18rem]" />
-          <col class="w-[9rem]" />
-          <col class="w-[9rem]" />
-          <col />
-        </colgroup>
-        <thead class="bg-zinc-50 dark:bg-white/[0.04]">
-          <tr>
-            ${['Type', 'Name', 'Status', 'Run', 'Details'].map(label => `<th class="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">${label}</th>`).join('')}
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-zinc-200 dark:divide-white/10">
-          ${items.map(item => {
-            const tags = item.tags
-              ? Object.entries(item.tags).slice(0, 5).map(([key, value]) => `${key}=${value}`).join(' • ')
-              : ''
-            return `
-              <tr>
-                <td class="break-words px-3 py-3 align-top text-sm font-semibold text-zinc-900 dark:text-zinc-100">${escapeHtml(item.type || 'AWS resource')}</td>
-                <td class="break-words px-3 py-3 align-top text-sm text-zinc-700 dark:text-zinc-300">
-                  <div class="font-medium">${escapeHtml(item.name || item.id || '')}</div>
-                  <div class="mt-1 text-xs text-zinc-500 dark:text-zinc-500">${escapeHtml(item.region || '')}</div>
-                </td>
-                <td class="break-words px-3 py-3 align-top text-sm text-zinc-700 dark:text-zinc-300">${escapeHtml(item.status || '')}</td>
-                <td class="break-words px-3 py-3 align-top text-sm text-zinc-700 dark:text-zinc-300">${escapeHtml(item.runId || '')}</td>
-                <td class="break-words px-3 py-3 align-top text-sm text-zinc-700 dark:text-zinc-300">
-                  <div>${escapeHtml(item.details || item.id || '')}</div>
-                  ${item.owner ? `<div class="mt-1 text-xs text-zinc-500 dark:text-zinc-500">Owner ${escapeHtml(item.owner)}</div>` : ''}
-                  ${tags ? `<div class="mt-1 text-xs text-zinc-500 dark:text-zinc-500">${escapeHtml(tags)}</div>` : ''}
-                </td>
-              </tr>
-            `
-          }).join('')}
-        </tbody>
-      </table>
-    </div>
-  `
 }
 
 const renderWorkspace = workspace => {
@@ -1618,11 +1527,7 @@ const renderCleanupCost = (cleanup, output) => {
   cleanupCostEl.innerHTML = ''
 }
 
-const renderCostHistory = costs => {
-  if (!costHistorySummaryEl || !costHistoryTableEl) {
-    return
-  }
-
+const renderCostControls = costs => {
   renderLocalArtifactCleanup(lastState?.workspace)
 
   if (resetCostLedgerBtnEl) {
@@ -1641,84 +1546,6 @@ const renderCostHistory = costs => {
     const dbPath = costs?.dbPath || 'terratest/automation-output/control-panel/cost-ledger.sqlite'
     costResetStatusEl.textContent = `${dbPath} is local cache under automation-output/ and is ignored by Git.`
   }
-
-  if (costs?.error) {
-    costHistorySummaryEl.innerHTML = ''
-    costHistoryTableEl.innerHTML = `
-      <div class="border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200">
-        Cost history unavailable: ${escapeHtml(costs.error)}
-      </div>
-    `
-    return
-  }
-
-  const totals = costs?.totals || {}
-  const totalCards = [
-    ['Lifetime', totals.lifetime],
-    ['This month', totals.month],
-    ['This week', totals.week],
-    ['Today', totals.today]
-  ]
-  costHistorySummaryEl.innerHTML = totalCards.map(([label, value]) => `
-    <div class="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-white/10 dark:bg-white/[0.03]">
-      <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">${escapeHtml(label)}</div>
-      <div class="mt-1 text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">${escapeHtml(formatUSD(value))}</div>
-      <div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Estimated AWS cleanup cost</div>
-    </div>
-  `).join('')
-
-  const entries = Array.isArray(costs?.entries) ? costs.entries : []
-  if (!entries.length) {
-    costHistoryTableEl.innerHTML = `
-      <div class="bg-zinc-50 p-4 text-sm text-zinc-600 dark:bg-white/[0.03] dark:text-zinc-400">
-        No persisted cost estimates yet. Successful destroys will add estimated EC2, EBS, RDS/Aurora, and load balancer cost rows here.
-      </div>
-    `
-    return
-  }
-
-  costHistoryTableEl.innerHTML = `
-    <div class="overflow-x-auto">
-      <table class="min-w-full divide-y divide-zinc-200 text-left text-sm dark:divide-white/10">
-        <thead class="bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:bg-white/[0.03] dark:text-zinc-400">
-          <tr>
-            <th class="px-4 py-3">Run</th>
-            <th class="px-4 py-3">Finished</th>
-            <th class="px-4 py-3">Owner</th>
-            <th class="px-4 py-3">Region</th>
-            <th class="px-4 py-3">Runtime</th>
-            <th class="px-4 py-3">EC2</th>
-            <th class="px-4 py-3">EBS</th>
-            <th class="px-4 py-3">RDS</th>
-            <th class="px-4 py-3">LB</th>
-            <th class="px-4 py-3">Total</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-zinc-200 bg-white dark:divide-white/10 dark:bg-white/[0.02]">
-          ${entries.map(entry => {
-            const finished = entry.finishedAt ? new Date(entry.finishedAt).toLocaleString() : 'not recorded'
-            return `
-              <tr>
-                <td class="px-4 py-3 font-semibold text-zinc-900 dark:text-zinc-100">
-                  ${escapeHtml(entry.runId || 'unknown')}
-                  ${entry.awsPrefix ? `<div class="mt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">${escapeHtml(entry.awsPrefix)}</div>` : ''}
-                </td>
-                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(finished)}</td>
-                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(entry.owner || 'not recorded')}</td>
-                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(entry.region || 'unknown')}</td>
-                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(Number(entry.totalRuntimeHours || 0).toFixed(2))}h</td>
-                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(formatUSD(entry.ec2CostUsd))}</td>
-                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(formatUSD(entry.ebsCostUsd))}</td>
-                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(formatUSD(entry.rdsCostUsd))}</td>
-                <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">${escapeHtml(formatUSD(entry.loadBalancerCostUsd))}</td>
-                <td class="px-4 py-3 font-semibold text-zinc-950 dark:text-zinc-50">${escapeHtml(formatUSD(entry.totalCostUsd))}</td>
-              </tr>
-            `
-          }).join('')}
-        </tbody>
-      </table>
-    </div>
-  `
 }
 
 const renderLocalArtifactCleanup = workspace => {
@@ -1806,7 +1633,8 @@ const cleanLocalArtifacts = async () => {
   const removed = Array.isArray(payload.removed) ? payload.removed.length : 0
   renderWorkspace(lastState.workspace)
   renderLocalArtifactCleanup(lastState.workspace)
-  renderCostHistory(lastState.costs)
+  publishControlPanelVueState(lastState)
+  renderCostControls(lastState.costs)
   localArtifactsStatusEl.textContent = removed
     ? `Cleaned ${removed} local artifact${removed === 1 ? '' : 's'}.`
     : 'No local artifacts needed cleaning.'
@@ -1841,7 +1669,7 @@ const resetCostLedger = async () => {
   if (costResetStatusEl) {
     costResetStatusEl.textContent = 'Resetting local cost ledger...'
   }
-  renderCostHistory(lastState?.costs)
+  renderCostControls(lastState?.costs)
 
   const response = await fetch('/api/costs/reset', {
     method: 'POST',
@@ -1857,7 +1685,7 @@ const resetCostLedger = async () => {
     if (costResetStatusEl) {
       costResetStatusEl.textContent = await response.text()
     }
-    renderCostHistory(lastState?.costs)
+    renderCostControls(lastState?.costs)
     return
   }
 
@@ -1869,7 +1697,8 @@ const resetCostLedger = async () => {
   if (costResetStatusEl) {
     costResetStatusEl.textContent = 'Cost history reset. A fresh empty SQLite ledger is ready.'
   }
-  renderCostHistory(lastState.costs)
+  publishControlPanelVueState(lastState)
+  renderCostControls(lastState.costs)
   refresh()
 }
 
@@ -1975,11 +1804,10 @@ const refresh = async () => {
     renderWorkspace(state.workspace)
     updateLeaderTracking(state)
     renderClusters(state)
-    renderAWSInventory(state.aws)
     renderSetup(state.setup)
     renderReadiness(state.readiness)
     renderCleanup(state.linodeCleanup?.running || state.linodeCleanup?.finishedAt || state.linodeCleanup?.error ? state.linodeCleanup : state.cleanup)
-    renderCostHistory(state.costs)
+    renderCostControls(state.costs)
     renderGPUReminderSettings()
     maybeShowGPUReminder(state)
     updateStopPanelState(state)
