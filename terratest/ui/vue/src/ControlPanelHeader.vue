@@ -38,6 +38,13 @@
         <span class="panel-chip-value">{{ chip.value }}</span>
       </span>
     </div>
+
+    <div
+      v-if="panel?.starterConfigCreated"
+      class="mt-4 max-w-3xl rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-800 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-200"
+    >
+      Created starter config at {{ panel.configPath }}. Fill in the blocked setup values below before starting setup.
+    </div>
   </div>
 </template>
 

@@ -38,11 +38,7 @@ import {
 const setupData = JSON.parse(document.getElementById('control-panel-data')?.textContent || '{}')
 const token = setupData.token || ''
 
-const panelSessionMetaEl = document.getElementById('panelSessionMeta')
-const buildVersionBadgeEl = document.getElementById('buildVersionBadge')
-const headerSummaryEl = document.getElementById('headerSummary')
 const commandDeckEl = document.getElementById('commandDeck')
-const configNoticeEl = document.getElementById('configNotice')
 const bootStatusEl = document.getElementById('bootStatus')
 const bootStatusDetailEl = document.getElementById('bootStatusDetail')
 const panelTabsEl = document.getElementById('panelTabs')
@@ -311,30 +307,15 @@ const setPanelFullscreen = async nextFullscreen => {
 }
 
 const setActivePanelTab = tab => {
-  const available = Boolean(panelTabsEl?.querySelector(`button[data-tab="${tab}"]`))
-  activePanelTab = available ? tab : 'runs'
+  const availableTabs = new Set(['setup', 'runs', 'clusters', 'aws', 'destroy', 'settings'])
+  activePanelTab = availableTabs.has(tab) ? tab : 'runs'
   localStorage.setItem('rancherControlPanelTab', activePanelTab)
   tabPanelEls.forEach(panel => {
     panel.classList.toggle('hidden', panel.dataset.tabPanel !== activePanelTab)
   })
-  panelTabsEl?.querySelectorAll('button[data-tab]').forEach(button => {
-    const active = button.dataset.tab === activePanelTab
-    if (active) {
-      button.setAttribute('aria-current', 'page')
-    } else {
-      button.removeAttribute('aria-current')
-    }
-    button.className = active
-      ? 'panel-tab rounded-lg bg-emerald-500 px-3.5 py-2 text-sm font-semibold text-white shadow-sm shadow-emerald-500/20'
-      : 'panel-tab rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-white/[0.06]'
-    const badge = button.querySelector('[data-tab-count]')
-    if (badge) {
-      const empty = !badge.textContent.trim()
-      badge.className = active
-        ? `tab-count bg-white/20 text-white ${empty ? 'hidden' : ''}`
-        : `tab-count bg-zinc-100 text-zinc-600 dark:bg-white/[0.08] dark:text-zinc-300 ${empty ? 'hidden' : ''}`
-    }
-  })
+  window.dispatchEvent(new CustomEvent('rancher-control-panel:tab', {
+    detail: { tab: activePanelTab }
+  }))
   if (activePanelTab === 'setup' && lastState) {
     dispatchSetupLifecycleState(lastState)
   }
@@ -433,9 +414,7 @@ const setBootState = (pending, detail = '') => {
     booting: bootStatePending,
     detail: detail || 'Checking local config, run slots, Terraform state, lifecycle processes, clusters, and AWS inventory.'
   })
-  renderHeaderSummary(lastState || {})
-  renderCommandDeck(lastState || {})
-  renderPanelTabBadges(lastState || {})
+  publishControlPanelVueState(lastState || {})
 }
 
 const setupRootElDispatch = detail => {
@@ -684,30 +663,6 @@ const appendLogLine = line => {
   }
 }
 
-const operationSummaryForState = state => {
-  const operations = [
-    ['setup', 'Setup', state?.setup],
-    ['readiness', 'Readiness', state?.readiness],
-    ['cleanup', 'Destroy', state?.cleanup],
-    ['linodeSetup', 'Linode setup', state?.linodeSetup],
-    ['linodeCleanup', 'Linode destroy', state?.linodeCleanup]
-  ]
-  const active = operations.find(([, , operation]) => operation?.running)
-  if (active) {
-    const [, label, operation] = active
-    return {
-      label,
-      value: operation?.runId ? `Run ${operation.runId}` : 'Running',
-      tone: 'sky',
-      running: true
-    }
-  }
-  if (bootStatePending) {
-    return { label: 'Safety check', value: 'Loading state', tone: 'sky', running: true }
-  }
-  return { label: 'Operation', value: 'Idle', tone: 'zinc', running: false }
-}
-
 const activeGPUClusters = state => clusterItems(state).filter(cluster =>
   cluster?.type === 'local' && (cluster.gpuWorkerIp || cluster.gpuWorkerPrivateIp)
 )
@@ -792,28 +747,6 @@ const maybeShowGPUReminder = state => {
   showGPUReminderModal(clusters)
 }
 
-const gpuSummaryChip = state => {
-  const clusters = activeGPUClusters(state)
-  if (!clusters.length) {
-    return null
-  }
-  const instanceTypes = [...new Set(clusters.map(cluster => cluster.gpuWorkerInstanceType).filter(Boolean))]
-  return {
-    label: clusters.length === 1 ? 'GPU node deployed' : 'GPU nodes deployed',
-    value: instanceTypes.length === 1 ? `${clusters.length} ${instanceTypes[0]}` : `${clusters.length} deployed`,
-    tone: 'rose',
-    running: false
-  }
-}
-
-const headerChipClasses = tone => ({
-  emerald: 'panel-chip-tone-emerald',
-  sky: 'panel-chip-tone-sky',
-  amber: 'panel-chip-tone-amber',
-  rose: 'panel-chip-tone-rose',
-  zinc: ''
-})[tone] || ''
-
 const publishControlPanelVueState = state => {
   window.rancherControlPanelState = state || {}
   window.dispatchEvent(new CustomEvent('rancher-control-panel:state', {
@@ -823,171 +756,6 @@ const publishControlPanelVueState = state => {
       refreshedAt: new Date().toISOString()
     }
   }))
-}
-
-const renderHeaderSummary = state => {
-  if (!headerSummaryEl) {
-    return
-  }
-  const runs = Array.isArray(state?.workspace?.runs) ? state.workspace.runs : []
-  const totalHAs = runs.reduce((total, run) => total + Number(run.totalHAs || 1), 0)
-  const clusters = clusterItems(state)
-  const reachable = clusters.filter(cluster => cluster.reachable).length
-  const awsItems = Array.isArray(state?.aws?.items) ? state.aws.items : []
-  const operation = operationSummaryForState(state)
-  const gpuChip = gpuSummaryChip(state)
-  const freshness = new Date().toLocaleTimeString()
-  const chips = [
-    { label: 'Runs', value: `${runs.length} slot${runs.length === 1 ? '' : 's'} / ${totalHAs} HA`, tone: runs.length ? 'emerald' : 'zinc' },
-    { label: 'Clusters', value: clusters.length ? `${reachable}/${clusters.length} reachable` : 'None yet', tone: clusters.length ? (reachable === clusters.length ? 'emerald' : 'amber') : 'zinc' },
-    gpuChip,
-    { label: 'AWS view', value: awsItems.length ? `${awsItems.length} resources` : 'No resources shown', tone: awsItems.length ? 'amber' : 'zinc' },
-    { label: operation.label, value: operation.value, tone: operation.tone, running: operation.running },
-    { label: 'Refreshed', value: freshness, tone: 'zinc' }
-  ].filter(Boolean)
-
-  headerSummaryEl.innerHTML = chips.map(chip => `
-    <span class="panel-chip ${headerChipClasses(chip.tone)}">
-      ${chip.running ? '<span class="spinner !h-3 !w-3 !border-[1.5px]"></span>' : ''}
-      <span>${escapeHtml(chip.label)}</span>
-      <span class="panel-chip-value">${escapeHtml(chip.value)}</span>
-    </span>
-  `).join('')
-}
-
-const renderPanelTabBadges = state => {
-  if (!panelTabsEl) {
-    return
-  }
-  const runs = Array.isArray(state?.workspace?.runs) ? state.workspace.runs : []
-  const clusters = clusterItems(state)
-  const awsItems = Array.isArray(state?.aws?.items) ? state.aws.items : []
-  const values = {
-    setup: state?.setup?.running ? 'AWS' : state?.linodeSetup?.running ? 'Linode' : '',
-    runs: runs.length ? String(runs.length) : '',
-    clusters: clusters.length ? String(clusters.length) : '',
-    aws: awsItems.length ? String(awsItems.length) : '',
-    destroy: runs.length ? String(runs.length) : ''
-  }
-  panelTabsEl.querySelectorAll('[data-tab-count]').forEach(badge => {
-    const tab = badge.dataset.tabCount
-    const value = values[tab] || ''
-    const active = activePanelTab === tab
-    badge.textContent = value
-    badge.className = active
-      ? `tab-count bg-white/20 text-white ${value ? '' : 'hidden'}`
-      : `tab-count bg-zinc-100 text-zinc-600 dark:bg-white/[0.08] dark:text-zinc-300 ${value ? '' : 'hidden'}`
-  })
-}
-
-const commandTileHTML = ({ tone = 'zinc', eyebrow, title, detail, meta = '', action = '', actionLabel = '' }) => `
-  <article class="command-tile p-4" data-tone="${escapeHtml(tone)}">
-    <div class="flex h-full min-w-0 flex-col gap-3">
-      <div class="flex min-w-0 items-start justify-between gap-3">
-        <div class="min-w-0">
-          <div class="text-[11px] font-extrabold uppercase tracking-[0.18em] text-zinc-500 dark:text-zinc-400">${escapeHtml(eyebrow)}</div>
-          <div class="mt-2 truncate text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
-        </div>
-        ${meta ? `<div class="shrink-0 rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-bold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(meta)}</div>` : ''}
-      </div>
-      <p class="min-h-[2.5rem] text-sm leading-5 text-zinc-600 dark:text-zinc-400">${escapeHtml(detail)}</p>
-      ${action && actionLabel ? `
-        <div class="mt-auto">
-          <button type="button" data-command-action="${escapeHtml(action)}" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">${escapeHtml(actionLabel)}</button>
-        </div>
-      ` : ''}
-    </div>
-  </article>
-`
-
-const renderCommandDeck = state => {
-  if (!commandDeckEl || commandDeckEl.dataset.vueOwned === 'true') {
-    return
-  }
-  const runs = Array.isArray(state?.workspace?.runs) ? state.workspace.runs : []
-  const currentRun = state?.workspace?.currentRun || runs[0] || null
-  const clusters = clusterItems(state)
-  const awsItems = Array.isArray(state?.aws?.items) ? state.aws.items : []
-  const operation = operationSummaryForState(state)
-  const lifecycleBusy = lifecycleRunning(state)
-  const readyForSetup = Boolean(state?.workspace?.canStartIsolatedRun && !lifecycleBusy && !bootStatePending)
-  const currentStats = currentRun ? runClusterStats(currentRun, state) : { total: 0, reachable: 0, management: 0, downstream: 0 }
-
-  const safetyTile = bootStatePending
-    ? {
-        tone: 'sky',
-        eyebrow: 'Safety gate',
-        title: 'Inspecting local state',
-        detail: 'Actions stay disabled while the panel checks config, run slots, Terraform state, and active lifecycle processes.',
-        meta: 'Locked',
-        action: 'runs',
-        actionLabel: 'View runs'
-      }
-    : lifecycleBusy
-      ? {
-          tone: 'sky',
-          eyebrow: 'Safety gate',
-          title: `${operation.label} is active`,
-          detail: 'Setup, readiness, and destroy are serialized so the run state and AWS target stay unambiguous.',
-          meta: 'Busy',
-          action: 'runs',
-          actionLabel: 'Inspect run'
-        }
-      : {
-          tone: readyForSetup ? 'emerald' : 'zinc',
-          eyebrow: 'Safety gate',
-          title: readyForSetup ? 'Ready for a new setup' : 'Operator actions ready',
-          detail: readyForSetup ? 'Setup is available from the Setup tab after plan resolution and approval.' : 'No lifecycle operation is running. Existing slots remain individually inspectable and destroyable.',
-          meta: 'Ready',
-          action: readyForSetup ? 'setup' : 'runs',
-          actionLabel: readyForSetup ? 'Open setup' : 'View runs'
-        }
-
-  const runTile = currentRun
-    ? {
-        tone: currentStats.total ? 'emerald' : 'amber',
-        eyebrow: 'Current slot',
-        title: `Run ${currentRun.runId || 'unknown'}`,
-        detail: `${currentRun.totalHAs || 1} ${currentRun.deploymentType === 'hosted-tenant-k3s' ? 'hosted-tenant Rancher instance' : currentRun.deploymentType === 'linode-docker-cattle' ? 'Docker Rancher instance' : 'HA target'}${Number(currentRun.totalHAs || 1) === 1 ? '' : 's'} for ${runVersionsLabel(currentRun)}. ${currentStats.total ? `${currentStats.reachable}/${currentStats.total} cluster records reachable.` : 'Cluster records are not visible yet.'}`,
-        meta: currentRun.status || 'recorded',
-        action: currentStats.total ? 'clusters' : 'runs',
-        actionLabel: currentStats.total ? 'Open clusters' : 'View slot'
-      }
-    : {
-        tone: 'zinc',
-        eyebrow: 'Current slot',
-        title: 'No run slot yet',
-        detail: 'Resolve a plan in Setup, approve the Helm/AWS gate, and the slot will appear before Terraform creates resources.',
-        meta: 'Empty',
-        action: 'setup',
-        actionLabel: 'Start setup flow'
-      }
-
-  const exposureTile = awsItems.length
-    ? {
-        tone: 'amber',
-        eyebrow: 'AWS exposure',
-        title: `${awsItems.length} resource${awsItems.length === 1 ? '' : 's'} visible`,
-        detail: 'Inventory is read-only. Destructive actions remain per-slot and require typed confirmation before Terraform destroy starts.',
-        meta: 'Live',
-        action: 'aws',
-        actionLabel: 'Open inventory'
-      }
-    : {
-        tone: runs.length ? 'emerald' : 'zinc',
-        eyebrow: 'AWS exposure',
-        title: 'No resources shown',
-        detail: runs.length ? 'Recorded slots are available; AWS inventory currently has no matching visible resources.' : 'No AWS resources are expected before an approved setup run.',
-        meta: 'Quiet',
-        action: runs.length ? 'destroy' : 'setup',
-        actionLabel: runs.length ? 'Open destroy' : 'Open setup'
-      }
-
-  commandDeckEl.innerHTML = [
-    safetyTile,
-    runTile,
-    exposureTile
-  ].map(commandTileHTML).join('')
 }
 
 const readinessBlockedReason = () => {
@@ -1095,59 +863,6 @@ const renderAWSInventory = inventory => {
       </table>
     </div>
   `
-}
-
-const renderBuildVersion = build => {
-  if (!buildVersionBadgeEl) {
-    return
-  }
-
-  const shortCommit = String(build?.commitShort || '').trim()
-  const fullCommit = String(build?.commit || '').trim()
-  const buildDate = String(build?.buildDate || '').trim()
-  const modified = Boolean(build?.modified)
-  buildVersionBadgeEl.textContent = shortCommit ? `Build ${shortCommit}${modified ? '*' : ''}` : 'Build unknown'
-
-  const titleParts = []
-  if (fullCommit) {
-    titleParts.push(`Commit: ${fullCommit}`)
-  }
-  if (buildDate) {
-    titleParts.push(`Built: ${buildDate}`)
-  }
-  if (modified) {
-    titleParts.push('Working tree had local changes when this binary was built.')
-  }
-  buildVersionBadgeEl.title = titleParts.length ? titleParts.join('\n') : 'No build commit was embedded in this binary.'
-}
-
-const renderPanelSession = panel => {
-  renderBuildVersion(panel?.build)
-
-  if (panelSessionMetaEl && panel?.sessionId) {
-    const started = panel.startedAt ? new Date(panel.startedAt).toLocaleTimeString() : ''
-    const pieces = [`Panel ${panel.sessionId}`]
-    if (started) {
-      pieces.push(`started ${started}`)
-    }
-    if (panel.repoRoot) {
-      pieces.push(panel.repoRoot)
-    }
-    panelSessionMetaEl.textContent = pieces.join(' • ')
-    if (panel.configPath) {
-      panelSessionMetaEl.title = panel.configPath
-    }
-  }
-
-  if (configNoticeEl) {
-    if (panel?.starterConfigCreated) {
-      configNoticeEl.classList.remove('hidden')
-      configNoticeEl.textContent = `Created starter config at ${panel.configPath}. Fill in the blocked setup values below before starting setup.`
-    } else {
-      configNoticeEl.classList.add('hidden')
-      configNoticeEl.textContent = ''
-    }
-  }
 }
 
 const renderWorkspace = workspace => {
@@ -2257,10 +1972,6 @@ const refresh = async () => {
       setBootState(false)
     }
     publishControlPanelVueState(state)
-    renderPanelSession(state.panel)
-    renderHeaderSummary(state)
-    renderCommandDeck(state)
-    renderPanelTabBadges(state)
     renderWorkspace(state.workspace)
     updateLeaderTracking(state)
     renderClusters(state)
@@ -3332,9 +3043,7 @@ window.addEventListener('rancher-setup-started', () => {
     }
   }
   dispatchSetupLifecycleState(lastState)
-  renderHeaderSummary(lastState)
-  renderCommandDeck(lastState)
-  renderPanelTabBadges(lastState)
+  publishControlPanelVueState(lastState)
   renderSetup(lastState.setup)
   refreshStatusEl.textContent = 'AWS setup accepted. Waiting for run state to appear...'
   setActivePanelTab('runs')

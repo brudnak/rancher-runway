@@ -751,7 +751,6 @@
       <header class="panel-header mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div class="min-w-0">
           <div id="controlPanelHeaderVue"></div>
-          <div id="configNotice" class="mt-4 hidden max-w-3xl rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-800 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-200"></div>
           <div id="bootStatus" class="mt-4 max-w-4xl rounded-xl border border-sky-200 bg-white px-4 py-3 text-sm text-sky-900 shadow-sm dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start">
               <span class="spinner mt-0.5 shrink-0 text-sky-600 dark:text-sky-300"></span>
@@ -804,14 +803,7 @@
 
       <section id="commandDeck" data-vue-owned="true" class="mb-5 grid min-w-0 gap-3 md:grid-cols-3" aria-live="polite"></section>
 
-      <nav id="panelTabs" class="panel-nav mb-5 flex gap-1.5 overflow-x-auto rounded-xl border border-zinc-200 bg-white/[0.88] p-1 dark:border-white/10 dark:bg-zinc-900/90" aria-label="Control panel sections">
-        <button type="button" data-tab="setup" class="panel-tab rounded-lg px-3.5 py-2 text-sm font-semibold"><span>Setup</span><span data-tab-count="setup" class="tab-count hidden"></span></button>
-        <button type="button" data-tab="runs" class="panel-tab rounded-lg px-3.5 py-2 text-sm font-semibold"><span>Runs</span><span data-tab-count="runs" class="tab-count hidden"></span></button>
-        <button type="button" data-tab="clusters" class="panel-tab rounded-lg px-3.5 py-2 text-sm font-semibold"><span>Clusters</span><span data-tab-count="clusters" class="tab-count hidden"></span></button>
-        <button type="button" data-tab="aws" class="panel-tab rounded-lg px-3.5 py-2 text-sm font-semibold"><span>AWS Inventory</span><span data-tab-count="aws" class="tab-count hidden"></span></button>
-        <button type="button" data-tab="destroy" class="panel-tab rounded-lg px-3.5 py-2 text-sm font-semibold"><span>Destroy</span><span data-tab-count="destroy" class="tab-count hidden"></span></button>
-        <button type="button" data-tab="settings" class="panel-tab rounded-lg px-3.5 py-2 text-sm font-semibold"><span>Settings</span><span data-tab-count="settings" class="tab-count hidden"></span></button>
-      </nav>
+      <nav id="panelTabs" data-vue-owned="true" class="panel-nav mb-5 flex gap-1.5 overflow-x-auto rounded-xl border border-zinc-200 bg-white/[0.88] p-1 dark:border-white/10 dark:bg-zinc-900/90" aria-label="Control panel sections"></nav>
 
       <div class="grid min-w-0 gap-6">
         <section data-tab-panel="setup" class="control-panel-setup min-w-0">
