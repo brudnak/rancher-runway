@@ -18,6 +18,8 @@ For repository-owned GitHub Actions automation, see [docs/README.md](docs/README
 - Optional Linode Docker runs: one standalone Rancher Docker install per requested Rancher version
 - AWS Kubernetes ingress with ALB, ACM certificates, Route53 records, and external TLS termination
 - Linode Docker DNS with Route53 records
+- Local k3d clusters for desktop-only Kubernetes API endpoints
+- Local Steve endpoints for trying Steve tags, branches, or commits against k3d
 - Local kubeconfigs, install artifacts, run records, lifecycle logs, cloud inventory, and cost history
 
 RKE2 installer scripts and optional image bundles are checksum-verified before
@@ -110,6 +112,10 @@ Use the app tabs as the main lifecycle:
 - **Destroy** removes provisioned cloud resources for a selected run slot.
 - **Costs** shows cleanup estimates and the local cost ledger.
 - **Settings** holds local app preferences such as GPU reminders.
+- **K3D Lab** starts and stops local k3d clusters without provisioning cloud
+  infrastructure.
+- **Steve Lab** starts a local Steve API endpoint against k3d for quick Steve
+  version checks.
 
 The app protects active work:
 
@@ -118,6 +124,51 @@ The app protects active work:
   operations are active.
 - Setup, readiness, and cleanup operations are serialized where shared state
   would collide.
+
+## Local Labs
+
+The local lab tabs are for fast desktop-only testing. They use local Docker and
+k3d, write their run records under `terratest/automation-output/`, and do not
+create AWS, Linode, Terraform, DNS, or certificate resources.
+
+### K3D Lab
+
+K3D Lab is a lightweight local Kubernetes launcher. Use it when you want one or
+more local k3d clusters with stable kubeconfig files and Kubernetes API
+endpoints for manual testing.
+
+- Pick a K3s image tag from the app's version list.
+- Leave the API port on Auto unless you need a fixed endpoint.
+- Start multiple k3d clusters side by side when you need separate local
+  Kubernetes targets.
+- Copy the API endpoint, copy the kubeconfig path, or save a kubeconfig file to
+  Downloads from the cluster card.
+- Stop, restart, or delete each cluster from the app.
+
+K3D Lab is intentionally independent from cloud run slots. It shares the local
+port reservation pool with Steve Lab so local endpoints do not collide.
+
+### Steve Lab
+
+Steve Lab is for quickly trying a Steve release, branch, tag, or exact commit
+against a disposable local k3d cluster. It is meant for endpoint testing, not
+for running Rancher tests from this app.
+
+- Pick a Steve release tag or paste a branch, tag, or commit.
+- The app inspects Steve's `go.mod` when it can and suggests a compatible K3s
+  image tag.
+- Steve Lab keeps one active Steve endpoint at a time. Launching again replaces
+  the current Steve cluster and run files.
+- The endpoint is HTTPS-only to avoid Steve's local HTTP redirect behavior.
+  Tools such as Bruno, Postman, or curl may need TLS verification disabled for
+  the local self-signed certificate.
+- Use the copied endpoint for API paths such as `/v1/pods`.
+- Opening the base endpoint may show Rancher Dashboard because standalone Steve
+  includes a dashboard fallback UI. The useful API surface for testing is still
+  under `/v1/...`.
+
+Steve Lab saves the k3d kubeconfig for the run and can copy the endpoint or save
+the kubeconfig to Downloads from the run card.
 
 ## Configuration Notes
 
