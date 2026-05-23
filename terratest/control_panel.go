@@ -87,6 +87,8 @@ type panelState struct {
 	Readiness     panelOperationSnapshot `json:"readiness"`
 	LinodeSetup   panelOperationSnapshot `json:"linodeSetup"`
 	LinodeCleanup panelOperationSnapshot `json:"linodeCleanup"`
+	Steve         steveLabPanelState     `json:"steve"`
+	K3D           k3dLabPanelState       `json:"k3d"`
 	Clusters      panelClusterState      `json:"clusters"`
 	AWS           panelAWSInventoryState `json:"aws"`
 	Cleanup       panelOperationSnapshot `json:"cleanup"`
@@ -189,6 +191,8 @@ const (
 	panelOperationCleanup       panelOperationName = "cleanup"
 	panelOperationLinodeSetup   panelOperationName = "linodeSetup"
 	panelOperationLinodeCleanup panelOperationName = "linodeCleanup"
+	panelOperationSteveLab      panelOperationName = "steveLab"
+	panelOperationK3DLab        panelOperationName = "k3dLab"
 )
 
 type panelOperationState struct {
@@ -376,6 +380,22 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/setup", p.handleSetup)
 	mux.HandleFunc("/api/run-slots/start", p.handleRunSlotStart)
 	mux.HandleFunc("/api/operations/abort", p.handleAbortOperation)
+	mux.HandleFunc("/api/steve/state", p.handleSteveLabState)
+	mux.HandleFunc("/api/steve/versions", p.handleSteveLabVersions)
+	mux.HandleFunc("/api/steve/ref", p.handleSteveLabRef)
+	mux.HandleFunc("/api/steve/start", p.handleSteveLabStart)
+	mux.HandleFunc("/api/steve/stop", p.handleSteveLabStop)
+	mux.HandleFunc("/api/steve/cleanup", p.handleSteveLabCleanup)
+	mux.HandleFunc("/api/steve/kubeconfig/save", p.handleSteveLabKubeconfigSave)
+	mux.HandleFunc("/api/steve/output/clear", p.handleSteveLabOutputClear)
+	mux.HandleFunc("/api/k3d/state", p.handleK3DLabState)
+	mux.HandleFunc("/api/k3d/install", p.handleK3DLabInstall)
+	mux.HandleFunc("/api/k3d/start", p.handleK3DLabStart)
+	mux.HandleFunc("/api/k3d/stop", p.handleK3DLabStop)
+	mux.HandleFunc("/api/k3d/restart", p.handleK3DLabRestart)
+	mux.HandleFunc("/api/k3d/delete", p.handleK3DLabDelete)
+	mux.HandleFunc("/api/k3d/kubeconfig/save", p.handleK3DLabKubeconfigSave)
+	mux.HandleFunc("/api/k3d/output/clear", p.handleK3DLabOutputClear)
 	mux.HandleFunc("/api/readiness", p.handleReadiness)
 	mux.HandleFunc("/api/cleanup", p.handleCleanup)
 	mux.HandleFunc("/api/costs/reset", p.handleCostLedgerReset)
@@ -1153,9 +1173,9 @@ func (p *localControlPanel) handleAbortOperation(w http.ResponseWriter, r *http.
 
 	operation := panelOperationName(strings.TrimSpace(strings.ToLower(req.Operation)))
 	switch operation {
-	case panelOperationSetup, panelOperationReadiness, panelOperationCleanup, panelOperationLinodeSetup, panelOperationLinodeCleanup:
+	case panelOperationSetup, panelOperationReadiness, panelOperationCleanup, panelOperationLinodeSetup, panelOperationLinodeCleanup, panelOperationSteveLab, panelOperationK3DLab:
 	default:
-		http.Error(w, "operation must be setup, readiness, cleanup, linodeSetup, or linodeCleanup", http.StatusBadRequest)
+		http.Error(w, "operation must be setup, readiness, cleanup, linodeSetup, linodeCleanup, steveLab, or k3dLab", http.StatusBadRequest)
 		return
 	}
 
@@ -1330,6 +1350,8 @@ func (p *localControlPanel) buildState() panelState {
 		Readiness:     p.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs),
 		LinodeSetup:   p.snapshotOperationForRuns(panelOperationLinodeSetup, activeRunIDs),
 		LinodeCleanup: p.snapshotOperationForRuns(panelOperationLinodeCleanup, activeRunIDs),
+		Steve:         p.steveLabPanelState(false),
+		K3D:           p.k3dLabPanelState(false),
 		Clusters: panelClusterState{
 			Items: clusters,
 		},
@@ -2396,6 +2418,51 @@ func (p *localControlPanel) kubeconfigContentForDownload(cluster clusterView) ([
 	default:
 		return nil, "", fmt.Errorf("unsupported cluster type %q", cluster.Type)
 	}
+}
+
+func localLabKubeconfigContent(path string, filename string) ([]byte, string, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, "", fmt.Errorf("local lab kubeconfig path is unavailable")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read local lab kubeconfig: %w", err)
+	}
+	return data, safeDownloadFilename(filename), nil
+}
+
+func steveLabKubeconfigDownloadName(record steveLabRunRecord) string {
+	ref := strings.TrimSpace(record.SteveRef)
+	if ref == "" {
+		ref = strings.TrimSpace(record.K3SVersion)
+	}
+	return labKubeconfigDownloadName("steve", ref, record.RunID)
+}
+
+func k3dLabKubeconfigDownloadName(record k3dLabRecord) string {
+	return labKubeconfigDownloadName("k3d", record.K3SVersion, record.RunID)
+}
+
+func labKubeconfigDownloadName(kind string, label string, runID string) string {
+	parts := []string{"rancher-runway", safeLabFilenamePart(kind)}
+	if label = strings.TrimSpace(label); label != "" {
+		parts = append(parts, safeLabFilenamePart(label))
+	}
+	if runID = strings.TrimSpace(runID); runID != "" {
+		parts = append(parts, safeLabFilenamePart(runID))
+	}
+	parts = append(parts, "kubeconfig")
+	return safeDownloadFilename(strings.Join(parts, "-") + ".yaml")
+}
+
+func safeLabFilenamePart(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.NewReplacer("/", "-", "\\", "-", ":", "-", "@", "-", " ", "-").Replace(value)
+	value = strings.Trim(value, ".-")
+	if value == "" {
+		return "local"
+	}
+	return value
 }
 
 func (p *localControlPanel) helmCommandForCluster(cluster clusterView) (string, error) {

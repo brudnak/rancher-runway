@@ -282,7 +282,7 @@ const setPanelFullscreen = async nextFullscreen => {
 }
 
 const setActivePanelTab = tab => {
-  const availableTabs = new Set(['setup', 'runs', 'clusters', 'aws', 'destroy', 'settings'])
+  const availableTabs = new Set(['setup', 'runs', 'clusters', 'aws', 'destroy', 'settings', 'k3d', 'steve'])
   activePanelTab = availableTabs.has(tab) ? tab : 'runs'
   localStorage.setItem('rancherControlPanelTab', activePanelTab)
   tabPanelEls.forEach(panel => {

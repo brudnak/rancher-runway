@@ -34,6 +34,8 @@ const tabs = [
   { id: "aws", label: "AWS Inventory" },
   { id: "destroy", label: "Destroy" },
   { id: "settings", label: "Settings" },
+  { id: "k3d", label: "K3D Lab" },
+  { id: "steve", label: "Steve Lab" },
 ];
 
 const clusterItems = currentState => (
@@ -41,6 +43,12 @@ const clusterItems = currentState => (
     ? currentState.clusters.items
     : []
 );
+
+const activeK3DClusterCount = currentState => {
+  const clusters = Array.isArray(currentState?.k3d?.clusters) ? currentState.k3d.clusters : [];
+  const active = clusters.filter(cluster => ["creating", "running"].includes(cluster.status));
+  return active.length ? String(active.length) : "";
+};
 
 const badges = computed(() => {
   const runs = Array.isArray(state.value?.workspace?.runs) ? state.value.workspace.runs : [];
@@ -54,6 +62,8 @@ const badges = computed(() => {
     aws: awsItems.length ? String(awsItems.length) : "",
     destroy: runs.length ? String(runs.length) : "",
     settings: "",
+    k3d: state.value?.k3d?.operation?.running ? "Run" : activeK3DClusterCount(state.value),
+    steve: state.value?.steve?.operation?.running ? "Run" : "",
   };
 });
 

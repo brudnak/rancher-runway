@@ -22,6 +22,8 @@ func newPanelOperations() map[panelOperationName]*panelOperationState {
 		panelOperationCleanup:       {},
 		panelOperationLinodeSetup:   {},
 		panelOperationLinodeCleanup: {},
+		panelOperationSteveLab:      {},
+		panelOperationK3DLab:        {},
 	}
 }
 
@@ -32,6 +34,8 @@ func allPanelOperationNames() []panelOperationName {
 		panelOperationCleanup,
 		panelOperationLinodeSetup,
 		panelOperationLinodeCleanup,
+		panelOperationSteveLab,
+		panelOperationK3DLab,
 	}
 }
 
@@ -39,6 +43,10 @@ func conflictingPanelOperationNames(operation panelOperationName) []panelOperati
 	switch operation {
 	case panelOperationLinodeSetup, panelOperationLinodeCleanup:
 		return []panelOperationName{panelOperationLinodeSetup, panelOperationLinodeCleanup}
+	case panelOperationSteveLab:
+		return []panelOperationName{panelOperationSteveLab}
+	case panelOperationK3DLab:
+		return []panelOperationName{panelOperationK3DLab}
 	default:
 		return []panelOperationName{panelOperationSetup, panelOperationReadiness, panelOperationCleanup}
 	}
@@ -220,7 +228,11 @@ func (p *localControlPanel) abortOperation(operation panelOperationName, runID s
 		return fmt.Errorf("%s is running for run %s, not %s", operation, op.RunID, runID)
 	}
 	pid := op.PID
-	op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for %s run %s. Terraform state and run records will be preserved.", operation, op.RunID))
+	if operation == panelOperationSteveLab {
+		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for %s run %s. Local k3d cluster and run files may need cleanup.", operation, op.RunID))
+	} else {
+		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for %s run %s. Terraform state and run records will be preserved.", operation, op.RunID))
+	}
 	now := time.Now()
 	op.UpdatedAt = &now
 	p.persistOperationsLocked()

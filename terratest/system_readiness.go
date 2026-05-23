@@ -117,7 +117,7 @@ func checkSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessIte
 		Minimum:     tool.MinimumVersion,
 	}
 
-	path, err := exec.LookPath(tool.Command)
+	path, err := resolveLocalToolPath(tool.Command)
 	if err != nil {
 		item.Status = "error"
 		item.Detail = fmt.Sprintf("%s is required but was not found in PATH.", tool.Command)
@@ -127,7 +127,9 @@ func checkSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessIte
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	output, err := exec.CommandContext(ctx, path, tool.Args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, path, tool.Args...)
+	cmd.Env = localToolEnv(nil)
+	output, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		item.Status = "error"
 		item.Detail = fmt.Sprintf("%s was found but timed out while checking its version.", tool.Command)
@@ -162,6 +164,117 @@ func checkSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessIte
 	item.Status = "ok"
 	item.Detail = fmt.Sprintf("Found %s.", version)
 	return item
+}
+
+func resolveLocalToolPath(command string) (string, error) {
+	if command == "git" {
+		return resolveGitToolPath()
+	}
+	if strings.Contains(command, string(os.PathSeparator)) {
+		if info, err := os.Stat(command); err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
+			return command, nil
+		}
+		return "", fmt.Errorf("%s not found", command)
+	}
+	for _, dir := range localToolSearchDirs() {
+		path := filepath.Join(dir, command)
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
+			return path, nil
+		}
+	}
+	if path, err := exec.LookPath(command); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("%s not found", command)
+}
+
+func resolveGitToolPath() (string, error) {
+	if path := xcrunGitPath(); path != "" {
+		return path, nil
+	}
+	for _, path := range []string{
+		"/Library/Developer/CommandLineTools/usr/bin/git",
+		"/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+		"/usr/bin/git",
+	} {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("git not found; install or repair Xcode Command Line Tools")
+}
+
+func xcrunGitPath() string {
+	xcrunPath := "/usr/bin/xcrun"
+	if info, err := os.Stat(xcrunPath); err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, xcrunPath, "--find", "git").Output()
+	if err != nil {
+		return ""
+	}
+	path := strings.TrimSpace(string(output))
+	if path == "" || strings.HasPrefix(path, "/opt/homebrew/") || strings.HasPrefix(path, "/usr/local/") {
+		return ""
+	}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
+		return path
+	}
+	return ""
+}
+
+func localToolEnv(extra []string) []string {
+	env := os.Environ()
+	pathValue := localToolPATH()
+	found := false
+	for i, value := range env {
+		if strings.HasPrefix(value, "PATH=") {
+			env[i] = "PATH=" + pathValue
+			found = true
+			break
+		}
+	}
+	if !found {
+		env = append(env, "PATH="+pathValue)
+	}
+	return append(env, extra...)
+}
+
+func localToolPATH() string {
+	parts := []string{}
+	parts = append(parts, localToolSearchDirs()...)
+	if current := strings.TrimSpace(os.Getenv("PATH")); current != "" {
+		parts = append(parts, strings.Split(current, string(os.PathListSeparator))...)
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	return strings.Join(out, string(os.PathListSeparator))
+}
+
+func localToolSearchDirs() []string {
+	return []string{
+		"/opt/homebrew/bin",
+		"/opt/homebrew/sbin",
+		"/usr/local/bin",
+		"/usr/local/sbin",
+		"/Library/Developer/CommandLineTools/usr/bin",
+		"/Applications/Xcode.app/Contents/Developer/usr/bin",
+		"/usr/bin",
+		"/bin",
+		"/usr/sbin",
+		"/sbin",
+		"/Applications/Docker.app/Contents/Resources/bin",
+	}
 }
 
 func extractToolVersion(tool systemReadinessToolConfig, output string) string {

@@ -6,7 +6,8 @@ module.exports = {
     './terratest/ui/static/control_panel_clusters.js',
     './terratest/ui/static/control_panel_runs.js',
     './terratest/ui/static/control_panel_utils.js',
-    './terratest/ui/static/interactive_setup.js'
+    './terratest/ui/static/interactive_setup.js',
+    './terratest/ui/vue/src/**/*.{js,vue}'
   ],
   darkMode: 'class',
   theme: {
