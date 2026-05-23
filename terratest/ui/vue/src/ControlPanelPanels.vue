@@ -60,57 +60,7 @@
   </section>
 
   <section data-tab-panel="destroy" class="hidden min-w-0 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20 sm:p-5">
-    <div class="mx-auto max-w-5xl">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Destroy Slots</h2>
-          <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Choose exactly one recorded run slot to destroy. Setup, readiness, and destroy are serialized so Terraform state, AWS actions, and logs stay unambiguous.
-            The slot record is removed only after Terraform destroy succeeds.
-          </p>
-        </div>
-        <div id="cleanupStatus" class="inline-flex items-center justify-center rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">Idle</div>
-      </div>
-      <div class="mt-5 inline-flex rounded-xl border border-zinc-200 bg-zinc-50 p-1 dark:border-white/10 dark:bg-white/[0.03]" role="tablist" aria-label="Destroy tabs">
-        <button id="destroySlotsTabBtn" type="button" data-destroy-tab="slots" class="rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-zinc-900 shadow-sm dark:bg-white/[0.08] dark:text-zinc-100">Run slots</button>
-        <button id="destroyCostsTabBtn" type="button" data-destroy-tab="costs" class="rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-white/[0.06]">Local data</button>
-      </div>
-      <div id="destroySlotsPane">
-        <div id="cleanupSlots" class="mt-5 grid gap-3">
-          <div class="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100">
-            <span class="spinner mr-2 align-[-0.15em]"></span>Checking recorded run slots before destroy is enabled.
-          </div>
-        </div>
-        <div id="cleanupActions" class="mt-5 flex flex-wrap justify-end gap-3">
-          <input id="cleanupConfirm" type="hidden" autocomplete="off" value="destroy" />
-          <button id="openCleanupLogsBtn" type="button" class="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">Open cleanup logs</button>
-          <button id="cleanupClearResultBtn" type="button" hidden class="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">Clear result</button>
-          <button id="cleanupBtn" type="button" hidden class="rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400">Destroy selected slot</button>
-        </div>
-        <div id="cleanupCost" class="mt-5 hidden"></div>
-      </div>
-      <div id="destroyCostsPane" class="mt-5 hidden">
-        <div class="mb-4 flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03] sm:flex-row sm:items-start sm:justify-between">
-          <div class="min-w-0">
-            <h3 class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Cost ledger</h3>
-            <p id="costResetStatus" class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-              Cost estimates are stored in a local ignored SQLite database.
-            </p>
-          </div>
-          <button id="resetCostLedgerBtn" type="button" class="shrink-0 rounded-lg border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 disabled:opacity-50 dark:border-rose-500/25 dark:bg-white/[0.06] dark:text-rose-300 dark:hover:bg-rose-500/10">Reset cost DB</button>
-        </div>
-        <div class="mb-4 flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03] sm:flex-row sm:items-start sm:justify-between">
-          <div class="min-w-0">
-            <h3 class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Post-destroy artifact cleanup</h3>
-            <p id="localArtifactsStatus" class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-              Backup cleanup stays locked until recorded slots are destroyed.
-            </p>
-          </div>
-          <button id="cleanLocalArtifactsBtn" type="button" class="shrink-0 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">Clean after destroy</button>
-        </div>
-        <CostHistoryPanel />
-      </div>
-    </div>
+    <DestroyPanel />
   </section>
 
   <section data-tab-panel="settings" class="hidden min-w-0 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20 sm:p-5">
@@ -128,7 +78,7 @@
 
 <script setup>
 import AwsInventoryPanel from "./AwsInventoryPanel.vue";
-import CostHistoryPanel from "./CostHistoryPanel.vue";
+import DestroyPanel from "./DestroyPanel.vue";
 import K3DLabPanel from "./K3DLabPanel.vue";
 import PreflightPanel from "./PreflightPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";

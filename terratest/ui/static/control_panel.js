@@ -1,11 +1,9 @@
 import {
   clusterItems,
-  compactPath,
   escapeHtml,
   highlightLogLine,
   lineMatchesLogLevel,
   operationOutput,
-  parseCleanupCost,
 } from './control_panel_utils.js'
 import {
   createBasicModal,
@@ -743,126 +741,21 @@ const syncWorkspace = workspace => {
   renderDestroySlots(workspace)
 }
 
-const renderDestroySlots = workspace => {
-  if (!cleanupSlotsEl) {
-    return
-  }
-
-  const runs = Array.isArray(workspace?.runs) ? workspace.runs : []
-  const cleanup = lastState?.cleanup || {}
-  const linodeCleanup = lastState?.linodeCleanup || {}
-  const cleanupRunning = Boolean(cleanup.running)
-  const linodeCleanupRunning = Boolean(linodeCleanup.running)
-  const setupRunning = Boolean(lastState?.setup?.running)
-  const linodeSetupRunning = Boolean(lastState?.linodeSetup?.running)
-  const readinessRunning = Boolean(lastState?.readiness?.running)
-
-  if (!runs.length) {
-    if (bootStatePending) {
-      cleanupSlotsEl.innerHTML = `
-        <div class="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100">
-          <span class="spinner mr-2 align-[-0.15em]"></span>Checking recorded run slots before destroy is enabled.
-        </div>
-      `
-      return
+const publishDestroyState = (workspace = lastState?.workspace) => {
+  window.dispatchEvent(new CustomEvent('rancher-control-panel:destroy', {
+    detail: {
+      state: lastState || {},
+      workspace: workspace || lastState?.workspace || {},
+      selectedRunId: selectedCleanupRunId,
+      cleanupStarting,
+      bootPending: bootStatePending,
+      dismissedCleanupResultKey: cleanupDismissedResultKey
     }
-    cleanupSlotsEl.innerHTML = `
-      <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">
-        No recorded run slots found. There is nothing for Terraform destroy to target from this panel.
-      </div>
-    `
-    return
-  }
+  }))
+}
 
-  const cards = runs.map(run => {
-    const linodeRun = runIsLinodeDocker(run)
-    const runSetupRunning = linodeRun ? linodeSetupRunning : setupRunning
-    const runCleanupRunning = linodeRun ? linodeCleanupRunning : cleanupRunning
-    const runCleanup = linodeRun ? linodeCleanup : cleanup
-    const pendingDestroy = cleanupStarting && selectedCleanupRunId === run.runId
-    const destroying = runCleanupRunning && runCleanup.runId === run.runId
-    const selected = selectedCleanupRunId && sameRunKey(selectedCleanupRunId, run.runId)
-    const versions = Array.isArray(run.rancherVersions) && run.rancherVersions.length
-      ? run.rancherVersions.join(', ')
-      : 'not recorded'
-    const hostname = run.customHostnamePrefix
-      ? `${run.customHostnamePrefix}.${run.route53Fqdn || ''}`.replace(/\.$/, '')
-      : run.awsPrefix && run.route53Fqdn ? `${run.awsPrefix}-h*.${run.route53Fqdn}` : run.route53Fqdn || 'generated per slot'
-    const updated = run.updatedAt ? new Date(run.updatedAt).toLocaleTimeString() : ''
-    const buttonLabel = destroying
-      ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Destroy running'
-        : pendingDestroy
-          ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Starting destroy'
-          : bootStatePending
-            ? 'Checking state'
-            : runSetupRunning
-              ? 'Setup running'
-              : !linodeRun && readinessRunning
-                ? 'Readiness running'
-                : runCleanupRunning
-                  ? 'Destroy running'
-                  : 'Destroy this slot'
-    const disabled = bootStatePending || runSetupRunning || (!linodeRun && readinessRunning) || runCleanupRunning || cleanupStarting
-    const disabledTitle = bootStatePending
-      ? 'Startup safety check is still loading run slots and operation state.'
-      : runSetupRunning
-      ? 'Wait for setup to finish before destroying a run slot.'
-      : !linodeRun && readinessRunning
-        ? 'Wait for readiness checks to finish before destroying a run slot.'
-        : runCleanupRunning
-          ? 'Wait for the current destroy to finish before starting another one.'
-          : cleanupStarting
-            ? 'Destroy request is being submitted.'
-            : `Destroy run ${run.runId || 'slot'}`
-    const cardClass = destroying || pendingDestroy
-      ? 'border-sky-200 bg-sky-50/60 dark:border-sky-500/25 dark:bg-sky-500/10'
-      : selected
-        ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/25 dark:bg-emerald-500/10'
-      : 'border-zinc-200 bg-white dark:border-white/10 dark:bg-white/[0.03]'
-    const activityBadge = destroying
-      ? '<span class="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">Destroy running</span>'
-      : pendingDestroy
-        ? '<span class="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">Starting destroy</span>'
-        : ''
-
-    return `
-      <article class="rounded-xl border ${cardClass} p-4">
-        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <h3 class="text-base font-semibold text-zinc-950 dark:text-zinc-50">Run ${escapeHtml(run.runId || 'unknown')}</h3>
-              <span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml((run.status || 'recorded').replaceAll('_', ' '))}</span>
-              ${selected && !destroying && !pendingDestroy ? '<span class="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">Selected for destroy</span>' : ''}
-              ${activityBadge}
-            </div>
-            ${updated ? `<div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Updated ${escapeHtml(updated)}</div>` : ''}
-            <div class="mt-3 grid gap-2 text-sm text-zinc-700 dark:text-zinc-300 md:grid-cols-2">
-              <div><span class="font-semibold">Slot:</span> ${escapeHtml(run.slotId || run.slotName || 'not recorded')}</div>
-              <div><span class="font-semibold">HAs:</span> ${escapeHtml(String(run.totalHAs || 1))}</div>
-              <div><span class="font-semibold">Rancher:</span> ${escapeHtml(versions)}</div>
-              <div><span class="font-semibold">Owner:</span> ${escapeHtml(run.owner || 'not recorded')}</div>
-              <div><span class="font-semibold">AWS prefix:</span> ${escapeHtml(run.awsPrefix || 'not recorded')}</div>
-              <div><span class="font-semibold">Hostname:</span> ${escapeHtml(hostname)}</div>
-              <div class="md:col-span-2"><span class="font-semibold">State:</span> <span title="${escapeHtml(run.terraformStatePath || run.terraformBackend || '')}">${escapeHtml(compactPath(run.terraformStatePath || run.terraformBackend || 'not recorded'))}</span></div>
-            </div>
-          </div>
-          <div class="flex shrink-0 flex-wrap gap-2 lg:justify-end">
-            <button type="button" data-action="open-run-folder" data-run-id="${escapeHtml(run.runId || '')}" ${runFolderAvailable(run) ? '' : 'disabled'} title="${escapeHtml(runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.')}" class="${runFolderAvailable(run) ? 'rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]' : 'rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400'}">Open folder</button>
-            <button type="button" data-action="destroy-slot" data-run-id="${escapeHtml(run.runId || '')}" title="${escapeHtml(disabledTitle)}" ${disabled ? 'disabled' : ''} class="${disabled ? 'rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400' : 'rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400'}">${buttonLabel}</button>
-          </div>
-        </div>
-      </article>
-    `
-  })
-
-  cleanupSlotsEl.innerHTML = `
-    ${selectedCleanupRunId ? `
-      <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-100">
-        Selected run ${escapeHtml(selectedCleanupRunId)}. Destroy is typed-confirmed and uses the recorded Terraform target for that slot.
-      </div>
-    ` : ''}
-    ${cards.join('')}
-  `
+const renderDestroySlots = workspace => {
+  publishDestroyState(workspace)
 }
 
 const awsLifecycleRunning = state => Boolean(state?.setup?.running || state?.readiness?.running || state?.cleanup?.running)
@@ -1175,49 +1068,7 @@ const cleanupResultDismissed = cleanup => {
 }
 
 const renderCleanupCost = (cleanup, output) => {
-  if (cleanupResultDismissed(cleanup)) {
-    cleanupCostEl.classList.add('hidden')
-    cleanupCostEl.innerHTML = ''
-    return
-  }
-
-  const cost = parseCleanupCost(output)
-  if (cost) {
-    cleanupCostEl.classList.remove('hidden')
-    cleanupCostEl.innerHTML = `
-      <div class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-left dark:border-emerald-500/20 dark:bg-emerald-500/10">
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div class="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Estimated infrastructure cost while alive</div>
-            <div class="mt-1 text-3xl font-semibold tracking-tight text-emerald-950 dark:text-emerald-100">${escapeHtml(cost.total)}</div>
-            <div class="mt-1 text-sm text-emerald-800/80 dark:text-emerald-200/80">${escapeHtml(cost.region || 'AWS region unavailable')}</div>
-          </div>
-          <div class="grid gap-2 text-sm text-emerald-950 dark:text-emerald-100 sm:min-w-80">
-            ${cost.runtime ? `<div><span class="font-semibold">Runtime:</span> ${escapeHtml(cost.runtime)}</div>` : ''}
-            ${cost.ec2 ? `<div><span class="font-semibold">EC2:</span> ${escapeHtml(cost.ec2)}</div>` : ''}
-            ${cost.ebs ? `<div><span class="font-semibold">EBS:</span> ${escapeHtml(cost.ebs)}</div>` : ''}
-            ${cost.rds ? `<div><span class="font-semibold">RDS/Aurora:</span> ${escapeHtml(cost.rds)}</div>` : ''}
-            ${cost.loadBalancers ? `<div><span class="font-semibold">Load balancers:</span> ${escapeHtml(cost.loadBalancers)}</div>` : ''}
-          </div>
-        </div>
-      </div>
-    `
-    return
-  }
-
-  const estimateUnavailable = output.some(line => line.includes('Could not estimate EC2/EBS cost') || line.includes('Could not estimate AWS cost') || line.includes('Terraform outputs unavailable'))
-  if (cleanup && cleanup.finishedAt && estimateUnavailable) {
-    cleanupCostEl.classList.remove('hidden')
-    cleanupCostEl.innerHTML = `
-      <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-left text-sm text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-        Unable to estimate infrastructure cost for this destroy run. Destroy still ran; AWS pricing or Terraform outputs were unavailable.
-      </div>
-    `
-    return
-  }
-
-  cleanupCostEl.classList.add('hidden')
-  cleanupCostEl.innerHTML = ''
+  publishDestroyState(lastState?.workspace)
 }
 
 const renderCostControls = costs => {
