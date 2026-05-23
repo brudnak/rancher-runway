@@ -31,7 +31,11 @@
     </div>
   </div>
 
-  <div v-if="!runs.length" class="rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-white/10 dark:bg-white/[0.03]">
+  <div v-if="activeOperations.length" class="mb-5">
+    <ActiveOperationsBanner :operations="activeOperations" />
+  </div>
+
+  <div v-if="!runs.length && !activeOperations.length" class="rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-white/10 dark:bg-white/[0.03]">
     <h3 class="text-base font-semibold text-zinc-950 dark:text-zinc-50">No run slots yet</h3>
     <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
       Setup is the only place that can create a new AWS run. Resolve the plan there, review the Helm commands, then approve AWS setup.
@@ -39,7 +43,7 @@
     <div class="mt-4">
       <button
         type="button"
-        data-run-action="open-setup"
+        @click="handleRunAction(null, 'open-setup')"
         class="run-action-button run-action-button--primary"
         :class="{ 'run-action-button--disabled': bootPending || lifecycleRunning }"
         :disabled="bootPending || lifecycleRunning"
@@ -50,15 +54,10 @@
     </div>
   </div>
 
-  <template v-else>
-    <ActiveOperationsBanner
-      v-if="activeOperations.length"
-      :operations="activeOperations"
-    />
-    <ReadinessFailedBanner
-      v-else-if="failedReadinessRun"
-      :run="failedReadinessRun"
-    />
+  <template v-else-if="runs.length">
+    <div v-if="failedReadinessRun" class="mb-5">
+      <ReadinessFailedBanner :run="failedReadinessRun" />
+    </div>
 
     <div class="grid gap-3">
       <article
@@ -130,6 +129,7 @@
               :variant="runStats(run).total ? 'primary' : 'secondary'"
               :disabled="!runStats(run).total"
               :title="runStats(run).total ? 'Open cluster details for this run.' : 'No cluster records discovered for this run yet.'"
+              @click="handleRunAction(run, 'view-clusters')"
             />
             <RunAction
               v-if="isCurrent(run) || readinessRunningForRun(run)"
@@ -139,8 +139,12 @@
               variant="blue"
               :disabled="readinessDisabled(run)"
               :title="readinessTitle(run)"
+              @click="handleRunAction(run, 'check-readiness')"
             />
-            <RunAction v-bind="lifecycleAction(run)" />
+            <RunAction
+              v-bind="lifecycleAction(run)"
+              @click="handleRunAction(run, lifecycleAction(run).action)"
+            />
           </div>
           <div class="run-utility-strip" aria-label="Run utilities">
             <RunAction
@@ -150,6 +154,7 @@
               variant="utility"
               :disabled="!runFolderAvailable(run)"
               :title="runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.'"
+              @click="handleRunAction(run, 'open-run-folder')"
             />
             <RunAction
               action="copy-terraform-path"
@@ -158,9 +163,22 @@
               variant="utility"
               :disabled="!runTerraformPath(run)"
               :title="runTerraformPath(run) ? 'Copy the Terraform module/state path for this run.' : 'Terraform path is not recorded yet.'"
+              @click="handleRunAction(run, 'copy-terraform-path')"
             />
-            <RunAction action="open-setup-logs" :run-id="run.runId" label="Setup log" variant="utility" />
-            <RunAction action="open-readiness-logs" :run-id="run.runId" label="Ready log" variant="utility" />
+            <RunAction
+              action="open-setup-logs"
+              :run-id="run.runId"
+              label="Setup log"
+              variant="utility"
+              @click="handleRunAction(run, 'open-setup-logs')"
+            />
+            <RunAction
+              action="open-readiness-logs"
+              :run-id="run.runId"
+              label="Ready log"
+              variant="utility"
+              @click="handleRunAction(run, 'open-readiness-logs')"
+            />
           </div>
         </div>
       </article>
@@ -169,10 +187,24 @@
 </template>
 
 <script setup>
-import { computed, defineComponent, h, onMounted, onUnmounted, ref } from "vue";
-
-const state = ref(window.rancherControlPanelState || {});
-const bootPending = ref(true);
+import { computed, defineComponent, h } from "vue";
+import {
+  state,
+  bootPending,
+  refreshStatus,
+  activeClusterRunKey,
+  activeClusterHAKey,
+  selectedCleanupRunId,
+  setActivePanelTab,
+  setActiveDestroyTab,
+  runReadiness,
+  openLocalPath,
+  copyTextToClipboard,
+  openSetupLogs,
+  openReadinessLogs,
+  openCleanupLogs,
+  stopOperationThenOpenDestroy,
+} from "./store.js";
 
 const sameRunKey = (left, right) => String(left || "").trim() === String(right || "").trim();
 const trimTrailingPathSeparator = value => String(value || "").replace(/[\\/]+$/, "");
@@ -398,7 +430,8 @@ const RunAction = defineComponent({
     disabled: { type: Boolean, default: false },
     title: { type: String, default: "" },
   },
-  setup(props) {
+  emits: ["click"],
+  setup(props, { emit }) {
     return () => h("button", {
       type: "button",
       "data-run-action": props.action,
@@ -406,6 +439,7 @@ const RunAction = defineComponent({
       disabled: props.disabled || undefined,
       title: props.title || undefined,
       class: actionClass(props.variant, props.disabled),
+      onClick: (event) => emit("click", event),
     }, props.label);
   },
 });
@@ -418,6 +452,43 @@ const operationLogAction = mode => {
     return "open-cleanup-logs";
   }
   return "open-setup-logs";
+};
+
+const handleRunAction = (runOrId, action) => {
+  const runId = typeof runOrId === "string" ? runOrId : (runOrId?.runId || "");
+  const run = typeof runOrId === "object" ? runOrId : runs.value.find(r => sameRunKey(r.runId, runId));
+
+  if (action === 'open-setup') {
+    setActivePanelTab('setup');
+  } else if (action === 'view-clusters') {
+    activeClusterRunKey.value = runId;
+    activeClusterHAKey.value = '';
+    setActivePanelTab('clusters');
+  } else if (action === 'check-readiness') {
+    runReadiness();
+  } else if (action === 'open-run-folder') {
+    if (!runFolderAvailable(run)) {
+      refreshStatus.value = 'Run folder is not available locally.';
+      return;
+    }
+    openLocalPath(runFolderPath(run));
+  } else if (action === 'copy-terraform-path') {
+    copyTextToClipboard(runTerraformPath(run), 'Copied Terraform path to clipboard.');
+  } else if (action === 'open-setup-logs') {
+    openSetupLogs(runIsLinodeDocker(run));
+  } else if (action === 'open-readiness-logs') {
+    openReadinessLogs();
+  } else if (action === 'open-cleanup-logs') {
+    openCleanupLogs(runIsLinodeDocker(run));
+  } else if (action === 'open-destroy') {
+    selectedCleanupRunId.value = runId;
+    setActiveDestroyTab('slots');
+    setActivePanelTab('destroy');
+  } else if (action === 'stop-setup-open-destroy') {
+    stopOperationThenOpenDestroy(runIsLinodeDocker(run) ? 'linodeSetup' : 'setup', runId);
+  } else if (action === 'stop-readiness-open-destroy') {
+    stopOperationThenOpenDestroy('readiness', runId);
+  }
 };
 
 const ActiveOperationsBanner = defineComponent({
@@ -447,8 +518,8 @@ const ActiveOperationsBanner = defineComponent({
             h("div", { class: "mt-1 text-xs text-sky-800/70 dark:text-sky-100/65" }, operation?.startedAt ? `Started ${new Date(operation.startedAt).toLocaleTimeString()}` : "Starting now"),
           ]),
           h("div", { class: "flex shrink-0 flex-wrap gap-2" }, [
-            h(RunAction, { action: operationLogAction(mode), runId, label: "Logs" }),
-            stopAction ? h(RunAction, { ...stopAction, runId, variant: "danger", title: "Requires typing confirm before stopping and opening Destroy." }) : null,
+            h(RunAction, { action: operationLogAction(mode), runId, label: "Logs", onClick: () => handleRunAction(runId, operationLogAction(mode)) }),
+            stopAction ? h(RunAction, { ...stopAction, runId, variant: "danger", title: "Requires typing confirm before stopping and opening Destroy.", onClick: () => handleRunAction(runId, stopAction.action) }) : null,
           ]),
         ]);
       })),
@@ -467,24 +538,11 @@ const ReadinessFailedBanner = defineComponent({
           h("p", { class: "mt-1 text-sm leading-6 text-rose-800/80 dark:text-rose-100/75" }, "If a manual Helm command left Rancher unhealthy, destroy this slot from the recorded Terraform state and start again with a corrected command."),
         ]),
         h("div", { class: "flex shrink-0 flex-wrap gap-2" }, [
-          h(RunAction, { action: "open-readiness-logs", runId: props.run.runId, label: "Readiness logs" }),
-          h(RunAction, { action: "open-destroy", runId: props.run.runId, label: "Destroy failed run", variant: "danger" }),
+          h(RunAction, { action: "open-readiness-logs", runId: props.run.runId, label: "Readiness logs", onClick: () => handleRunAction(props.run.runId, "open-readiness-logs") }),
+          h(RunAction, { action: "open-destroy", runId: props.run.runId, label: "Destroy failed run", variant: "danger", onClick: () => handleRunAction(props.run.runId, "open-destroy") }),
         ]),
       ]),
     ]);
   },
-});
-
-const handleStateEvent = event => {
-  state.value = event.detail?.state || {};
-  bootPending.value = Boolean(event.detail?.bootPending);
-};
-
-onMounted(() => {
-  window.addEventListener("rancher-control-panel:state", handleStateEvent);
-});
-
-onUnmounted(() => {
-  window.removeEventListener("rancher-control-panel:state", handleStateEvent);
 });
 </script>

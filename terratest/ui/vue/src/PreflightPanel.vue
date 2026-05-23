@@ -1,5 +1,8 @@
 <template>
-  <details class="hidden">
+  <details
+    :class="{ hidden: !items.length }"
+    class="mb-5 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.02]"
+  >
     <summary class="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3">
       <div class="flex min-w-0 items-center gap-3">
         <h3 class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Preflight</h3>
@@ -8,8 +11,8 @@
         </div>
       </div>
       <button
-        id="refreshPreflightBtn"
         type="button"
+        @click="refreshPreflight"
         :disabled="checking"
         class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]"
       >
@@ -41,14 +44,14 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed } from "vue";
+import {
+  preflight,
+  preflightChecking,
+  refreshPreflight,
+} from "./store.js";
 
-const preflight = ref(window.rancherControlPanelPreflight || {
-  ready: false,
-  summary: "Preflight has not run yet.",
-  items: [],
-});
-const checking = ref(false);
+const checking = computed(() => preflightChecking.value);
 
 const items = computed(() => Array.isArray(preflight.value?.items) ? preflight.value.items : []);
 const counts = computed(() => ({
@@ -114,17 +117,4 @@ const itemClass = status => ({
   blocked: "border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-200",
   error: "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200",
 })[status] || "border-zinc-200 bg-white text-zinc-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300";
-
-const handlePreflightEvent = event => {
-  preflight.value = event.detail?.preflight || preflight.value;
-  checking.value = Boolean(event.detail?.checking);
-};
-
-onMounted(() => {
-  window.addEventListener("rancher-control-panel:preflight", handlePreflightEvent);
-});
-
-onUnmounted(() => {
-  window.removeEventListener("rancher-control-panel:preflight", handlePreflightEvent);
-});
 </script>

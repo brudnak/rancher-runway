@@ -31,7 +31,7 @@
       <div v-if="tile.action && tile.actionLabel" class="mt-auto">
         <button
           type="button"
-          :data-command-action="tile.action"
+          @click="setActivePanelTab(tile.action)"
           class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-bold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]"
         >
           {{ tile.actionLabel }}
@@ -42,10 +42,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
-
-const state = ref(window.rancherControlPanelState || {});
-const bootPending = ref(true);
+import { computed } from "vue";
+import {
+  state,
+  bootPending,
+  setActivePanelTab,
+} from "./store.js";
 
 const clusterItems = currentState => (
   currentState && currentState.clusters && Array.isArray(currentState.clusters.items)
@@ -203,18 +205,5 @@ const tiles = computed(() => {
       };
 
   return [safetyTile, runTile, exposureTile];
-});
-
-const handleStateEvent = event => {
-  state.value = event.detail?.state || {};
-  bootPending.value = Boolean(event.detail?.bootPending);
-};
-
-onMounted(() => {
-  window.addEventListener("rancher-control-panel:state", handleStateEvent);
-});
-
-onUnmounted(() => {
-  window.removeEventListener("rancher-control-panel:state", handleStateEvent);
 });
 </script>

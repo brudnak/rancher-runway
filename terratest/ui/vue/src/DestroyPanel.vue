@@ -8,15 +8,30 @@
           The slot record is removed only after Terraform destroy succeeds.
         </p>
       </div>
-      <div id="cleanupStatus" class="inline-flex items-center justify-center rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">Idle</div>
+      <div :class="cleanupStatusClass">
+        <span v-if="cleanupStatusTone === 'running'" class="spinner mr-2"></span>
+        {{ cleanupStatusLabel }}
+      </div>
     </div>
 
     <div class="mt-5 inline-flex rounded-xl border border-zinc-200 bg-zinc-50 p-1 dark:border-white/10 dark:bg-white/[0.03]" role="tablist" aria-label="Destroy tabs">
-      <button id="destroySlotsTabBtn" type="button" data-destroy-tab="slots" class="rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-zinc-900 shadow-sm dark:bg-white/[0.08] dark:text-zinc-100">Run slots</button>
-      <button id="destroyCostsTabBtn" type="button" data-destroy-tab="costs" class="rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-white/[0.06]">Local data</button>
+      <button
+        type="button"
+        @click="setActiveDestroyTab('slots')"
+        :class="activeDestroyTab === 'slots' ? activeTabClass : inactiveTabClass"
+      >
+        Run slots
+      </button>
+      <button
+        type="button"
+        @click="setActiveDestroyTab('costs')"
+        :class="activeDestroyTab === 'costs' ? activeTabClass : inactiveTabClass"
+      >
+        Local data
+      </button>
     </div>
 
-    <div id="destroySlotsPane">
+    <div v-if="activeDestroyTab === 'slots'" id="destroySlotsPane">
       <div id="cleanupSlots" class="mt-5 grid gap-3">
         <div
           v-if="!runs.length && bootPending"
@@ -89,8 +104,7 @@
             <div class="flex shrink-0 flex-wrap gap-2 lg:justify-end">
               <button
                 type="button"
-                data-action="open-run-folder"
-                :data-run-id="run.runId || ''"
+                @click="handleOpenFolder(run)"
                 :disabled="!runFolderAvailable(run)"
                 :title="runFolderAvailable(run) ? 'Open this run slot folder in Finder.' : 'Run folder is not available locally.'"
                 :class="runFolderAvailable(run) ? secondaryButtonClass : disabledButtonClass"
@@ -99,8 +113,7 @@
               </button>
               <button
                 type="button"
-                data-action="destroy-slot"
-                :data-run-id="run.runId || ''"
+                @click="handleDestroySlot(run.runId)"
                 :disabled="slotDestroyDisabled(run)"
                 :title="slotDestroyTitle(run)"
                 :class="slotDestroyDisabled(run) ? disabledButtonClass : dangerButtonClass"
@@ -115,13 +128,24 @@
       </div>
 
       <div id="cleanupActions" class="mt-5 flex flex-wrap justify-end gap-3">
-        <input id="cleanupConfirm" type="hidden" autocomplete="off" value="destroy" />
-        <button id="openCleanupLogsBtn" type="button" :class="secondaryButtonClass">Open cleanup logs</button>
-        <button id="cleanupClearResultBtn" type="button" hidden :class="secondaryButtonClass">Clear result</button>
-        <button id="cleanupBtn" type="button" hidden :class="dangerButtonClass">Destroy selected slot</button>
+        <button
+          type="button"
+          @click="openCleanupLogs(runIsLinodeDocker(activeCleanup))"
+          :class="secondaryButtonClass"
+        >
+          Open cleanup logs
+        </button>
+        <button
+          v-if="cleanupResultFinished"
+          type="button"
+          @click="dismissedCleanupResultKey = cleanupResultKey(activeCleanup)"
+          :class="secondaryButtonClass"
+        >
+          Clear result
+        </button>
       </div>
 
-      <div id="cleanupCost" class="mt-5" :class="{ hidden: !cleanupCostVisible }">
+      <div v-if="cleanupCostVisible" id="cleanupCost" class="mt-5">
         <div
           v-if="cleanupCost"
           class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-left dark:border-emerald-500/20 dark:bg-emerald-500/10"
@@ -150,24 +174,42 @@
       </div>
     </div>
 
-    <div id="destroyCostsPane" class="mt-5 hidden">
+    <div v-else-if="activeDestroyTab === 'costs'" id="destroyCostsPane" class="mt-5">
       <div class="mb-4 flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03] sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0">
           <h3 class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Cost ledger</h3>
-          <p id="costResetStatus" class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Cost estimates are stored in a local ignored SQLite database.
+          <p class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+            {{ costResetStatusText }}
           </p>
         </div>
-        <button id="resetCostLedgerBtn" type="button" class="shrink-0 rounded-lg border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 disabled:opacity-50 dark:border-rose-500/25 dark:bg-white/[0.06] dark:text-rose-300 dark:hover:bg-rose-500/10">Reset cost DB</button>
+        <button
+          type="button"
+          @click="resetCostLedger"
+          :disabled="resetCostsLocked"
+          :title="resetCostsTitle"
+          class="shrink-0 rounded-lg border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 disabled:opacity-50 dark:border-rose-500/25 dark:bg-white/[0.06] dark:text-rose-300 dark:hover:bg-rose-500/10"
+        >
+          <span v-if="costResetting" class="spinner mr-2 !h-4 !w-4 !border-2 align-[-0.15em]"></span>
+          {{ resetCostsLabel }}
+        </button>
       </div>
       <div class="mb-4 flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03] sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0">
           <h3 class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Post-destroy artifact cleanup</h3>
-          <p id="localArtifactsStatus" class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Backup cleanup stays locked until recorded slots are destroyed.
+          <p class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+            {{ artifactsStatusText }}
           </p>
         </div>
-        <button id="cleanLocalArtifactsBtn" type="button" class="shrink-0 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">Clean after destroy</button>
+        <button
+          type="button"
+          @click="cleanLocalArtifacts"
+          :disabled="cleanArtifactsLocked"
+          :title="cleanArtifactsTitle"
+          class="shrink-0 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]"
+        >
+          <span v-if="localArtifactsCleaning" class="spinner mr-2 !h-4 !w-4 !border-2 align-[-0.15em]"></span>
+          {{ cleanArtifactsLabel }}
+        </button>
       </div>
       <CostHistoryPanel />
     </div>
@@ -175,18 +217,32 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed } from "vue";
 import CostHistoryPanel from "./CostHistoryPanel.vue";
-
-const state = ref(window.rancherControlPanelState || {});
-const selectedRunId = ref("");
-const cleanupStarting = ref(false);
-const bootPending = ref(true);
-const dismissedCleanupResultKey = ref("");
+import {
+  state,
+  bootPending,
+  activeDestroyTab,
+  selectedCleanupRunId as selectedRunId,
+  cleanupStarting,
+  dismissedCleanupResultKey,
+  costResetting,
+  localArtifactsCleaning,
+  lifecycleRunning,
+  setActiveDestroyTab,
+  openCleanupLogs,
+  openLocalPath,
+  runCleanup,
+  resetCostLedger,
+  cleanLocalArtifacts,
+} from "./store.js";
 
 const secondaryButtonClass = "rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]";
 const disabledButtonClass = "rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400";
 const dangerButtonClass = "rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400";
+
+const activeTabClass = "rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-zinc-900 shadow-sm dark:bg-white/[0.08] dark:text-zinc-100";
+const inactiveTabClass = "rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-white/[0.06]";
 
 const runs = computed(() => Array.isArray(state.value?.workspace?.runs) ? state.value.workspace.runs : []);
 const activeCleanup = computed(() => {
@@ -200,8 +256,6 @@ const cleanupOutput = computed(() => Array.isArray(activeCleanup.value?.output) 
 
 const sameRunKey = (left, right) => String(left || "").trim() === String(right || "").trim();
 const runIsLinodeDocker = run => run?.deploymentType === "linode-docker-cattle";
-const awsLifecycleRunning = computed(() => Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.cleanup?.running));
-const linodeLifecycleRunning = computed(() => Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running));
 
 const timeLabel = value => value ? new Date(value).toLocaleTimeString() : "";
 const trimTrailingPathSeparator = value => String(value || "").replace(/[\\/]+$/, "");
@@ -331,36 +385,101 @@ const estimateUnavailable = computed(() => !cleanupDismissed.value && Boolean(ac
 ));
 const cleanupCostVisible = computed(() => Boolean(cleanupCost.value || estimateUnavailable.value));
 
-const handleStateEvent = event => {
-  state.value = event.detail?.state || {};
-  bootPending.value = Boolean(event.detail?.bootPending);
-};
-const handleDestroyEvent = event => {
-  const detail = event.detail || {};
-  if (detail.state) {
-    state.value = detail.state;
+const handleOpenFolder = run => {
+  if (!runFolderAvailable(run)) {
+    return;
   }
-  if ("selectedRunId" in detail) {
-    selectedRunId.value = detail.selectedRunId || "";
-  }
-  if ("cleanupStarting" in detail) {
-    cleanupStarting.value = Boolean(detail.cleanupStarting);
-  }
-  if ("bootPending" in detail) {
-    bootPending.value = Boolean(detail.bootPending);
-  }
-  if ("dismissedCleanupResultKey" in detail) {
-    dismissedCleanupResultKey.value = detail.dismissedCleanupResultKey || "";
-  }
+  openLocalPath(runFolderPath(run));
 };
 
-onMounted(() => {
-  window.addEventListener("rancher-control-panel:state", handleStateEvent);
-  window.addEventListener("rancher-control-panel:destroy", handleDestroyEvent);
+const handleDestroySlot = runId => {
+  selectedRunId.value = runId;
+  runCleanup(runId);
+};
+
+const cleanupStatusTone = computed(() => {
+  const cleanup = activeCleanup.value;
+  if (cleanup?.running) return "running";
+  if (cleanup?.finishedAt && !cleanup?.error && !cleanupDismissed.value) return "success";
+  if (cleanup?.error && !cleanupDismissed.value) return "error";
+  return "idle";
 });
 
-onUnmounted(() => {
-  window.removeEventListener("rancher-control-panel:state", handleStateEvent);
-  window.removeEventListener("rancher-control-panel:destroy", handleDestroyEvent);
+const cleanupStatusLabel = computed(() => {
+  const cleanup = activeCleanup.value;
+  if (cleanup?.running) {
+    return `Destroy running${cleanup.runId ? ` for ${cleanup.runId}` : ""}${cleanup.startedAt ? ` since ${new Date(cleanup.startedAt).toLocaleTimeString()}` : ""}`;
+  }
+  if (cleanup?.finishedAt && !cleanup?.error && !cleanupDismissed.value) {
+    return `Destroy finished successfully at ${new Date(cleanup.finishedAt).toLocaleTimeString()}`;
+  }
+  if (cleanup?.error && !cleanupDismissed.value) {
+    return "Destroy finished with error";
+  }
+  return "Idle";
+});
+
+const cleanupStatusClass = computed(() => {
+  const tones = {
+    running: "inline-flex items-center justify-center rounded-full bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300",
+    success: "inline-flex items-center justify-center rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+    error: "inline-flex items-center justify-center rounded-full bg-rose-100 px-3 py-1.5 text-xs font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
+    idle: "inline-flex items-center justify-center rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300",
+  };
+  return tones[cleanupStatusTone.value];
+});
+
+const cleanupResultFinished = computed(() => {
+  const cleanup = activeCleanup.value;
+  return Boolean(cleanup?.finishedAt && !cleanupDismissed.value);
+});
+
+// Cost ledger status & artifacts cleanup bindings
+const resetCostsLocked = computed(() =>
+  costResetting.value || bootPending.value || lifecycleRunning.value
+);
+const resetCostsTitle = computed(() =>
+  bootPending.value
+    ? "Startup safety check is still loading panel state."
+    : lifecycleRunning.value
+      ? "Wait for setup, readiness, or destroy to finish before resetting the cost ledger."
+      : "Delete the local ignored SQLite cost ledger and recreate it empty."
+);
+const resetCostsLabel = computed(() =>
+  costResetting.value ? "Resetting" : "Reset cost DB"
+);
+const costResetStatusText = computed(() => {
+  const dbPath = state.value?.costs?.dbPath || "terratest/automation-output/control-panel/cost-ledger.sqlite";
+  return `${dbPath} is local cache under automation-output/ and is ignored by Git.`;
+});
+
+const runCount = computed(() => runs.value.length);
+const residueCount = computed(() => Array.isArray(state.value?.workspace?.sharedPathLabels) ? state.value.workspace.sharedPathLabels.length : 0);
+const cleanArtifactsLocked = computed(() =>
+  localArtifactsCleaning.value || bootPending.value || lifecycleRunning.value || runCount.value > 0
+);
+const cleanArtifactsTitle = computed(() =>
+  bootPending.value
+    ? "Startup safety check is still loading panel state."
+    : lifecycleRunning.value
+      ? "Wait for setup, readiness, or destroy to finish before cleaning local artifacts."
+      : runCount.value > 0
+        ? "Locked while recorded run slots exist so Terraform destroy targets stay available."
+        : "Remove ignored local run residue left after destroy. Cost history is kept."
+);
+const cleanArtifactsLabel = computed(() =>
+  localArtifactsCleaning.value ? "Cleaning" : "Clean after destroy"
+);
+const artifactsStatusText = computed(() => {
+  if (localArtifactsCleaning.value) {
+    return "Cleaning ignored local run residue...";
+  }
+  if (runCount.value > 0) {
+    return `Locked: ${runCount.value} recorded run slot${runCount.value === 1 ? "" : "s"} still exist. Destroy slots first so Terraform targets stay intact.`;
+  }
+  if (residueCount.value > 0) {
+    return `Ready: no recorded run slots remain. ${residueCount.value} leftover local artifact${residueCount.value === 1 ? "" : "s"} can be cleaned.`;
+  }
+  return "Ready: no recorded run slots remain and no shared workspace residue is blocking setup.";
 });
 </script>

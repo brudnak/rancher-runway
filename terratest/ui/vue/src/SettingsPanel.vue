@@ -19,7 +19,7 @@
             v-for="interval in intervals"
             :key="interval.minutes"
             type="button"
-            :data-gpu-reminder-interval="interval.minutes"
+            @click="setIntervalMinutes(interval.minutes)"
             :disabled="disabled"
             class="gpu-reminder-interval rounded-lg px-3.5 py-2 text-sm font-semibold shadow-sm"
             :class="intervalClass(interval.minutes)"
@@ -30,17 +30,17 @@
       </div>
       <div class="mt-4 flex flex-wrap justify-end gap-3">
         <button
-          id="gpuReminderEnableBtn"
+          v-if="disabled"
           type="button"
-          :hidden="!disabled"
+          @click="enableReminders"
           class="rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400"
         >
           Enable reminders
         </button>
         <button
-          id="gpuReminderDisableBtn"
+          v-else
           type="button"
-          :hidden="disabled"
+          @click="disableReminders"
           class="rounded-lg border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-500/25 dark:bg-white/[0.06] dark:text-rose-300 dark:hover:bg-rose-500/10"
         >
           Disable reminders
@@ -51,17 +51,22 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed } from "vue";
+import {
+  gpuReminderSettings,
+  saveGPUReminderSettings,
+  showPanelNotice,
+  requestTypedConfirmation,
+} from "./store.js";
 
-const settings = ref(window.rancherGpuReminderSettings || { intervalMinutes: 15, disabled: false });
 const intervals = [
   { minutes: 15, label: "15 min" },
   { minutes: 30, label: "30 min" },
   { minutes: 60, label: "1 hr" },
 ];
 
-const disabled = computed(() => Boolean(settings.value.disabled));
-const intervalMinutes = computed(() => Number(settings.value.intervalMinutes || 15));
+const disabled = computed(() => Boolean(gpuReminderSettings.value.disabled));
+const intervalMinutes = computed(() => Number(gpuReminderSettings.value.intervalMinutes || 15));
 const intervalLabel = computed(() => intervalMinutes.value === 60 ? "1 hour" : `${intervalMinutes.value} minutes`);
 
 const statusClass = computed(() => disabled.value
@@ -78,15 +83,33 @@ const intervalClass = minutes => (
     : "border border-rose-200 bg-white text-rose-700 hover:bg-rose-50 dark:border-rose-500/25 dark:bg-white/[0.06] dark:text-rose-200 dark:hover:bg-rose-500/10"
 );
 
-const handleSettingsEvent = event => {
-  settings.value = event.detail?.settings || settings.value;
+const enableReminders = () => {
+  gpuReminderSettings.value.disabled = false;
+  gpuReminderSettings.value.lastReminderAt = Date.now();
+  saveGPUReminderSettings();
+  showPanelNotice("GPU reminders enabled", `Next reminder after ${intervalLabel.value} if GPU infrastructure remains active.`);
 };
 
-onMounted(() => {
-  window.addEventListener("rancher-control-panel:gpu-reminders", handleSettingsEvent);
-});
+const disableReminders = async () => {
+  const confirmed = await requestTypedConfirmation({
+    title: "Disable GPU reminders?",
+    body: "GPU worker nodes can create meaningful cloud cost when left running. Close-time GPU warnings still appear, but timed reminders will stop until you enable them again.",
+    typedValue: "disable gpu reminders",
+    confirmText: "Disable reminders",
+    accentText: "GPU cost warning",
+  });
+  if (!confirmed) return;
+  gpuReminderSettings.value.disabled = true;
+  gpuReminderSettings.value.lastReminderAt = Date.now();
+  saveGPUReminderSettings();
+  showPanelNotice("GPU reminders disabled", "Close-time GPU warnings remain active.");
+};
 
-onUnmounted(() => {
-  window.removeEventListener("rancher-control-panel:gpu-reminders", handleSettingsEvent);
-});
+const setIntervalMinutes = minutes => {
+  gpuReminderSettings.value.disabled = false;
+  gpuReminderSettings.value.intervalMinutes = minutes;
+  gpuReminderSettings.value.lastReminderAt = Date.now();
+  saveGPUReminderSettings();
+  showPanelNotice("GPU reminders updated", `Reminder interval set to ${intervalLabel.value}.`);
+};
 </script>
