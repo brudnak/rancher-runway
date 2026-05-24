@@ -30,7 +30,14 @@ image.lockFocus()
 
 let bounds = NSRect(origin: .zero, size: size)
 let iconMask = NSBezierPath(roundedRect: bounds.insetBy(dx: 12, dy: 12), xRadius: 210, yRadius: 210)
-let sourceCrop = NSRect(x: 76, y: 76, width: 1102, height: 1102)
+
+let w = sourceImage.size.width
+let h = sourceImage.size.height
+let cropSize = min(w, h) * 0.8788
+let cropX = (w - cropSize) / 2
+let cropY = (h - cropSize) / 2
+let sourceCrop = NSRect(x: cropX, y: cropY, width: cropSize, height: cropSize)
+
 NSGraphicsContext.current?.saveGraphicsState()
 iconMask.addClip()
 NSGraphicsContext.current?.imageInterpolation = .high
