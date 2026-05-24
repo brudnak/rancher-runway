@@ -1198,14 +1198,14 @@ watch(bootPending, pending => {
     booting: pending,
     detail: bootDetail.value,
   });
-});
+}, { immediate: true });
 
 watch(activeTab, tab => {
   const setupEl = document.getElementById("setupTabPanel") || document.querySelector('[data-tab-panel="setup"]');
   if (setupEl) {
     setupEl.classList.toggle("hidden", tab !== "setup");
   }
-});
+}, { immediate: true });
 
 // Setup event listeners
 export const initStore = () => {

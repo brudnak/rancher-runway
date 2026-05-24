@@ -1,23 +1,25 @@
 <template>
-  <button
-    v-for="tab in tabs"
-    :key="tab.id"
-    type="button"
-    @click="setActivePanelTab(tab.id)"
-    class="panel-tab flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold whitespace-nowrap"
-    :class="tabButtonClass(tab.id)"
-    :aria-current="activeTab === tab.id ? 'page' : undefined"
-  >
-    <span>{{ tab.label }}</span>
-    <span
-      v-if="tabBadge(tab.id)"
-      :data-tab-count="tab.id"
-      class="tab-count"
-      :class="tabBadgeClass(tab.id)"
+  <div class="contents">
+    <button
+      v-for="tab in tabs"
+      :key="tab.id"
+      type="button"
+      @click="setActivePanelTab(tab.id)"
+      class="panel-tab flex shrink-0 items-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-semibold whitespace-nowrap"
+      :class="tabButtonClass(tab.id)"
+      :aria-current="activeTab === tab.id ? 'page' : undefined"
     >
-      {{ tabBadge(tab.id) }}
-    </span>
-  </button>
+      <span>{{ tab.label }}</span>
+      <span
+        v-if="tabBadge(tab.id)"
+        :data-tab-count="tab.id"
+        class="tab-count"
+        :class="tabBadgeClass(tab.id)"
+      >
+        {{ tabBadge(tab.id) }}
+      </span>
+    </button>
+  </div>
 </template>
 
 <script setup>
