@@ -50,7 +50,7 @@
     aria-modal="true"
     aria-labelledby="logModalTitle"
   >
-    <section class="mx-auto flex h-full max-w-[1700px] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl shadow-zinc-950/30 dark:border-white/10 dark:bg-zinc-950">
+    <section class="mx-auto flex w-full h-full max-w-[1700px] flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-2xl shadow-zinc-950/30 dark:border-white/10 dark:bg-zinc-950">
       <header class="sticky top-0 z-10 border-b border-zinc-200 bg-white px-4 py-4 dark:border-white/10 dark:bg-zinc-900 sm:px-5">
         <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div class="min-w-0">
@@ -449,6 +449,7 @@ const logEntries = computed(() => {
 });
 
 const logWaiting = computed(() => {
+  if (logs.loading) return true;
   const waitingForLive = logs.mode === "live" && (logs.liveState === "connecting" || logs.liveState === "live");
   const waitingForSetup = logs.mode === "setup" && logs.liveState === "setupRunning";
   const waitingForReadiness = logs.mode === "readiness" && logs.liveState === "readinessRunning";
@@ -459,6 +460,12 @@ const logWaiting = computed(() => {
 });
 
 const logWaitingMessage = computed(() => {
+  if (logs.loading) {
+    if (logs.mode === "docker") {
+      return "Loading Docker logs...";
+    }
+    return "Loading logs...";
+  }
   if (logs.mode === "live" && (logs.liveState === "connecting" || logs.liveState === "live")) {
     return "Waiting for live log lines...";
   }

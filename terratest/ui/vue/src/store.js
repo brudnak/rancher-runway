@@ -54,6 +54,7 @@ export const logs = reactive({
   search: "",
   liveState: "idle", // 'idle', 'connecting', 'live', 'stopped', 'error', and operation specific ones
   statusText: "",
+  loading: false,
 });
 
 // Dangerous confirmation modal state
@@ -604,6 +605,7 @@ export const loadLogs = async (clusterId, namespace, podName) => {
   stopStream({ internal: true });
   setActiveLogContext("tail", clusterId, namespace, podName);
   logs.liveState = "idle";
+  logs.loading = true;
   openLogModal();
   logs.rawText = "";
   renderLogViewer();
@@ -618,6 +620,8 @@ export const loadLogs = async (clusterId, namespace, podName) => {
     logs.statusText = message;
     logs.rawText = `[error] ${message}`;
     renderLogViewer();
+  } finally {
+    logs.loading = false;
   }
 };
 
@@ -629,6 +633,7 @@ export const loadDockerLogs = async cluster => {
   activeDockerLogsClusterId.value = clusterId;
   setActiveLogContext("docker", clusterId, "linode", "rancher");
   logs.liveState = "idle";
+  logs.loading = true;
   openLogModal();
   logs.rawText = "";
   renderLogViewer();
@@ -645,6 +650,7 @@ export const loadDockerLogs = async cluster => {
     renderLogViewer();
   } finally {
     activeDockerLogsClusterId.value = "";
+    logs.loading = false;
   }
 };
 
