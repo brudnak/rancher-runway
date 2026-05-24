@@ -554,9 +554,9 @@
       color: rgb(244 244 245);
     }
     .run-footline {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
       margin-top: 1rem;
       color: rgb(82 82 91);
       font-size: 0.82rem;
@@ -689,8 +689,7 @@
     @media (max-width: 900px) {
       .run-summary-strip,
       .run-row,
-      .run-kpi-grid,
-      .run-footline {
+      .run-kpi-grid {
         grid-template-columns: 1fr;
       }
       .run-command-panel {

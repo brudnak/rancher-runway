@@ -387,6 +387,8 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/steve/stop", p.handleSteveLabStop)
 	mux.HandleFunc("/api/steve/cleanup", p.handleSteveLabCleanup)
 	mux.HandleFunc("/api/steve/kubeconfig/save", p.handleSteveLabKubeconfigSave)
+	mux.HandleFunc("/api/steve/sqlite/vacuum", p.handleSteveLabSqliteVacuum)
+	mux.HandleFunc("/api/steve/logs", p.handleSteveLabLogs)
 	mux.HandleFunc("/api/steve/output/clear", p.handleSteveLabOutputClear)
 	mux.HandleFunc("/api/k3d/state", p.handleK3DLabState)
 	mux.HandleFunc("/api/k3d/install", p.handleK3DLabInstall)

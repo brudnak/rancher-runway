@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 const steveRepoURL = "https://github.com/rancher/steve.git"
@@ -47,6 +50,7 @@ type steveLabRunRecord struct {
 	StevePID    int       `json:"stevePid,omitempty"`
 	LogPath     string    `json:"logPath,omitempty"`
 	KeepCluster bool      `json:"keepCluster"`
+	SQLCache    bool      `json:"sqlCache"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
 	Error       string    `json:"error,omitempty"`
@@ -288,6 +292,73 @@ func (p *localControlPanel) handleSteveLabKubeconfigSave(w http.ResponseWriter, 
 	})
 }
 
+func (p *localControlPanel) handleSteveLabSqliteVacuum(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	runID := safeRunPathSegment(req.RunID)
+	if runID == "" {
+		http.Error(w, "runId is required", http.StatusBadRequest)
+		return
+	}
+	record, ok := p.readSteveLabRunRecord(runID)
+	if !ok {
+		http.Error(w, "Steve Lab run not found", http.StatusNotFound)
+		return
+	}
+
+	sourceDBPath := filepath.Join(record.SourceDir, "informer_object_cache.db")
+	if _, err := os.Stat(sourceDBPath); os.IsNotExist(err) {
+		http.Error(w, "SQLite database file not found yet. Make sure Steve has started and initialized the cache.", http.StatusNotFound)
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		http.Error(w, "failed to find home directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	downloadsDir := filepath.Join(home, "Downloads")
+	if err := os.MkdirAll(downloadsDir, 0o755); err != nil {
+		http.Error(w, "failed to create Downloads directory: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	filename := fmt.Sprintf("steve-cache-%s.db", record.RunID)
+	targetDBPath := uniqueDownloadPath(downloadsDir, filename)
+
+	db, err := sql.Open("sqlite", sourceDBPath)
+	if err != nil {
+		http.Error(w, "failed to open source database: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
+
+	escapedPath := strings.ReplaceAll(targetDBPath, "'", "''")
+	query := fmt.Sprintf("VACUUM INTO '%s'", escapedPath)
+	if _, err := db.Exec(query); err != nil {
+		http.Error(w, "failed to vacuum SQLite database: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, map[string]string{
+		"filename": filepath.Base(targetDBPath),
+		"path":     targetDBPath,
+	})
+}
+
 func (p *localControlPanel) handleSteveLabOutputClear(w http.ResponseWriter, r *http.Request) {
 	if !p.authorizedLocalAction(r) {
 		http.Error(w, "invalid control panel token", http.StatusForbidden)
@@ -305,6 +376,44 @@ func (p *localControlPanel) handleSteveLabOutputClear(w http.ResponseWriter, r *
 	p.persistOperationsLocked()
 	p.mu.Unlock()
 	writeJSON(w, map[string]string{"status": "cleared"})
+}
+
+func (p *localControlPanel) handleSteveLabLogs(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedReadOnly(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	runID := safeRunPathSegment(r.URL.Query().Get("runId"))
+	if runID == "" {
+		http.Error(w, "runId is required", http.StatusBadRequest)
+		return
+	}
+	record, ok := p.readSteveLabRunRecord(runID)
+	if !ok {
+		http.Error(w, "Steve Lab run not found", http.StatusNotFound)
+		return
+	}
+
+	content, err := os.ReadFile(record.LogPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, map[string]string{"text": "(no Steve log file found yet)"})
+			return
+		}
+		http.Error(w, "failed to read Steve log: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	outputText := string(content)
+	if len(outputText) > 1000000 {
+		outputText = outputText[len(outputText)-1000000:]
+	}
+
+	writeJSON(w, map[string]string{"text": outputText})
 }
 
 func (p *localControlPanel) steveLabPanelState(includePreflight bool) steveLabPanelState {
@@ -602,9 +711,21 @@ func (p *localControlPanel) runSteveLabSteps(record *steveLabRunRecord) error {
 	if commit, err := resolveSteveGitHubCommit(record.SteveRef); err == nil && commit != "" {
 		record.SteveCommit = commit
 	}
+
+	// Check if the downloaded Steve version supports SQL Cache
+	hasSQLCache := false
+	if _, err := os.Stat(filepath.Join(record.SourceDir, "pkg", "sqlcache")); err == nil {
+		hasSQLCache = true
+	}
+	record.SQLCache = hasSQLCache
 	record.UpdatedAt = time.Now()
 	_ = p.writeSteveLabRunRecord(*record)
-	p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Resolved Steve commit "+record.SteveCommit)
+	
+	if hasSQLCache {
+		p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Detected SQL cache support in Steve version")
+	} else {
+		p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Resolved Steve commit "+record.SteveCommit)
+	}
 
 	if err := p.runSteveLabCommand(record, record.RunDir, "k3d", "cluster", "create", record.ClusterName, "--image", k3sImage(record.K3SVersion), "--wait", "--timeout", "180s"); err != nil {
 		return err
@@ -626,6 +747,14 @@ func (p *localControlPanel) runSteveLabSteps(record *steveLabRunRecord) error {
 	if err := p.runSteveLabCommand(record, record.RunDir, "kubectl", "--kubeconfig", record.Kubeconfig, "wait", "node", "--all", "--for=condition=Ready", "--timeout=180s"); err != nil {
 		return err
 	}
+
+	if record.SQLCache {
+		p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Applying Project CRD prerequisites for SQL cache...")
+		if err := ensureSQLCachePrereqs(record.Kubeconfig); err != nil {
+			p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Warning: failed to apply SQL cache prerequisites: "+err.Error())
+		}
+	}
+
 	return p.startSteveEndpoint(record)
 }
 
@@ -807,6 +936,9 @@ func (p *localControlPanel) startSteveEndpoint(record *steveLabRunRecord) error 
 		"--kubeconfig", record.Kubeconfig,
 		"--http-listen-port", fmt.Sprintf("%d", record.HTTPPort),
 		"--https-listen-port", fmt.Sprintf("%d", record.HTTPSPort),
+	}
+	if record.SQLCache {
+		args = append(args, "--sql-cache")
 	}
 	p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] $ go "+strings.Join(args, " "))
 	logFile, err := os.OpenFile(record.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -1087,3 +1219,37 @@ func k3dDeleteMissingClusterOK(output string) bool {
 		strings.Contains(output, "no cluster") ||
 		strings.Contains(output, "does not exist")
 }
+
+func ensureSQLCachePrereqs(kubeconfigPath string) error {
+	kubectlPath, err := resolveLocalToolPath("kubectl")
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(kubectlPath, "--kubeconfig", kubeconfigPath, "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(projectCRD)
+	cmd.Env = localToolEnv(nil)
+	return cmd.Run()
+}
+
+const projectCRD = `
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: projects.management.cattle.io
+spec:
+  group: management.cattle.io
+  names:
+    kind: Project
+    listKind: ProjectList
+    plural: projects
+    singular: project
+  scope: Namespaced
+  versions:
+  - name: v3
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        x-kubernetes-preserve-unknown-fields: true
+`

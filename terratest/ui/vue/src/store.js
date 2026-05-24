@@ -475,6 +475,9 @@ export const logFilename = () => {
   if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") {
     return `${logs.mode === "linodeCleanup" ? "linode-cleanup" : "cleanup"}${logs.search ? "-filtered" : ""}.log`;
   }
+  if (logs.mode === "steveLive" || logs.mode === "steveLog") {
+    return `steve-${logs.podName || "log"}${logs.search ? "-filtered" : ""}.log`;
+  }
   const pod = logs.podName || "pod";
   const safePod = pod.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "pod";
   return `${safePod}-${logs.mode}${logs.search ? "-filtered" : ""}.log`;
@@ -549,13 +552,18 @@ export const stopStream = (options = {}) => {
     streamLogs(logs.clusterId, logs.namespace, logs.podName, { preserveLogs: true });
     return;
   }
+  if (!options.internal && logs.mode === "steveLive" && (logs.liveState === "stopped" || logs.liveState === "error")) {
+    const run = { runId: logs.podName };
+    streamSteveLogs(run, { preserveLogs: true });
+    return;
+  }
   if (streamPollTimer) {
     window.clearInterval(streamPollTimer);
     streamPollTimer = null;
   }
   livePollGeneration += 1;
 
-  if (logs.mode === "live") {
+  if (logs.mode === "live" || logs.mode === "steveLive") {
     if (!options.internal) {
       logs.statusText = "Live log refresh stopped.";
       logs.liveState = "stopped";
@@ -652,6 +660,73 @@ export const loadDockerLogs = async cluster => {
     activeDockerLogsClusterId.value = "";
     logs.loading = false;
   }
+};
+
+export const loadSteveLogs = async run => {
+  stopStream({ internal: true });
+  setActiveLogContext("steveLog", "local", "steve", run.runId);
+  logs.liveState = "idle";
+  logs.loading = true;
+  openLogModal();
+  logs.rawText = "";
+  renderLogViewer();
+  logs.statusText = `Loading Steve logs for ${run.runId}...`;
+
+  try {
+    const params = new URLSearchParams({ runId: run.runId });
+    const response = await apiFetch(`/api/steve/logs?${params.toString()}`);
+    const data = await response.json();
+    logs.rawText = data.text || "";
+    renderLogViewer();
+    logs.statusText = `Showing logs for Steve ${run.runId}`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load Steve logs";
+    logs.statusText = message;
+    logs.rawText = `[error] ${message}`;
+    renderLogViewer();
+  } finally {
+    logs.loading = false;
+  }
+};
+
+export const streamSteveLogs = (run, options = {}) => {
+  stopStream({ internal: true });
+  setActiveLogContext("steveLive", "local", "steve", run.runId);
+  logs.liveState = "connecting";
+  openLogModal();
+  if (!options.preserveLogs) {
+    logs.rawText = "";
+  }
+  renderLogViewer();
+  logs.statusText = `Refreshing live Steve logs for ${run.runId}...`;
+
+  const generation = livePollGeneration;
+  const poll = async () => {
+    try {
+      const params = new URLSearchParams({ runId: run.runId });
+      const response = await apiFetch(`/api/steve/logs?${params.toString()}`);
+      if (generation !== livePollGeneration || logs.mode !== "steveLive") {
+        return;
+      }
+      const data = await response.json();
+      logs.rawText = data.text || "";
+      logs.liveState = "live";
+      renderLogViewer();
+      logs.statusText = `Live Steve logs auto-refreshing for ${run.runId}`;
+    } catch (error) {
+      if (generation !== livePollGeneration || logs.mode !== "steveLive") {
+        return;
+      }
+      const message = error instanceof Error ? error.message : "Failed to refresh live Steve logs";
+      logs.liveState = "error";
+      logs.rawText = logs.rawText ? `${logs.rawText}\n[error] ${message}` : `[error] ${message}`;
+      renderLogViewer();
+      logs.statusText = message;
+    }
+  };
+
+  poll();
+  streamPollTimer = window.setInterval(poll, 3000);
 };
 
 export const openSetupLogs = (linode = false) => {

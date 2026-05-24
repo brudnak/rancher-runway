@@ -128,7 +128,7 @@
           </button>
         </div>
       </header>
-      <div id="logBox" ref="logBoxRef" class="min-h-0 flex-1 overflow-auto bg-zinc-50 p-3 font-mono text-xs leading-5 text-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 sm:p-4">
+      <div id="logBox" ref="logBoxRef" class="min-h-0 flex-1 overflow-auto bg-zinc-50 p-3 font-mono text-xs leading-5 text-zinc-800 dark:bg-zinc-950 dark:text-zinc-300 sm:p-4 border-t border-zinc-200 dark:border-zinc-900/40">
         <template v-if="logEntries.length">
           <div
             v-for="entry in logEntries"
@@ -139,7 +139,7 @@
               {{ entry.index }}
             </div>
             <code
-              class="min-w-0 whitespace-pre-wrap break-words px-3 py-1.5 text-zinc-800 dark:text-zinc-200"
+              class="min-w-0 whitespace-pre-wrap break-words px-3 py-1.5 text-zinc-800 dark:text-zinc-300"
               v-html="highlightLogLine(entry.line, logs.search)"
             ></code>
           </div>
