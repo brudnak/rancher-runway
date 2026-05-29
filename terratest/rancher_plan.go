@@ -1074,18 +1074,18 @@ func buildSupportMatrixURL(releasedVersion string) string {
 func resolveHighestSupportedRKE2Minor(supportMatrixURL string) (int, string, error) {
 	body, err := fetchURLBody(supportMatrixURL)
 	if err != nil {
-		return 0, "", err
+		return resolveCachedSupportRange("RKE2", supportMatrixURL, err)
 	}
 
 	textContent, err := extractTextFromHTML(body)
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to parse support matrix page %s: %w", supportMatrixURL, err)
+		return resolveCachedSupportRange("RKE2", supportMatrixURL, fmt.Errorf("failed to parse support matrix page: %w", err))
 	}
 
 	rke2RangePattern := regexp.MustCompile(`RKE2\s+v1\.(\d+)\s+v1\.(\d+)`)
 	matches := rke2RangePattern.FindStringSubmatch(textContent)
 	if len(matches) != 3 {
-		return 0, "", fmt.Errorf("could not find supported RKE2 range in %s", supportMatrixURL)
+		return resolveCachedSupportRange("RKE2", supportMatrixURL, fmt.Errorf("could not find supported RKE2 range in support matrix page"))
 	}
 
 	highestMinorVersion, err := goversion.NewVersion(matches[2])
@@ -1100,22 +1100,21 @@ func resolveHighestSupportedRKE2Minor(supportMatrixURL string) (int, string, err
 
 	var highestMinor int
 	fmt.Sscanf(matches[2], "%d", &highestMinor)
-	return highestMinor, fmt.Sprintf("Support matrix certifies RKE2 from v1.%s through v1.%s", matches[1], matches[2]), nil
+	var minMinor int
+	fmt.Sscanf(matches[1], "%d", &minMinor)
+	rangeText := fmt.Sprintf("Support matrix certifies RKE2 from v1.%s through v1.%s", matches[1], matches[2])
+	updateSupportRangeCache("RKE2", supportMatrixURL, rangeText, minMinor, highestMinor)
+	return highestMinor, rangeText, nil
 }
 
 func resolveLatestRKE2Patch(highestMinor int) (string, error) {
 	releaseNotesURL := fmt.Sprintf("https://docs.rke2.io/release-notes/v1.%d.X", highestMinor)
-	body, err := fetchURLBody(releaseNotesURL)
-	if err != nil {
-		return "", err
+	config := releaseProductConfig{
+		ProductName: "RKE2",
+		CacheKey:    "rke2",
+		Pattern:     regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+rke2r\d+`, highestMinor)),
 	}
-
-	pattern := regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+rke2r\d+`, highestMinor))
-	match := pattern.FindString(body)
-	if match == "" {
-		return "", fmt.Errorf("could not find an RKE2 patch release in %s", releaseNotesURL)
-	}
-	return match, nil
+	return resolveLatestCachedReleasePatch(config, highestMinor, releaseNotesURL, firstReleaseVersion)
 }
 
 type manualRKE2RecommendationResult struct {
@@ -1449,7 +1448,7 @@ func fetchURLBody(url string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected HTTP status %d fetching %s", resp.StatusCode, url)
+		return "", httpStatusError{URL: url, StatusCode: resp.StatusCode}
 	}
 
 	body, err := io.ReadAll(resp.Body)

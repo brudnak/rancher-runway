@@ -1,8 +1,12 @@
 package test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -211,6 +215,123 @@ func TestHelmKubeVersionFromRKE2VersionStripsRKE2BuildMetadata(t *testing.T) {
 	if got != "1.34.6" {
 		t.Fatalf("expected Helm kube version 1.34.6, got %q", got)
 	}
+}
+
+func TestResolveLatestReleasePatchWritesCacheOnSuccess(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
+	t.Setenv(releaseLookupCachePathEnv, cachePath)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/release-notes/v1.31.X" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`RKE2 releases v1.31.9+rke2r1 and v1.31.8+rke2r1`))
+	}))
+	t.Cleanup(server.Close)
+
+	config := releaseProductConfig{
+		ProductName: "RKE2",
+		CacheKey:    "rke2",
+		Pattern:     rke2ReleasePattern(31),
+	}
+	got, err := resolveLatestCachedReleasePatch(config, 31, server.URL+"/release-notes/v1.31.X", firstReleaseVersion)
+	if err != nil {
+		t.Fatalf("expected release lookup to succeed, got %v", err)
+	}
+	if got != "v1.31.9+rke2r1" {
+		t.Fatalf("expected latest RKE2 release from docs order, got %q", got)
+	}
+
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("expected cache file to be written: %v", err)
+	}
+	for _, want := range []string{`"rke2"`, `"v1.31"`, `"v1.31.9+rke2r1"`, `"v1.31.8+rke2r1"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected cache to contain %s, got:\n%s", want, string(data))
+		}
+	}
+}
+
+func TestHighestSemverReleaseVersionSelectsLatestK3sPatch(t *testing.T) {
+	got, err := highestSemverReleaseVersion([]string{
+		"v1.31.8+k3s1",
+		"v1.31.10+k3s1",
+		"v1.31.9+k3s2",
+	}, "+k3s")
+	if err != nil {
+		t.Fatalf("expected K3s release selection to succeed, got %v", err)
+	}
+	if got != "v1.31.10+k3s1" {
+		t.Fatalf("expected highest K3s patch release, got %q", got)
+	}
+}
+
+func TestResolveLatestReleasePatchFallsBackToValidatedCacheOn404(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
+	t.Setenv(releaseLookupCachePathEnv, cachePath)
+	updateReleaseCache(releaseProductConfig{
+		ProductName: "RKE2",
+		CacheKey:    "rke2",
+		Pattern:     rke2ReleasePattern(31),
+	}, 31, "https://docs.rke2.io/release-notes/v1.31.X", "v1.31.8+rke2r1", []string{"v1.31.8+rke2r1"})
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+
+	got, err := resolveLatestCachedReleasePatch(releaseProductConfig{
+		ProductName: "RKE2",
+		CacheKey:    "rke2",
+		Pattern:     rke2ReleasePattern(31),
+	}, 31, server.URL+"/release-notes/v1.31.X", firstReleaseVersion)
+	if err != nil {
+		t.Fatalf("expected cached release lookup to be used, got %v", err)
+	}
+	if got != "v1.31.8+rke2r1" {
+		t.Fatalf("expected cached RKE2 release, got %q", got)
+	}
+}
+
+func TestResolveLatestReleasePatchReturnsHelpfulErrorWithoutCache(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
+	t.Setenv(releaseLookupCachePathEnv, cachePath)
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+
+	_, err := resolveLatestCachedReleasePatch(releaseProductConfig{
+		ProductName: "RKE2",
+		CacheKey:    "rke2",
+		Pattern:     rke2ReleasePattern(31),
+	}, 31, server.URL+"/release-notes/v1.31.X", firstReleaseVersion)
+	if err == nil {
+		t.Fatal("expected release lookup to fail without cache")
+	}
+	for _, want := range []string{"RKE2 release-note lookup is unavailable", "HTTP 404", "no cached lookup"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+		}
+	}
+}
+
+func TestResolveCachedSupportRangeFallsBackToValidatedCache(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
+	t.Setenv(releaseLookupCachePathEnv, cachePath)
+	supportMatrixURL := "https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/rancher-v2-14-1/"
+	updateSupportRangeCache("RKE2", supportMatrixURL, "Support matrix certifies RKE2 from v1.30 through v1.31", 30, 31)
+
+	highestMinor, summary, err := resolveCachedSupportRange("RKE2", supportMatrixURL, httpStatusError{URL: supportMatrixURL, StatusCode: http.StatusNotFound})
+	if err != nil {
+		t.Fatalf("expected cached support range, got %v", err)
+	}
+	if highestMinor != 31 || summary != "Support matrix certifies RKE2 from v1.30 through v1.31" {
+		t.Fatalf("unexpected cached support range: minor=%d summary=%q", highestMinor, summary)
+	}
+}
+
+func rke2ReleasePattern(highestMinor int) *regexp.Regexp {
+	return regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+rke2r\d+`, highestMinor))
 }
 
 func TestNormalizeRKE2VersionInputAddsLeadingV(t *testing.T) {

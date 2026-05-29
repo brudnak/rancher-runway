@@ -163,11 +163,11 @@ func hostedK3SChecksumForVersion(mapKey, singleKey, version string) (string, err
 func resolveHighestSupportedHostedK3SMinor(supportMatrixURL string) (int, string, error) {
 	body, err := fetchURLBody(supportMatrixURL)
 	if err != nil {
-		return 0, "", err
+		return resolveCachedSupportRange("K3s", supportMatrixURL, err)
 	}
 	textContent, err := extractTextFromHTML(body)
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to parse support matrix page %s: %w", supportMatrixURL, err)
+		return resolveCachedSupportRange("K3s", supportMatrixURL, fmt.Errorf("failed to parse support matrix page: %w", err))
 	}
 
 	patterns := []*regexp.Regexp{
@@ -187,41 +187,26 @@ func resolveHighestSupportedHostedK3SMinor(supportMatrixURL string) (int, string
 		if len(segments) == 0 {
 			return 0, "", fmt.Errorf("unexpected supported K3s minor value %q", highest.Original())
 		}
-		return int(segments[0]), fmt.Sprintf("Support matrix certifies K3s from v1.%s through v1.%s", matches[1], matches[2]), nil
+		maxMinor := int(segments[0])
+		var minMinor int
+		fmt.Sscanf(matches[1], "%d", &minMinor)
+		rangeText := fmt.Sprintf("Support matrix certifies K3s from v1.%s through v1.%s", matches[1], matches[2])
+		updateSupportRangeCache("K3s", supportMatrixURL, rangeText, minMinor, maxMinor)
+		return maxMinor, rangeText, nil
 	}
-	return 0, "", fmt.Errorf("could not find supported K3s range in %s", supportMatrixURL)
+	return resolveCachedSupportRange("K3s", supportMatrixURL, fmt.Errorf("could not find supported K3s range in support matrix page"))
 }
 
 func resolveLatestHostedK3SPatch(highestMinor int) (string, error) {
 	releaseNotesURL := fmt.Sprintf("https://docs.k3s.io/release-notes/v1.%d.X", highestMinor)
-	body, err := fetchURLBody(releaseNotesURL)
-	if err != nil {
-		return "", err
+	config := releaseProductConfig{
+		ProductName: "K3s",
+		CacheKey:    "k3s",
+		Pattern:     regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+k3s\d+`, highestMinor)),
 	}
-
-	pattern := regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+k3s\d+`, highestMinor))
-	matches := pattern.FindAllString(body, -1)
-	if len(matches) == 0 {
-		return "", fmt.Errorf("could not find a K3s patch release in %s", releaseNotesURL)
-	}
-
-	var bestVersion *goversion.Version
-	bestOriginal := ""
-	for _, match := range matches {
-		normalized := strings.TrimPrefix(strings.Replace(match, "+k3s", "-k3s", 1), "v")
-		parsed, err := goversion.NewVersion(normalized)
-		if err != nil {
-			continue
-		}
-		if bestVersion == nil || parsed.GreaterThan(bestVersion) {
-			bestVersion = parsed
-			bestOriginal = match
-		}
-	}
-	if bestOriginal == "" {
-		return "", fmt.Errorf("could not parse K3s patch releases in %s", releaseNotesURL)
-	}
-	return bestOriginal, nil
+	return resolveLatestCachedReleasePatch(config, highestMinor, releaseNotesURL, func(matches []string) (string, error) {
+		return highestSemverReleaseVersion(matches, "+k3s")
+	})
 }
 
 func resolveHostedRemoteSHA256(url string) (string, error) {
