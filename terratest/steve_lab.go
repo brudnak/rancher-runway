@@ -34,26 +34,30 @@ type steveLabPanelState struct {
 }
 
 type steveLabRunRecord struct {
-	RunID       string    `json:"runId"`
-	Status      string    `json:"status"`
-	SteveRef    string    `json:"steveRef"`
-	SteveCommit string    `json:"steveCommit,omitempty"`
-	K3SVersion  string    `json:"k3sVersion"`
-	ClusterName string    `json:"clusterName"`
-	Kubeconfig  string    `json:"kubeconfig"`
-	RunDir      string    `json:"runDir"`
-	SourceDir   string    `json:"sourceDir"`
-	HTTPPort    int       `json:"httpPort,omitempty"`
-	HTTPSPort   int       `json:"httpsPort,omitempty"`
-	HTTPURL     string    `json:"httpUrl,omitempty"`
-	HTTPSURL    string    `json:"httpsUrl,omitempty"`
-	StevePID    int       `json:"stevePid,omitempty"`
-	LogPath     string    `json:"logPath,omitempty"`
-	KeepCluster bool      `json:"keepCluster"`
-	SQLCache    bool      `json:"sqlCache"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	Error       string    `json:"error,omitempty"`
+	RunID                        string    `json:"runId"`
+	Status                       string    `json:"status"`
+	SteveRef                     string    `json:"steveRef"`
+	SteveCommit                  string    `json:"steveCommit,omitempty"`
+	K3SVersion                   string    `json:"k3sVersion"`
+	ClusterName                  string    `json:"clusterName"`
+	Kubeconfig                   string    `json:"kubeconfig"`
+	RunDir                       string    `json:"runDir"`
+	SourceDir                    string    `json:"sourceDir"`
+	HTTPPort                     int       `json:"httpPort,omitempty"`
+	HTTPSPort                    int       `json:"httpsPort,omitempty"`
+	HTTPURL                      string    `json:"httpUrl,omitempty"`
+	HTTPSURL                     string    `json:"httpsUrl,omitempty"`
+	StevePID                     int       `json:"stevePid,omitempty"`
+	LogPath                      string    `json:"logPath,omitempty"`
+	KeepCluster                  bool      `json:"keepCluster"`
+	SQLCache                     bool      `json:"sqlCache"`
+	EnableMetrics                bool      `json:"enableMetrics,omitempty"`
+	MetricsUpdateIntervalSeconds int       `json:"metricsUpdateIntervalSeconds,omitempty"`
+	ExtraEnv                     []string  `json:"extraEnv,omitempty"`
+	ExtraArgs                    []string  `json:"extraArgs,omitempty"`
+	CreatedAt                    time.Time `json:"createdAt"`
+	UpdatedAt                    time.Time `json:"updatedAt"`
+	Error                        string    `json:"error,omitempty"`
 }
 
 type steveVersionRef struct {
@@ -78,14 +82,18 @@ type steveRefDetails struct {
 }
 
 type steveLabStartRequest struct {
-	SteveRef       string `json:"steveRef"`
-	K3SVersion     string `json:"k3sVersion"`
-	KeepCluster    bool   `json:"keepCluster"`
-	HTTPPort       int    `json:"httpPort"`
-	HTTPSPort      int    `json:"httpsPort"`
-	HeaderAuth     bool   `json:"headerAuth"`
-	EnableSQLCache bool   `json:"enableSqlCache"`
-	Replace        bool   `json:"replace"`
+	SteveRef                     string   `json:"steveRef"`
+	K3SVersion                   string   `json:"k3sVersion"`
+	KeepCluster                  bool     `json:"keepCluster"`
+	HTTPPort                     int      `json:"httpPort"`
+	HTTPSPort                    int      `json:"httpsPort"`
+	HeaderAuth                   bool     `json:"headerAuth"`
+	EnableSQLCache               bool     `json:"enableSqlCache"`
+	EnableMetrics                bool     `json:"enableMetrics"`
+	MetricsUpdateIntervalSeconds int      `json:"metricsUpdateIntervalSeconds"`
+	ExtraEnv                     []string `json:"extraEnv"`
+	ExtraArgs                    []string `json:"extraArgs"`
+	Replace                      bool     `json:"replace"`
 }
 
 func (p *localControlPanel) handleSteveLabState(w http.ResponseWriter, r *http.Request) {
@@ -524,7 +532,7 @@ func inspectSteveRefDetails(ref string) steveRefDetails {
 	details.KubernetesModuleVersion = version
 	if minor := kubernetesMinorFromModule(version); minor != "" {
 		details.RecommendedMinor = "1." + minor
-		details.RecommendedK3SVersions = k3sVersionsForMinor(minor)
+		details.RecommendedK3SVersions = k3sVersionsForModuleVersion(version)
 	}
 	return details
 }
@@ -547,6 +555,14 @@ func kubernetesMinorFromModule(version string) string {
 	return matches[1]
 }
 
+func kubernetesPatchFromModule(version string) string {
+	matches := regexp.MustCompile(`v0\.[0-9]+\.([0-9]+)`).FindStringSubmatch(version)
+	if len(matches) != 2 {
+		return "0"
+	}
+	return matches[1]
+}
+
 func defaultK3SVersions() []string {
 	return []string{
 		"v1.33.5-k3s1",
@@ -555,6 +571,20 @@ func defaultK3SVersions() []string {
 		"v1.30.14-k3s1",
 		"v1.29.15-k3s1",
 	}
+}
+
+func k3sVersionsForModuleVersion(moduleVersion string) []string {
+	minor := kubernetesMinorFromModule(moduleVersion)
+	if minor == "" {
+		return defaultK3SVersions()
+	}
+	versions := k3sVersionsForMinor(minor)
+	if len(versions) > 0 && strings.HasPrefix(versions[0], "v1."+minor+".") {
+		return versions
+	}
+	patch := kubernetesPatchFromModule(moduleVersion)
+	candidate := fmt.Sprintf("v1.%s.%s-k3s1", minor, patch)
+	return append([]string{candidate}, removeString(defaultK3SVersions(), candidate)...)
 }
 
 func k3sVersionsForMinor(minor string) []string {
@@ -594,6 +624,50 @@ func k3sImage(value string) string {
 	return "rancher/k3s:" + value
 }
 
+func normalizeSteveLabMetricsInterval(value int) int {
+	if value <= 0 {
+		return 15
+	}
+	return value
+}
+
+func normalizeSteveLabEnv(values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if strings.ContainsRune(value, '\x00') {
+			return nil, fmt.Errorf("Steve env var contains a null byte")
+		}
+		key, _, ok := strings.Cut(value, "=")
+		if !ok {
+			return nil, fmt.Errorf("Steve env var %q must use KEY=value format", value)
+		}
+		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(key) {
+			return nil, fmt.Errorf("Steve env var %q has an invalid name", key)
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
+func normalizeSteveLabArgs(values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if strings.ContainsRune(value, '\x00') || strings.ContainsAny(value, "\r\n") {
+			return nil, fmt.Errorf("Steve argument %q contains unsupported control characters", value)
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
 func (p *localControlPanel) startSteveLab(req steveLabStartRequest) error {
 	preflight := collectSteveLabPreflight()
 	if !preflight.Ready {
@@ -609,6 +683,18 @@ func (p *localControlPanel) startSteveLab(req steveLabStartRequest) error {
 	k3sVersion := normalizeSteveLabK3SVersion(req.K3SVersion)
 	if k3sVersion == "" {
 		k3sVersion = defaultK3SVersions()[0]
+	}
+	extraEnv, err := normalizeSteveLabEnv(req.ExtraEnv)
+	if err != nil {
+		return err
+	}
+	extraArgs, err := normalizeSteveLabArgs(req.ExtraArgs)
+	if err != nil {
+		return err
+	}
+	metricsInterval := 0
+	if req.EnableMetrics {
+		metricsInterval = normalizeSteveLabMetricsInterval(req.MetricsUpdateIntervalSeconds)
 	}
 
 	if active := p.activeSteveLabRunRecords(); len(active) > 0 {
@@ -643,20 +729,24 @@ func (p *localControlPanel) startSteveLab(req steveLabStartRequest) error {
 		return err
 	}
 	record := steveLabRunRecord{
-		RunID:       runID,
-		Status:      "running",
-		SteveRef:    ref,
-		K3SVersion:  k3sVersion,
-		ClusterName: "rancher-runway-" + runID,
-		Kubeconfig:  filepath.Join(runDir, "kubeconfig.yaml"),
-		RunDir:      runDir,
-		SourceDir:   filepath.Join(runDir, "steve"),
-		HTTPSPort:   httpsPort,
-		HTTPSURL:    fmt.Sprintf("https://127.0.0.1:%d", httpsPort),
-		LogPath:     filepath.Join(runDir, "steve.log"),
-		KeepCluster: true,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		RunID:                        runID,
+		Status:                       "running",
+		SteveRef:                     ref,
+		K3SVersion:                   k3sVersion,
+		ClusterName:                  "rancher-runway-" + runID,
+		Kubeconfig:                   filepath.Join(runDir, "kubeconfig.yaml"),
+		RunDir:                       runDir,
+		SourceDir:                    filepath.Join(runDir, "steve"),
+		HTTPSPort:                    httpsPort,
+		HTTPSURL:                     fmt.Sprintf("https://127.0.0.1:%d", httpsPort),
+		LogPath:                      filepath.Join(runDir, "steve.log"),
+		KeepCluster:                  true,
+		EnableMetrics:                req.EnableMetrics,
+		MetricsUpdateIntervalSeconds: metricsInterval,
+		ExtraEnv:                     extraEnv,
+		ExtraArgs:                    extraArgs,
+		CreatedAt:                    now,
+		UpdatedAt:                    now,
 	}
 	op := p.operationLocked(panelOperationSteveLab)
 	op.Running = true
@@ -671,6 +761,15 @@ func (p *localControlPanel) startSteveLab(req steveLabStartRequest) error {
 		fmt.Sprintf("[steve-lab] Run %s", runID),
 		fmt.Sprintf("[steve-lab] Steve ref: %s", ref),
 		fmt.Sprintf("[steve-lab] k3d image: %s", k3sImage(k3sVersion)),
+	}
+	if record.EnableMetrics {
+		op.Output = append(op.Output, fmt.Sprintf("[steve-lab] Prometheus metrics enabled with %ds update interval", record.MetricsUpdateIntervalSeconds))
+	}
+	if len(record.ExtraEnv) > 0 {
+		op.Output = append(op.Output, fmt.Sprintf("[steve-lab] Custom Steve env vars: %d", len(record.ExtraEnv)))
+	}
+	if len(record.ExtraArgs) > 0 {
+		op.Output = append(op.Output, fmt.Sprintf("[steve-lab] Custom Steve args: %s", strings.Join(record.ExtraArgs, " ")))
 	}
 	p.persistOperationsLocked()
 	if err := p.writeSteveLabRunRecord(record); err != nil {
@@ -720,7 +819,7 @@ func (p *localControlPanel) runSteveLabSteps(record *steveLabRunRecord) error {
 	record.SQLCache = hasSQLCache
 	record.UpdatedAt = time.Now()
 	_ = p.writeSteveLabRunRecord(*record)
-	
+
 	if hasSQLCache {
 		p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Detected SQL cache support in Steve version")
 	} else {
@@ -931,15 +1030,7 @@ func (p *localControlPanel) startSteveEndpoint(record *steveLabRunRecord) error 
 	if err != nil {
 		return err
 	}
-	args := []string{
-		"run", "main.go",
-		"--kubeconfig", record.Kubeconfig,
-		"--http-listen-port", fmt.Sprintf("%d", record.HTTPPort),
-		"--https-listen-port", fmt.Sprintf("%d", record.HTTPSPort),
-	}
-	if record.SQLCache {
-		args = append(args, "--sql-cache")
-	}
+	args := steveEndpointArgs(record)
 	p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] $ go "+strings.Join(args, " "))
 	logFile, err := os.OpenFile(record.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -947,10 +1038,7 @@ func (p *localControlPanel) startSteveEndpoint(record *steveLabRunRecord) error 
 	}
 	cmd := exec.Command(goPath, args...)
 	cmd.Dir = record.SourceDir
-	cmd.Env = localToolEnv([]string{
-		"CGO_ENABLED=0",
-		"KUBECONFIG=" + record.Kubeconfig,
-	})
+	cmd.Env = localToolEnv(steveEndpointEnv(record))
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = panelCommandSysProcAttr()
@@ -974,6 +1062,38 @@ func (p *localControlPanel) startSteveEndpoint(record *steveLabRunRecord) error 
 	_ = p.writeSteveLabRunRecord(*record)
 	p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] HTTPS endpoint "+record.HTTPSURL)
 	return nil
+}
+
+func steveEndpointArgs(record *steveLabRunRecord) []string {
+	args := []string{
+		"run", "main.go",
+		"--kubeconfig", record.Kubeconfig,
+		"--http-listen-port", fmt.Sprintf("%d", record.HTTPPort),
+		"--https-listen-port", fmt.Sprintf("%d", record.HTTPSPort),
+	}
+	if record.SQLCache {
+		args = append(args, "--sql-cache")
+	}
+	if record.EnableMetrics {
+		args = append(args, "--enable-metrics")
+		if record.MetricsUpdateIntervalSeconds > 0 && record.MetricsUpdateIntervalSeconds != 15 {
+			args = append(args, fmt.Sprintf("--metrics-update-interval-seconds=%d", record.MetricsUpdateIntervalSeconds))
+		}
+	}
+	args = append(args, record.ExtraArgs...)
+	return args
+}
+
+func steveEndpointEnv(record *steveLabRunRecord) []string {
+	env := []string{
+		"CGO_ENABLED=0",
+		"KUBECONFIG=" + record.Kubeconfig,
+	}
+	if record.EnableMetrics {
+		env = append(env, "CATTLE_PROMETHEUS_METRICS=true")
+	}
+	env = append(env, record.ExtraEnv...)
+	return env
 }
 
 func (p *localControlPanel) watchSteveEndpointProcess(record steveLabRunRecord, cmd *exec.Cmd, logFile *os.File) {

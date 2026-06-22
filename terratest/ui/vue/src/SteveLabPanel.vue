@@ -310,6 +310,73 @@
       </section>
     </div>
 
+    <!-- Runtime overrides panel -->
+    <section class="rounded-2xl border border-zinc-200/80 bg-zinc-50/50 p-5 shadow-2xs dark:border-white/10 dark:bg-white/[0.02]">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714a2.25 2.25 0 00.659 1.591L19 14.5m-4.75-11.396c.251.023.501.05.75.082M19 14.5l-3.243 3.243a6 6 0 01-8.486 0L5 14.5m14 0l1.5 1.5M5 14.5L3.5 16" />
+            </svg>
+            <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-50">Steve Runtime Overrides</h3>
+          </div>
+          <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Enable Prometheus metrics or add custom launch-time env vars and args.</p>
+        </div>
+        <div v-if="enableMetrics" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
+          CATTLE_PROMETHEUS_METRICS=true
+        </div>
+      </div>
+
+      <div class="mt-4 grid gap-4 lg:grid-cols-[minmax(0,0.75fr)_minmax(0,1fr)_minmax(0,1fr)]">
+        <div class="grid gap-3 rounded-xl border border-zinc-200 bg-white p-3.5 dark:border-white/10 dark:bg-zinc-900/50">
+          <label class="flex min-h-11 cursor-pointer items-center justify-between gap-3 text-sm font-semibold text-zinc-700 dark:text-zinc-200">
+            <span>Prometheus metrics</span>
+            <input
+              v-model="enableMetrics"
+              type="checkbox"
+              :disabled="inputsDisabled"
+              class="h-4 w-4 rounded border-zinc-300 text-emerald-500 focus:ring-emerald-500 disabled:opacity-50"
+            />
+          </label>
+          <label class="grid gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+            <span>Update interval seconds</span>
+            <input
+              v-model.number="metricsUpdateInterval"
+              type="number"
+              min="1"
+              max="3600"
+              :disabled="inputsDisabled || !enableMetrics"
+              class="w-full rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-zinc-900 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 disabled:opacity-60 disabled:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-white dark:disabled:bg-zinc-900/50"
+            />
+          </label>
+        </div>
+
+        <label class="grid gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+          <span>Additional env vars</span>
+          <textarea
+            v-model="extraEnv"
+            rows="4"
+            spellcheck="false"
+            :disabled="inputsDisabled"
+            placeholder="KEY=value"
+            class="min-h-24 w-full resize-y rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 font-mono text-xs font-semibold text-zinc-900 outline-none placeholder:text-zinc-400 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 disabled:opacity-60 disabled:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-white dark:placeholder:text-zinc-500 dark:disabled:bg-zinc-900/50"
+          ></textarea>
+        </label>
+
+        <label class="grid gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+          <span>Additional Steve args</span>
+          <textarea
+            v-model="extraArgs"
+            rows="4"
+            spellcheck="false"
+            :disabled="inputsDisabled"
+            placeholder="--flag --another-flag=value"
+            class="min-h-24 w-full resize-y rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 font-mono text-xs font-semibold text-zinc-900 outline-none placeholder:text-zinc-400 focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 disabled:opacity-60 disabled:bg-zinc-50 dark:border-white/10 dark:bg-zinc-900 dark:text-white dark:placeholder:text-zinc-500 dark:disabled:bg-zinc-900/50"
+          ></textarea>
+        </label>
+      </div>
+    </section>
+
     <!-- Terminal Console Output panel -->
     <section id="terminalConsole" class="overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 shadow-md">
       <!-- Terminal Header -->
@@ -465,6 +532,12 @@
               </span>
               <span v-if="run.sqlCache" class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300 border border-emerald-500/20" title="SQLite Object Cache enabled">
                 Cache
+              </span>
+              <span v-if="run.enableMetrics" class="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-[9px] font-bold text-sky-700 dark:bg-sky-500/10 dark:text-sky-300 border border-sky-500/20" :title="`Prometheus metrics every ${run.metricsUpdateIntervalSeconds || 15}s`">
+                Metrics
+              </span>
+              <span v-if="runtimeOverrideCount(run)" class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-bold text-amber-700 dark:bg-amber-500/10 dark:text-amber-300 border border-amber-500/20" :title="runtimeOverrideTitle(run)">
+                Overrides
               </span>
             </div>
           </div>
@@ -769,6 +842,10 @@ const selectedTag = ref("");
 const steveRef = ref("");
 const k3sVersion = ref("");
 const httpsPort = ref("");
+const enableMetrics = ref(false);
+const metricsUpdateInterval = ref(15);
+const extraEnv = ref("");
+const extraArgs = ref("");
 const versionsLoading = ref(false);
 const notice = ref("");
 const noticeKind = ref("info");
@@ -899,6 +976,17 @@ const setNotice = (message, kind = "info") => {
   noticeKind.value = kind;
 };
 
+const parsedExtraEnv = () => extraEnv.value
+  .split(/\r?\n/)
+  .map(line => line.trim())
+  .filter(Boolean);
+
+const parsedExtraArgs = () => extraArgs.value
+  .trim()
+  .split(/\s+/)
+  .map(arg => arg.trim())
+  .filter(Boolean);
+
 const apiFetch = async (path, options = {}) => {
   const response = await fetch(path, {
     ...options,
@@ -971,6 +1059,10 @@ const startRun = async () => {
         keepCluster: true,
         httpsPort: Number(httpsPort.value || 0),
         headerAuth: true,
+        enableMetrics: Boolean(enableMetrics.value),
+        metricsUpdateIntervalSeconds: Number(metricsUpdateInterval.value || 15),
+        extraEnv: parsedExtraEnv(),
+        extraArgs: parsedExtraArgs(),
         replace: replacing,
       }),
     });
@@ -1157,6 +1249,17 @@ const compactPath = value => {
 };
 
 const timeLabel = value => value ? new Date(value).toLocaleString() : "";
+
+const runtimeOverrideCount = run => (
+  (Array.isArray(run?.extraEnv) ? run.extraEnv.length : 0) +
+  (Array.isArray(run?.extraArgs) ? run.extraArgs.length : 0)
+);
+
+const runtimeOverrideTitle = run => {
+  const envCount = Array.isArray(run?.extraEnv) ? run.extraEnv.length : 0;
+  const argCount = Array.isArray(run?.extraArgs) ? run.extraArgs.length : 0;
+  return `${envCount} env var${envCount === 1 ? "" : "s"}, ${argCount} arg${argCount === 1 ? "" : "s"}`;
+};
 
 const openingSqliteRunId = ref("");
 const vacuumingRunId = ref("");

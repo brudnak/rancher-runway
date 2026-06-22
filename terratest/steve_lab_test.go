@@ -3,6 +3,7 @@ package test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -26,6 +27,15 @@ require (
 	}
 	if got := k3sVersionsForMinor("33"); len(got) == 0 || got[0] != "v1.33.5-k3s1" {
 		t.Fatalf("expected 1.33 k3s recommendation first, got %#v", got)
+	}
+}
+
+func TestSteveLabK3SRecommendationSynthesizesNewerMinor(t *testing.T) {
+	if got := k3sVersionsForModuleVersion("v0.36.0"); len(got) == 0 || got[0] != "v1.36.0-k3s1" {
+		t.Fatalf("expected synthesized 1.36 k3s recommendation first, got %#v", got)
+	}
+	if got := k3sVersionsForModuleVersion("v0.33.4"); len(got) == 0 || got[0] != "v1.33.5-k3s1" {
+		t.Fatalf("expected known 1.33 k3s recommendation first, got %#v", got)
 	}
 }
 
@@ -125,6 +135,83 @@ func TestSteveLabActiveRunRecordsOnlyIncludeLiveEndpoints(t *testing.T) {
 			t.Fatalf("expected only serving record to be active, got %#v", active)
 		}
 	})
+}
+
+func TestSteveEndpointArgsAndEnvIncludeMetricsOverrides(t *testing.T) {
+	record := &steveLabRunRecord{
+		Kubeconfig:                   "/tmp/steve-kubeconfig.yaml",
+		HTTPSPort:                    6080,
+		SQLCache:                     true,
+		EnableMetrics:                true,
+		MetricsUpdateIntervalSeconds: 7,
+		ExtraEnv:                     []string{"STEVE_EXPERIMENT=enabled"},
+		ExtraArgs:                    []string{"--custom-flag", "--custom-value=on"},
+	}
+
+	wantArgs := []string{
+		"run", "main.go",
+		"--kubeconfig", "/tmp/steve-kubeconfig.yaml",
+		"--http-listen-port", "0",
+		"--https-listen-port", "6080",
+		"--sql-cache",
+		"--enable-metrics",
+		"--metrics-update-interval-seconds=7",
+		"--custom-flag",
+		"--custom-value=on",
+	}
+	if got := steveEndpointArgs(record); !reflect.DeepEqual(got, wantArgs) {
+		t.Fatalf("unexpected Steve args:\nwant %#v\n got %#v", wantArgs, got)
+	}
+
+	wantEnv := []string{
+		"CGO_ENABLED=0",
+		"KUBECONFIG=/tmp/steve-kubeconfig.yaml",
+		"CATTLE_PROMETHEUS_METRICS=true",
+		"STEVE_EXPERIMENT=enabled",
+	}
+	if got := steveEndpointEnv(record); !reflect.DeepEqual(got, wantEnv) {
+		t.Fatalf("unexpected Steve env:\nwant %#v\n got %#v", wantEnv, got)
+	}
+}
+
+func TestSteveEndpointMetricsIntervalDefaultsToFifteenSeconds(t *testing.T) {
+	record := &steveLabRunRecord{EnableMetrics: true}
+	got := steveEndpointArgs(record)
+	if got[len(got)-1] != "--enable-metrics" {
+		t.Fatalf("expected default metrics interval to omit interval flag, got %#v", got)
+	}
+
+	record.MetricsUpdateIntervalSeconds = 10
+	got = steveEndpointArgs(record)
+	if !reflect.DeepEqual(got[len(got)-2:], []string{"--enable-metrics", "--metrics-update-interval-seconds=10"}) {
+		t.Fatalf("expected custom metrics interval, got %#v", got)
+	}
+}
+
+func TestSteveLabRuntimeOverridesValidation(t *testing.T) {
+	env, err := normalizeSteveLabEnv([]string{"", " CATTLE_PROMETHEUS_METRICS=true ", "INVALID-NAME=true"})
+	if err == nil {
+		t.Fatalf("expected invalid env var name error, got env %#v", env)
+	}
+	env, err = normalizeSteveLabEnv([]string{" CATTLE_PROMETHEUS_METRICS=true "})
+	if err != nil {
+		t.Fatalf("expected env var to validate: %v", err)
+	}
+	if !reflect.DeepEqual(env, []string{"CATTLE_PROMETHEUS_METRICS=true"}) {
+		t.Fatalf("unexpected env normalization: %#v", env)
+	}
+
+	args, err := normalizeSteveLabArgs([]string{" --enable-metrics ", "--bad\narg"})
+	if err == nil {
+		t.Fatalf("expected invalid arg error, got args %#v", args)
+	}
+	args, err = normalizeSteveLabArgs([]string{" --enable-metrics ", "", "--metrics-update-interval-seconds=5"})
+	if err != nil {
+		t.Fatalf("expected args to validate: %v", err)
+	}
+	if !reflect.DeepEqual(args, []string{"--enable-metrics", "--metrics-update-interval-seconds=5"}) {
+		t.Fatalf("unexpected args normalization: %#v", args)
+	}
 }
 
 func TestGitHubTarballTargetStripsTopDirectory(t *testing.T) {
