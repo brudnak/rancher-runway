@@ -339,6 +339,52 @@ func TestResolveLatestReleasePatchFallsBackToGitHubTagsWithoutCache(t *testing.T
 	}
 }
 
+func TestResolveLatestReleasePatchGitHubFallbackSkipsTagsMissingRequiredAssets(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
+	t.Setenv(releaseLookupCachePathEnv, cachePath)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/release-notes/v1.31.X":
+			http.NotFound(w, r)
+		case r.URL.Path == "/repos/rancher/rke2/git/matching-refs/tags/v1.31.":
+			_, _ = w.Write([]byte(`[
+				{"ref":"refs/tags/v1.31.9+rke2r1"},
+				{"ref":"refs/tags/v1.31.10+rke2r1"},
+				{"ref":"refs/tags/v1.31.10+rke2r2"}
+			]`))
+		case strings.HasSuffix(r.URL.Path, "/repos/rancher/rke2/releases/tags/v1.31.10+rke2r2"):
+			_, _ = w.Write([]byte(`{"assets":[]}`))
+		case strings.HasSuffix(r.URL.Path, "/repos/rancher/rke2/releases/tags/v1.31.10+rke2r1"):
+			_, _ = w.Write([]byte(`{"assets":[{"name":"rke2-images.linux-amd64.tar.zst"},{"name":"sha256sum-amd64.txt"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/repos/rancher/rke2/releases/tags/v1.31.9+rke2r1"):
+			_, _ = w.Write([]byte(`{"assets":[{"name":"rke2-images.linux-amd64.tar.zst"},{"name":"sha256sum-amd64.txt"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	got, err := resolveLatestCachedReleasePatch(releaseProductConfig{
+		ProductName:       "RKE2",
+		CacheKey:          "rke2",
+		Pattern:           rke2ReleasePattern(31),
+		GitHubTagRefsURL:  server.URL + "/repos/rancher/rke2/git/matching-refs/tags/v1.31.",
+		GitHubBuildPrefix: "+rke2",
+		GitHubReleaseURL:  server.URL + "/repos/rancher/rke2/releases/tags/%s",
+		GitHubAssetNames: []string{
+			"rke2-images.linux-amd64.tar.zst",
+			"sha256sum-amd64.txt",
+		},
+	}, 31, server.URL+"/release-notes/v1.31.X", firstReleaseVersion)
+	if err != nil {
+		t.Fatalf("expected GitHub tag fallback to skip assetless tags, got %v", err)
+	}
+	if got != "v1.31.10+rke2r1" {
+		t.Fatalf("expected latest RKE2 tag with required assets, got %q", got)
+	}
+}
+
 func TestResolveLatestReleasePatchReturnsHelpfulErrorWithoutCache(t *testing.T) {
 	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
 	t.Setenv(releaseLookupCachePathEnv, cachePath)

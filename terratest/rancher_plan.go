@@ -1115,6 +1115,11 @@ func resolveLatestRKE2Patch(highestMinor int) (string, error) {
 		Pattern:           regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+rke2r\d+`, highestMinor)),
 		GitHubTagRefsURL:  fmt.Sprintf("https://api.github.com/repos/rancher/rke2/git/matching-refs/tags/v1.%d.", highestMinor),
 		GitHubBuildPrefix: "+rke2",
+		GitHubReleaseURL:  "https://api.github.com/repos/rancher/rke2/releases/tags/%s",
+		GitHubAssetNames: []string{
+			"rke2-images.linux-amd64.tar.zst",
+			"sha256sum-amd64.txt",
+		},
 	}
 	return resolveLatestCachedReleasePatch(config, highestMinor, releaseNotesURL, firstReleaseVersion)
 }

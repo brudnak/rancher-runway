@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,6 +54,8 @@ type releaseProductConfig struct {
 	Pattern           *regexp.Regexp
 	GitHubTagRefsURL  string
 	GitHubBuildPrefix string
+	GitHubReleaseURL  string
+	GitHubAssetNames  []string
 }
 
 type httpStatusError struct {
@@ -62,6 +65,12 @@ type httpStatusError struct {
 
 type githubTagRef struct {
 	Ref string `json:"ref"`
+}
+
+type githubRelease struct {
+	Assets []struct {
+		Name string `json:"name"`
+	} `json:"assets"`
 }
 
 func (e httpStatusError) Error() string {
@@ -325,12 +334,61 @@ func resolveLatestGitHubTagRelease(config releaseProductConfig, highestMinor int
 	if len(versions) == 0 {
 		return "", fmt.Errorf("could not find any %s v1.%d patch tags in %s", config.ProductName, highestMinor, config.GitHubTagRefsURL)
 	}
+	if len(config.GitHubAssetNames) > 0 {
+		versions, err = githubTagReleasesWithAssets(config, versions)
+		if err != nil {
+			return "", err
+		}
+		if len(versions) == 0 {
+			return "", fmt.Errorf("could not find any %s v1.%d patch tags with required assets %s", config.ProductName, highestMinor, strings.Join(config.GitHubAssetNames, ", "))
+		}
+	}
 	latest, err := highestSemverReleaseVersion(versions, config.GitHubBuildPrefix)
 	if err != nil {
 		return "", fmt.Errorf("could not select a %s v1.%d patch release from GitHub tags: %w", config.ProductName, highestMinor, err)
 	}
 	updateReleaseCache(config, highestMinor, config.GitHubTagRefsURL, latest, versions)
 	return latest, nil
+}
+
+func githubTagReleasesWithAssets(config releaseProductConfig, versions []string) ([]string, error) {
+	if strings.TrimSpace(config.GitHubReleaseURL) == "" {
+		return nil, fmt.Errorf("%s GitHub release asset validation requires GitHubReleaseURL", config.ProductName)
+	}
+	filtered := make([]string, 0, len(versions))
+	for _, version := range versions {
+		releaseURL := fmt.Sprintf(config.GitHubReleaseURL, url.PathEscape(version))
+		body, err := fetchURLBody(releaseURL)
+		if err != nil {
+			log.Printf("[resolver] Warning: skipping %s tag %s because release metadata lookup failed: %v", config.ProductName, version, err)
+			continue
+		}
+		var release githubRelease
+		if err := json.Unmarshal([]byte(body), &release); err != nil {
+			log.Printf("[resolver] Warning: skipping %s tag %s because release metadata could not be parsed: %v", config.ProductName, version, err)
+			continue
+		}
+		if githubReleaseHasAssets(release, config.GitHubAssetNames) {
+			filtered = append(filtered, version)
+		}
+	}
+	return filtered, nil
+}
+
+func githubReleaseHasAssets(release githubRelease, requiredNames []string) bool {
+	if len(requiredNames) == 0 {
+		return true
+	}
+	assets := map[string]bool{}
+	for _, asset := range release.Assets {
+		assets[asset.Name] = true
+	}
+	for _, name := range requiredNames {
+		if !assets[name] {
+			return false
+		}
+	}
+	return true
 }
 
 func releaseLookupError(productName, url string, liveErr error, cachePath string, cacheErr error) error {
