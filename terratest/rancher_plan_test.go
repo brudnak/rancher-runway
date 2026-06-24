@@ -293,6 +293,52 @@ func TestResolveLatestReleasePatchFallsBackToValidatedCacheOn404(t *testing.T) {
 	}
 }
 
+func TestResolveLatestReleasePatchFallsBackToGitHubTagsWithoutCache(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
+	t.Setenv(releaseLookupCachePathEnv, cachePath)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release-notes/v1.31.X":
+			http.NotFound(w, r)
+		case "/repos/rancher/rke2/git/matching-refs/tags/v1.31.":
+			_, _ = w.Write([]byte(`[
+				{"ref":"refs/tags/v1.31.8+rke2r1"},
+				{"ref":"refs/tags/v1.31.10+rke2r1"},
+				{"ref":"refs/tags/v1.31.10+rke2r2"},
+				{"ref":"refs/tags/v1.32.1+rke2r1"}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	got, err := resolveLatestCachedReleasePatch(releaseProductConfig{
+		ProductName:       "RKE2",
+		CacheKey:          "rke2",
+		Pattern:           rke2ReleasePattern(31),
+		GitHubTagRefsURL:  server.URL + "/repos/rancher/rke2/git/matching-refs/tags/v1.31.",
+		GitHubBuildPrefix: "+rke2",
+	}, 31, server.URL+"/release-notes/v1.31.X", firstReleaseVersion)
+	if err != nil {
+		t.Fatalf("expected GitHub tag fallback to be used, got %v", err)
+	}
+	if got != "v1.31.10+rke2r2" {
+		t.Fatalf("expected highest RKE2 tag fallback release, got %q", got)
+	}
+
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		t.Fatalf("expected fallback lookup to write cache: %v", err)
+	}
+	for _, want := range []string{`"rke2"`, `"v1.31"`, `"v1.31.10+rke2r2"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected cache to contain %s, got:\n%s", want, string(data))
+		}
+	}
+}
+
 func TestResolveLatestReleasePatchReturnsHelpfulErrorWithoutCache(t *testing.T) {
 	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
 	t.Setenv(releaseLookupCachePathEnv, cachePath)

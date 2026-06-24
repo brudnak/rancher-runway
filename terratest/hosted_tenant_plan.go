@@ -200,9 +200,11 @@ func resolveHighestSupportedHostedK3SMinor(supportMatrixURL string) (int, string
 func resolveLatestHostedK3SPatch(highestMinor int) (string, error) {
 	releaseNotesURL := fmt.Sprintf("https://docs.k3s.io/release-notes/v1.%d.X", highestMinor)
 	config := releaseProductConfig{
-		ProductName: "K3s",
-		CacheKey:    "k3s",
-		Pattern:     regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+k3s\d+`, highestMinor)),
+		ProductName:       "K3s",
+		CacheKey:          "k3s",
+		Pattern:           regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+k3s\d+`, highestMinor)),
+		GitHubTagRefsURL:  fmt.Sprintf("https://api.github.com/repos/k3s-io/k3s/git/matching-refs/tags/v1.%d.", highestMinor),
+		GitHubBuildPrefix: "+k3s",
 	}
 	return resolveLatestCachedReleasePatch(config, highestMinor, releaseNotesURL, func(matches []string) (string, error) {
 		return highestSemverReleaseVersion(matches, "+k3s")

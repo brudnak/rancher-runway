@@ -48,14 +48,20 @@ type supportRangeCacheEntry struct {
 }
 
 type releaseProductConfig struct {
-	ProductName string
-	CacheKey    string
-	Pattern     *regexp.Regexp
+	ProductName       string
+	CacheKey          string
+	Pattern           *regexp.Regexp
+	GitHubTagRefsURL  string
+	GitHubBuildPrefix string
 }
 
 type httpStatusError struct {
 	URL        string
 	StatusCode int
+}
+
+type githubTagRef struct {
+	Ref string `json:"ref"`
 }
 
 func (e httpStatusError) Error() string {
@@ -288,7 +294,43 @@ func resolveLatestCachedReleasePatch(config releaseProductConfig, highestMinor i
 		log.Printf("[resolver] Warning: using cached %s release lookup for v1.%d from %s because live docs lookup failed: %v", config.ProductName, highestMinor, cachePath, err)
 		return entry.LatestVersion, nil
 	}
+	if config.GitHubTagRefsURL != "" {
+		latest, fallbackErr := resolveLatestGitHubTagRelease(config, highestMinor)
+		if fallbackErr == nil {
+			log.Printf("[resolver] Warning: using %s GitHub tags for v1.%d because docs lookup failed and no cached lookup was available: %v", config.ProductName, highestMinor, err)
+			return latest, nil
+		}
+		log.Printf("[resolver] Warning: %s GitHub tag fallback failed for v1.%d after docs lookup failed: %v", config.ProductName, highestMinor, fallbackErr)
+	}
 	return "", releaseLookupError(config.ProductName, releaseNotesURL, err, cachePath, cacheErr)
+}
+
+func resolveLatestGitHubTagRelease(config releaseProductConfig, highestMinor int) (string, error) {
+	body, err := fetchURLBody(config.GitHubTagRefsURL)
+	if err != nil {
+		return "", err
+	}
+	var refs []githubTagRef
+	if err := json.Unmarshal([]byte(body), &refs); err != nil {
+		return "", fmt.Errorf("failed to parse GitHub tag refs from %s: %w", config.GitHubTagRefsURL, err)
+	}
+	versions := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		version := strings.TrimPrefix(strings.TrimSpace(ref.Ref), "refs/tags/")
+		if config.Pattern.MatchString(version) {
+			versions = append(versions, version)
+		}
+	}
+	versions = uniqueStrings(versions)
+	if len(versions) == 0 {
+		return "", fmt.Errorf("could not find any %s v1.%d patch tags in %s", config.ProductName, highestMinor, config.GitHubTagRefsURL)
+	}
+	latest, err := highestSemverReleaseVersion(versions, config.GitHubBuildPrefix)
+	if err != nil {
+		return "", fmt.Errorf("could not select a %s v1.%d patch release from GitHub tags: %w", config.ProductName, highestMinor, err)
+	}
+	updateReleaseCache(config, highestMinor, config.GitHubTagRefsURL, latest, versions)
+	return latest, nil
 }
 
 func releaseLookupError(productName, url string, liveErr error, cachePath string, cacheErr error) error {

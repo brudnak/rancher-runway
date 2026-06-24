@@ -1110,9 +1110,11 @@ func resolveHighestSupportedRKE2Minor(supportMatrixURL string) (int, string, err
 func resolveLatestRKE2Patch(highestMinor int) (string, error) {
 	releaseNotesURL := fmt.Sprintf("https://docs.rke2.io/release-notes/v1.%d.X", highestMinor)
 	config := releaseProductConfig{
-		ProductName: "RKE2",
-		CacheKey:    "rke2",
-		Pattern:     regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+rke2r\d+`, highestMinor)),
+		ProductName:       "RKE2",
+		CacheKey:          "rke2",
+		Pattern:           regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+rke2r\d+`, highestMinor)),
+		GitHubTagRefsURL:  fmt.Sprintf("https://api.github.com/repos/rancher/rke2/git/matching-refs/tags/v1.%d.", highestMinor),
+		GitHubBuildPrefix: "+rke2",
 	}
 	return resolveLatestCachedReleasePatch(config, highestMinor, releaseNotesURL, firstReleaseVersion)
 }
