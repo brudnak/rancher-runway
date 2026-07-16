@@ -303,6 +303,39 @@ func TestResolveLatestReleasePatchFallsBackToValidatedCacheOn404(t *testing.T) {
 	}
 }
 
+func TestResolveLatestReleasePatchTriesArchivedReleaseNotes(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
+	t.Setenv(releaseLookupCachePathEnv, cachePath)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release-notes/v1.32.X":
+			http.NotFound(w, r)
+		case "/release-notes-old/v1.32.X":
+			_, _ = w.Write([]byte(`K3s releases v1.32.12+k3s1 and v1.32.13+k3s1`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	config := releaseProductConfig{
+		ProductName:              "K3s",
+		CacheKey:                 "k3s",
+		Pattern:                  regexp.MustCompile(`v1\.32\.\d+\+k3s\d+`),
+		ReleaseNotesFallbackURLs: []string{server.URL + "/release-notes-old/v1.32.X"},
+	}
+	got, err := resolveLatestCachedReleasePatch(config, 32, server.URL+"/release-notes/v1.32.X", func(matches []string) (string, error) {
+		return highestSemverReleaseVersion(matches, "+k3s")
+	})
+	if err != nil {
+		t.Fatalf("expected archived release notes lookup to succeed, got %v", err)
+	}
+	if got != "v1.32.13+k3s1" {
+		t.Fatalf("expected latest archived K3s release, got %q", got)
+	}
+}
+
 func TestResolveLatestReleasePatchFallsBackToGitHubTagsWithoutCache(t *testing.T) {
 	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
 	t.Setenv(releaseLookupCachePathEnv, cachePath)

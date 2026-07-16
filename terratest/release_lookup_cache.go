@@ -49,13 +49,14 @@ type supportRangeCacheEntry struct {
 }
 
 type releaseProductConfig struct {
-	ProductName       string
-	CacheKey          string
-	Pattern           *regexp.Regexp
-	GitHubTagRefsURL  string
-	GitHubBuildPrefix string
-	GitHubReleaseURL  string
-	GitHubAssetNames  []string
+	ProductName              string
+	CacheKey                 string
+	Pattern                  *regexp.Regexp
+	ReleaseNotesFallbackURLs []string
+	GitHubTagRefsURL         string
+	GitHubBuildPrefix        string
+	GitHubReleaseURL         string
+	GitHubAssetNames         []string
 }
 
 type httpStatusError struct {
@@ -284,17 +285,23 @@ func validateSupportRangeCacheEntry(product, supportMatrixURL string, entry supp
 }
 
 func resolveLatestCachedReleasePatch(config releaseProductConfig, highestMinor int, releaseNotesURL string, selectLatest func([]string) (string, error)) (string, error) {
-	body, err := fetchURLBody(releaseNotesURL)
-	if err == nil {
+	releaseNotesURLs := append([]string{releaseNotesURL}, config.ReleaseNotesFallbackURLs...)
+	var err error
+	for _, candidateURL := range releaseNotesURLs {
+		body, fetchErr := fetchURLBody(candidateURL)
+		if fetchErr != nil {
+			err = fetchErr
+			continue
+		}
 		versions := uniqueStrings(config.Pattern.FindAllString(body, -1))
 		if len(versions) == 0 {
-			return "", fmt.Errorf("could not find any %s v1.%d patch releases in %s. The docs page loaded, but its release-note format may have changed.", config.ProductName, highestMinor, releaseNotesURL)
+			return "", fmt.Errorf("could not find any %s v1.%d patch releases in %s. The docs page loaded, but its release-note format may have changed.", config.ProductName, highestMinor, candidateURL)
 		}
 		latest, err := selectLatest(versions)
 		if err != nil {
-			return "", fmt.Errorf("could not select a %s v1.%d patch release from %s: %w", config.ProductName, highestMinor, releaseNotesURL, err)
+			return "", fmt.Errorf("could not select a %s v1.%d patch release from %s: %w", config.ProductName, highestMinor, candidateURL, err)
 		}
-		updateReleaseCache(config, highestMinor, releaseNotesURL, latest, versions)
+		updateReleaseCache(config, highestMinor, candidateURL, latest, versions)
 		return latest, nil
 	}
 
