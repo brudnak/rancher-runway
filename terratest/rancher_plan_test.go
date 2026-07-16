@@ -92,6 +92,16 @@ func TestClassifyRancherVersionAllowsCommitHead(t *testing.T) {
 	}
 }
 
+func TestClassifyRancherVersionAllowsRCSServerBuild(t *testing.T) {
+	buildType, minorLine, err := classifyRancherVersion("2.15.0-rcs-9933.2")
+	if err != nil {
+		t.Fatalf("expected RCS build to be valid, got error: %v", err)
+	}
+	if buildType != "rc" || minorLine != "2.15" {
+		t.Fatalf("expected RCS build classification for 2.15 RC, got buildType=%q minorLine=%q", buildType, minorLine)
+	}
+}
+
 func TestParseHelmSearchResultsSkipsLeadingWarnings(t *testing.T) {
 	output := []byte(`WARNING: Kubernetes configuration file is group-readable. This is insecure.
 WARNING: Kubernetes configuration file is world-readable. This is insecure.
@@ -504,6 +514,16 @@ func TestResolveImageSettingsAllowsMixedReleaseAndAlphaSources(t *testing.T) {
 	plainHeadImage, plainHeadTag, plainHeadAgent, _ := resolveImageSettings("head", "head", "community")
 	if plainHeadImage != "" || plainHeadTag != "head" || plainHeadAgent != "" {
 		t.Fatalf("expected plain head to use Docker Hub head tag without agent override, got image=%q tag=%q agent=%q", plainHeadImage, plainHeadTag, plainHeadAgent)
+	}
+}
+
+func TestResolveImageSettingsUsesStagingServerAndAgentForRCSBuild(t *testing.T) {
+	image, tag, agent, _ := resolveImageSettings("2.15.0-rcs-9933.2", "rc", "community-staging")
+	if image != "stgregistry.suse.com/rancher/rancher" || tag != "v2.15.0-rcs-9933.2" {
+		t.Fatalf("expected staging Rancher image for RCS build, got image=%q tag=%q", image, tag)
+	}
+	if agent != "stgregistry.suse.com/rancher/rancher-agent:v2.15.0-rcs-9933.2" {
+		t.Fatalf("expected staging agent image for RCS build, got %q", agent)
 	}
 }
 

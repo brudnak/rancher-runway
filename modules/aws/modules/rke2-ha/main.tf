@@ -107,7 +107,7 @@ locals {
 resource "aws_instance" "aws_instance" {
   count                  = var.server_count
   ami                    = var.aws_ami
-  instance_type          = "t3a.large"
+  instance_type          = "t3a.2xlarge"
   subnet_id              = var.aws_subnet_id
   vpc_security_group_ids = [var.aws_security_group_id]
   key_name               = var.aws_pem_key_name

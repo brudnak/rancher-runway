@@ -382,6 +382,7 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 	headPattern := regexp.MustCompile(`^\d+\.\d+-head$`)
 	alphaPattern := regexp.MustCompile(`^\d+\.\d+\.\d+-alpha\d+$`)
 	rcPattern := regexp.MustCompile(`^\d+\.\d+\.\d+-rc\d+$`)
+	rcsPattern := regexp.MustCompile(`^\d+\.\d+\.\d+-rcs-\d+\.\d+$`)
 	releasePattern := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 	switch {
@@ -397,6 +398,9 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 		parts := strings.Split(version, "-")
 		return "alpha", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
 	case rcPattern.MatchString(version):
+		parts := strings.Split(version, "-")
+		return "rc", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
+	case rcsPattern.MatchString(version):
 		parts := strings.Split(version, "-")
 		return "rc", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
 	case releasePattern.MatchString(version):
