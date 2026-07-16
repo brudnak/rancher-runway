@@ -1,7 +1,19 @@
 {
   "targets": [
     {
-      "rancher_version": "v2.11.15-alpha3"
+      "rancher_version": "v2.15.0-alpha21"
+    },
+    {
+      "rancher_version": "v2.14.4-alpha3"
+    },
+    {
+      "rancher_version": "v2.13.8-alpha4"
+    },
+    {
+      "rancher_version": "v2.12.12-alpha4"
+    },
+    {
+      "rancher_version": "v2.11.16-alpha3"
     }
   ]
 }
