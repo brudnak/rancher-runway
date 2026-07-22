@@ -27,10 +27,11 @@ const (
 )
 
 var (
-	alphaVersionRE   = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-alpha(\d+)$`)
-	releaseVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
-	webhookBuildRE   = regexp.MustCompile(`(?m)^\s*webhookVersion:\s*["']?([^"'\s]+)["']?\s*$`)
-	errNoRecentAlpha = errors.New("no recent Rancher alpha release found")
+	alphaVersionRE      = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-alpha(\d+)$`)
+	prereleaseVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-(?:alpha|rc)(\d+)$`)
+	releaseVersionRE    = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
+	webhookBuildRE      = regexp.MustCompile(`(?m)^\s*webhookVersion:\s*["']?([^"'\s]+)["']?\s*$`)
+	errNoRecentAlpha    = errors.New("no recent Rancher alpha release found")
 )
 
 type plan struct {
@@ -138,7 +139,7 @@ func main() {
 	var ignoreLedger bool
 	var maxAgeDays int
 
-	flag.StringVar(&targetVersion, "rancher-version", "", "target Rancher alpha tag, for example v2.14.1-alpha6")
+	flag.StringVar(&targetVersion, "rancher-version", "", "target Rancher alpha or RC tag, for example v2.14.1-alpha6 or v2.15.0-rc2")
 	flag.StringVar(&previousVersion, "previous-rancher-version", "", "previous Rancher release tag; resolved automatically when omitted")
 	flag.StringVar(&webhookImage, "webhook-image", "", "candidate webhook image; when omitted, probes staging SUSE, Prime, public SUSE, then Docker Hub for the target webhook tag")
 	flag.StringVar(&signingPolicy, "signing-policy", "auto", "required, report-only, skip, or auto")
@@ -297,7 +298,7 @@ func writeJSON(value interface{}, outputPath string) {
 }
 
 func buildPlan(ctx context.Context, client githubClient, targetVersion, previousVersion, webhookImage, signingPolicyInput, runID, stateKeyRoot, awsBasePrefix string) (plan, error) {
-	target, err := parseAlphaVersion(targetVersion)
+	target, err := parsePrereleaseVersion(targetVersion)
 	if err != nil {
 		return plan{}, err
 	}
@@ -387,7 +388,7 @@ func buildPlan(ctx context.Context, client githubClient, targetVersion, previous
 	} else {
 		skipped = append(skipped, skippedLane{
 			Name:   laneWebhookCandidateOnPrevious,
-			Reason: fmt.Sprintf("Target alpha reuses previous Rancher webhook tag %s; overriding the old Rancher to the same webhook adds no coverage.", targetWebhookTag),
+			Reason: fmt.Sprintf("Target prerelease reuses previous Rancher webhook tag %s; overriding the old Rancher to the same webhook adds no coverage.", targetWebhookTag),
 		})
 	}
 	applyLaneRuntimeFields(lanes, targetVersion, fmt.Sprintf("v%d.%d", target.Major, target.Minor), runID, stateKeyRoot, awsBasePrefix)
@@ -1063,6 +1064,14 @@ func parseAlphaVersion(value string) (semver, error) {
 	match := alphaVersionRE.FindStringSubmatch(strings.TrimSpace(value))
 	if len(match) != 5 {
 		return semver{}, fmt.Errorf("target Rancher version must be an alpha tag like v2.14.1-alpha6")
+	}
+	return parseVersionParts(value, match)
+}
+
+func parsePrereleaseVersion(value string) (semver, error) {
+	match := prereleaseVersionRE.FindStringSubmatch(strings.TrimSpace(value))
+	if len(match) != 5 {
+		return semver{}, fmt.Errorf("target Rancher version must be an alpha or RC tag like v2.14.1-alpha6 or v2.15.0-rc2")
 	}
 	return parseVersionParts(value, match)
 }

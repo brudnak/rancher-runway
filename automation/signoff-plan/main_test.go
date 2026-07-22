@@ -77,6 +77,60 @@ func TestWebhookImageCandidatesPreferStagingForPrereleaseTags(t *testing.T) {
 	}
 }
 
+func TestParsePrereleaseVersionAcceptsAlphaAndRC(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "alpha", value: "v2.14.1-alpha6", want: "v2.14.1-alpha6"},
+		{name: "rc without prefix", value: "2.15.0-rc2", want: "v2.15.0-rc2"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parsePrereleaseVersion(tt.value)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.Raw != tt.want {
+				t.Fatalf("expected %s, got %s", tt.want, got.Raw)
+			}
+		})
+	}
+}
+
+func TestParsePrereleaseVersionRejectsStableRelease(t *testing.T) {
+	_, err := parsePrereleaseVersion("v2.15.0")
+	if err == nil {
+		t.Fatal("expected stable release to be rejected")
+	}
+}
+
+func TestBuildPlanAcceptsRancherRCTag(t *testing.T) {
+	client := fakeGitHubClient(t, map[string]string{
+		"/repos/rancher/rancher/releases":                        `[{"tag_name":"v2.15.0-rc2","prerelease":true},{"tag_name":"v2.14.3","prerelease":false}]`,
+		"/rancher/rancher/v2.15.0-rc2/build.yaml":                `webhookVersion: 110.0.0+up0.11.0-rc.1`,
+		"/rancher/rancher/v2.14.3/build.yaml":                    `webhookVersion: 109.0.3+up0.10.3`,
+		"/stg/v2/rancher/rancher-webhook/manifests/v0.11.0-rc.1": "ok",
+	})
+
+	plan, err := buildPlan(context.Background(), client, "v2.15.0-rc2", "", "stgregistry.suse.com/rancher/rancher-webhook:v0.11.0-rc.1", "auto", "", "rancher-runway/signoff", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if plan.TargetVersion != "v2.15.0-rc2" {
+		t.Fatalf("expected RC target version, got %s", plan.TargetVersion)
+	}
+	if plan.PreviousVersion != "v2.14.3" {
+		t.Fatalf("expected previous release v2.14.3, got %s", plan.PreviousVersion)
+	}
+	if plan.Lanes[2].UpgradeToRancher != "v2.15.0-rc2" {
+		t.Fatalf("expected upgrade lane to target RC, got %#v", plan.Lanes[2])
+	}
+}
+
 func TestBuildPlanAddsOldWebhookLaneWhenWebhookChanged(t *testing.T) {
 	client := fakeGitHubClient(t, map[string]string{
 		"/rancher/rancher/v2.14.1-alpha6/build.yaml":             `webhookVersion: 109.0.1+up0.10.1-rc.5`,
@@ -377,6 +431,7 @@ func TestBuildLaneAWSPrefixKeepsLegacyShapeWithoutOwnerBasePrefix(t *testing.T) 
 func TestLatestAlphasPerLineReturnsNewestRecentAlphaPerLine(t *testing.T) {
 	targets := latestAlphasPerLineFromReleases([]release{
 		{TagName: "v2.14.1-alpha7", Prerelease: true, PublishedAt: "2026-04-24T12:00:00Z"},
+		{TagName: "v2.14.1-rc1", Prerelease: true, PublishedAt: "2026-04-25T12:00:00Z"},
 		{TagName: "v2.13.5-alpha6", Prerelease: true, PublishedAt: "2026-04-24T11:00:00Z"},
 		{TagName: "v2.14.1-alpha6", Prerelease: true, PublishedAt: "2026-04-23T12:00:00Z"},
 		{TagName: "v2.12.9-alpha6", Prerelease: true, PublishedAt: "2026-04-24T10:00:00Z"},

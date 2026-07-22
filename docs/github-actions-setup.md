@@ -1,6 +1,6 @@
 # GitHub Actions Setup
 
-This repo can run disposable Rancher alpha sign-off lanes in GitHub
+This repo can run disposable Rancher alpha and RC sign-off lanes in GitHub
 Actions while still keeping local `tool-config.yml` usage unchanged.
 
 The GitHub Actions path is intentionally environment-gated:
@@ -96,10 +96,10 @@ generated Linode root password before noisy provisioning steps.
 
 After environments, secrets, and variables are configured:
 
-1. Run `Plan Rancher Sign-Off` manually for a known alpha, for example
-   `v2.13.5-alpha5`, with `dispatch_runs=false`.
+1. Run `Plan Rancher Sign-Off` manually for a known alpha or RC prerelease, for
+   example `v2.15.0-rc2`, with `dispatch_runs=false`.
 2. Run `Run Rancher Sign-Off Lane` with:
-   - `rancher_version`: `v2.13.5-alpha5`
+   - `rancher_version`: `v2.15.0-rc2`
    - `lane`: `framework-regression`
    - `keep_infra_on_failure`: `false`
    - `run_rancher_tests`: `false`
@@ -113,8 +113,9 @@ After environments, secrets, and variables are configured:
    disabled for Rancher 2.11 and older and VAI enabled for Rancher 2.12 and
    newer. Downstream webhook lanes run webhook security settings for Rancher
    2.14 and newer when the actual Rancher chart should contain those settings.
-6. For normal use, edit `signoff-targets.json` with the alpha versions you care
-   about and run `Plan Rancher Sign-Off` manually with `dispatch_runs=true`.
+6. For normal use, edit `signoff-targets.json` with the alpha or RC versions you
+   care about and run `Plan Rancher Sign-Off` manually with
+   `dispatch_runs=true`.
 
 ## Target Selection
 
@@ -129,6 +130,9 @@ Use `signoff-targets.json` as the source of truth for manually selected targets:
   ]
 }
 ```
+
+Target versions may be alpha tags such as `v2.14.1-alpha7` or RC tags such as
+`v2.15.0-rc2`.
 
 To keep a target in the file without planning it, set `enabled` to `false`.
 
