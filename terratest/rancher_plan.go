@@ -22,6 +22,7 @@ import (
 const (
 	rancherHelmOperationInstall = "install"
 	rancherHelmOperationUpgrade = "upgrade"
+	rancherHookImageRegistry    = "registry.rancher.com"
 )
 
 var rancherRegistryHTTPClient = http.DefaultClient
@@ -1343,6 +1344,7 @@ func buildAutoHelmCommand(operation, chartRepoAlias, chartVersion, bootstrapPass
 	}
 	if operation == rancherHelmOperationUpgrade {
 		baseSettings = append(baseSettings[:len(baseSettings)-1], append([]string{
+			"  --set preUpgrade.image.registry=" + rancherHookImageRegistry + " \\",
 			"  --wait \\",
 			"  --wait-for-jobs \\",
 			"  --timeout 30m \\",

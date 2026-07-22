@@ -523,6 +523,71 @@ func validateSecretEnvironment() error {
 	return nil
 }
 
+const dockerHubPullTokenURL = "https://auth.docker.io/token?service=registry.docker.io&scope=repository:rancher/rancher:pull"
+
+func prepareDockerHubCredentialsForProvisioning() error {
+	return prepareDockerHubCredentialsForProvisioningWithClient(http.DefaultClient, dockerHubPullTokenURL)
+}
+
+func prepareDockerHubCredentialsForProvisioningWithClient(client *http.Client, tokenURL string) error {
+	username := strings.TrimSpace(os.Getenv("DOCKERHUB_USERNAME"))
+	password := strings.TrimSpace(os.Getenv("DOCKERHUB_PASSWORD"))
+	if username == "" && password == "" {
+		return nil
+	}
+	if username == "" || password == "" {
+		return fmt.Errorf("set both DOCKERHUB_USERNAME and DOCKERHUB_PASSWORD, or leave both unset")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	accepted, err := dockerHubCredentialsAccepted(ctx, client, tokenURL, username, password)
+	if err != nil {
+		return fmt.Errorf("validate Docker Hub credentials before provisioning: %w", err)
+	}
+	if accepted {
+		log.Printf("[preflight] Docker Hub credentials validated successfully")
+		return nil
+	}
+
+	log.Printf("[preflight] WARNING: Docker Hub rejected the configured credentials; falling back to anonymous pulls instead of installing invalid RKE2 registry authentication")
+	if err := os.Unsetenv("DOCKERHUB_USERNAME"); err != nil {
+		return fmt.Errorf("clear rejected DOCKERHUB_USERNAME: %w", err)
+	}
+	if err := os.Unsetenv("DOCKERHUB_PASSWORD"); err != nil {
+		return fmt.Errorf("clear rejected DOCKERHUB_PASSWORD: %w", err)
+	}
+	return nil
+}
+
+func dockerHubCredentialsAccepted(ctx context.Context, client *http.Client, tokenURL, username, password string) (bool, error) {
+	if client == nil {
+		return false, fmt.Errorf("Docker Hub HTTP client is nil")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
+	if err != nil {
+		return false, err
+	}
+	req.SetBasicAuth(username, password)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32*1024))
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return false, nil
+	default:
+		return false, fmt.Errorf("Docker Hub credential check returned HTTP %d", resp.StatusCode)
+	}
+}
+
 func validateWebhookImagePreflight() error {
 	webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE"))
 	if webhookImage == "" {

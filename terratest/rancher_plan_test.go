@@ -904,6 +904,7 @@ func TestBuildAutoHelmCommandUpgradeUsesSameResolvedSettings(t *testing.T) {
 		"--set image.tag=v2.14.1-alpha6",
 		"--set 'extraEnv[0].name=CATTLE_AGENT_IMAGE'",
 		"--set 'extraEnv[0].value=stgregistry.suse.com/rancher/rancher-agent:v2.14.1-alpha6'",
+		"--set preUpgrade.image.registry=registry.rancher.com",
 		"--wait",
 		"--wait-for-jobs",
 		"--timeout 30m",
@@ -919,6 +920,9 @@ func TestBuildAutoHelmCommandUpgradeUsesSameResolvedSettings(t *testing.T) {
 	}
 	if strings.Contains(command, "webhook.global") {
 		t.Fatalf("expected Optimus upgrade command not to include webhook overrides, got:\n%s", command)
+	}
+	if strings.Contains(command, "systemDefaultRegistry=registry.rancher.com") {
+		t.Fatalf("expected only the pre-upgrade hook image registry to be overridden, got:\n%s", command)
 	}
 }
 

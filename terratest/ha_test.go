@@ -71,6 +71,9 @@ func runHARKE2Setup(t *testing.T) {
 	if err := validateSecretEnvironment(); err != nil {
 		t.Fatalf("Secret environment preflight failed before provisioning infrastructure: %v", err)
 	}
+	if err := prepareDockerHubCredentialsForProvisioning(); err != nil {
+		t.Fatalf("Docker Hub credential preflight failed before provisioning infrastructure: %v", err)
+	}
 
 	if err := validatePinnedRKE2InstallerChecksum(resolvedPlans); err != nil {
 		t.Fatalf("RKE2 installer checksum preflight failed before provisioning infrastructure: %v", err)

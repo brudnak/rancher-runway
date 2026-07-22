@@ -53,6 +53,9 @@ func runHostedTenantSetup(t *testing.T) {
 	if err := validateSecretEnvironment(); err != nil {
 		t.Fatalf("Secret environment preflight failed before provisioning infrastructure: %v", err)
 	}
+	if err := prepareDockerHubCredentialsForProvisioning(); err != nil {
+		t.Fatalf("Docker Hub credential preflight failed before provisioning infrastructure: %v", err)
+	}
 
 	for i, plan := range resolvedPlans {
 		if err := writeRancherResolutionArtifact("hosted-tenant-install", i+1, plan); err != nil {

@@ -54,8 +54,8 @@ workflow logs/artifacts for this repository.
 | `AWS_AUTOMATION_ROLE_ARN` | yes | AWS OIDC role used by live sign-off lanes. |
 | `RANCHER_BOOTSTRAP_PASSWORD` | yes | Initial Rancher admin password rendered into generated `tool-config.yml`. |
 | `LINODE_TOKEN` | yes for downstream lanes | Linode token used by Rancher to create the disposable downstream K3s node. |
-| `DOCKERHUB_USERNAME` | optional | Docker Hub auth for RKE2 pulls when needed. |
-| `DOCKERHUB_PASSWORD` | optional | Docker Hub auth for RKE2 pulls when needed. |
+| `DOCKERHUB_USERNAME` | optional | Docker Hub auth for RKE2 pulls when needed. Rejected credentials fall back to anonymous pulls rather than being installed on the nodes. |
+| `DOCKERHUB_PASSWORD` | optional | Docker Hub auth for RKE2 pulls when needed. Rejected credentials fall back to anonymous pulls rather than being installed on the nodes. |
 The workflow masks repository secrets, generated Rancher admin tokens, and the
 generated Linode root password before noisy provisioning steps.
 

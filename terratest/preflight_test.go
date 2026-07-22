@@ -1,6 +1,9 @@
 package test
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -84,6 +87,63 @@ func TestValidateRancherHelmVersion(t *testing.T) {
 				t.Fatalf("validateRancherHelmVersion(%q) failed: %v", test.version, err)
 			}
 		})
+	}
+}
+
+func TestPrepareDockerHubCredentialsForProvisioningKeepsAcceptedCredentials(t *testing.T) {
+	t.Setenv("DOCKERHUB_USERNAME", "valid-user")
+	t.Setenv("DOCKERHUB_PASSWORD", "valid-token")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "valid-user" || password != "valid-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := prepareDockerHubCredentialsForProvisioningWithClient(server.Client(), server.URL); err != nil {
+		t.Fatalf("credential preparation failed: %v", err)
+	}
+	if os.Getenv("DOCKERHUB_USERNAME") != "valid-user" || os.Getenv("DOCKERHUB_PASSWORD") != "valid-token" {
+		t.Fatal("accepted Docker Hub credentials were unexpectedly cleared")
+	}
+}
+
+func TestPrepareDockerHubCredentialsForProvisioningDropsRejectedCredentials(t *testing.T) {
+	t.Setenv("DOCKERHUB_USERNAME", "expired-user")
+	t.Setenv("DOCKERHUB_PASSWORD", "expired-token")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	t.Cleanup(server.Close)
+
+	if err := prepareDockerHubCredentialsForProvisioningWithClient(server.Client(), server.URL); err != nil {
+		t.Fatalf("credential preparation failed: %v", err)
+	}
+	if os.Getenv("DOCKERHUB_USERNAME") != "" || os.Getenv("DOCKERHUB_PASSWORD") != "" {
+		t.Fatal("rejected Docker Hub credentials must be cleared before writing RKE2 registries.yaml")
+	}
+}
+
+func TestPrepareDockerHubCredentialsForProvisioningFailsOnIndeterminateResponse(t *testing.T) {
+	t.Setenv("DOCKERHUB_USERNAME", "valid-user")
+	t.Setenv("DOCKERHUB_PASSWORD", "valid-token")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+	}))
+	t.Cleanup(server.Close)
+
+	err := prepareDockerHubCredentialsForProvisioningWithClient(server.Client(), server.URL)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 429") {
+		t.Fatalf("expected indeterminate Docker Hub response to fail clearly, got %v", err)
+	}
+	if os.Getenv("DOCKERHUB_USERNAME") == "" || os.Getenv("DOCKERHUB_PASSWORD") == "" {
+		t.Fatal("indeterminate validation must not silently clear configured credentials")
 	}
 }
 

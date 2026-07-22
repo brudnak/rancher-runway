@@ -87,6 +87,10 @@ export DOCKERHUB_PASSWORD="optional-dockerhub-password"
 EOF
 ```
 
+Provisioning validates the optional Docker Hub credential pair before writing
+RKE2 registry configuration. Rejected credentials are ignored and the run falls
+back to anonymous Docker Hub pulls.
+
 Then open the profile with your preferred editor and replace the placeholder
 values:
 
