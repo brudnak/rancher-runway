@@ -61,7 +61,7 @@ RANCHER_RUNWAY_KEEP_WAILS_BUILD_APP=1 make setup
 - macOS with Xcode Command Line Tools
 - Go matching the version in [go.mod](go.mod)
 - Node.js with `npm`
-- Terraform, Helm, and kubectl for real lifecycle runs
+- Terraform, Helm 3, and kubectl for real lifecycle runs (CI pins Helm v3.21.3)
 - AWS credentials and Route53 inputs for AWS or Linode DNS provisioning
 - Linode API token for Linode Docker runs
 

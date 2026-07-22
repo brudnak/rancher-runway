@@ -20,7 +20,11 @@ func (p *localControlPanel) collectPanelPreflightForRunSlotStart() systemReadine
 }
 
 func (p *localControlPanel) collectPanelPreflightWithWorkspace(blockOnRunRecords bool) systemReadinessState {
-	readiness := collectSystemReadiness(p.configPath)
+	collector := collectSystemReadiness
+	if p.readinessCollector != nil {
+		collector = p.readinessCollector
+	}
+	readiness := collector(p.configPath)
 	readiness.Items = append(readiness.Items, p.checkSetupConfigState())
 	readiness.Items = append(readiness.Items, p.checkSetupWorkspaceStateForMode(blockOnRunRecords))
 

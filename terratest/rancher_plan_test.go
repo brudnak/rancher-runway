@@ -601,6 +601,27 @@ func TestRancherLatestTagOnlyDoesNotClearCommitHeadImages(t *testing.T) {
 	}
 }
 
+func TestApplyRancherLatestTagOnlySettingsClearsStagingOverridesAndExplanation(t *testing.T) {
+	rancherImage, imageTag, agentImage, explanation, applied := applyRancherLatestTagOnlySettings(
+		"rc",
+		"rancher-latest",
+		"2.15.0-rc2",
+		"stgregistry.suse.com/rancher/rancher",
+		"v2.15.0-rc2",
+		"stgregistry.suse.com/rancher/rancher-agent:v2.15.0-rc2",
+		[]string{"Using staging Rancher images"},
+	)
+	if !applied {
+		t.Fatal("expected rancher-latest RC tag-only settings to apply")
+	}
+	if rancherImage != "" || imageTag != "v2.15.0-rc2" || agentImage != "" {
+		t.Fatalf("unexpected tag-only settings: image=%q tag=%q agent=%q", rancherImage, imageTag, agentImage)
+	}
+	if len(explanation) != 0 {
+		t.Fatalf("expected staging explanation to be cleared, got %#v", explanation)
+	}
+}
+
 func TestValidateResolvedRancherImagesChecksExplicitRancherAndAgentImages(t *testing.T) {
 	var serverURL string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

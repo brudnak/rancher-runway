@@ -174,6 +174,16 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 				return nil, fmt.Errorf("resolve Rancher image settings for %s: %w", requestedVersion, err)
 			}
 		}
+		var rancherLatestTagOnly bool
+		rancherImage, rancherImageTag, agentImage, imageExplanation, rancherLatestTagOnly = applyRancherLatestTagOnlySettings(
+			buildType,
+			chartRepoAlias,
+			requestedVersion,
+			rancherImage,
+			rancherImageTag,
+			agentImage,
+			imageExplanation,
+		)
 		if buildType != "release" && chartVersion == requestedVersion && chartRepoAlias == "rancher-prime" {
 			rancherImage = ""
 			rancherImageTag = ""
@@ -181,7 +191,9 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s, so no Rancher image overrides are needed", chartRepoAlias, chartVersion))
 		}
 		if buildType != "release" && chartVersion == requestedVersion && isExactCommunityPrereleaseChart(chartRepoAlias) {
-			if err := validateResolvedRancherImages(rancherImage, rancherImageTag, agentImage); err != nil {
+			if rancherLatestTagOnly {
+				explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with community image defaults", chartRepoAlias, chartVersion))
+			} else if err := validateResolvedRancherImages(rancherImage, rancherImageTag, agentImage); err != nil {
 				rancherImage = ""
 				agentImage = ""
 				imageExplanation = []string{fmt.Sprintf("Staging Rancher image override was unavailable for %s, using exact community chart/image defaults", requestedVersion)}
@@ -193,9 +205,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		if buildType != "release" && chartVersion == requestedVersion && isExactStagingPrereleaseChart(chartRepoAlias) {
 			explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with explicit staging Rancher image overrides", chartRepoAlias, chartVersion))
 		}
-		if shouldUseRancherLatestTagOnly(buildType, chartRepoAlias, requestedVersion) {
-			rancherImage = ""
-			agentImage = ""
+		if rancherLatestTagOnly {
 			explanation = append(explanation, fmt.Sprintf("Using rancher-latest for this %s build, so only the Rancher image tag is overridden to %s", buildType, rancherImageTag))
 		}
 		if buildType == "release" && chartRepoAlias == "rancher-prime" {
@@ -416,6 +426,21 @@ func isCommitHeadRancherVersion(version string) bool {
 
 func shouldUseRancherLatestTagOnly(buildType, chartRepoAlias, requestedVersion string) bool {
 	return buildType != "release" && chartRepoAlias == "rancher-latest" && !isCommitHeadRancherVersion(requestedVersion)
+}
+
+func applyRancherLatestTagOnlySettings(
+	buildType string,
+	chartRepoAlias string,
+	requestedVersion string,
+	rancherImage string,
+	rancherImageTag string,
+	agentImage string,
+	imageExplanation []string,
+) (string, string, string, []string, bool) {
+	if !shouldUseRancherLatestTagOnly(buildType, chartRepoAlias, requestedVersion) {
+		return rancherImage, rancherImageTag, agentImage, imageExplanation, false
+	}
+	return "", rancherImageTag, "", nil, true
 }
 
 func chooseRancherSourceCandidates(requestedDistro, buildType string) ([]string, string, []string) {

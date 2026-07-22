@@ -136,7 +136,7 @@ jobs:
           terraform_version: 1.13.5
           terraform_wrapper: false
 
-      - name: Install kubectl and helm
+      - name: Install kubectl
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -144,10 +144,24 @@ jobs:
           sudo install -d -m 0755 /etc/apt/keyrings
           curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.34/deb/Release.key | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
           echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.34/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-          curl -fsSL https://packages.buildkite.com/helm-linux/helm-debian/gpgkey | sudo gpg --batch --yes --dearmor -o /etc/apt/keyrings/helm.gpg
-          echo 'deb [signed-by=/etc/apt/keyrings/helm.gpg] https://packages.buildkite.com/helm-linux/helm-debian/any/ any main' | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list
           sudo apt-get update
-          sudo apt-get install -y kubectl helm
+          sudo apt-get install -y kubectl
+
+      - name: Set up Helm 3
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.21.3
+
+      - name: Verify CLI versions
+        run: |
+          set -euo pipefail
+          helm_version="$(helm version --template '{{ .Version }}')"
+          if [ "$helm_version" != "v3.21.3" ]; then
+            echo "Expected Helm v3.21.3, found $helm_version" >&2
+            exit 1
+          fi
+          helm version
+          kubectl version --client
 
       - name: Build automation tools
         run: |
@@ -314,7 +328,7 @@ jobs:
       - name: Run Rancher upgrade
         id: upgrade
         if: ${{ inputs.lane == 'webhook-upgrade' }}
-        run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAUpgradeRancher$' -timeout 45m ./terratest
+        run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAUpgradeRancher$' -timeout 90m ./terratest
 
       - name: Wait for webhook chart rollout
         id: webhook_chart

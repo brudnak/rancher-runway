@@ -35,6 +35,7 @@ type localControlPanel struct {
 	repoRoot             string
 	testDir              string
 	configPath           string
+	readinessCollector   func(string) systemReadinessState
 	starterConfigCreated bool
 	trustedLocalOrigin   bool
 	listener             net.Listener

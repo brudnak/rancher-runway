@@ -272,11 +272,12 @@ func TestIsolatedRunStartStatusAllowsUniqueCustomHostname(t *testing.T) {
 	viper.Set("user.last_name", "Lovelace")
 
 	panel := &localControlPanel{
-		repoRoot:   repoRoot,
-		testDir:    testDir,
-		configPath: configPath,
-		totalHAs:   1,
-		operations: newPanelOperations(),
+		repoRoot:           repoRoot,
+		testDir:            testDir,
+		configPath:         configPath,
+		totalHAs:           1,
+		operations:         newPanelOperations(),
+		readinessCollector: readySystemReadinessForTest,
 	}
 
 	ok, reason := panel.isolatedRunStartStatus()
@@ -327,11 +328,12 @@ func TestIsolatedRunStartStatusBlocksDuplicateCustomHostname(t *testing.T) {
 	viper.Set("user.last_name", "Lovelace")
 
 	panel := &localControlPanel{
-		repoRoot:   repoRoot,
-		testDir:    testDir,
-		configPath: configPath,
-		totalHAs:   1,
-		operations: newPanelOperations(),
+		repoRoot:           repoRoot,
+		testDir:            testDir,
+		configPath:         configPath,
+		totalHAs:           1,
+		operations:         newPanelOperations(),
+		readinessCollector: readySystemReadinessForTest,
 	}
 	panel.writeRunRecord(panelRunRecord{
 		RunID:                "abc12345",
@@ -396,11 +398,12 @@ func TestIsolatedRunStartStatusAllowsCleanGeneratedHostnameConfig(t *testing.T) 
 	viper.Set("user.last_name", "Lovelace")
 
 	panel := &localControlPanel{
-		repoRoot:   repoRoot,
-		testDir:    testDir,
-		configPath: configPath,
-		totalHAs:   1,
-		operations: newPanelOperations(),
+		repoRoot:           repoRoot,
+		testDir:            testDir,
+		configPath:         configPath,
+		totalHAs:           1,
+		operations:         newPanelOperations(),
+		readinessCollector: readySystemReadinessForTest,
 	}
 
 	ok, reason := panel.isolatedRunStartStatus()
@@ -451,11 +454,12 @@ func TestIsolatedRunStartStatusAllowsExistingIsolatedRunRecords(t *testing.T) {
 	viper.Set("user.last_name", "Lovelace")
 
 	panel := &localControlPanel{
-		repoRoot:   repoRoot,
-		testDir:    testDir,
-		configPath: configPath,
-		totalHAs:   1,
-		operations: newPanelOperations(),
+		repoRoot:           repoRoot,
+		testDir:            testDir,
+		configPath:         configPath,
+		totalHAs:           1,
+		operations:         newPanelOperations(),
+		readinessCollector: readySystemReadinessForTest,
 	}
 	panel.createCurrentRunRecord("abc12345", time.Now())
 
@@ -474,6 +478,10 @@ func TestIsolatedRunStartStatusAllowsExistingIsolatedRunRecords(t *testing.T) {
 	if !state.CanStartIsolatedRun {
 		t.Fatalf("expected workspace to allow another isolated run slot, got %q", state.IsolatedRunBlockedReason)
 	}
+}
+
+func readySystemReadinessForTest(string) systemReadinessState {
+	return systemReadinessState{Ready: true, Summary: "Ready for test"}
 }
 
 func TestTerraformBackendConfigFromEnvEmptyUsesLocalState(t *testing.T) {

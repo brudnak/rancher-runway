@@ -61,6 +61,32 @@ func TestKnownRancherHelmRepoURLs(t *testing.T) {
 	}
 }
 
+func TestValidateRancherHelmVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		wantErr bool
+	}{
+		{name: "supported Helm 3", version: "v3.21.3"},
+		{name: "Helm 3 with build metadata", version: "v3.21.3+g1234567"},
+		{name: "unsupported Helm 4", version: "v4.1.3", wantErr: true},
+		{name: "malformed", version: "development", wantErr: true},
+		{name: "empty", version: "", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRancherHelmVersion(test.version)
+			if test.wantErr && err == nil {
+				t.Fatalf("validateRancherHelmVersion(%q) succeeded, want error", test.version)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("validateRancherHelmVersion(%q) failed: %v", test.version, err)
+			}
+		})
+	}
+}
+
 func TestRancherHelmCommandUsesExternalTLS(t *testing.T) {
 	tests := []string{
 		`helm install rancher rancher-latest/rancher --set tls=external`,

@@ -7,6 +7,32 @@ import (
 	"github.com/spf13/viper"
 )
 
+func TestSystemReadinessRequiresHelm3(t *testing.T) {
+	config := loadSystemReadinessConfig()
+	var helmConfig *systemReadinessToolConfig
+	for i := range config.Tools {
+		if config.Tools[i].Command == "helm" {
+			helmConfig = &config.Tools[i]
+			break
+		}
+	}
+	if helmConfig == nil {
+		t.Fatal("system readiness config does not include Helm")
+	}
+	if helmConfig.RequiredMajorVersion != 3 {
+		t.Fatalf("Helm required major = %d, want 3", helmConfig.RequiredMajorVersion)
+	}
+	if helmConfig.RecommendedVersion != "3.21.3" {
+		t.Fatalf("Helm recommended version = %q, want 3.21.3", helmConfig.RecommendedVersion)
+	}
+	if !toolMajorVersionSupported(*helmConfig, "3.21.3") {
+		t.Fatal("expected Helm 3 to satisfy readiness")
+	}
+	if toolMajorVersionSupported(*helmConfig, "4.1.3") {
+		t.Fatal("expected Helm 4 to fail readiness")
+	}
+}
+
 func TestDeploymentSecretReadinessItemsRequireLinodeSecrets(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)

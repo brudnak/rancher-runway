@@ -26,13 +26,14 @@ type systemReadinessConfig struct {
 }
 
 type systemReadinessToolConfig struct {
-	Name               string   `json:"name"`
-	Command            string   `json:"command"`
-	Args               []string `json:"args"`
-	VersionPattern     string   `json:"version_pattern"`
-	JSONVersionKey     string   `json:"json_version_key"`
-	MinimumVersion     string   `json:"minimum_version"`
-	RecommendedVersion string   `json:"recommended_version"`
+	Name                 string   `json:"name"`
+	Command              string   `json:"command"`
+	Args                 []string `json:"args"`
+	VersionPattern       string   `json:"version_pattern"`
+	JSONVersionKey       string   `json:"json_version_key"`
+	MinimumVersion       string   `json:"minimum_version"`
+	RecommendedVersion   string   `json:"recommended_version"`
+	RequiredMajorVersion int      `json:"required_major_version"`
 }
 
 type systemReadinessEnvPairConfig struct {
@@ -148,6 +149,11 @@ func checkSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessIte
 		item.Detail = fmt.Sprintf("%s is installed, but its version could not be read. Recommended %s.", tool.Command, tool.RecommendedVersion)
 		return item
 	}
+	if !toolMajorVersionSupported(tool, version) {
+		item.Status = "error"
+		item.Detail = fmt.Sprintf("Found %s. This repo requires %s major version %d.", version, tool.Name, tool.RequiredMajorVersion)
+		return item
+	}
 
 	if tool.MinimumVersion != "" && compareVersionStrings(version, tool.MinimumVersion) < 0 {
 		item.Status = "warning"
@@ -164,6 +170,10 @@ func checkSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessIte
 	item.Status = "ok"
 	item.Detail = fmt.Sprintf("Found %s.", version)
 	return item
+}
+
+func toolMajorVersionSupported(tool systemReadinessToolConfig, version string) bool {
+	return tool.RequiredMajorVersion == 0 || versionParts(version)[0] == tool.RequiredMajorVersion
 }
 
 func resolveLocalToolPath(command string) (string, error) {

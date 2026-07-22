@@ -21,8 +21,9 @@
       "command": "helm",
       "args": ["version", "--short"],
       "version_pattern": "v?([0-9]+\\.[0-9]+(?:\\.[0-9]+)?)",
-      "minimum_version": "3.14.0",
-      "recommended_version": "4.1.3"
+      "minimum_version": "3.18.0",
+      "recommended_version": "3.21.3",
+      "required_major_version": 3
     },
     {
       "name": "Terraform",

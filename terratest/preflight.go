@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	goversion "github.com/hashicorp/go-version"
 	"github.com/spf13/viper"
 )
 
@@ -26,6 +27,9 @@ func validateLocalToolingPreflight(helmCommands []string) error {
 		if _, err := exec.LookPath(commandName); err != nil {
 			return fmt.Errorf("%s is required locally but was not found in PATH", commandName)
 		}
+	}
+	if err := validateInstalledRancherHelmVersion(); err != nil {
+		return err
 	}
 
 	helmRepoAliases := helmRepoAliasesFromCommands(helmCommands)
@@ -48,6 +52,26 @@ func validateLocalToolingPreflight(helmCommands []string) error {
 	}
 
 	log.Printf("[preflight] Local tooling validated successfully")
+	return nil
+}
+
+func validateInstalledRancherHelmVersion() error {
+	output, err := exec.Command("helm", "version", "--template", "{{.Version}}").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to determine the installed Helm version: %w", err)
+	}
+	return validateRancherHelmVersion(string(output))
+}
+
+func validateRancherHelmVersion(raw string) error {
+	raw = strings.TrimSpace(raw)
+	parsed, err := goversion.NewVersion(strings.TrimPrefix(raw, "v"))
+	if err != nil || raw == "" {
+		return fmt.Errorf("Rancher installs and upgrades require Helm 3; could not parse installed version %q", raw)
+	}
+	if parsed.Segments()[0] != 3 {
+		return fmt.Errorf("Rancher installs and upgrades require Helm 3; found %s", raw)
+	}
 	return nil
 }
 
