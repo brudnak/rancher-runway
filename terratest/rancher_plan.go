@@ -1376,6 +1376,67 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
+type rancherWebhookOverrideValues struct {
+	Global rancherWebhookGlobalValues `json:"global"`
+	Image  rancherWebhookImageValues  `json:"image"`
+}
+
+type rancherWebhookGlobalValues struct {
+	Cattle rancherWebhookCattleValues `json:"cattle"`
+}
+
+type rancherWebhookCattleValues struct {
+	SystemDefaultRegistry string `json:"systemDefaultRegistry"`
+}
+
+type rancherWebhookImageValues struct {
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+}
+
+func rancherHelmCommandWithWebhookImage(command, image string) (string, error) {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return command, nil
+	}
+	if strings.TrimSpace(command) == "" {
+		return "", fmt.Errorf("Rancher Helm command must not be empty")
+	}
+
+	payload, err := rancherWebhookValuesJSON(image)
+	if err != nil {
+		return "", err
+	}
+
+	// Rancher's chart forwards this scalar only to its managed webhook chart.
+	// This overrides an inherited Prime registry without redirecting Rancher or
+	// any other system image.
+	return strings.TrimSpace(command) + " \\\n  --set-literal " + shellQuote("webhook="+payload), nil
+}
+
+func rancherWebhookValuesJSON(image string) (string, error) {
+	registry, repository, tag, err := parseRegistryImage(image)
+	if err != nil {
+		return "", fmt.Errorf("parse Rancher webhook image %q: %w", strings.TrimSpace(image), err)
+	}
+	values := rancherWebhookOverrideValues{
+		Global: rancherWebhookGlobalValues{
+			Cattle: rancherWebhookCattleValues{
+				SystemDefaultRegistry: registry,
+			},
+		},
+		Image: rancherWebhookImageValues{
+			Repository: repository,
+			Tag:        tag,
+		},
+	}
+	payload, err := json.Marshal(values)
+	if err != nil {
+		return "", fmt.Errorf("encode Rancher webhook Helm values: %w", err)
+	}
+	return string(payload), nil
+}
+
 type helmImageSettings struct {
 	clearSystemDefaultRegistry bool
 	rancherImage               string

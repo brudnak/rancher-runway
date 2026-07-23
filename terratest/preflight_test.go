@@ -90,6 +90,15 @@ func TestValidateRancherHelmVersion(t *testing.T) {
 	}
 }
 
+func TestHelmFlagConsumesSetLiteralValue(t *testing.T) {
+	if !helmFlagConsumesValue("--set-literal") {
+		t.Fatal("expected --set-literal to consume the following argument")
+	}
+	if helmFlagConsumesValue("--set-literal=webhook={}") {
+		t.Fatal("expected an inline --set-literal value not to consume another argument")
+	}
+}
+
 func TestPrepareDockerHubCredentialsForProvisioningKeepsAcceptedCredentials(t *testing.T) {
 	t.Setenv("DOCKERHUB_USERNAME", "valid-user")
 	t.Setenv("DOCKERHUB_PASSWORD", "valid-token")

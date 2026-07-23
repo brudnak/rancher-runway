@@ -414,7 +414,7 @@ func helmFlagConsumesValue(flag string) bool {
 		return false
 	}
 	switch flag {
-	case "-n", "--namespace", "-f", "--values", "--version", "--set", "--set-string", "--set-file", "--set-json", "--timeout", "--kube-version", "--kubeconfig", "--registry-config", "--repository-config", "--repository-cache", "--username", "--password":
+	case "-n", "--namespace", "-f", "--values", "--version", "--set", "--set-string", "--set-literal", "--set-file", "--set-json", "--timeout", "--kube-version", "--kubeconfig", "--registry-config", "--repository-config", "--repository-cache", "--username", "--password":
 		return true
 	default:
 		return false

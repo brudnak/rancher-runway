@@ -3,6 +3,7 @@ package test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -67,6 +68,44 @@ func TestSelectLocalWebhookDeploymentErrorsWhenMissing(t *testing.T) {
 	_, err := selectLocalWebhookDeployment([]byte(`{"items":[]}`))
 	if err == nil {
 		t.Fatal("expected missing webhook deployment error")
+	}
+}
+
+func TestWebhookDeploymentImageMatchesExactCandidate(t *testing.T) {
+	target := webhookDeploymentTarget{
+		Namespace:      "cattle-system",
+		DeploymentName: "rancher-webhook",
+		ContainerName:  "rancher-webhook",
+		CurrentImage:   "stgregistry.suse.com/rancher/rancher-webhook:v0.8.9-rc.1",
+	}
+
+	if err := webhookDeploymentImageMatches(target, target.CurrentImage); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWebhookDeploymentImageMatchesRejectsDifferentImage(t *testing.T) {
+	target := webhookDeploymentTarget{
+		Namespace:      "cattle-system",
+		DeploymentName: "rancher-webhook",
+		ContainerName:  "rancher-webhook",
+		CurrentImage:   "registry.rancher.com/rancher/rancher-webhook:v0.8.9-rc.1",
+	}
+	expected := "stgregistry.suse.com/rancher/rancher-webhook:v0.8.9-rc.1"
+
+	err := webhookDeploymentImageMatches(target, expected)
+	if err == nil {
+		t.Fatal("expected a different registry to fail the exact image check")
+	}
+	if !strings.Contains(err.Error(), target.CurrentImage) || !strings.Contains(err.Error(), expected) {
+		t.Fatalf("error %q does not include actual and expected images", err)
+	}
+}
+
+func TestWebhookDeploymentImageMatchesRejectsEmptyExpectedImage(t *testing.T) {
+	err := webhookDeploymentImageMatches(webhookDeploymentTarget{CurrentImage: "example.com/rancher-webhook:v1"}, " ")
+	if err == nil {
+		t.Fatal("expected an empty expected image to fail")
 	}
 }
 

@@ -45,25 +45,37 @@ func TestRenderToolConfigForFreshLane(t *testing.T) {
 	assertContains(t, rendered, `total_has: 1`)
 }
 
-func TestRenderToolConfigKeepsAutoUpgradeLaneOnCommunityDistro(t *testing.T) {
-	cfg := renderConfig{
-		RancherDistro: "auto",
-	}
-	lane := signoffLane{
-		Name:             "webhook-upgrade",
-		InstallRancher:   "v2.14.3",
-		UpgradeToRancher: "v2.15.0-rc2",
+func TestRenderToolConfigPreservesAutoDistroForUpgradeLane(t *testing.T) {
+	tests := []struct {
+		name             string
+		installRancher   string
+		upgradeToRancher string
+	}{
+		{
+			name:             "prime-only 2.12 patch upgrading to prerelease",
+			installRancher:   "v2.12.11",
+			upgradeToRancher: "v2.12.12-alpha7",
+		},
+		{
+			name:             "released 2.14 patch upgrading to rc",
+			installRancher:   "v2.14.3",
+			upgradeToRancher: "v2.15.0-rc2",
+		},
 	}
 
-	rendered := renderToolConfig(cfg, lane)
-	assertContains(t, rendered, `version: "2.14.3"`)
-	assertContains(t, rendered, `distro: "community"`)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := renderConfig{RancherDistro: "auto"}
+			lane := signoffLane{
+				Name:             "webhook-upgrade",
+				InstallRancher:   tt.installRancher,
+				UpgradeToRancher: tt.upgradeToRancher,
+			}
 
-func TestRancherDistroForLanePreservesExplicitSelection(t *testing.T) {
-	lane := signoffLane{UpgradeToRancher: "v2.15.0-rc2"}
-	if got := rancherDistroForLane("prime", lane); got != "prime" {
-		t.Fatalf("explicit distro changed to %q", got)
+			rendered := renderToolConfig(cfg, lane)
+			assertContains(t, rendered, `version: "`+strings.TrimPrefix(tt.installRancher, "v")+`"`)
+			assertContains(t, rendered, `distro: "auto"`)
+		})
 	}
 }
 

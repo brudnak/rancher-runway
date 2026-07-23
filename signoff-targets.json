@@ -4,7 +4,10 @@
       "rancher_version": "v2.15.0-rc2"
     },
     {
-      "rancher_version": "v2.12.12-alpha7"
+      "rancher_version": "v2.12.12-alpha8"
+    },
+    {
+      "rancher_version": "v2.14.4-alpha6"
     }
   ]
 }

@@ -163,6 +163,10 @@ func TestHAWaitWebhookChartVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	expectedImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE"))
+	if expectedImage == "" {
+		t.Fatal("RANCHER_WEBHOOK_IMAGE must be set when waiting for the webhook chart rollout")
+	}
 
 	records, err := readDownstreamOutputRecords()
 	if err != nil {
@@ -186,7 +190,7 @@ func TestHAWaitWebhookChartVersion(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := waitForWebhookChartVersion(instanceNum, "local", "local", kubeconfigPath, expectedVersion, timeout, interval, settleDelay); err != nil {
+			if err := waitForWebhookChartVersion(instanceNum, "local", "local", kubeconfigPath, expectedVersion, expectedImage, timeout, interval, settleDelay); err != nil {
 				errCh <- err
 			}
 		}()
@@ -201,7 +205,7 @@ func TestHAWaitWebhookChartVersion(t *testing.T) {
 				errCh <- err
 				return
 			}
-			if err := waitForWebhookChartVersion(record.HAIndex, "downstream", record.ClusterName, kubeconfigPath, expectedVersion, timeout, interval, settleDelay); err != nil {
+			if err := waitForWebhookChartVersion(record.HAIndex, "downstream", record.ClusterName, kubeconfigPath, expectedVersion, expectedImage, timeout, interval, settleDelay); err != nil {
 				errCh <- err
 			}
 		}()
@@ -295,7 +299,7 @@ func findSignoffPlanPath() (string, error) {
 	return "", fmt.Errorf("could not find signoff-plan.json; checked %s", strings.Join(checked, ", "))
 }
 
-func waitForWebhookChartVersion(instanceNum int, scope, clusterName, kubeconfigPath, expectedVersion string, timeout, interval, settleDelay time.Duration) error {
+func waitForWebhookChartVersion(instanceNum int, scope, clusterName, kubeconfigPath, expectedVersion, expectedImage string, timeout, interval, settleDelay time.Duration) error {
 	start := time.Now()
 	deadline := start.Add(timeout)
 	attempt := 0
@@ -313,6 +317,12 @@ func waitForWebhookChartVersion(instanceNum int, scope, clusterName, kubeconfigP
 				if err != nil {
 					return err
 				}
+				if err := webhookDeploymentImageMatches(target, expectedImage); err != nil {
+					log.Printf("[webhook][ha-%d][%s:%s] Attempt %d after %s: chart version is ready but webhook image has not converged: %v",
+						instanceNum, scope, clusterName, attempt, time.Since(start).Round(time.Second), err)
+					time.Sleep(interval)
+					continue
+				}
 				if err := runKubectlDirect(kubeconfigPath, "rollout", "status", "deployment/"+target.DeploymentName, "-n", target.Namespace, "--timeout=5m"); err != nil {
 					return err
 				}
@@ -321,13 +331,37 @@ func waitForWebhookChartVersion(instanceNum int, scope, clusterName, kubeconfigP
 						instanceNum, scope, clusterName, settleDelay)
 					time.Sleep(settleDelay)
 				}
+				finalTarget, err := discoverWebhookDeployment(kubeconfigPath, "")
+				if err != nil {
+					return err
+				}
+				if err := webhookDeploymentImageMatches(finalTarget, expectedImage); err != nil {
+					return fmt.Errorf("%s cluster %s webhook image changed after rollout: %w", scope, clusterName, err)
+				}
+				log.Printf("[webhook][ha-%d][%s:%s] Webhook chart %s rollout uses expected image %s",
+					instanceNum, scope, clusterName, expectedVersion, expectedImage)
 				return nil
 			}
 		}
 		time.Sleep(interval)
 	}
 
-	return fmt.Errorf("timed out after %s waiting for %s cluster %s webhook chart version %s", timeout, scope, clusterName, expectedVersion)
+	return fmt.Errorf("timed out after %s waiting for %s cluster %s webhook chart version %s with image %s", timeout, scope, clusterName, expectedVersion, expectedImage)
+}
+
+func webhookDeploymentImageMatches(target webhookDeploymentTarget, expectedImage string) error {
+	expectedImage = strings.TrimSpace(expectedImage)
+	if expectedImage == "" {
+		return fmt.Errorf("expected rancher-webhook image is empty")
+	}
+	actualImage := strings.TrimSpace(target.CurrentImage)
+	if actualImage == "" {
+		return fmt.Errorf("%s/%s container %s has an empty image", target.Namespace, target.DeploymentName, target.ContainerName)
+	}
+	if actualImage != expectedImage {
+		return fmt.Errorf("%s/%s container %s image is %q, want exactly %q", target.Namespace, target.DeploymentName, target.ContainerName, actualImage, expectedImage)
+	}
+	return nil
 }
 
 func installedWebhookChartVersion(kubeconfigPath string) (string, error) {

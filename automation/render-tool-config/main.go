@@ -180,7 +180,6 @@ func (cfg renderConfig) validate(lane signoffLane) error {
 }
 
 func renderToolConfig(cfg renderConfig, lane signoffLane) string {
-	rancherDistro := rancherDistroForLane(cfg.RancherDistro, lane)
 	return fmt.Sprintf(`rancher:
   mode: auto
   version: %s
@@ -212,7 +211,7 @@ tf_vars:
   aws_route53_fqdn: %s
 `,
 		yamlQuote(strings.TrimPrefix(lane.InstallRancher, "v")),
-		yamlQuote(rancherDistro),
+		yamlQuote(cfg.RancherDistro),
 		yamlQuote(cfg.BootstrapPassword),
 		cfg.AutoApprove,
 		cfg.PreloadImages,
@@ -231,17 +230,6 @@ tf_vars:
 		yamlQuote(cfg.AWSPemKeyName),
 		yamlQuote(cfg.AWSRoute53FQDN),
 	)
-}
-
-func rancherDistroForLane(configured string, lane signoffLane) string {
-	configured = strings.TrimSpace(configured)
-	if strings.EqualFold(configured, "auto") && strings.TrimSpace(lane.UpgradeToRancher) != "" {
-		// Keep the upgrade on one distribution. Otherwise auto mode installs the
-		// released baseline from Prime but resolves prerelease targets from the
-		// community repos, carrying Prime's system registry into the RC webhook.
-		return "community"
-	}
-	return configured
 }
 
 func renderEnvOutput(plan signoffPlan, lane signoffLane) (string, error) {

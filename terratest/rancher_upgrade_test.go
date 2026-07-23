@@ -95,6 +95,11 @@ func TestHAUpgradeRancher(t *testing.T) {
 	if len(failures) > 0 {
 		t.Fatalf("Rancher upgrade failed:\n%s", strings.Join(failures, "\n"))
 	}
+	if webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE")); webhookImage != "" {
+		if err := configureDownstreamRancherWebhookImage(webhookImage); err != nil {
+			t.Fatalf("downstream Rancher webhook configuration failed: %v", err)
+		}
+	}
 
 	timeout := durationFromEnv("RANCHER_UPGRADE_READY_TIMEOUT", durationFromEnv("RANCHER_READY_TIMEOUT", 30*time.Minute))
 	initialDelay := durationFromEnv("RANCHER_UPGRADE_READY_INITIAL_DELAY", 45*time.Second)
@@ -148,9 +153,17 @@ func upgradeHAInstanceRancher(instanceNum int, outputs map[string]string, plan *
 		plan.UseRancherImageFields,
 	)
 	helmCommand = rancherHelmCommandForHA(helmCommand, haOutputs.RancherURL)
+	webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE"))
+	helmCommand, err = rancherHelmCommandWithWebhookImage(helmCommand, webhookImage)
+	if err != nil {
+		return fmt.Errorf("configure Rancher webhook image for HA %d: %w", instanceNum, err)
+	}
 
 	log.Printf("[upgrade][ha-%d] Upgrading Rancher at %s to requested version %s using %s/rancher@%s",
 		instanceNum, clickableURL(haOutputs.RancherURL), plan.RequestedVersion, plan.ChartRepoAlias, plan.ChartVersion)
+	if webhookImage != "" {
+		log.Printf("[upgrade][ha-%d] Applying the validated webhook candidate through Rancher's scoped webhook chart values: %s", instanceNum, webhookImage)
+	}
 	for _, explanation := range plan.Explanation {
 		log.Printf("[upgrade][ha-%d] %s", instanceNum, explanation)
 	}

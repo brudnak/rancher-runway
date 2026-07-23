@@ -926,6 +926,49 @@ func TestBuildAutoHelmCommandUpgradeUsesSameResolvedSettings(t *testing.T) {
 	}
 }
 
+func TestRancherHelmCommandWithWebhookImageUsesScopedLiteralValues(t *testing.T) {
+	command := buildAutoHelmCommand(
+		rancherHelmOperationUpgrade,
+		"optimus-rancher-alpha",
+		"2.12.12-alpha7",
+		"admin",
+		"stgregistry.suse.com/rancher/rancher",
+		"v2.12.12-alpha7",
+		"stgregistry.suse.com/rancher/rancher-agent:v2.12.12-alpha7",
+		true,
+	)
+
+	command, err := rancherHelmCommandWithWebhookImage(command, "stgregistry.suse.com/rancher/rancher-webhook:v0.8.9-rc.1")
+	if err != nil {
+		t.Fatalf("unexpected webhook override error: %v", err)
+	}
+	expected := `--set-literal 'webhook={"global":{"cattle":{"systemDefaultRegistry":"stgregistry.suse.com"}},"image":{"repository":"rancher/rancher-webhook","tag":"v0.8.9-rc.1"}}'`
+	if !strings.Contains(command, expected) {
+		t.Fatalf("expected scoped webhook values %q, got:\n%s", expected, command)
+	}
+	if strings.Contains(command, "--set systemDefaultRegistry=stgregistry.suse.com") {
+		t.Fatalf("webhook override must not change the cluster-wide registry, got:\n%s", command)
+	}
+}
+
+func TestRancherHelmCommandWithWebhookImageRejectsInvalidImage(t *testing.T) {
+	_, err := rancherHelmCommandWithWebhookImage("helm upgrade rancher rancher-latest/rancher", "rancher/rancher-webhook")
+	if err == nil || !strings.Contains(err.Error(), "image must include a tag") {
+		t.Fatalf("expected an invalid tagged-image error, got %v", err)
+	}
+}
+
+func TestRancherHelmCommandWithWebhookImageLeavesEmptyOverrideAlone(t *testing.T) {
+	const command = "helm upgrade rancher rancher-latest/rancher"
+	got, err := rancherHelmCommandWithWebhookImage(command, "  ")
+	if err != nil {
+		t.Fatalf("unexpected empty override error: %v", err)
+	}
+	if got != command {
+		t.Fatalf("empty webhook override changed command: %q", got)
+	}
+}
+
 func TestBuildAutoHelmCommandShellQuotesBootstrapPassword(t *testing.T) {
 	password := `abc&Vfw8_Qr7*YVh1DE'with,comma\slash`
 	command := buildAutoHelmCommand(
