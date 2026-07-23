@@ -45,6 +45,28 @@ func TestRenderToolConfigForFreshLane(t *testing.T) {
 	assertContains(t, rendered, `total_has: 1`)
 }
 
+func TestRenderToolConfigKeepsAutoUpgradeLaneOnCommunityDistro(t *testing.T) {
+	cfg := renderConfig{
+		RancherDistro: "auto",
+	}
+	lane := signoffLane{
+		Name:             "webhook-upgrade",
+		InstallRancher:   "v2.14.3",
+		UpgradeToRancher: "v2.15.0-rc2",
+	}
+
+	rendered := renderToolConfig(cfg, lane)
+	assertContains(t, rendered, `version: "2.14.3"`)
+	assertContains(t, rendered, `distro: "community"`)
+}
+
+func TestRancherDistroForLanePreservesExplicitSelection(t *testing.T) {
+	lane := signoffLane{UpgradeToRancher: "v2.15.0-rc2"}
+	if got := rancherDistroForLane("prime", lane); got != "prime" {
+		t.Fatalf("explicit distro changed to %q", got)
+	}
+}
+
 func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 	tempDir := t.TempDir()
 	planPath := filepath.Join(tempDir, "plan.json")
