@@ -4,18 +4,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
+	"time"
 )
 
 const (
-	rancherConfigNamespace      = "cattle-system"
-	rancherConfigName           = "rancher-config"
-	rancherWebhookConfigDataKey = "rancher-webhook"
+	rancherConfigNamespace                    = "cattle-system"
+	rancherConfigName                         = "rancher-config"
+	rancherWebhookConfigDataKey               = "rancher-webhook"
+	downstreamWebhookConfigMaxAttempts        = 24
+	downstreamWebhookConfigRetryInterval      = 5 * time.Second
+	downstreamWebhookConfigConvergenceTimeout = 2 * time.Minute
+	downstreamWebhookKubectlRequestTimeout    = 15 * time.Second
 )
 
 type downstreamWebhookKubectl struct {
 	output func(string, ...string) (string, error)
 	direct func(string, ...string) error
+	sleep  func(time.Duration)
 }
 
 func configureDownstreamRancherWebhookImage(webhookImage string) error {
@@ -38,8 +46,9 @@ func configureDownstreamRancherWebhookImage(webhookImage string) error {
 	}
 
 	runner := downstreamWebhookKubectl{
-		output: runKubectlOutput,
-		direct: runKubectlDirect,
+		output: runDownstreamWebhookKubectlOutput,
+		direct: runDownstreamWebhookKubectlDirect,
+		sleep:  time.Sleep,
 	}
 	var failures []string
 	for _, record := range records {
@@ -71,47 +80,111 @@ func configureDownstreamRancherWebhookConfig(kubeconfigPath, valuesJSON string, 
 		return fmt.Errorf("downstream kubectl runner is incomplete")
 	}
 
-	existing, err := runner.output(
-		kubeconfigPath,
-		"get", "configmap", rancherConfigName,
-		"-n", rancherConfigNamespace,
-		"--ignore-not-found",
-		"-o", "name",
-	)
-	if err != nil {
-		return fmt.Errorf("inspect %s/%s: %w", rancherConfigNamespace, rancherConfigName, err)
-	}
-
-	if strings.TrimSpace(existing) == "" {
-		createErr := runner.direct(
-			kubeconfigPath,
-			"create", "configmap", rancherConfigName,
-			"-n", rancherConfigNamespace,
-			"--from-literal="+rancherWebhookConfigDataKey+"="+valuesJSON,
-		)
-		if createErr == nil {
-			return nil
-		}
-
-		// Another controller or test may create rancher-config between the get
-		// and create calls. A merge patch makes that race harmless while also
-		// preserving every unrelated data key in the newly created ConfigMap.
-		patchErr := patchDownstreamRancherWebhookConfig(kubeconfigPath, valuesJSON, runner)
-		if patchErr == nil {
-			return nil
-		}
-		return fmt.Errorf("create %s/%s failed: %v; merge patch after possible create race failed: %w",
-			rancherConfigNamespace, rancherConfigName, createErr, patchErr)
-	}
-
-	return patchDownstreamRancherWebhookConfig(kubeconfigPath, valuesJSON, runner)
-}
-
-func patchDownstreamRancherWebhookConfig(kubeconfigPath, valuesJSON string, runner downstreamWebhookKubectl) error {
 	patch, err := rancherWebhookConfigMergePatch(valuesJSON)
 	if err != nil {
 		return err
 	}
+
+	deadline := time.Now().Add(downstreamWebhookConfigConvergenceTimeout)
+	attempts := 0
+	var lastErr error
+	for attempt := 1; attempt <= downstreamWebhookConfigMaxAttempts; attempt++ {
+		attempts = attempt
+		exists, currentValue, inspectErr := inspectDownstreamRancherWebhookConfig(kubeconfigPath, runner)
+		if inspectErr != nil {
+			lastErr = fmt.Errorf("inspect %s/%s: %w", rancherConfigNamespace, rancherConfigName, inspectErr)
+		} else if exists && currentValue == valuesJSON {
+			return nil
+		} else {
+			operation := "create"
+			var mutationErr error
+			if exists {
+				operation = "patch"
+				mutationErr = patchDownstreamRancherWebhookConfig(kubeconfigPath, patch, runner)
+			} else {
+				mutationErr = createDownstreamRancherWebhookConfig(kubeconfigPath, valuesJSON, runner)
+			}
+
+			// Always read the value back, even when the mutation failed. Rancher
+			// can delete a ConfigMap between get and patch, or create one between
+			// get and create. In either case another actor may already have put the
+			// desired value in place, and the read-back is the source of truth.
+			readBackExists, readBackValue, readBackErr := inspectDownstreamRancherWebhookConfig(kubeconfigPath, runner)
+			switch {
+			case readBackErr != nil:
+				lastErr = downstreamWebhookConfigAttemptError(operation, mutationErr,
+					fmt.Errorf("read back %s/%s: %w", rancherConfigNamespace, rancherConfigName, readBackErr))
+			case readBackExists && readBackValue == valuesJSON:
+				return nil
+			case !readBackExists:
+				lastErr = downstreamWebhookConfigAttemptError(operation, mutationErr,
+					fmt.Errorf("read-back found %s/%s absent", rancherConfigNamespace, rancherConfigName))
+			default:
+				lastErr = downstreamWebhookConfigAttemptError(operation, mutationErr,
+					fmt.Errorf("read-back key %s did not contain the requested webhook values", rancherWebhookConfigDataKey))
+			}
+		}
+
+		if attempt < downstreamWebhookConfigMaxAttempts && time.Now().Before(deadline) {
+			retryInterval := downstreamWebhookConfigRetryInterval
+			if remaining := time.Until(deadline); remaining < retryInterval {
+				retryInterval = remaining
+			}
+			if retryInterval <= 0 {
+				break
+			}
+			log.Printf("[upgrade][webhook] %s/%s did not converge on attempt %d/%d: %v; retrying in %s",
+				rancherConfigNamespace, rancherConfigName, attempt, downstreamWebhookConfigMaxAttempts,
+				lastErr, retryInterval)
+			if runner.sleep != nil {
+				runner.sleep(retryInterval)
+			}
+			continue
+		}
+		break
+	}
+
+	return fmt.Errorf("%s/%s webhook values did not converge after %d attempts within %s: %w",
+		rancherConfigNamespace, rancherConfigName, attempts, downstreamWebhookConfigConvergenceTimeout, lastErr)
+}
+
+func inspectDownstreamRancherWebhookConfig(kubeconfigPath string, runner downstreamWebhookKubectl) (bool, string, error) {
+	output, err := runner.output(
+		kubeconfigPath,
+		"get", "configmap", rancherConfigName,
+		"-n", rancherConfigNamespace,
+		"--ignore-not-found",
+		"-o", "json",
+	)
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(output) == "" {
+		return false, "", nil
+	}
+
+	var configMap struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(output), &configMap); err != nil {
+		return false, "", fmt.Errorf("decode %s/%s: %w", rancherConfigNamespace, rancherConfigName, err)
+	}
+	return true, configMap.Data[rancherWebhookConfigDataKey], nil
+}
+
+func createDownstreamRancherWebhookConfig(kubeconfigPath, valuesJSON string, runner downstreamWebhookKubectl) error {
+	if err := runner.direct(
+		kubeconfigPath,
+		"create", "configmap", rancherConfigName,
+		"-n", rancherConfigNamespace,
+		"--from-literal="+rancherWebhookConfigDataKey+"="+valuesJSON,
+	); err != nil {
+		return fmt.Errorf("create %s/%s: %w", rancherConfigNamespace, rancherConfigName, err)
+	}
+	return nil
+}
+
+func patchDownstreamRancherWebhookConfig(kubeconfigPath, patch string, runner downstreamWebhookKubectl) error {
 	if err := runner.direct(
 		kubeconfigPath,
 		"patch", "configmap", rancherConfigName,
@@ -122,6 +195,55 @@ func patchDownstreamRancherWebhookConfig(kubeconfigPath, valuesJSON string, runn
 		return fmt.Errorf("patch %s/%s: %w", rancherConfigNamespace, rancherConfigName, err)
 	}
 	return nil
+}
+
+func downstreamWebhookConfigAttemptError(operation string, mutationErr, readBackErr error) error {
+	if mutationErr == nil {
+		return fmt.Errorf("%s completed but configuration did not converge: %w", operation, readBackErr)
+	}
+	return fmt.Errorf("%s failed: %v; configuration did not converge: %w", operation, mutationErr, readBackErr)
+}
+
+// These narrow kubectl runners keep stderr diagnostics separate from stdout so
+// warnings cannot turn an absent --ignore-not-found response into invalid JSON.
+// The request timeout also prevents one API call from consuming the full
+// ConfigMap convergence window.
+func runDownstreamWebhookKubectlOutput(kubeconfigPath string, args ...string) (string, error) {
+	commandArgs := downstreamWebhookKubectlCommandArgs(kubeconfigPath, args...)
+	cmd := exec.Command("kubectl", commandArgs...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	output, err := cmd.Output()
+	if err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return "", fmt.Errorf("kubectl %s failed: %w (%s)", strings.Join(args, " "), err, detail)
+		}
+		return "", fmt.Errorf("kubectl %s failed: %w", strings.Join(args, " "), err)
+	}
+	if warning := strings.TrimSpace(stderr.String()); warning != "" {
+		log.Printf("[upgrade][webhook][kubectl warning] %s", warning)
+	}
+	return string(output), nil
+}
+
+func runDownstreamWebhookKubectlDirect(kubeconfigPath string, args ...string) error {
+	commandArgs := downstreamWebhookKubectlCommandArgs(kubeconfigPath, args...)
+	cmd := exec.Command("kubectl", commandArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("kubectl %s failed: %w", strings.Join(args, " "), err)
+	}
+	return nil
+}
+
+func downstreamWebhookKubectlCommandArgs(kubeconfigPath string, args ...string) []string {
+	commandArgs := []string{
+		"--kubeconfig", kubeconfigPath,
+		"--request-timeout=" + downstreamWebhookKubectlRequestTimeout.String(),
+	}
+	return append(commandArgs, args...)
 }
 
 func rancherWebhookConfigMergePatch(valuesJSON string) (string, error) {

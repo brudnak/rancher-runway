@@ -95,11 +95,6 @@ func TestHAUpgradeRancher(t *testing.T) {
 	if len(failures) > 0 {
 		t.Fatalf("Rancher upgrade failed:\n%s", strings.Join(failures, "\n"))
 	}
-	if webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE")); webhookImage != "" {
-		if err := configureDownstreamRancherWebhookImage(webhookImage); err != nil {
-			t.Fatalf("downstream Rancher webhook configuration failed: %v", err)
-		}
-	}
 
 	timeout := durationFromEnv("RANCHER_UPGRADE_READY_TIMEOUT", durationFromEnv("RANCHER_READY_TIMEOUT", 30*time.Minute))
 	initialDelay := durationFromEnv("RANCHER_UPGRADE_READY_INITIAL_DELAY", 45*time.Second)
@@ -126,6 +121,15 @@ func TestHAUpgradeRancher(t *testing.T) {
 	}
 	if len(failures) > 0 {
 		t.Fatalf("Rancher upgrade readiness failed:\n%s", strings.Join(failures, "\n"))
+	}
+
+	// Wait until the upgraded Rancher control plane has settled before writing
+	// downstream system-chart configuration, avoiding upgrade-time reconciliation
+	// churn while the new webhook chart is being deployed.
+	if webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE")); webhookImage != "" {
+		if err := configureDownstreamRancherWebhookImage(webhookImage); err != nil {
+			t.Fatalf("downstream Rancher webhook configuration failed: %v", err)
+		}
 	}
 }
 
