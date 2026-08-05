@@ -11,6 +11,7 @@ const setupEndpoint = path => `${basePath}${path.startsWith('/') ? path : `/${pa
 
 let setupMode = setupData.mode === 'manual' ? 'manual' : 'auto'
 let versions = Array.isArray(setupData.versions) ? setupData.versions : ['']
+let agentImages = Array.isArray(setupData.agentImages) ? setupData.agentImages : []
 let manualCommands = Array.isArray(setupData.helmCommands) ? setupData.helmCommands : []
 let k8sVersions = Array.isArray(setupData.k8sVersions) ? setupData.k8sVersions : []
 let installerSHA256s = Array.isArray(setupData.installerSHA256s) ? setupData.installerSHA256s : []
@@ -1047,21 +1048,30 @@ const renderDeploymentType = () => {
 }
 
 const renderRows = () => {
-  ensureDeploymentCompatibleRows()
+	ensureDeploymentCompatibleRows()
   if (singleHARunLocked() && versions.length !== 1) {
     versions = [versions[0] || '']
     saveDeploymentVersions()
   }
 
-  rowsEl.innerHTML = versions.map((version, index) => {
-    const removeDisabled = singleHARunLocked() || versions.length <= minimumAutoRows() ? ' disabled' : ''
-    const label = autoRowLabel(index)
+	while (agentImages.length < versions.length) agentImages.push('')
+	if (agentImages.length > versions.length) agentImages = agentImages.slice(0, versions.length)
+	rowsEl.innerHTML = versions.map((version, index) => {
+		const removeDisabled = singleHARunLocked() || versions.length <= minimumAutoRows() ? ' disabled' : ''
+		const label = autoRowLabel(index)
+		const agentImage = String(agentImages[index] || '')
+		const derivesAgent = !agentImage.trim()
 
-    return [
-      `<div class="${rowClass}">`,
-      `<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
-      `<div><input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="2.14.1-alpha3" /></div>`,
-      `<div><button class="${removeButtonClass}" type="button" data-remove-index="${index}"${removeDisabled}>Remove</button></div>`,
+		return [
+			`<div class="${rowClass}">`,
+			`<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
+			'<div class="grid gap-2">',
+			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="2.14.1-alpha3 or docker.io/user/rancher:tag" />`,
+			`<label class="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-400"><input type="checkbox" data-agent-derive-index="${index}"${derivesAgent ? ' checked' : ''} /> Derive matching rancher-agent image</label>`,
+			`<input type="hidden" name="agentImages" value="${escapeHtml(agentImage)}" data-agent-hidden-index="${index}" />`,
+			`<input class="${inputClass}${derivesAgent ? ' hidden' : ''}" type="text" value="${escapeHtml(agentImage)}" data-agent-index="${index}" placeholder="docker.io/user/rancher-agent:tag" />`,
+			'</div>',
+			`<div><button class="${removeButtonClass}" type="button" data-remove-index="${index}"${removeDisabled}>Remove</button></div>`,
       '</div>'
     ].join('')
   }).join('')
@@ -1082,7 +1092,7 @@ const renderRows = () => {
           ? 'Custom Rancher URL is limited to one HA.'
           : ''
 
-  rowsEl.querySelectorAll('input[data-index]').forEach(input => {
+	rowsEl.querySelectorAll('input[data-index]').forEach(input => {
     input.addEventListener('input', event => {
       versions[Number(event.target.getAttribute('data-index'))] = event.target.value
       saveDeploymentVersions()
@@ -1091,7 +1101,25 @@ const renderRows = () => {
       linodeImageSearchTag = ''
       renderLinodeImageSearch()
       clearValidationError()
-    })
+	})
+
+	rowsEl.querySelectorAll('input[data-agent-derive-index]').forEach(toggle => {
+		toggle.addEventListener('change', event => {
+			const index = Number(event.target.getAttribute('data-agent-derive-index'))
+			agentImages[index] = event.target.checked ? '' : deriveAgentImage(versions[index])
+			renderRows()
+		})
+	})
+
+	rowsEl.querySelectorAll('input[data-agent-index]').forEach(input => {
+		input.addEventListener('input', event => {
+			const index = Number(event.target.getAttribute('data-agent-index'))
+			agentImages[index] = event.target.value
+			const hidden = rowsEl.querySelector(`input[data-agent-hidden-index="${index}"]`)
+			if (hidden) hidden.value = event.target.value
+			clearValidationError()
+		})
+	})
   })
 
   rowsEl.querySelectorAll('button[data-remove-index]').forEach(button => {
@@ -1100,7 +1128,9 @@ const renderRows = () => {
         return
       }
 
-      versions.splice(Number(button.getAttribute('data-remove-index')), 1)
+		const index = Number(button.getAttribute('data-remove-index'))
+		versions.splice(index, 1)
+		agentImages.splice(index, 1)
       saveDeploymentVersions()
       renderRows()
     })
@@ -1402,7 +1432,7 @@ const renderMode = () => {
         ? 'Linode Docker uses auto mode to map each Rancher version to one Docker install on its own Linode.'
       : setupMode === 'manual'
       ? 'Manual mode saves one editable Helm command and one RKE2 version per HA, then validates the Helm render before AWS starts.'
-      : 'Auto mode resolves Rancher chart, image, RKE2 version, and installer SHA256 from the requested Rancher versions.'
+      : 'Auto mode resolves the Rancher chart, server and agent images, RKE2 version, and installer SHA256 from a requested version or exact custom server image.'
   }
   if (setupMode === 'manual') {
     ensureManualRows()
@@ -1700,6 +1730,13 @@ const buildSeedHelmCommand = index => {
     '  --set agentTLSMode=system-store'
   ]
   return lines.join('\n')
+}
+
+const deriveAgentImage = value => {
+	const image = String(value || '').trim()
+	if (/\/rancher-agent:[^/]+$/.test(image)) return image
+	if (/\/rancher:[^/]+$/.test(image)) return image.replace(/\/rancher:([^/]+)$/, '/rancher-agent:$1')
+	return ''
 }
 
 const ensureManualRows = () => {
@@ -2844,7 +2881,8 @@ addBtnEl.addEventListener('click', () => {
     return
   }
 
-  versions.push('')
+	versions.push('')
+	agentImages.push('')
   saveDeploymentVersions()
   renderDeploymentType()
   renderRows()

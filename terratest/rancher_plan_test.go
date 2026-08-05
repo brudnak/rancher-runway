@@ -81,6 +81,75 @@ func TestClassifyRancherVersionAllowsPlainHead(t *testing.T) {
 	}
 }
 
+func TestClassifyRancherCustomImageAsHead(t *testing.T) {
+	image := "docker.io/tomleb/rancher:fix-tls-internal-cn-hostname-injection-1"
+	buildType, minorLine, err := classifyRancherVersionOrImage(image)
+	if err != nil {
+		t.Fatalf("classifyRancherVersionOrImage returned error: %v", err)
+	}
+	if buildType != "head" || minorLine != "" {
+		t.Fatalf("expected custom image to classify as head, got buildType=%q minorLine=%q", buildType, minorLine)
+	}
+
+	request, ok, err := parseCustomRancherImageRequest(image)
+	if err != nil {
+		t.Fatalf("parseCustomRancherImageRequest returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected a custom image request")
+	}
+	if request.serverRepository != "docker.io/tomleb/rancher" {
+		t.Fatalf("unexpected server repository %q", request.serverRepository)
+	}
+	if request.tag != "fix-tls-internal-cn-hostname-injection-1" {
+		t.Fatalf("unexpected image tag %q", request.tag)
+	}
+	if request.agentImage != "docker.io/tomleb/rancher-agent:fix-tls-internal-cn-hostname-injection-1" {
+		t.Fatalf("unexpected agent image %q", request.agentImage)
+	}
+}
+
+func TestCustomRancherImageRequiresRancherRepository(t *testing.T) {
+	_, ok, err := parseCustomRancherImageRequest("docker.io/tomleb/not-rancher:test")
+	if !ok || err == nil {
+		t.Fatalf("expected invalid custom image error, got ok=%t err=%v", ok, err)
+	}
+}
+
+func TestCustomRancherAgentImageDerivesServerImage(t *testing.T) {
+	image := "docker.io/tomleb/rancher-agent:fix-tls-internal-cn-hostname-injection-1"
+	request, ok, err := parseCustomRancherImageRequest(image)
+	if err != nil {
+		t.Fatalf("parseCustomRancherImageRequest returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected a custom image request")
+	}
+	if request.serverRepository != "docker.io/tomleb/rancher" {
+		t.Fatalf("unexpected server repository %q", request.serverRepository)
+	}
+	if request.agentImage != image {
+		t.Fatalf("unexpected agent image %q", request.agentImage)
+	}
+}
+
+func TestRequestedAgentImageOverridesAllowExplicitPair(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("rancher.agent_images", []string{"docker.io/tomleb/rancher-agent:agent-fix"})
+
+	overrides, err := getRequestedAgentImageOverrides(1)
+	if err != nil {
+		t.Fatalf("getRequestedAgentImageOverrides returned error: %v", err)
+	}
+	if len(overrides) != 1 || overrides[0] != "docker.io/tomleb/rancher-agent:agent-fix" {
+		t.Fatalf("unexpected overrides: %#v", overrides)
+	}
+	if err := validateCustomAgentImage(overrides[0]); err != nil {
+		t.Fatalf("validateCustomAgentImage returned error: %v", err)
+	}
+}
+
 func TestClassifyRancherVersionAllowsCommitHead(t *testing.T) {
 	version := "2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
 	buildType, minorLine, err := classifyRancherVersion(version)

@@ -349,7 +349,7 @@ func editAutoModePreflightWithBrowser(configPath string, versions []string) erro
   <div class="shell">
     <div class="header">
       <h1>Rancher Setup Preflight</h1>
-      <p class="subtitle">Review the requested Rancher versions for this run before resolving the final plan. The row count becomes <code>total_has</code> automatically.</p>
+      <p class="subtitle">Review the requested Rancher versions or exact custom server images for this run before resolving the final plan. The row count becomes <code>total_has</code> automatically.</p>
     </div>
     <div class="body">
       <div class="panel">
@@ -443,7 +443,7 @@ func editAutoModePreflightWithBrowser(configPath string, versions []string) erro
         return (
           '<div class="row">' +
             '<div class="ha-label">HA ' + (index + 1) + '</div>' +
-            '<div><input type="text" value="' + escapeHtml(version) + '" data-index="' + index + '" placeholder="2.14.1-alpha3" /></div>' +
+            '<div><input type="text" value="' + escapeHtml(version) + '" data-index="' + index + '" placeholder="2.14.1-alpha3 or docker.io/user/rancher:tag" /></div>' +
             '<div><button class="secondary remove" type="button" data-remove-index="' + index + '"' + removeDisabled + '>Remove</button></div>' +
           '</div>'
         );
@@ -715,6 +715,25 @@ func normalizePreflightVersions(versions []string) ([]string, error) {
 	return normalized, nil
 }
 
+func normalizePreflightAgentImages(agentImages []string, total int) ([]string, error) {
+	if len(agentImages) == 0 {
+		return make([]string, total), nil
+	}
+	if len(agentImages) != total {
+		return nil, fmt.Errorf("agent image overrides must contain %d entries", total)
+	}
+	normalized := make([]string, total)
+	for i, image := range agentImages {
+		normalized[i] = strings.TrimSpace(image)
+		if normalized[i] != "" {
+			if err := validateCustomAgentImage(normalized[i]); err != nil {
+				return nil, fmt.Errorf("agent image for HA %d: %w", i+1, err)
+			}
+		}
+	}
+	return normalized, nil
+}
+
 func updateAutoModeConfigFile(configPath string, update settings.PreflightConfigUpdate) error {
 	requestedDeploymentType := strings.ToLower(strings.TrimSpace(update.DeploymentType))
 	if requestedDeploymentType == "" {
@@ -745,6 +764,12 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	switch mode {
 	case "auto":
 		normalizedVersions, err = normalizePreflightVersions(update.Versions)
+		if err == nil {
+			if update.AgentImages == nil {
+				update.AgentImages = currentAgentImageOverrides(normalizedVersions)
+			}
+			update.AgentImages, err = normalizePreflightAgentImages(update.AgentImages, len(normalizedVersions))
+		}
 	case "manual":
 		normalizedHelmCommands, normalizedK8SVersions, installerSHA256s, err = normalizeManualPreflight(update)
 	default:
@@ -867,7 +892,13 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	switch mode {
 	case "auto":
 		setStringSequenceValue(rancherNode, "versions", normalizedVersions)
+		if hasNonEmptyString(update.AgentImages) {
+			setStringSequenceValue(rancherNode, "agent_images", update.AgentImages)
+		} else {
+			deleteMappingKey(rancherNode, "agent_images")
+		}
 		deleteMappingKey(rancherNode, "version")
+		deleteMappingKey(rancherNode, "agent_image")
 		deleteMappingKey(rancherNode, "helm_commands")
 		setIntValue(root, "total_has", len(normalizedVersions))
 		if hostedTenant {
@@ -879,6 +910,8 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		setStringLiteralSequenceValue(rancherNode, "helm_commands", normalizedHelmCommands)
 		deleteMappingKey(rancherNode, "version")
 		deleteMappingKey(rancherNode, "versions")
+		deleteMappingKey(rancherNode, "agent_image")
+		deleteMappingKey(rancherNode, "agent_images")
 		setIntValue(root, "total_has", len(normalizedHelmCommands))
 		deleteMappingKey(root, "total_rancher_instances")
 		k8sNode := ensureMappingValue(root, "k8s")
@@ -1010,6 +1043,15 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	viper.Set(settings.CustomHostnameConfigKey, customHostnamePrefix)
 
 	return nil
+}
+
+func hasNonEmptyString(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 var installerSHA256Pattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)

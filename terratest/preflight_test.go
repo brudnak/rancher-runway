@@ -66,25 +66,38 @@ func TestKnownRancherHelmRepoURLs(t *testing.T) {
 
 func TestValidateRancherHelmVersion(t *testing.T) {
 	tests := []struct {
-		name    string
-		version string
-		wantErr bool
+		name          string
+		version       string
+		wantErr       bool
+		wantErrSubstr string
 	}{
-		{name: "supported Helm 3", version: "v3.21.3"},
+		{name: "recommended Helm 3", version: "v3.21.3"},
+		{name: "Helm 3 without v prefix", version: "3.21.3"},
+		{name: "Helm 3 with surrounding whitespace", version: "  v3.21.3\n"},
 		{name: "Helm 3 with build metadata", version: "v3.21.3+g1234567"},
-		{name: "unsupported Helm 4", version: "v4.1.3", wantErr: true},
-		{name: "malformed", version: "development", wantErr: true},
-		{name: "empty", version: "", wantErr: true},
+		{name: "Helm 3 prerelease", version: "v3.22.0-rc.1"},
+		{name: "minimum Helm 3 line", version: "v3.0.0"},
+		{name: "future Helm 3 minor", version: "v3.99.0"},
+		{name: "unsupported Helm 2", version: "v2.17.0", wantErr: true, wantErrSubstr: "require Helm 3"},
+		{name: "unsupported Helm 4", version: "v4.1.3", wantErr: true, wantErrSubstr: "found v4.1.3"},
+		{name: "unsupported future major", version: "v5.0.0", wantErr: true, wantErrSubstr: "require Helm 3"},
+		{name: "malformed", version: "development", wantErr: true, wantErrSubstr: "could not parse"},
+		{name: "version prefix only", version: "v", wantErr: true, wantErrSubstr: "could not parse"},
+		{name: "empty", version: "", wantErr: true, wantErrSubstr: "could not parse"},
+		{name: "whitespace only", version: " \n\t", wantErr: true, wantErrSubstr: "could not parse"},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			err := validateRancherHelmVersion(test.version)
+			if !test.wantErr && err != nil {
+				t.Fatalf("validateRancherHelmVersion(%q) failed: %v", test.version, err)
+			}
 			if test.wantErr && err == nil {
 				t.Fatalf("validateRancherHelmVersion(%q) succeeded, want error", test.version)
 			}
-			if !test.wantErr && err != nil {
-				t.Fatalf("validateRancherHelmVersion(%q) failed: %v", test.version, err)
+			if test.wantErrSubstr != "" && !strings.Contains(err.Error(), test.wantErrSubstr) {
+				t.Fatalf("validateRancherHelmVersion(%q) error = %q, want it to contain %q", test.version, err, test.wantErrSubstr)
 			}
 		})
 	}

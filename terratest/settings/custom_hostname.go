@@ -18,6 +18,7 @@ type PreflightConfigUpdate struct {
 	DeploymentType        string            `json:"deploymentType"`
 	Mode                  string            `json:"mode"`
 	Versions              []string          `json:"versions"`
+	AgentImages           []string          `json:"agentImages"`
 	HelmCommands          []string          `json:"helmCommands"`
 	K8SVersions           []string          `json:"k8sVersions"`
 	InstallerSHA256s      []string          `json:"installerSHA256s"`

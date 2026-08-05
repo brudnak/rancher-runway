@@ -29,6 +29,12 @@ var rancherRegistryHTTPClient = http.DefaultClient
 var rancherRegistryBaseURLs = map[string]string{}
 var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)-[0-9a-fA-F]{7,40}-head$`)
 
+type customRancherImageRequest struct {
+	serverRepository string
+	tag              string
+	agentImage       string
+}
+
 func prepareRancherConfiguration(totalHAs int) ([]*RancherResolvedPlan, error) {
 	mode := rancherMode()
 	switch mode {
@@ -112,6 +118,10 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	agentImageOverrides, err := getRequestedAgentImageOverrides(totalHAs)
+	if err != nil {
+		return nil, err
+	}
 
 	requestedDistro := strings.ToLower(strings.TrimSpace(viper.GetString("rancher.distro")))
 	if requestedDistro == "" {
@@ -125,7 +135,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 
 	repoAliases := map[string]bool{}
 	for _, requestedVersion := range requestedVersions {
-		buildType, _, err := classifyRancherVersion(requestedVersion)
+		buildType, _, err := classifyRancherVersionOrImage(requestedVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -144,8 +154,12 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 	}
 
 	plans := make([]*RancherResolvedPlan, 0, len(requestedVersions))
-	for _, requestedVersion := range requestedVersions {
-		buildType, minorLine, err := classifyRancherVersion(requestedVersion)
+	for planIndex, requestedVersion := range requestedVersions {
+		customImage, isCustomImage, err := parseCustomRancherImageRequest(requestedVersion)
+		if err != nil {
+			return nil, err
+		}
+		buildType, minorLine, err := classifyRancherVersionOrImage(requestedVersion)
 		if err != nil {
 			return nil, err
 		}
@@ -154,7 +168,11 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		}
 
 		repoCandidates, resolvedDistro, explanation := chooseRancherSourceCandidates(requestedDistro, buildType)
-		chartRepoAlias, chartVersion, compatibilityBaseline, err := resolveChartAndBaseline(repoCandidates, requestedVersion, minorLine, buildType)
+		chartRequest := requestedVersion
+		if isCustomImage {
+			chartRequest = "head"
+		}
+		chartRepoAlias, chartVersion, compatibilityBaseline, err := resolveChartAndBaseline(repoCandidates, chartRequest, minorLine, buildType)
 		if err != nil {
 			return nil, err
 		}
@@ -169,6 +187,22 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		}
 
 		rancherImage, rancherImageTag, agentImage, imageExplanation := resolveImageSettings(requestedVersion, buildType, resolvedDistro)
+		if isCustomImage {
+			rancherImage = customImage.serverRepository
+			rancherImageTag = customImage.tag
+			agentImage = customImage.agentImage
+			imageExplanation = []string{fmt.Sprintf("Using exact custom Rancher image %s and derived agent image %s", requestedVersion, agentImage)}
+		}
+		if explicitAgentImage := agentImageOverrides[planIndex]; explicitAgentImage != "" {
+			if !isCustomImage {
+				return nil, fmt.Errorf("rancher.agent_images[%d] requires a custom Rancher server or agent image in rancher.versions[%d]", planIndex, planIndex)
+			}
+			if err := validateCustomAgentImage(explicitAgentImage); err != nil {
+				return nil, fmt.Errorf("rancher.agent_images[%d]: %w", planIndex, err)
+			}
+			agentImage = explicitAgentImage
+			imageExplanation = []string{fmt.Sprintf("Using exact custom Rancher image %s and explicitly supplied agent image %s", rancherImage+":"+rancherImageTag, agentImage)}
+		}
 		if buildType == "head" && isCommitHeadRancherVersion(requestedVersion) {
 			rancherImage, rancherImageTag, agentImage, imageExplanation, err = resolveCommitHeadImageSettings(requestedVersion)
 			if err != nil {
@@ -176,15 +210,17 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			}
 		}
 		var rancherLatestTagOnly bool
-		rancherImage, rancherImageTag, agentImage, imageExplanation, rancherLatestTagOnly = applyRancherLatestTagOnlySettings(
-			buildType,
-			chartRepoAlias,
-			requestedVersion,
-			rancherImage,
-			rancherImageTag,
-			agentImage,
-			imageExplanation,
-		)
+		if !isCustomImage {
+			rancherImage, rancherImageTag, agentImage, imageExplanation, rancherLatestTagOnly = applyRancherLatestTagOnlySettings(
+				buildType,
+				chartRepoAlias,
+				requestedVersion,
+				rancherImage,
+				rancherImageTag,
+				agentImage,
+				imageExplanation,
+			)
+		}
 		if buildType != "release" && chartVersion == requestedVersion && chartRepoAlias == "rancher-prime" {
 			rancherImage = ""
 			rancherImageTag = ""
@@ -217,7 +253,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			return nil, fmt.Errorf("validate Rancher image settings for %s: %w", requestedVersion, err)
 		}
 		explanation = append(explanation, imageExplanation...)
-		if compatibilityBaseline != requestedVersion {
+		if isCustomImage || compatibilityBaseline != requestedVersion {
 			explanation = append(explanation, fmt.Sprintf("Using %s as the latest released compatibility baseline for the %s release line", compatibilityBaseline, minorLine))
 		}
 		useRancherImageFields, err := chartSupportsRancherImageFields(chartRepoAlias, chartVersion)
@@ -276,6 +312,36 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 	}
 
 	return plans, nil
+}
+
+func getRequestedAgentImageOverrides(totalHAs int) ([]string, error) {
+	overrides := viper.GetStringSlice("rancher.agent_images")
+	if len(overrides) == 0 {
+		if single := strings.TrimSpace(viper.GetString("rancher.agent_image")); single != "" {
+			overrides = []string{single}
+		}
+	}
+	if len(overrides) == 0 {
+		return make([]string, totalHAs), nil
+	}
+	if len(overrides) != totalHAs {
+		return nil, fmt.Errorf("rancher.agent_images has %d entries but total_has is %d; provide one entry per Rancher image (blank entries use automatic derivation)", len(overrides), totalHAs)
+	}
+	for i := range overrides {
+		overrides[i] = strings.TrimSpace(overrides[i])
+	}
+	return overrides, nil
+}
+
+func validateCustomAgentImage(image string) error {
+	_, repository, _, err := parseRegistryImage(image)
+	if err != nil {
+		return fmt.Errorf("invalid custom Rancher agent image %q: %w", image, err)
+	}
+	if pathBase := repository[strings.LastIndex(repository, "/")+1:]; pathBase != "rancher-agent" {
+		return fmt.Errorf("custom Rancher agent image repository must end in /rancher-agent, got %q", image)
+	}
+	return nil
 }
 
 func mapKeys(values map[string]bool) []string {
@@ -419,6 +485,46 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 	default:
 		return "", "", fmt.Errorf("unsupported rancher.version format %q", version)
 	}
+}
+
+func classifyRancherVersionOrImage(value string) (buildType string, minorLine string, err error) {
+	if _, ok, imageErr := parseCustomRancherImageRequest(value); ok || imageErr != nil {
+		if imageErr != nil {
+			return "", "", imageErr
+		}
+		return "head", "", nil
+	}
+	return classifyRancherVersion(value)
+}
+
+func parseCustomRancherImageRequest(value string) (customRancherImageRequest, bool, error) {
+	value = strings.TrimSpace(value)
+	if !strings.Contains(value, "/") {
+		return customRancherImageRequest{}, false, nil
+	}
+
+	registry, repository, tag, err := parseRegistryImage(value)
+	if err != nil {
+		return customRancherImageRequest{}, true, fmt.Errorf("invalid custom Rancher image %q: %w", value, err)
+	}
+	pathBase := repository[strings.LastIndex(repository, "/")+1:]
+	var serverRepository, agentRepository string
+	switch pathBase {
+	case "rancher":
+		serverRepository = repository
+		agentRepository = strings.TrimSuffix(repository, "/rancher") + "/rancher-agent"
+	case "rancher-agent":
+		agentRepository = repository
+		serverRepository = strings.TrimSuffix(repository, "/rancher-agent") + "/rancher"
+	default:
+		return customRancherImageRequest{}, true, fmt.Errorf("custom Rancher image repository must end in /rancher or /rancher-agent, got %q", value)
+	}
+
+	return customRancherImageRequest{
+		serverRepository: registry + "/" + serverRepository,
+		tag:              tag,
+		agentImage:       registry + "/" + agentRepository + ":" + tag,
+	}, true, nil
 }
 
 func isCommitHeadRancherVersion(version string) bool {

@@ -185,7 +185,12 @@ you are most likely to care about:
   supported RKE2 version, and installer checksum details.
 - `rancher.version` or `rancher.versions` selects the Rancher build or builds.
   Auto mode accepts releases, alpha/RC versions, `head`, minor-line head builds
-  such as `2.13-head`, and commit-specific head image tags.
+  such as `2.13-head`, commit-specific head image tags, and exact custom server
+  images such as `docker.io/example/rancher:my-fix` or its matching
+  `rancher-agent` image. Runway derives the sibling image with the same tag, verifies both,
+  and resolves the latest released community chart as the compatibility baseline.
+  Turn off agent-image derivation in the setup UI to provide both references;
+  explicit per-HA values are stored in `rancher.agent_images`.
 - `user.first_name` and `user.last_name` tag cloud resources with an owner.
 - `tf_vars.aws_prefix` is the base resource prefix. Run slots derive unique
   per-run prefixes from it.

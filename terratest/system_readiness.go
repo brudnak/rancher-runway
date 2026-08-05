@@ -334,9 +334,11 @@ func versionParts(version string) [3]int {
 	var parts [3]int
 	fields := strings.Split(normalizeToolVersion(version), ".")
 	for i := 0; i < len(fields) && i < 3; i++ {
-		n, _ := strconv.Atoi(strings.TrimFunc(fields[i], func(r rune) bool {
-			return r < '0' || r > '9'
-		}))
+		digitEnd := 0
+		for digitEnd < len(fields[i]) && fields[i][digitEnd] >= '0' && fields[i][digitEnd] <= '9' {
+			digitEnd++
+		}
+		n, _ := strconv.Atoi(fields[i][:digitEnd])
 		parts[i] = n
 	}
 	return parts

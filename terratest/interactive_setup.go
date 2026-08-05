@@ -59,6 +59,7 @@ type interactiveSetupState struct {
 	DeploymentType        string                           `json:"deploymentType"`
 	Mode                  string                           `json:"mode"`
 	Versions              []string                         `json:"versions"`
+	AgentImages           []string                         `json:"agentImages"`
 	HelmCommands          []string                         `json:"helmCommands"`
 	K8SVersions           []string                         `json:"k8sVersions"`
 	InstallerSHA256s      []string                         `json:"installerSHA256s"`
@@ -602,6 +603,7 @@ func interactiveSetupTemplateDataFor(token string, configPath string, initialVer
 		DeploymentType:        deploymentType(),
 		Mode:                  rancherMode(),
 		Versions:              initialVersions,
+		AgentImages:           currentAgentImageOverrides(initialVersions),
 		HelmCommands:          currentManualHelmCommands(),
 		K8SVersions:           currentManualK8SVersions(),
 		InstallerSHA256s:      currentManualInstallerSHA256s(),
@@ -619,6 +621,22 @@ func interactiveSetupTemplateDataFor(token string, configPath string, initialVer
 		Embedded:         embedded,
 		InitialStateJSON: template.JS(string(initialStateJSON)),
 	}
+}
+
+func currentAgentImageOverrides(versions []string) []string {
+	overrides := viper.GetStringSlice("rancher.agent_images")
+	if len(overrides) == 0 {
+		if single := strings.TrimSpace(viper.GetString("rancher.agent_image")); single != "" {
+			overrides = []string{single}
+		}
+	}
+	for len(overrides) < len(versions) {
+		overrides = append(overrides, "")
+	}
+	if len(overrides) > len(versions) {
+		overrides = overrides[:len(versions)]
+	}
+	return overrides
 }
 
 func currentManualHelmCommands() []string {
@@ -724,6 +742,7 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 		DeploymentType:        r.FormValue("deploymentType"),
 		Mode:                  r.FormValue("mode"),
 		Versions:              r.Form["versions"],
+		AgentImages:           r.Form["agentImages"],
 		HelmCommands:          r.Form["helmCommands"],
 		K8SVersions:           r.Form["k8sVersions"],
 		InstallerSHA256s:      r.Form["installerSHA256s"],
