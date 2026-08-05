@@ -282,3 +282,5 @@ RKE2 artifacts downloaded onto cluster nodes are validated before use:
 
 In manual mode, you provide installer checksum pins. In auto mode, the app
 resolves the matching installer checksum during plan generation.
+
+# Test
