@@ -588,14 +588,22 @@ func dockerHubCredentialsAccepted(ctx context.Context, client *http.Client, toke
 	}
 }
 
-func validateWebhookImagePreflight() error {
-	webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE"))
+func configuredRancherWebhookImage() string {
+	if webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE")); webhookImage != "" {
+		return webhookImage
+	}
+	return configuredRancherInstallWebhookImage()
+}
+
+func configuredRancherInstallWebhookImage() string {
+	return strings.TrimSpace(viper.GetString("rancher.webhook_image"))
+}
+
+func validateRancherWebhookImage(webhookImage string) error {
+	webhookImage = strings.TrimSpace(webhookImage)
 	if webhookImage == "" {
-		log.Printf("[preflight] No RANCHER_WEBHOOK_IMAGE set; skipping explicit webhook image manifest check")
 		return nil
 	}
-
-	log.Printf("[preflight] Validating webhook image manifest before provisioning: %s", webhookImage)
 	registry, repository, tag, err := parseRegistryImage(webhookImage)
 	if err != nil {
 		return err
@@ -606,6 +614,20 @@ func validateWebhookImagePreflight() error {
 	}
 	if !found {
 		return fmt.Errorf("webhook image %s was not found in registry", webhookImage)
+	}
+	return nil
+}
+
+func validateWebhookImagePreflight() error {
+	webhookImage := configuredRancherWebhookImage()
+	if webhookImage == "" {
+		log.Printf("[preflight] No Rancher webhook image override configured; skipping explicit webhook image manifest check")
+		return nil
+	}
+
+	log.Printf("[preflight] Validating webhook image manifest before provisioning: %s", webhookImage)
+	if err := validateRancherWebhookImage(webhookImage); err != nil {
+		return err
 	}
 
 	log.Printf("[preflight] Webhook image manifest validated successfully")

@@ -47,7 +47,16 @@ func prepareHostedTenantRancherConfiguration(totalInstances int) ([]*RancherReso
 }
 
 func prepareManualHostedTenantPlans(totalInstances int) ([]*RancherResolvedPlan, error) {
+	webhookImage := configuredRancherInstallWebhookImage()
+	if err := validateRancherWebhookImage(webhookImage); err != nil {
+		return nil, err
+	}
 	helmCommands := viper.GetStringSlice("rancher.helm_commands")
+	var err error
+	helmCommands, err = rancherHelmCommandsWithWebhookImage(helmCommands, webhookImage)
+	if err != nil {
+		return nil, err
+	}
 	if len(helmCommands) != totalInstances {
 		return nil, fmt.Errorf("rancher.helm_commands has %d entries but total_rancher_instances is %d", len(helmCommands), totalInstances)
 	}
@@ -79,6 +88,7 @@ func prepareManualHostedTenantPlans(totalInstances int) ([]*RancherResolvedPlan,
 			HelmCommands:          []string{strings.TrimSpace(helmCommands[i])},
 		})
 	}
+	viper.Set("rancher.helm_commands", helmCommands)
 	return plans, nil
 }
 
@@ -89,10 +99,11 @@ func resolveAutoHostedTenantPlans(totalInstances int) ([]*RancherResolvedPlan, e
 	}
 
 	for _, plan := range plans {
-		highestK3SMinor, supportExplanation, err := resolveHighestSupportedHostedK3SMinor(plan.SupportMatrixURL)
+		highestK3SMinor, supportExplanation, resolvedSupportMatrixURL, err := resolveHighestSupportedHostedK3SMinor(plan.SupportMatrixURL)
 		if err != nil {
 			return nil, err
 		}
+		plan.SupportMatrixURL = resolvedSupportMatrixURL
 		recommendedK3S, err := resolveLatestHostedK3SPatch(highestK3SMinor)
 		if err != nil {
 			return nil, err
@@ -160,41 +171,38 @@ func hostedK3SChecksumForVersion(mapKey, singleKey, version string) (string, err
 	return "", fmt.Errorf("%s.%s must be set", mapKey, version)
 }
 
-func resolveHighestSupportedHostedK3SMinor(supportMatrixURL string) (int, string, error) {
-	body, err := fetchURLBody(supportMatrixURL)
+func resolveHighestSupportedHostedK3SMinor(supportMatrixURL string) (int, string, string, error) {
+	page, err := resolveSupportMatrixPage(supportMatrixURL)
 	if err != nil {
-		return resolveCachedSupportRange("K3s", supportMatrixURL, err)
+		highest, summary, resolvedURL, cacheErr := resolveCachedSupportRange("K3s", supportMatrixURL, err)
+		return highest, summary, resolvedURL, cacheErr
 	}
-	textContent, err := extractTextFromHTML(body)
+	textContent, err := extractTextFromHTML(page.Body)
 	if err != nil {
-		return resolveCachedSupportRange("K3s", supportMatrixURL, fmt.Errorf("failed to parse support matrix page: %w", err))
+		highest, summary, resolvedURL, cacheErr := resolveCachedSupportRange("K3s", page.URL, fmt.Errorf("failed to parse support matrix page: %w", err))
+		return highest, supportMatrixSummary(page, summary), resolvedURL, cacheErr
 	}
 
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`K3s\s+v1\.(\d+)\s+v1\.(\d+)`),
-		regexp.MustCompile(`K3s[^\n\r]*?v1\.(\d+)[^\n\r]*?v1\.(\d+)`),
+	pattern := regexp.MustCompile(`(?i)K3s\s+v1\.(\d+)\s+v1\.(\d+)`)
+	matches := pattern.FindStringSubmatch(textContent)
+	if len(matches) != 3 {
+		highest, summary, resolvedURL, cacheErr := resolveCachedSupportRange("K3s", page.URL, fmt.Errorf("could not find supported K3s range in support matrix page"))
+		return highest, supportMatrixSummary(page, summary), resolvedURL, cacheErr
 	}
-	for _, pattern := range patterns {
-		matches := pattern.FindStringSubmatch(textContent)
-		if len(matches) != 3 {
-			continue
-		}
-		highest, err := goversion.NewVersion(matches[2])
-		if err != nil {
-			return 0, "", fmt.Errorf("failed to parse supported K3s minor %q: %w", matches[2], err)
-		}
-		segments := highest.Segments64()
-		if len(segments) == 0 {
-			return 0, "", fmt.Errorf("unexpected supported K3s minor value %q", highest.Original())
-		}
-		maxMinor := int(segments[0])
-		var minMinor int
-		fmt.Sscanf(matches[1], "%d", &minMinor)
-		rangeText := fmt.Sprintf("Support matrix certifies K3s from v1.%s through v1.%s", matches[1], matches[2])
-		updateSupportRangeCache("K3s", supportMatrixURL, rangeText, minMinor, maxMinor)
-		return maxMinor, rangeText, nil
+	highest, err := goversion.NewVersion(matches[2])
+	if err != nil {
+		return 0, "", page.URL, fmt.Errorf("failed to parse supported K3s minor %q: %w", matches[2], err)
 	}
-	return resolveCachedSupportRange("K3s", supportMatrixURL, fmt.Errorf("could not find supported K3s range in support matrix page"))
+	segments := highest.Segments64()
+	if len(segments) == 0 {
+		return 0, "", page.URL, fmt.Errorf("unexpected supported K3s minor value %q", highest.Original())
+	}
+	maxMinor := int(segments[0])
+	var minMinor int
+	fmt.Sscanf(matches[1], "%d", &minMinor)
+	rangeText := fmt.Sprintf("Support matrix certifies K3s from v1.%s through v1.%s", matches[1], matches[2])
+	cacheResolvedSupportMatrixRange("K3s", page, rangeText, minMinor, maxMinor)
+	return maxMinor, supportMatrixSummary(page, rangeText), page.URL, nil
 }
 
 func resolveLatestHostedK3SPatch(highestMinor int) (string, error) {

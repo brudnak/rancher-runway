@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	goversion "github.com/hashicorp/go-version"
 	"github.com/spf13/viper"
@@ -23,11 +25,16 @@ const (
 	rancherHelmOperationInstall = "install"
 	rancherHelmOperationUpgrade = "upgrade"
 	rancherHookImageRegistry    = "registry.rancher.com"
+	supportMatrixIndexURL       = "https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/"
+	rancherResolverHTTPTimeout  = 30 * time.Second
 )
 
-var rancherRegistryHTTPClient = http.DefaultClient
+var rancherRegistryHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout}
 var rancherRegistryBaseURLs = map[string]string{}
 var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)-[0-9a-fA-F]{7,40}-head$`)
+var rcsVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+-rcs-\d+\.\d+$`)
+var supportMatrixURLVersionPattern = regexp.MustCompile(`rancher-v(\d+)-(\d+)-(\d+)/?`)
+var rancherLookupHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout}
 
 type customRancherImageRequest struct {
 	serverRepository string
@@ -86,11 +93,19 @@ func hasRequestedRancherVersions() bool {
 }
 
 func prepareManualRKE2Plans(totalHAs int) ([]*RancherResolvedPlan, error) {
+	webhookImage := configuredRancherInstallWebhookImage()
+	if err := validateRancherWebhookImage(webhookImage); err != nil {
+		return nil, err
+	}
 	versions, err := getRequestedRKE2Versions(totalHAs)
 	if err != nil {
 		return nil, err
 	}
 	helmCommands := viper.GetStringSlice("rancher.helm_commands")
+	helmCommands, err = rancherHelmCommandsWithWebhookImage(helmCommands, webhookImage)
+	if err != nil {
+		return nil, err
+	}
 	if len(helmCommands) != totalHAs {
 		return nil, fmt.Errorf("rancher.helm_commands has %d entries but total_has is %d; please provide exactly one Helm command per HA", len(helmCommands), totalHAs)
 	}
@@ -109,11 +124,16 @@ func prepareManualRKE2Plans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			HelmCommands:           []string{strings.TrimSpace(helmCommands[i])},
 		})
 	}
+	viper.Set("rancher.helm_commands", helmCommands)
 
 	return plans, nil
 }
 
 func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
+	webhookImage := configuredRancherInstallWebhookImage()
+	if err := validateRancherWebhookImage(webhookImage); err != nil {
+		return nil, err
+	}
 	requestedVersions, err := getRequestedRancherVersions(totalHAs)
 	if err != nil {
 		return nil, err
@@ -194,14 +214,18 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			imageExplanation = []string{fmt.Sprintf("Using exact custom Rancher image %s and derived agent image %s", requestedVersion, agentImage)}
 		}
 		if explicitAgentImage := agentImageOverrides[planIndex]; explicitAgentImage != "" {
-			if !isCustomImage {
-				return nil, fmt.Errorf("rancher.agent_images[%d] requires a custom Rancher server or agent image in rancher.versions[%d]", planIndex, planIndex)
+			if !allowsExplicitAgentImageOverride(requestedVersion, isCustomImage) {
+				return nil, fmt.Errorf("rancher.agent_images[%d] requires a custom Rancher server or agent image, or an RCS build, in rancher.versions[%d]", planIndex, planIndex)
 			}
 			if err := validateCustomAgentImage(explicitAgentImage); err != nil {
 				return nil, fmt.Errorf("rancher.agent_images[%d]: %w", planIndex, err)
 			}
 			agentImage = explicitAgentImage
-			imageExplanation = []string{fmt.Sprintf("Using exact custom Rancher image %s and explicitly supplied agent image %s", rancherImage+":"+rancherImageTag, agentImage)}
+			if isCustomImage {
+				imageExplanation = []string{fmt.Sprintf("Using exact custom Rancher image %s and explicitly supplied agent image %s", rancherImage+":"+rancherImageTag, agentImage)}
+			} else {
+				imageExplanation = []string{fmt.Sprintf("Using exact RCS staging Rancher image %s and explicitly supplied agent image %s", rancherImage+":"+rancherImageTag, agentImage)}
+			}
 		}
 		if buildType == "head" && isCommitHeadRancherVersion(requestedVersion) {
 			rancherImage, rancherImageTag, agentImage, imageExplanation, err = resolveCommitHeadImageSettings(requestedVersion)
@@ -221,7 +245,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 				imageExplanation,
 			)
 		}
-		if buildType != "release" && chartVersion == requestedVersion && chartRepoAlias == "rancher-prime" {
+		if buildType != "release" && chartVersion == requestedVersion && chartRepoAlias == "rancher-prime" && !isRCSServerBuild(requestedVersion) {
 			rancherImage = ""
 			rancherImageTag = ""
 			agentImage = ""
@@ -231,10 +255,14 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			if rancherLatestTagOnly {
 				explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with community image defaults", chartRepoAlias, chartVersion))
 			} else if err := validateResolvedRancherImages(rancherImage, rancherImageTag, agentImage); err != nil {
-				rancherImage = ""
-				agentImage = ""
-				imageExplanation = []string{fmt.Sprintf("Staging Rancher image override was unavailable for %s, using exact community chart/image defaults", requestedVersion)}
-				explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with community image defaults", chartRepoAlias, chartVersion))
+				if isRCSServerBuild(requestedVersion) {
+					explanation = append(explanation, fmt.Sprintf("RCS build %s requires its explicit staging Rancher images", requestedVersion))
+				} else {
+					rancherImage = ""
+					agentImage = ""
+					imageExplanation = []string{fmt.Sprintf("Staging Rancher image override was unavailable for %s, using exact community chart/image defaults", requestedVersion)}
+					explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with community image defaults", chartRepoAlias, chartVersion))
+				}
 			} else {
 				explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with explicit staging Rancher image overrides", chartRepoAlias, chartVersion))
 			}
@@ -270,10 +298,11 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		recommendedRKE2Version := ""
 		installerSHA256 := ""
 		if !isHostedTenantK3SDeployment() {
-			highestRKE2Minor, supportExplanation, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
+			highestRKE2Minor, supportExplanation, resolvedSupportMatrixURL, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
 			if err != nil {
 				return nil, err
 			}
+			supportMatrixURL = resolvedSupportMatrixURL
 			explanation = append(explanation, supportExplanation)
 
 			recommendedRKE2Version, err = resolveLatestRKE2Patch(highestRKE2Minor)
@@ -289,6 +318,10 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		}
 
 		helmCommands := buildAutoHelmCommands(1, rancherHelmOperationInstall, chartRepoAlias, chartVersion, bootstrapPassword, rancherImage, rancherImageTag, agentImage, useRancherImageFields)
+		helmCommands, err = rancherHelmCommandsWithWebhookImage(helmCommands, webhookImage)
+		if err != nil {
+			return nil, fmt.Errorf("configure Rancher webhook image for %s: %w", requestedVersion, err)
+		}
 
 		plans = append(plans, &RancherResolvedPlan{
 			Mode:                   "auto",
@@ -342,6 +375,10 @@ func validateCustomAgentImage(image string) error {
 		return fmt.Errorf("custom Rancher agent image repository must end in /rancher-agent, got %q", image)
 	}
 	return nil
+}
+
+func allowsExplicitAgentImageOverride(requestedVersion string, isCustomImage bool) bool {
+	return isCustomImage || isRCSServerBuild(requestedVersion)
 }
 
 func mapKeys(values map[string]bool) []string {
@@ -459,7 +496,6 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 	headPattern := regexp.MustCompile(`^\d+\.\d+-head$`)
 	alphaPattern := regexp.MustCompile(`^\d+\.\d+\.\d+-alpha\d+$`)
 	rcPattern := regexp.MustCompile(`^\d+\.\d+\.\d+-rc\d+$`)
-	rcsPattern := regexp.MustCompile(`^\d+\.\d+\.\d+-rcs-\d+\.\d+$`)
 	releasePattern := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 	switch {
@@ -477,7 +513,7 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 	case rcPattern.MatchString(version):
 		parts := strings.Split(version, "-")
 		return "rc", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
-	case rcsPattern.MatchString(version):
+	case rcsVersionPattern.MatchString(version):
 		parts := strings.Split(version, "-")
 		return "rc", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
 	case releasePattern.MatchString(version):
@@ -531,8 +567,15 @@ func isCommitHeadRancherVersion(version string) bool {
 	return commitHeadVersionPattern.MatchString(strings.TrimSpace(version))
 }
 
+func isRCSServerBuild(version string) bool {
+	return rcsVersionPattern.MatchString(normalizeVersionInput(version))
+}
+
 func shouldUseRancherLatestTagOnly(buildType, chartRepoAlias, requestedVersion string) bool {
-	return buildType != "release" && chartRepoAlias == "rancher-latest" && !isCommitHeadRancherVersion(requestedVersion)
+	return buildType != "release" &&
+		chartRepoAlias == "rancher-latest" &&
+		!isCommitHeadRancherVersion(requestedVersion) &&
+		!isRCSServerBuild(requestedVersion)
 }
 
 func applyRancherLatestTagOnlySettings(
@@ -1207,31 +1250,209 @@ func buildSupportMatrixURL(releasedVersion string) string {
 	return fmt.Sprintf("https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/rancher-v%s/", pathVersion)
 }
 
-func resolveHighestSupportedRKE2Minor(supportMatrixURL string) (int, string, error) {
-	body, err := fetchURLBody(supportMatrixURL)
+type supportMatrixVersion struct {
+	Major int
+	Minor int
+	Patch int
+}
+
+func (version supportMatrixVersion) String() string {
+	return fmt.Sprintf("%d.%d.%d", version.Major, version.Minor, version.Patch)
+}
+
+func (version supportMatrixVersion) equal(other supportMatrixVersion) bool {
+	return version.Major == other.Major && version.Minor == other.Minor && version.Patch == other.Patch
+}
+
+type resolvedSupportMatrixPage struct {
+	RequestedURL string
+	URL          string
+	Body         string
+	FallbackNote string
+}
+
+type supportMatrixRedirectError struct {
+	Requested supportMatrixVersion
+	Resolved  supportMatrixVersion
+}
+
+func (err supportMatrixRedirectError) Error() string {
+	return fmt.Sprintf("support matrix request for Rancher %s resolved to Rancher %s", err.Requested, err.Resolved)
+}
+
+func resolveSupportMatrixPage(requestedURL string) (resolvedSupportMatrixPage, error) {
+	requestedVersion, err := supportMatrixVersionFromURL(requestedURL)
 	if err != nil {
-		return resolveCachedSupportRange("RKE2", supportMatrixURL, err)
+		return resolvedSupportMatrixPage{RequestedURL: requestedURL, URL: requestedURL}, err
 	}
 
-	textContent, err := extractTextFromHTML(body)
-	if err != nil {
-		return resolveCachedSupportRange("RKE2", supportMatrixURL, fmt.Errorf("failed to parse support matrix page: %w", err))
+	body, resolvedURL, fetchErr := fetchURLBodyWithResolvedURL(requestedURL)
+	if fetchErr == nil {
+		if resolvedVersion, resolvedErr := supportMatrixVersionFromURL(resolvedURL); resolvedErr == nil && !resolvedVersion.equal(requestedVersion) {
+			fetchErr = supportMatrixRedirectError{Requested: requestedVersion, Resolved: resolvedVersion}
+		} else {
+			return resolvedSupportMatrixPage{RequestedURL: requestedURL, URL: requestedURL, Body: body}, nil
+		}
+	}
+	if !isMissingSupportMatrixPage(fetchErr) {
+		return resolvedSupportMatrixPage{RequestedURL: requestedURL, URL: requestedURL}, fetchErr
 	}
 
-	rke2RangePattern := regexp.MustCompile(`RKE2\s+v1\.(\d+)\s+v1\.(\d+)`)
+	indexBody, resolvedIndexURL, indexErr := fetchURLBodyWithResolvedURL(supportMatrixIndexURL)
+	if indexErr != nil {
+		return resolvedSupportMatrixPage{RequestedURL: requestedURL, URL: requestedURL}, fmt.Errorf("%w; published support-matrix discovery failed: %v", fetchErr, indexErr)
+	}
+	versions := supportMatrixVersionsFromHTML(indexBody)
+	if resolvedIndexVersion, resolvedErr := supportMatrixVersionFromURL(resolvedIndexURL); resolvedErr == nil {
+		versions = append(versions, resolvedIndexVersion)
+	}
+	fallbackVersion, ok := selectSupportMatrixFallback(requestedVersion, versions)
+	if !ok {
+		return resolvedSupportMatrixPage{RequestedURL: requestedURL, URL: requestedURL}, fmt.Errorf("%w; no published Rancher support matrix at or before the %d.%d release line was listed by %s", fetchErr, requestedVersion.Major, requestedVersion.Minor, supportMatrixIndexURL)
+	}
+
+	fallbackURL := buildSupportMatrixURL(fallbackVersion.String())
+	fallbackBody, resolvedFallbackURL, fallbackErr := fetchURLBodyWithResolvedURL(fallbackURL)
+	if fallbackErr != nil {
+		return resolvedSupportMatrixPage{RequestedURL: requestedURL, URL: requestedURL}, fmt.Errorf("%w; fallback support matrix %s also failed: %v", fetchErr, fallbackURL, fallbackErr)
+	}
+	if resolvedVersion, resolvedErr := supportMatrixVersionFromURL(resolvedFallbackURL); resolvedErr == nil && !resolvedVersion.equal(fallbackVersion) {
+		return resolvedSupportMatrixPage{RequestedURL: requestedURL, URL: requestedURL}, fmt.Errorf("%w; fallback support matrix %s resolved to Rancher %s", fetchErr, fallbackURL, resolvedVersion)
+	}
+
+	return resolvedSupportMatrixPage{
+		RequestedURL: requestedURL,
+		URL:          fallbackURL,
+		Body:         fallbackBody,
+		FallbackNote: fmt.Sprintf("No SUSE support matrix is published for Rancher %s; using Rancher %s as the nearest published compatibility proxy (the requested build is not being reported as certified)", requestedVersion, fallbackVersion),
+	}, nil
+}
+
+func supportMatrixVersionFromURL(value string) (supportMatrixVersion, error) {
+	match := supportMatrixURLVersionPattern.FindStringSubmatch(strings.TrimSpace(value))
+	if len(match) != 4 {
+		return supportMatrixVersion{}, fmt.Errorf("could not determine Rancher version from support matrix URL %q", value)
+	}
+	major, majorErr := strconv.Atoi(match[1])
+	minor, minorErr := strconv.Atoi(match[2])
+	patch, patchErr := strconv.Atoi(match[3])
+	if majorErr != nil || minorErr != nil || patchErr != nil {
+		return supportMatrixVersion{}, fmt.Errorf("invalid Rancher version in support matrix URL %q", value)
+	}
+	return supportMatrixVersion{Major: major, Minor: minor, Patch: patch}, nil
+}
+
+func supportMatrixVersionsFromHTML(body string) []supportMatrixVersion {
+	matches := supportMatrixURLVersionPattern.FindAllStringSubmatch(body, -1)
+	versions := make([]supportMatrixVersion, 0, len(matches))
+	seen := map[supportMatrixVersion]bool{}
+	for _, match := range matches {
+		if len(match) != 4 {
+			continue
+		}
+		major, majorErr := strconv.Atoi(match[1])
+		minor, minorErr := strconv.Atoi(match[2])
+		patch, patchErr := strconv.Atoi(match[3])
+		if majorErr != nil || minorErr != nil || patchErr != nil {
+			continue
+		}
+		version := supportMatrixVersion{Major: major, Minor: minor, Patch: patch}
+		if !seen[version] {
+			seen[version] = true
+			versions = append(versions, version)
+		}
+	}
+	return versions
+}
+
+func selectSupportMatrixFallback(requested supportMatrixVersion, versions []supportMatrixVersion) (supportMatrixVersion, bool) {
+	var sameMinor *supportMatrixVersion
+	sameMinorDistance := 0
+	for _, candidate := range versions {
+		if candidate.equal(requested) || candidate.Major != requested.Major || candidate.Minor != requested.Minor {
+			continue
+		}
+		distance := candidate.Patch - requested.Patch
+		if distance < 0 {
+			distance = -distance
+		}
+		if sameMinor == nil || distance < sameMinorDistance || (distance == sameMinorDistance && candidate.Patch < sameMinor.Patch) {
+			candidateCopy := candidate
+			sameMinor = &candidateCopy
+			sameMinorDistance = distance
+		}
+	}
+	if sameMinor != nil {
+		return *sameMinor, true
+	}
+
+	var earlier *supportMatrixVersion
+	for _, candidate := range versions {
+		if candidate.Major != requested.Major || candidate.Minor >= requested.Minor {
+			continue
+		}
+		if earlier == nil || candidate.Minor > earlier.Minor || (candidate.Minor == earlier.Minor && candidate.Patch > earlier.Patch) {
+			candidateCopy := candidate
+			earlier = &candidateCopy
+		}
+	}
+	if earlier == nil {
+		return supportMatrixVersion{}, false
+	}
+	return *earlier, true
+}
+
+func isMissingSupportMatrixPage(err error) bool {
+	var statusErr httpStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.StatusCode == http.StatusNotFound || statusErr.StatusCode == http.StatusGone
+	}
+	var redirectErr supportMatrixRedirectError
+	return errors.As(err, &redirectErr)
+}
+
+func supportMatrixSummary(page resolvedSupportMatrixPage, rangeText string) string {
+	if page.FallbackNote == "" {
+		return rangeText
+	}
+	return page.FallbackNote + ". " + rangeText
+}
+
+func cacheResolvedSupportMatrixRange(product string, page resolvedSupportMatrixPage, rangeText string, minMinor, maxMinor int) {
+	updateSupportRangeCacheWithResolvedURL(product, page.URL, page.URL, rangeText, minMinor, maxMinor)
+	if page.RequestedURL != "" && page.RequestedURL != page.URL {
+		updateSupportRangeCacheWithResolvedURL(product, page.RequestedURL, page.URL, supportMatrixSummary(page, rangeText), minMinor, maxMinor)
+	}
+}
+
+func resolveHighestSupportedRKE2Minor(supportMatrixURL string) (int, string, string, error) {
+	page, err := resolveSupportMatrixPage(supportMatrixURL)
+	if err != nil {
+		highest, summary, resolvedURL, cacheErr := resolveCachedSupportRange("RKE2", supportMatrixURL, err)
+		return highest, summary, resolvedURL, cacheErr
+	}
+
+	textContent, err := extractTextFromHTML(page.Body)
+	if err != nil {
+		highest, summary, resolvedURL, cacheErr := resolveCachedSupportRange("RKE2", page.URL, fmt.Errorf("failed to parse support matrix page: %w", err))
+		return highest, supportMatrixSummary(page, summary), resolvedURL, cacheErr
+	}
+
+	rke2RangePattern := regexp.MustCompile(`(?i)RKE2\s+v1\.(\d+)\s+v1\.(\d+)`)
 	matches := rke2RangePattern.FindStringSubmatch(textContent)
 	if len(matches) != 3 {
-		return resolveCachedSupportRange("RKE2", supportMatrixURL, fmt.Errorf("could not find supported RKE2 range in support matrix page"))
+		highest, summary, resolvedURL, cacheErr := resolveCachedSupportRange("RKE2", page.URL, fmt.Errorf("could not find supported RKE2 range in support matrix page"))
+		return highest, supportMatrixSummary(page, summary), resolvedURL, cacheErr
 	}
 
 	highestMinorVersion, err := goversion.NewVersion(matches[2])
 	if err != nil {
-		return 0, "", fmt.Errorf("failed to parse supported RKE2 minor %q: %w", matches[2], err)
+		return 0, "", page.URL, fmt.Errorf("failed to parse supported RKE2 minor %q: %w", matches[2], err)
 	}
 
 	majorSegments := strings.Split(highestMinorVersion.Original(), ".")
 	if len(majorSegments) == 0 {
-		return 0, "", fmt.Errorf("unexpected supported RKE2 minor value %q", highestMinorVersion.Original())
+		return 0, "", page.URL, fmt.Errorf("unexpected supported RKE2 minor value %q", highestMinorVersion.Original())
 	}
 
 	var highestMinor int
@@ -1239,8 +1460,8 @@ func resolveHighestSupportedRKE2Minor(supportMatrixURL string) (int, string, err
 	var minMinor int
 	fmt.Sscanf(matches[1], "%d", &minMinor)
 	rangeText := fmt.Sprintf("Support matrix certifies RKE2 from v1.%s through v1.%s", matches[1], matches[2])
-	updateSupportRangeCache("RKE2", supportMatrixURL, rangeText, minMinor, highestMinor)
-	return highestMinor, rangeText, nil
+	cacheResolvedSupportMatrixRange("RKE2", page, rangeText, minMinor, highestMinor)
+	return highestMinor, supportMatrixSummary(page, rangeText), page.URL, nil
 }
 
 func resolveLatestRKE2Patch(highestMinor int) (string, error) {
@@ -1353,10 +1574,11 @@ func recommendManualRKE2Version(helmCommand string, result *manualRKE2Recommenda
 	result.CompatibilityBaseline = compatibilityBaseline
 	supportMatrixURL := buildSupportMatrixURL(compatibilityBaseline)
 	result.SupportMatrixURL = supportMatrixURL
-	highestRKE2Minor, supportExplanation, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
+	highestRKE2Minor, supportExplanation, resolvedSupportMatrixURL, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
 	if err != nil {
 		return "", err
 	}
+	result.SupportMatrixURL = resolvedSupportMatrixURL
 	result.Detail = supportExplanation
 	return resolveLatestRKE2Patch(highestRKE2Minor)
 }
@@ -1520,6 +1742,18 @@ func rancherHelmCommandWithWebhookImage(command, image string) (string, error) {
 	return strings.TrimSpace(command) + " \\\n  --set-literal " + shellQuote("webhook="+payload), nil
 }
 
+func rancherHelmCommandsWithWebhookImage(commands []string, image string) ([]string, error) {
+	configured := make([]string, len(commands))
+	for i, command := range commands {
+		var err error
+		configured[i], err = rancherHelmCommandWithWebhookImage(command, image)
+		if err != nil {
+			return nil, fmt.Errorf("Helm command %d: %w", i+1, err)
+		}
+	}
+	return configured, nil
+}
+
 func rancherWebhookValuesJSON(image string) (string, error) {
 	registry, repository, tag, err := parseRegistryImage(image)
 	if err != nil {
@@ -1646,21 +1880,30 @@ func splitRegistryRepository(image string) (string, string, bool) {
 }
 
 func fetchURLBody(url string) (string, error) {
-	resp, err := http.Get(url)
+	body, _, err := fetchURLBodyWithResolvedURL(url)
+	return body, err
+}
+
+func fetchURLBodyWithResolvedURL(url string) (string, string, error) {
+	resp, err := rancherLookupHTTPClient.Get(url)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch %s: %w", url, err)
+		return "", url, fmt.Errorf("failed to fetch %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
+	resolvedURL := url
+	if resp.Request != nil && resp.Request.URL != nil {
+		resolvedURL = resp.Request.URL.String()
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", httpStatusError{URL: url, StatusCode: resp.StatusCode}
+		return "", resolvedURL, httpStatusError{URL: url, StatusCode: resp.StatusCode}
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read %s: %w", url, err)
+		return "", resolvedURL, fmt.Errorf("failed to read %s: %w", url, err)
 	}
-	return string(body), nil
+	return string(body), resolvedURL, nil
 }
 
 func extractTextFromHTML(document string) (string, error) {

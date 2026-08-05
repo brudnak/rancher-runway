@@ -2,6 +2,7 @@ package test
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -150,6 +151,29 @@ func TestRequestedAgentImageOverridesAllowExplicitPair(t *testing.T) {
 	}
 }
 
+func TestExplicitAgentImageOverrideSupportsCustomImagesAndRCSBuilds(t *testing.T) {
+	tests := []struct {
+		name             string
+		requestedVersion string
+		isCustomImage    bool
+		want             bool
+	}{
+		{name: "custom image", requestedVersion: "docker.io/example/rancher:fix", isCustomImage: true, want: true},
+		{name: "RCS build", requestedVersion: "2.16.0-rcs-0844.1", want: true},
+		{name: "RCS build with v prefix", requestedVersion: "v2.16.0-rcs-0844.1", want: true},
+		{name: "released version", requestedVersion: "2.15.3", want: false},
+		{name: "standard RC", requestedVersion: "2.16.0-rc1", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := allowsExplicitAgentImageOverride(tt.requestedVersion, tt.isCustomImage); got != tt.want {
+				t.Fatalf("allowsExplicitAgentImageOverride(%q, %t) = %t, want %t", tt.requestedVersion, tt.isCustomImage, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClassifyRancherVersionAllowsCommitHead(t *testing.T) {
 	version := "2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
 	buildType, minorLine, err := classifyRancherVersion(version)
@@ -162,12 +186,12 @@ func TestClassifyRancherVersionAllowsCommitHead(t *testing.T) {
 }
 
 func TestClassifyRancherVersionAllowsRCSServerBuild(t *testing.T) {
-	buildType, minorLine, err := classifyRancherVersion("2.15.0-rcs-9933.2")
+	buildType, minorLine, err := classifyRancherVersion("2.16.0-rcs-0844.1")
 	if err != nil {
 		t.Fatalf("expected RCS build to be valid, got error: %v", err)
 	}
-	if buildType != "rc" || minorLine != "2.15" {
-		t.Fatalf("expected RCS build classification for 2.15 RC, got buildType=%q minorLine=%q", buildType, minorLine)
+	if buildType != "rc" || minorLine != "2.16" {
+		t.Fatalf("expected RCS build classification for 2.16 RC, got buildType=%q minorLine=%q", buildType, minorLine)
 	}
 }
 
@@ -525,13 +549,109 @@ func TestResolveCachedSupportRangeFallsBackToValidatedCache(t *testing.T) {
 	supportMatrixURL := "https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/rancher-v2-14-1/"
 	updateSupportRangeCache("RKE2", supportMatrixURL, "Support matrix certifies RKE2 from v1.30 through v1.31", 30, 31)
 
-	highestMinor, summary, err := resolveCachedSupportRange("RKE2", supportMatrixURL, httpStatusError{URL: supportMatrixURL, StatusCode: http.StatusNotFound})
+	highestMinor, summary, resolvedURL, err := resolveCachedSupportRange("RKE2", supportMatrixURL, httpStatusError{URL: supportMatrixURL, StatusCode: http.StatusNotFound})
 	if err != nil {
 		t.Fatalf("expected cached support range, got %v", err)
 	}
 	if highestMinor != 31 || summary != "Support matrix certifies RKE2 from v1.30 through v1.31" {
 		t.Fatalf("unexpected cached support range: minor=%d summary=%q", highestMinor, summary)
 	}
+	if resolvedURL != supportMatrixURL {
+		t.Fatalf("unexpected cached support matrix URL: %q", resolvedURL)
+	}
+}
+
+func TestSupportMatrixResolutionUsesNearestPublishedCompatibilityProxy(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "release-cache.json")
+	t.Setenv(releaseLookupCachePathEnv, cachePath)
+
+	requestedURL := buildSupportMatrixURL("2.16.0")
+	fallbackURL := buildSupportMatrixURL("2.14.4")
+	offline := false
+	previousClient := rancherLookupHTTPClient
+	rancherLookupHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		status := http.StatusOK
+		body := ""
+		if offline {
+			status = http.StatusServiceUnavailable
+		} else {
+			switch req.URL.String() {
+			case requestedURL:
+				status = http.StatusNotFound
+			case supportMatrixIndexURL:
+				body = `<a href="/suse-rancher/support-matrix/all-supported-versions/rancher-v2-14-4/">2.14.4</a>
+				<a href="/suse-rancher/support-matrix/all-supported-versions/rancher-v2-13-7/">2.13.7</a>`
+			case fallbackURL:
+				body = `<html><body><nav>K3S 1.X v1.36 v1.35</nav><div>RKE2 v1.33 v1.35</div><div>k3s v1.32 v1.34</div></body></html>`
+			default:
+				status = http.StatusNotFound
+			}
+		}
+		return &http.Response{
+			StatusCode: status,
+			Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+	t.Cleanup(func() { rancherLookupHTTPClient = previousClient })
+
+	rke2Minor, rke2Summary, rke2URL, err := resolveHighestSupportedRKE2Minor(requestedURL)
+	if err != nil {
+		t.Fatalf("expected RKE2 compatibility proxy resolution to succeed, got %v", err)
+	}
+	if rke2Minor != 35 || rke2URL != fallbackURL {
+		t.Fatalf("unexpected RKE2 fallback: minor=%d URL=%q", rke2Minor, rke2URL)
+	}
+	for _, want := range []string{"nearest published compatibility proxy", "not being reported as certified", "RKE2 from v1.33 through v1.35"} {
+		if !strings.Contains(rke2Summary, want) {
+			t.Fatalf("expected RKE2 explanation to contain %q, got %q", want, rke2Summary)
+		}
+	}
+
+	k3sMinor, k3sSummary, k3sURL, err := resolveHighestSupportedHostedK3SMinor(requestedURL)
+	if err != nil {
+		t.Fatalf("expected K3s compatibility proxy resolution to succeed, got %v", err)
+	}
+	if k3sMinor != 34 || k3sURL != fallbackURL {
+		t.Fatalf("unexpected K3s fallback: minor=%d URL=%q", k3sMinor, k3sURL)
+	}
+	if !strings.Contains(k3sSummary, "K3s from v1.32 through v1.34") {
+		t.Fatalf("unexpected K3s explanation: %q", k3sSummary)
+	}
+
+	offline = true
+	cachedMinor, cachedSummary, cachedURL, err := resolveHighestSupportedRKE2Minor(requestedURL)
+	if err != nil {
+		t.Fatalf("expected requested-to-proxy support range cache to survive an outage, got %v", err)
+	}
+	if cachedMinor != 35 || !strings.Contains(cachedSummary, "nearest published compatibility proxy") || !strings.Contains(cachedSummary, "not being reported as certified") {
+		t.Fatalf("unexpected cached compatibility proxy result: minor=%d summary=%q", cachedMinor, cachedSummary)
+	}
+	if cachedURL != fallbackURL {
+		t.Fatalf("expected cached compatibility proxy URL %q, got %q", fallbackURL, cachedURL)
+	}
+}
+
+func TestSelectSupportMatrixFallbackPrefersNearestSameMinorPatch(t *testing.T) {
+	got, ok := selectSupportMatrixFallback(
+		supportMatrixVersion{Major: 2, Minor: 14, Patch: 0},
+		[]supportMatrixVersion{
+			{Major: 2, Minor: 14, Patch: 4},
+			{Major: 2, Minor: 13, Patch: 7},
+			{Major: 2, Minor: 14, Patch: 1},
+		},
+	)
+	if !ok || got != (supportMatrixVersion{Major: 2, Minor: 14, Patch: 1}) {
+		t.Fatalf("expected nearest 2.14 patch, got %#v ok=%t", got, ok)
+	}
+}
+
+type rancherPlanRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn rancherPlanRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
 
 func rke2ReleasePattern(highestMinor int) *regexp.Regexp {
@@ -620,11 +740,11 @@ func TestResolveImageSettingsAllowsMixedReleaseAndAlphaSources(t *testing.T) {
 }
 
 func TestResolveImageSettingsUsesStagingServerAndAgentForRCSBuild(t *testing.T) {
-	image, tag, agent, _ := resolveImageSettings("2.15.0-rcs-9933.2", "rc", "community-staging")
-	if image != "stgregistry.suse.com/rancher/rancher" || tag != "v2.15.0-rcs-9933.2" {
+	image, tag, agent, _ := resolveImageSettings("2.16.0-rcs-0844.1", "rc", "community-staging")
+	if image != "stgregistry.suse.com/rancher/rancher" || tag != "v2.16.0-rcs-0844.1" {
 		t.Fatalf("expected staging Rancher image for RCS build, got image=%q tag=%q", image, tag)
 	}
-	if agent != "stgregistry.suse.com/rancher/rancher-agent:v2.15.0-rcs-9933.2" {
+	if agent != "stgregistry.suse.com/rancher/rancher-agent:v2.16.0-rcs-0844.1" {
 		t.Fatalf("expected staging agent image for RCS build, got %q", agent)
 	}
 }
@@ -670,6 +790,29 @@ func TestRancherLatestTagOnlyDoesNotClearCommitHeadImages(t *testing.T) {
 	}
 }
 
+func TestRancherLatestTagOnlyDoesNotClearRCSStagingImages(t *testing.T) {
+	if shouldUseRancherLatestTagOnly("rc", "rancher-latest", "2.16.0-rcs-0844.1") {
+		t.Fatal("RCS builds must keep explicit staging image settings")
+	}
+
+	const serverImage = "stgregistry.suse.com/rancher/rancher"
+	const imageTag = "v2.16.0-rcs-0844.1"
+	const agentImage = "stgregistry.suse.com/rancher/rancher-agent:v2.16.0-rcs-0844.1"
+	wantExplanation := []string{"Using exact staging Rancher and agent images"}
+	gotServer, gotTag, gotAgent, gotExplanation, applied := applyRancherLatestTagOnlySettings(
+		"rc", "rancher-latest", "2.16.0-rcs-0844.1", serverImage, imageTag, agentImage, wantExplanation,
+	)
+	if applied {
+		t.Fatal("RCS build unexpectedly entered tag-only mode")
+	}
+	if gotServer != serverImage || gotTag != imageTag || gotAgent != agentImage {
+		t.Fatalf("RCS staging images changed: image=%q tag=%q agent=%q", gotServer, gotTag, gotAgent)
+	}
+	if strings.Join(gotExplanation, "|") != strings.Join(wantExplanation, "|") {
+		t.Fatalf("RCS image explanation changed: %#v", gotExplanation)
+	}
+}
+
 func TestApplyRancherLatestTagOnlySettingsClearsStagingOverridesAndExplanation(t *testing.T) {
 	rancherImage, imageTag, agentImage, explanation, applied := applyRancherLatestTagOnlySettings(
 		"rc",
@@ -688,6 +831,67 @@ func TestApplyRancherLatestTagOnlySettingsClearsStagingOverridesAndExplanation(t
 	}
 	if len(explanation) != 0 {
 		t.Fatalf("expected staging explanation to be cleared, got %#v", explanation)
+	}
+}
+
+func TestValidateResolvedRCSImagesOnlyContactsStagingRegistry(t *testing.T) {
+	var requests []string
+	previousClient := rancherRegistryHTTPClient
+	previousBases := rancherRegistryBaseURLs
+	rancherRegistryHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests = append(requests, req.URL.String())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+			Request:    req,
+		}, nil
+	})}
+	rancherRegistryBaseURLs = map[string]string{}
+	t.Cleanup(func() {
+		rancherRegistryHTTPClient = previousClient
+		rancherRegistryBaseURLs = previousBases
+	})
+
+	err := validateResolvedRancherImages(
+		"stgregistry.suse.com/rancher/rancher",
+		"v2.16.0-rcs-0844.1",
+		"stgregistry.suse.com/rancher/rancher-agent:v2.16.0-rcs-0844.1",
+	)
+	if err != nil {
+		t.Fatalf("expected exact RCS images to validate, got %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("expected server and agent manifest requests, got %#v", requests)
+	}
+	for _, requestURL := range requests {
+		if !strings.HasPrefix(requestURL, "https://stgregistry.suse.com/") || strings.Contains(requestURL, "docker.io") {
+			t.Fatalf("RCS validation escaped the staging registry: %s", requestURL)
+		}
+	}
+}
+
+func TestBuildAutoHelmCommandKeepsExactRCSStagingImages(t *testing.T) {
+	command := buildAutoHelmCommand(
+		rancherHelmOperationInstall,
+		"rancher-latest",
+		"2.16.0-rcs-0844.1",
+		"admin",
+		"stgregistry.suse.com/rancher/rancher",
+		"v2.16.0-rcs-0844.1",
+		"stgregistry.suse.com/rancher/rancher-agent:v2.16.0-rcs-0844.1",
+		true,
+	)
+	for _, want := range []string{
+		"--set image.registry=stgregistry.suse.com",
+		"--set image.repository=rancher/rancher",
+		"--set image.tag=v2.16.0-rcs-0844.1",
+		"--set 'extraEnv[0].value=stgregistry.suse.com/rancher/rancher-agent:v2.16.0-rcs-0844.1'",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("expected exact RCS Helm command to contain %q, got:\n%s", want, command)
+		}
 	}
 }
 
@@ -1035,6 +1239,91 @@ func TestRancherHelmCommandWithWebhookImageLeavesEmptyOverrideAlone(t *testing.T
 	}
 	if got != command {
 		t.Fatalf("empty webhook override changed command: %q", got)
+	}
+}
+
+func TestConfiguredRancherWebhookImagePrefersEnvironmentOverConfig(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RANCHER_WEBHOOK_IMAGE", "")
+	viper.Set("rancher.webhook_image", "  stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1  ")
+
+	if got := configuredRancherWebhookImage(); got != "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1" {
+		t.Fatalf("expected persisted webhook image, got %q", got)
+	}
+
+	t.Setenv("RANCHER_WEBHOOK_IMAGE", "  registry.example.test/rancher/rancher-webhook:v9.9.9  ")
+	if got := configuredRancherWebhookImage(); got != "registry.example.test/rancher/rancher-webhook:v9.9.9" {
+		t.Fatalf("expected environment webhook image to take precedence, got %q", got)
+	}
+	if got := configuredRancherInstallWebhookImage(); got != "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1" {
+		t.Fatalf("expected initial-install override to remain scoped to persisted UI config, got %q", got)
+	}
+}
+
+func TestPrepareManualRKE2PlanInjectsPersistedWebhookWithoutEnvironmentContamination(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RANCHER_WEBHOOK_IMAGE", "registry.example.test/rancher/rancher-webhook:v9.9.9")
+	viper.Set("rancher.webhook_image", "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1")
+	viper.Set("rancher.helm_commands", []string{"helm install rancher rancher-latest/rancher --namespace cattle-system --version 2.16.0-rcs-0844.1"})
+	viper.Set("k8s.version", "v1.35.1+rke2r1")
+	viper.Set("rke2.install_script_sha256", "test-checksum")
+
+	previousClient := rancherRegistryHTTPClient
+	rancherRegistryHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: http.NoBody, Request: req}, nil
+	})}
+	t.Cleanup(func() { rancherRegistryHTTPClient = previousClient })
+
+	plans, err := prepareManualRKE2Plans(1)
+	if err != nil {
+		t.Fatalf("expected manual RKE2 plan to accept persisted webhook override, got %v", err)
+	}
+	if len(plans) != 1 || len(plans[0].HelmCommands) != 1 {
+		t.Fatalf("unexpected manual RKE2 plans: %#v", plans)
+	}
+	command := plans[0].HelmCommands[0]
+	if !strings.Contains(command, `"tag":"v0.12.1-rcs-0844.1"`) || strings.Contains(command, `"tag":"v9.9.9"`) {
+		t.Fatalf("manual initial install used the wrong webhook override:\n%s", command)
+	}
+}
+
+func TestPrepareManualHostedPlanInjectsPersistedWebhookImage(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("RANCHER_WEBHOOK_IMAGE", "")
+	viper.Set("rancher.webhook_image", "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1")
+	viper.Set("rancher.helm_commands", []string{"helm install rancher rancher-latest/rancher --namespace cattle-system --version 2.16.0-rcs-0844.1"})
+	viper.Set("k3s.version", "v1.35.1+k3s1")
+	viper.Set("k3s.install_script_sha256", "test-checksum")
+
+	previousClient := rancherRegistryHTTPClient
+	rancherRegistryHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: http.NoBody, Request: req}, nil
+	})}
+	t.Cleanup(func() { rancherRegistryHTTPClient = previousClient })
+
+	plans, err := prepareManualHostedTenantPlans(1)
+	if err != nil {
+		t.Fatalf("expected manual hosted plan to accept persisted webhook override, got %v", err)
+	}
+	if len(plans) != 1 || !strings.Contains(plans[0].HelmCommands[0], `"tag":"v0.12.1-rcs-0844.1"`) {
+		t.Fatalf("manual hosted plan did not inject the webhook override: %#v", plans)
+	}
+}
+
+func TestValidateRancherWebhookImageRejectsMissingManifest(t *testing.T) {
+	previousClient := rancherRegistryHTTPClient
+	rancherRegistryHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Header: make(http.Header), Body: http.NoBody, Request: req}, nil
+	})}
+	t.Cleanup(func() { rancherRegistryHTTPClient = previousClient })
+
+	image := "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1"
+	err := validateRancherWebhookImage(image)
+	if err == nil || !strings.Contains(err.Error(), image+" was not found in registry") {
+		t.Fatalf("expected missing webhook manifest error, got %v", err)
 	}
 }
 

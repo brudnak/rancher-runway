@@ -749,6 +749,7 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 		ResolveInstallerSHA:   parseHTMLBool(r.FormValue("resolveInstallerSHA")),
 		Distro:                r.FormValue("distro"),
 		BootstrapPassword:     r.FormValue("bootstrapPassword"),
+		WebhookImage:          r.FormValue("webhookImage"),
 		PreloadImages:         parseHTMLBool(r.FormValue("preloadImages")),
 		ServerCount:           parseHTMLInt(r.FormValue("serverCount")),
 		GPUWorkerEnabled:      parseHTMLBool(r.FormValue("gpuWorkerEnabled")),

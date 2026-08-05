@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       rancher_version:
-        description: Target Rancher alpha or RC, for example v2.15.0-rc2.
+        description: Target Rancher alpha, RC, or RCS, for example v2.16.0-rcs-0844.1.
         required: true
         type: string
       lane:
@@ -23,7 +23,7 @@ on:
         required: false
         type: string
       webhook_image:
-        description: Candidate webhook image. Leave blank to use Docker Hub image from target build.yaml.
+        description: Candidate webhook image. Leave blank to discover the target build.yaml tag across supported registries.
         required: false
         type: string
       signing_policy:

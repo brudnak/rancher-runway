@@ -36,6 +36,9 @@ func TestHAUpgradeRancher(t *testing.T) {
 	if upgradeVersion == "" {
 		t.Skip("RANCHER_UPGRADE_VERSION is not set; skipping Rancher upgrade")
 	}
+	if err := validateRancherWebhookImage(configuredRancherWebhookImage()); err != nil {
+		t.Fatalf("Rancher webhook image preflight failed: %v", err)
+	}
 	if err := validateInstalledRancherHelmVersion(); err != nil {
 		t.Fatalf("Rancher upgrade tooling preflight failed: %v", err)
 	}
@@ -126,7 +129,7 @@ func TestHAUpgradeRancher(t *testing.T) {
 	// Wait until the upgraded Rancher control plane has settled before writing
 	// downstream system-chart configuration, avoiding upgrade-time reconciliation
 	// churn while the new webhook chart is being deployed.
-	if webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE")); webhookImage != "" {
+	if webhookImage := configuredRancherWebhookImage(); webhookImage != "" {
 		if err := configureDownstreamRancherWebhookImage(webhookImage); err != nil {
 			t.Fatalf("downstream Rancher webhook configuration failed: %v", err)
 		}
@@ -157,7 +160,7 @@ func upgradeHAInstanceRancher(instanceNum int, outputs map[string]string, plan *
 		plan.UseRancherImageFields,
 	)
 	helmCommand = rancherHelmCommandForHA(helmCommand, haOutputs.RancherURL)
-	webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE"))
+	webhookImage := configuredRancherWebhookImage()
 	helmCommand, err = rancherHelmCommandWithWebhookImage(helmCommand, webhookImage)
 	if err != nil {
 		return fmt.Errorf("configure Rancher webhook image for HA %d: %w", instanceNum, err)

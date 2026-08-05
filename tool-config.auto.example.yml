@@ -4,6 +4,7 @@ rancher:
     - "2.13-head"
     - "2.13.4"
   distro: auto
+  webhook_image: "" # Optional complete registry/repository:tag override for Rancher's managed webhook chart.
   bootstrap_password: "change-me"
   auto_approve: false
 

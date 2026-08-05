@@ -19,6 +19,7 @@ let resolveInstallerSHA = setupData.resolveInstallerSHA !== false
 let config = setupData.config || {
   distro: 'auto',
   bootstrapPassword: '',
+  webhookImage: '',
   preloadImages: false,
   serverCount: 3,
   gpuWorker: {
@@ -135,6 +136,8 @@ const linodeSshRootPasswordToggleEl = byId('linodeSshRootPasswordToggle')
 const distroSelectEl = byId('distroSelect')
 const bootstrapPasswordInputEl = byId('bootstrapPasswordInput')
 const bootstrapPasswordToggleEl = byId('bootstrapPasswordToggle')
+const webhookImageFieldEl = byId('webhookImageField')
+const webhookImageInputEl = byId('webhookImageInput')
 const preloadImagesLabelEl = byId('preloadImagesLabel')
 const preloadImagesToggleEl = byId('preloadImagesToggle')
 const preloadImagesTextEl = byId('preloadImagesText')
@@ -880,6 +883,9 @@ const loadSystemReadiness = async () => {
 const renderEditableConfig = () => {
   distroSelectEl.value = config.distro || 'auto'
   bootstrapPasswordInputEl.value = config.bootstrapPassword || ''
+  if (webhookImageInputEl) {
+    webhookImageInputEl.value = config.webhookImage || ''
+  }
   preloadImagesToggleEl.checked = Boolean(config.preloadImages)
   if (serverCountInputEl) {
     serverCountInputEl.value = String(normalizeServerCount(config.serverCount))
@@ -958,6 +964,7 @@ const renderDeploymentType = () => {
   rke2ServerLayoutFieldsetEl?.classList.toggle('hidden', hosted || linode)
   gpuWorkerBoxEl?.classList.toggle('hidden', hosted || linode)
   distroFieldEl?.classList.toggle('hidden', linode)
+  webhookImageFieldEl?.classList.toggle('hidden', linode)
   preloadImagesLabelEl?.classList.toggle('hidden', linode)
   rancherSettingsPanelEl?.classList.toggle('hidden', false)
   if (rancherSettingsTitleEl) {
@@ -1066,7 +1073,7 @@ const renderRows = () => {
 			`<div class="${rowClass}">`,
 			`<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
 			'<div class="grid gap-2">',
-			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="2.14.1-alpha3 or docker.io/user/rancher:tag" />`,
+			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="2.16.0-rcs-0844.1 or docker.io/user/rancher:tag" />`,
 			`<label class="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-400"><input type="checkbox" data-agent-derive-index="${index}"${derivesAgent ? ' checked' : ''} /> Derive matching rancher-agent image</label>`,
 			`<input type="hidden" name="agentImages" value="${escapeHtml(agentImage)}" data-agent-hidden-index="${index}" />`,
 			`<input class="${inputClass}${derivesAgent ? ' hidden' : ''}" type="text" value="${escapeHtml(agentImage)}" data-agent-index="${index}" placeholder="docker.io/user/rancher-agent:tag" />`,
@@ -1717,6 +1724,7 @@ const buildSeedHelmCommand = index => {
   const chartVersion = version && version !== 'head' ? version : '2.14.0'
   const password = String(bootstrapPasswordInputEl?.value || config.bootstrapPassword || 'change-me').replaceAll('\\', '\\\\').replaceAll("'", "'\\''")
   const imageTag = manualImageTagForVersion(version)
+  const rcsBuild = /^\d+\.\d+\.\d+-rcs-\d+\.\d+$/.test(version)
   const lines = [
     `helm install rancher ${chartAlias}/rancher \\`,
     '  --namespace cattle-system \\',
@@ -1726,6 +1734,12 @@ const buildSeedHelmCommand = index => {
     '  --set tls=external \\',
     '  --set global.cattle.psp.enabled=false \\',
     `  --set image.tag=${imageTag} \\`,
+    ...(rcsBuild ? [
+      '  --set image.registry=stgregistry.suse.com \\',
+      '  --set image.repository=rancher/rancher \\',
+      "  --set 'extraEnv[0].name=CATTLE_AGENT_IMAGE' \\",
+      `  --set 'extraEnv[0].value=stgregistry.suse.com/rancher/rancher-agent:${imageTag}' \\`
+    ] : []),
     ...(currentServerCount() === 1 ? ['  --set replicas=1 \\'] : []),
     '  --set agentTLSMode=system-store'
   ]
@@ -1736,6 +1750,10 @@ const deriveAgentImage = value => {
 	const image = String(value || '').trim()
 	if (/\/rancher-agent:[^/]+$/.test(image)) return image
 	if (/\/rancher:[^/]+$/.test(image)) return image.replace(/\/rancher:([^/]+)$/, '/rancher-agent:$1')
+	const version = normalizeVersion(image)
+	if (/^\d+\.\d+\.\d+-rcs-\d+\.\d+$/.test(version)) {
+		return `stgregistry.suse.com/rancher/rancher-agent:v${version}`
+	}
 	return ''
 }
 
@@ -2279,6 +2297,9 @@ const setSubmittingState = nextSubmitting => {
   distroSelectEl.disabled = nextSubmitting
   bootstrapPasswordInputEl.disabled = nextSubmitting
   bootstrapPasswordToggleEl.disabled = nextSubmitting
+  if (webhookImageInputEl) {
+    webhookImageInputEl.disabled = nextSubmitting
+  }
   preloadImagesToggleEl.disabled = nextSubmitting
   if (gpuWorkerToggleEl) {
     gpuWorkerToggleEl.disabled = nextSubmitting || isHostedTenantDeployment() || isLinodeDockerDeployment()
@@ -3317,9 +3338,11 @@ customHostnameToggleEl.addEventListener('change', event => {
 })
 
 customHostnameInputEl.addEventListener('input', event => {
-  customHostname = event.target.value
-  clearValidationError()
+	  customHostname = event.target.value
+	  clearValidationError()
 })
+
+webhookImageInputEl?.addEventListener('input', clearValidationError)
 
 editorCancelBtnEl.addEventListener('click', cancelEditor)
 setupFormEl.addEventListener('submit', prepareSetupSubmit)

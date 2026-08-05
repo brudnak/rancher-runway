@@ -146,6 +146,7 @@ func TestUpdateAutoModeConfigFileWritesEditableConfig(t *testing.T) {
     - "2.14-head"
   distro: auto
   bootstrap_password: "old"
+  webhook_image: "registry.example.com/rancher/rancher-webhook:old"
 rke2:
   preload_images: false
 total_has: 1
@@ -183,6 +184,7 @@ tf_vars:
 		Versions:          []string{"head"},
 		Distro:            "community",
 		BootstrapPassword: "new-password",
+		WebhookImage:      "  stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1  ",
 		PreloadImages:     true,
 		UserFirstName:     "Ada",
 		UserLastName:      "Lovelace",
@@ -209,6 +211,13 @@ tf_vars:
 	if parsed.Rancher["distro"] != "community" || parsed.Rancher["bootstrap_password"] != "new-password" {
 		t.Fatalf("expected Rancher settings to be updated, got %#v", parsed.Rancher)
 	}
+	const webhookImage = "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1"
+	if parsed.Rancher["webhook_image"] != webhookImage {
+		t.Fatalf("expected normalized rancher.webhook_image %q, got %#v", webhookImage, parsed.Rancher["webhook_image"])
+	}
+	if got := viper.GetString("rancher.webhook_image"); got != webhookImage {
+		t.Fatalf("expected in-memory rancher.webhook_image %q, got %q", webhookImage, got)
+	}
 	if parsed.RKE2["preload_images"] != true {
 		t.Fatalf("expected rke2.preload_images=true, got %#v", parsed.RKE2["preload_images"])
 	}
@@ -217,6 +226,75 @@ tf_vars:
 	}
 	if parsed.TFVars["aws_prefix"] != "atb" || parsed.TFVars["aws_region"] != "us-west-2" {
 		t.Fatalf("expected tf_vars to be updated and prefix lowercased, got %#v", parsed.TFVars)
+	}
+}
+
+func TestUpdateAutoModeConfigFileClearsWebhookImageOverride(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "tool-config.yml")
+	initialConfig := `rancher:
+  mode: auto
+  versions:
+    - "2.14-head"
+  distro: auto
+  bootstrap_password: "old"
+  webhook_image: "registry.example.com/rancher/rancher-webhook:old"
+total_has: 1
+user:
+  first_name: "Ada"
+  last_name: "Lovelace"
+tf_vars:
+  aws_prefix: "atb"
+  aws_pem_key_name: "qa-key"
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	if err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		Versions:          []string{"2.14-head"},
+		Distro:            "auto",
+		BootstrapPassword: "new-password",
+		WebhookImage:      "  ",
+		UserFirstName:     "Ada",
+		UserLastName:      "Lovelace",
+		TFVars: map[string]string{
+			"aws_prefix":       "atb",
+			"aws_pem_key_name": "qa-key",
+		},
+	}); err != nil {
+		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read updated config: %v", err)
+	}
+	var parsed struct {
+		Rancher map[string]interface{} `yaml:"rancher"`
+	}
+	if err := yaml.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("failed to parse updated config: %v", err)
+	}
+	if _, exists := parsed.Rancher["webhook_image"]; exists {
+		t.Fatalf("expected blank webhook override to remove rancher.webhook_image, got %#v", parsed.Rancher["webhook_image"])
+	}
+	if got := viper.GetString("rancher.webhook_image"); got != "" {
+		t.Fatalf("expected blank in-memory rancher.webhook_image, got %q", got)
+	}
+}
+
+func TestCurrentEditablePreflightConfigIncludesWebhookImage(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	viper.Set("rancher.webhook_image", "  stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1  ")
+
+	config := settings.CurrentEditablePreflightConfig()
+	if config.WebhookImage != "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1" {
+		t.Fatalf("unexpected editable webhook image: %q", config.WebhookImage)
 	}
 }
 
@@ -544,7 +622,7 @@ func TestBuildResolvedPlansDialogMessageLabelsHostedTenantK3SPlans(t *testing.T)
 }
 
 func TestDecodePreflightConfigUpdateRequestFromHTMXForm(t *testing.T) {
-	body := strings.NewReader("deploymentType=hosted-tenant-k3s&versions=head&versions=v2.14-head&distro=community&bootstrapPassword=secret&preloadImages=true&serverCount=5&hostedRDSPassword=S3curePass1&hostedEC2InstanceType=m5.xlarge&userFirstName=Ada&userLastName=Lovelace&customHostnameEnabled=true&customHostname=demo&tfVars.aws_prefix=ATB&tfVars.aws_pem_key_name=qa-key&tfVars.aws_route53_fqdn=qa.rancher.space")
+	body := strings.NewReader("deploymentType=hosted-tenant-k3s&versions=head&versions=v2.14-head&distro=community&bootstrapPassword=secret&webhookImage=stgregistry.suse.com%2Francher%2Francher-webhook%3Av0.12.1-rcs-0844.1&preloadImages=true&serverCount=5&hostedRDSPassword=S3curePass1&hostedEC2InstanceType=m5.xlarge&userFirstName=Ada&userLastName=Lovelace&customHostnameEnabled=true&customHostname=demo&tfVars.aws_prefix=ATB&tfVars.aws_pem_key_name=qa-key&tfVars.aws_route53_fqdn=qa.rancher.space")
 	req := httptest.NewRequest("POST", "/submit", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
@@ -557,6 +635,9 @@ func TestDecodePreflightConfigUpdateRequestFromHTMXForm(t *testing.T) {
 	}
 	if update.DeploymentType != deploymentTypeHostedTenantK3S || update.Distro != "community" || update.BootstrapPassword != "secret" || !update.PreloadImages || !update.CustomHostnameEnabled {
 		t.Fatalf("unexpected decoded update: %#v", update)
+	}
+	if update.WebhookImage != "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1" {
+		t.Fatalf("unexpected decoded webhook image: %q", update.WebhookImage)
 	}
 	if update.ServerCount != 5 || update.HostedRDSPassword != "S3curePass1" || update.HostedEC2InstanceType != "m5.xlarge" {
 		t.Fatalf("unexpected hosted tenant settings: %#v", update)

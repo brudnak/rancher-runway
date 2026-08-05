@@ -45,9 +45,12 @@ func TestHAOverrideLocalWebhook(t *testing.T) {
 	requireExplicitLifecycleTest(t, "TestHAOverrideLocalWebhook")
 	setupConfig(t)
 
-	webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE"))
+	webhookImage := configuredRancherWebhookImage()
 	if webhookImage == "" {
-		t.Skip("RANCHER_WEBHOOK_IMAGE is not set; skipping local webhook override")
+		t.Skip("no Rancher webhook image override is configured; skipping local webhook override")
+	}
+	if err := validateRancherWebhookImage(webhookImage); err != nil {
+		t.Fatalf("Rancher webhook image preflight failed: %v", err)
 	}
 
 	totalHAs := viper.GetInt("total_has")
@@ -117,9 +120,12 @@ func TestHAOverrideDownstreamWebhook(t *testing.T) {
 	requireExplicitLifecycleTest(t, "TestHAOverrideDownstreamWebhook")
 	setupConfig(t)
 
-	webhookImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE"))
+	webhookImage := configuredRancherWebhookImage()
 	if webhookImage == "" {
-		t.Skip("RANCHER_WEBHOOK_IMAGE is not set; skipping downstream webhook override")
+		t.Skip("no Rancher webhook image override is configured; skipping downstream webhook override")
+	}
+	if err := validateRancherWebhookImage(webhookImage); err != nil {
+		t.Fatalf("Rancher webhook image preflight failed: %v", err)
 	}
 
 	records, err := readDownstreamOutputRecords()
@@ -163,9 +169,12 @@ func TestHAWaitWebhookChartVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectedImage := strings.TrimSpace(os.Getenv("RANCHER_WEBHOOK_IMAGE"))
+	expectedImage := configuredRancherWebhookImage()
 	if expectedImage == "" {
-		t.Fatal("RANCHER_WEBHOOK_IMAGE must be set when waiting for the webhook chart rollout")
+		t.Fatal("a Rancher webhook image override must be configured when waiting for the webhook chart rollout")
+	}
+	if err := validateRancherWebhookImage(expectedImage); err != nil {
+		t.Fatalf("Rancher webhook image preflight failed: %v", err)
 	}
 
 	records, err := readDownstreamOutputRecords()

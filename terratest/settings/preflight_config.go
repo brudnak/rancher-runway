@@ -63,6 +63,7 @@ func normalizeOwnerNamePart(value string) string {
 type EditablePreflightConfig struct {
 	Distro                string            `json:"distro"`
 	BootstrapPassword     string            `json:"bootstrapPassword"`
+	WebhookImage          string            `json:"webhookImage"`
 	PreloadImages         bool              `json:"preloadImages"`
 	ServerCount           int               `json:"serverCount"`
 	GPUWorker             GPUWorkerConfig   `json:"gpuWorker"`
@@ -178,6 +179,7 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 	return EditablePreflightConfig{
 		Distro:                distro,
 		BootstrapPassword:     viper.GetString("rancher.bootstrap_password"),
+		WebhookImage:          strings.TrimSpace(viper.GetString("rancher.webhook_image")),
 		PreloadImages:         preloadImages,
 		ServerCount:           CurrentRKE2ServerCount(),
 		GPUWorker:             CurrentGPUWorkerConfig(),
@@ -194,7 +196,7 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 }
 
 func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
-	if update.TFVars == nil && strings.TrimSpace(update.Distro) == "" && strings.TrimSpace(update.BootstrapPassword) == "" && strings.TrimSpace(update.UserFirstName) == "" && strings.TrimSpace(update.UserLastName) == "" {
+	if update.TFVars == nil && strings.TrimSpace(update.Distro) == "" && strings.TrimSpace(update.BootstrapPassword) == "" && strings.TrimSpace(update.WebhookImage) == "" && strings.TrimSpace(update.UserFirstName) == "" && strings.TrimSpace(update.UserLastName) == "" {
 		return nil
 	}
 
@@ -212,6 +214,7 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 	if update.BootstrapPassword == "" {
 		return fmt.Errorf("rancher.bootstrap_password must be set")
 	}
+	update.WebhookImage = strings.TrimSpace(update.WebhookImage)
 	update.ServerCount = NormalizeRKE2ServerCount(update.ServerCount)
 	update.GPUWorkerProfile = NormalizeGPUWorkerProfile(update.GPUWorkerProfile)
 	update.GPUWorkerAMI = strings.TrimSpace(update.GPUWorkerAMI)

@@ -184,13 +184,20 @@ you are most likely to care about:
 - `rancher.mode` is usually `auto`, where the app resolves chart, image,
   supported RKE2 version, and installer checksum details.
 - `rancher.version` or `rancher.versions` selects the Rancher build or builds.
-  Auto mode accepts releases, alpha/RC versions, `head`, minor-line head builds
+  Auto mode accepts releases, alpha/RC/RCS versions such as
+  `2.16.0-rcs-0844.1`, `head`, minor-line head builds
   such as `2.13-head`, commit-specific head image tags, and exact custom server
   images such as `docker.io/example/rancher:my-fix` or its matching
   `rancher-agent` image. Runway derives the sibling image with the same tag, verifies both,
   and resolves the latest released community chart as the compatibility baseline.
-  Turn off agent-image derivation in the setup UI to provide both references;
-  explicit per-HA values are stored in `rancher.agent_images`.
+  Turn off agent-image derivation in the setup UI to provide both references.
+  Custom images and RCS builds support this explicit override; per-HA values
+  are stored in `rancher.agent_images`.
+- `rancher.webhook_image` optionally pins a complete webhook image such as
+  `stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1`. The app
+  validates its anonymously readable manifest and passes the override only to
+  Rancher's managed webhook chart. `RANCHER_WEBHOOK_IMAGE` remains an
+  environment-level override for upgrade and lifecycle validation runs.
 - `user.first_name` and `user.last_name` tag cloud resources with an owner.
 - `tf_vars.aws_prefix` is the base resource prefix. Run slots derive unique
   per-run prefixes from it.

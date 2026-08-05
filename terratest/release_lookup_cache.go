@@ -40,12 +40,13 @@ type releaseCacheEntry struct {
 }
 
 type supportRangeCacheEntry struct {
-	Product   string `json:"product"`
-	SourceURL string `json:"source_url"`
-	Range     string `json:"range"`
-	MinMinor  int    `json:"min_minor"`
-	MaxMinor  int    `json:"max_minor"`
-	UpdatedAt string `json:"updated_at"`
+	Product     string `json:"product"`
+	SourceURL   string `json:"source_url"`
+	ResolvedURL string `json:"resolved_url,omitempty"`
+	Range       string `json:"range"`
+	MinMinor    int    `json:"min_minor"`
+	MaxMinor    int    `json:"max_minor"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 type releaseProductConfig struct {
@@ -189,6 +190,10 @@ func cachedRelease(config releaseProductConfig, highestMinor int) (releaseCacheE
 }
 
 func updateSupportRangeCache(product, supportMatrixURL, rangeText string, minMinor, maxMinor int) {
+	updateSupportRangeCacheWithResolvedURL(product, supportMatrixURL, supportMatrixURL, rangeText, minMinor, maxMinor)
+}
+
+func updateSupportRangeCacheWithResolvedURL(product, supportMatrixURL, resolvedURL, rangeText string, minMinor, maxMinor int) {
 	path := releaseLookupCachePath()
 	releaseLookupCacheMu.Lock()
 	defer releaseLookupCacheMu.Unlock()
@@ -198,13 +203,18 @@ func updateSupportRangeCache(product, supportMatrixURL, rangeText string, minMin
 		log.Printf("[resolver] Warning: could not read release lookup cache %s: %v", path, err)
 		cache = newReleaseLookupCache()
 	}
+	resolvedURL = strings.TrimSpace(resolvedURL)
+	if resolvedURL == "" {
+		resolvedURL = supportMatrixURL
+	}
 	cache.SupportRanges[supportRangeCacheKey(product, supportMatrixURL)] = supportRangeCacheEntry{
-		Product:   product,
-		SourceURL: supportMatrixURL,
-		Range:     rangeText,
-		MinMinor:  minMinor,
-		MaxMinor:  maxMinor,
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		Product:     product,
+		SourceURL:   supportMatrixURL,
+		ResolvedURL: resolvedURL,
+		Range:       rangeText,
+		MinMinor:    minMinor,
+		MaxMinor:    maxMinor,
+		UpdatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 	if err := saveReleaseLookupCache(path, cache); err != nil {
 		log.Printf("[resolver] Warning: could not write release lookup cache %s: %v", path, err)
@@ -413,11 +423,15 @@ func releaseLookupError(productName, url string, liveErr error, cachePath string
 	return fmt.Errorf("%s release-note lookup is unavailable: failed to fetch %s (%v), and %s. Check network access to the docs site or rerun after a successful lookup has populated the cache", productName, url, liveErr, cacheMessage)
 }
 
-func resolveCachedSupportRange(productName, supportMatrixURL string, liveErr error) (int, string, error) {
+func resolveCachedSupportRange(productName, supportMatrixURL string, liveErr error) (int, string, string, error) {
 	entry, cachePath, cacheErr := cachedSupportRange(productName, supportMatrixURL)
 	if cacheErr == nil {
 		log.Printf("[resolver] Warning: using cached %s support range from %s because live support matrix lookup failed: %v", productName, cachePath, liveErr)
-		return entry.MaxMinor, entry.Range, nil
+		resolvedURL := strings.TrimSpace(entry.ResolvedURL)
+		if resolvedURL == "" {
+			resolvedURL = entry.SourceURL
+		}
+		return entry.MaxMinor, entry.Range, resolvedURL, nil
 	}
 	cacheMessage := "no valid cached support range was available"
 	if cacheErr != nil && !errors.Is(cacheErr, os.ErrNotExist) {
@@ -425,7 +439,7 @@ func resolveCachedSupportRange(productName, supportMatrixURL string, liveErr err
 	} else if cachePath != "" {
 		cacheMessage = fmt.Sprintf("no cached support range was found at %s", cachePath)
 	}
-	return 0, "", fmt.Errorf("%s support matrix lookup is unavailable: failed to resolve %s (%v), and %s. Check access to the SUSE support matrix or rerun after a successful lookup has populated the cache", productName, supportMatrixURL, liveErr, cacheMessage)
+	return 0, "", supportMatrixURL, fmt.Errorf("%s support matrix lookup is unavailable: failed to resolve %s (%v), and %s. Check access to the SUSE support matrix or rerun after a successful lookup has populated the cache", productName, supportMatrixURL, liveErr, cacheMessage)
 }
 
 func uniqueStrings(values []string) []string {

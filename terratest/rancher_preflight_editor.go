@@ -443,7 +443,7 @@ func editAutoModePreflightWithBrowser(configPath string, versions []string) erro
         return (
           '<div class="row">' +
             '<div class="ha-label">HA ' + (index + 1) + '</div>' +
-            '<div><input type="text" value="' + escapeHtml(version) + '" data-index="' + index + '" placeholder="2.14.1-alpha3 or docker.io/user/rancher:tag" /></div>' +
+            '<div><input type="text" value="' + escapeHtml(version) + '" data-index="' + index + '" placeholder="2.16.0-rcs-0844.1 or docker.io/user/rancher:tag" /></div>' +
             '<div><button class="secondary remove" type="button" data-remove-index="' + index + '"' + removeDisabled + '>Remove</button></div>' +
           '</div>'
         );
@@ -781,6 +781,11 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if err := settings.NormalizePreflightConfigUpdate(&update); err != nil {
 		return err
 	}
+	if update.TFVars != nil && update.WebhookImage != "" {
+		if _, _, _, err := parseRegistryImage(update.WebhookImage); err != nil {
+			return fmt.Errorf("rancher.webhook_image: %w", err)
+		}
+	}
 	if hostedTenant {
 		if len(normalizedVersions) < hostedTenantMinInstances {
 			return fmt.Errorf("hosted-tenant-k3s requires one host and at least one tenant Rancher version")
@@ -869,6 +874,11 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if update.TFVars != nil {
 		setStringValue(rancherNode, "distro", update.Distro)
 		setStringValue(rancherNode, "bootstrap_password", update.BootstrapPassword)
+		if update.WebhookImage == "" {
+			deleteMappingKey(rancherNode, "webhook_image")
+		} else {
+			setStringValue(rancherNode, "webhook_image", update.WebhookImage)
+		}
 		userNode := ensureMappingValue(root, "user")
 		setStringValue(userNode, "first_name", update.UserFirstName)
 		setStringValue(userNode, "last_name", update.UserLastName)
@@ -1009,6 +1019,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if update.TFVars != nil {
 		viper.Set("rancher.distro", update.Distro)
 		viper.Set("rancher.bootstrap_password", update.BootstrapPassword)
+		viper.Set("rancher.webhook_image", update.WebhookImage)
 		viper.Set("user.first_name", update.UserFirstName)
 		viper.Set("user.last_name", update.UserLastName)
 		if hostedTenant {

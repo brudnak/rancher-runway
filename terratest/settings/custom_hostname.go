@@ -25,6 +25,7 @@ type PreflightConfigUpdate struct {
 	ResolveInstallerSHA   bool              `json:"resolveInstallerSHA"`
 	Distro                string            `json:"distro"`
 	BootstrapPassword     string            `json:"bootstrapPassword"`
+	WebhookImage          string            `json:"webhookImage"`
 	PreloadImages         bool              `json:"preloadImages"`
 	ServerCount           int               `json:"serverCount"`
 	GPUWorkerEnabled      bool              `json:"gpuWorkerEnabled"`
