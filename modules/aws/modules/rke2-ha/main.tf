@@ -43,7 +43,7 @@ variable "aws_security_group_id" {
 
 variable "aws_pem_key_name" {
   type        = string
-  description = "Name of the PEM key for SSH access"
+  description = "Name of an existing EC2 key pair to attach to the instances"
 }
 
 variable "server_count" {

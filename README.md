@@ -27,53 +27,60 @@ use. The setup path does not use `curl | bash`.
 
 ## Install The Desktop App
 
-From a fresh clone on Apple Silicon or Intel macOS:
+The supported installer for Apple Silicon and Intel macOS is Homebrew:
+
+```bash
+brew install --cask brudnak/tap/rancher-runway
+```
+
+The Cask installs the signed, notarized universal app plus Terraform, Helm 3,
+and `kubectl`. The app contains its own signed lifecycle worker, so ordinary
+setup, readiness, and cleanup runs do not require a source checkout, Go,
+Node.js, or Xcode.
+
+Upgrade in place with:
+
+```bash
+brew update
+brew upgrade --cask rancher-runway
+```
+
+App updates preserve configuration, Terraform state, kubeconfigs, logs, and run
+records under `~/Library/Application Support/Rancher Runway`. Do not use
+`brew uninstall --zap rancher-runway` until all live infrastructure has been
+destroyed; `--zap` intentionally removes that cleanup state.
+
+### Build From Source
+
+Contributors can still build and install the current checkout:
 
 ```bash
 make setup
 ```
 
-`make setup` builds the Wails desktop app and installs `Rancher Runway.app` to
-`/Applications` by default. It also installs missing local build dependencies,
-regenerates embedded control-panel assets, and refuses to replace the app while
-the app or an active lifecycle operation is running.
-
-Re-run the same command whenever you want to update the installed app:
-
-```bash
-make setup
-```
-
-Install somewhere else:
+That development path embeds a checkout hint and requires Xcode Command Line
+Tools, the Go version from [go.mod](go.mod), and Node.js/npm. Re-run `make setup`
+to replace the development app, or set `INSTALL_DIR` to install elsewhere.
 
 ```bash
 make setup INSTALL_DIR="$HOME/Desktop"
 ```
 
-Keep the transient Wails build-output app as well as the installed copy:
-
-```bash
-RANCHER_RUNWAY_KEEP_WAILS_BUILD_APP=1 make setup
-```
-
 ## Requirements
 
-- macOS with Xcode Command Line Tools
-- Go matching the version in [go.mod](go.mod)
-- Node.js with `npm`
-- Terraform, Helm 3, and kubectl for real lifecycle runs (CI pins Helm v3.21.3)
+- macOS 12 Monterey or newer with Homebrew
 - AWS credentials and Route53 inputs for AWS or Linode DNS provisioning
 - Linode API token for Linode Docker runs
+- Go, Git, Docker, and k3d only for the optional Steve Lab workflow
 
 ## First Run
 
-After `make setup` finishes, open the macOS Applications folder and look for
+After Homebrew finishes, open the macOS Applications folder and look for
 `Rancher Runway`. Launching the app opens the desktop control panel.
 
-If `tool-config.yml` does not exist, the app creates an ignored starter config
-for you. Fill in the blocked values from the Setup and preflight screens before
-starting a run. The local `tool-config.yml` is ignored so account details,
-hostnames, and local choices do not get committed.
+If `tool-config.yml` does not exist, the app creates a private starter config in
+its Application Support workspace. Fill in the blocked values from the Setup
+and preflight screens before starting a run.
 
 Common environment variables can live in your shell profile:
 
@@ -124,16 +131,17 @@ Use the app tabs as the main lifecycle:
 The app protects active work:
 
 - Closing the app is blocked while setup, readiness, or cleanup is running.
-- `make setup` refuses to replace the installed app while the app or lifecycle
-  operations are active.
+- Homebrew upgrades replace only the app bundle; the managed workspace and
+  version-matched lifecycle worker remain available to an in-flight release.
+- Development `make setup` installs refuse to replace an open app.
 - Setup, readiness, and cleanup operations are serialized where shared state
   would collide.
 
 ## Local Labs
 
 The local lab tabs are for fast desktop-only testing. They use local Docker and
-k3d, write their run records under `terratest/automation-output/`, and do not
-create AWS, Linode, Terraform, DNS, or certificate resources.
+k3d, write their run records in the app workspace, and do not create AWS,
+Linode, Terraform, DNS, or certificate resources.
 
 ### K3D Lab
 
@@ -221,8 +229,10 @@ Checked-in examples are available if you want to compare shapes manually:
 ## Run Slots And Cleanup
 
 Each setup creates a run slot with isolated Terraform state, Terraform data,
-module files, deployment output, kubeconfigs, logs, AWS names, and a run record
-under `terratest/automation-output/`.
+module files, deployment output, kubeconfigs, logs, AWS names, and a run record.
+Homebrew installs keep those files under
+`~/Library/Application Support/Rancher Runway/workspace/terratest/automation-output/`;
+source builds keep them under this checkout's `terratest/automation-output/`.
 
 Linode Docker slots use the same slot model, but they do not produce
 kubeconfigs. Cluster details show the Rancher URL and Linode IP instead.
@@ -234,7 +244,7 @@ not destroy cloud resources.
 
 ## Build Targets
 
-Useful app-oriented targets:
+Useful source-development targets:
 
 ```bash
 make help
@@ -244,9 +254,9 @@ make panel-ui
 make test
 ```
 
-The Wails app stores the checkout path in ignored local build hints so a
-double-clicked app can find this repository without committing user-specific
-paths.
+Development Wails builds store the checkout path in ignored local build hints.
+Release builds instead stage signed, versioned runtime assets in Application
+Support and do not depend on the checkout.
 
 ## Advanced Usage
 

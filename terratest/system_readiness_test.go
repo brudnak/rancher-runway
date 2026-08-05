@@ -1,11 +1,26 @@
 package test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
 )
+
+func TestCoreSystemReadinessUsesPackagedWorkerInsteadOfGo(t *testing.T) {
+	worker := filepath.Join(t.TempDir(), "rancher-runway-lifecycle")
+	if err := os.WriteFile(worker, []byte("worker"), 0o755); err != nil {
+		t.Fatalf("create packaged worker: %v", err)
+	}
+	t.Setenv(packagedLifecycleBinaryEnv, worker)
+
+	item := checkCoreSystemReadinessTool(systemReadinessToolConfig{Name: "Go", Command: "go"})
+	if item.Status != "ok" || item.Version != "bundled" || !strings.Contains(item.Detail, "Go is not required") {
+		t.Fatalf("packaged Go readiness = %#v", item)
+	}
+}
 
 func TestSystemReadinessRequiresHelm3(t *testing.T) {
 	config := loadSystemReadinessConfig()

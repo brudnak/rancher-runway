@@ -63,7 +63,7 @@ func collectSystemReadiness(configPath string) systemReadinessState {
 	items := make([]systemReadinessItem, 0, len(cfg.Tools)+len(cfg.RequiredEnv)+len(cfg.OptionalEnvPairs)+3)
 
 	for _, tool := range cfg.Tools {
-		items = append(items, checkSystemReadinessTool(tool))
+		items = append(items, checkCoreSystemReadinessTool(tool))
 	}
 
 	items = append(items, checkToolConfigReadiness(configPath))
@@ -101,6 +101,27 @@ func collectSystemReadiness(configPath string) systemReadinessState {
 		Summary: summary,
 		Items:   items,
 	}
+}
+
+func checkCoreSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessItem {
+	if tool.Command == "go" && packagedLifecycleWorkerReady() {
+		return systemReadinessItem{
+			Name:    tool.Name,
+			Status:  "ok",
+			Version: "bundled",
+			Detail:  "The signed Rancher Runway lifecycle worker is available; Go is not required for core operations.",
+		}
+	}
+	return checkSystemReadinessTool(tool)
+}
+
+func packagedLifecycleWorkerReady() bool {
+	path := strings.TrimSpace(os.Getenv(packagedLifecycleBinaryEnv))
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
 }
 
 func loadSystemReadinessConfig() systemReadinessConfig {
@@ -273,6 +294,10 @@ func localToolPATH() string {
 
 func localToolSearchDirs() []string {
 	return []string{
+		"/opt/homebrew/opt/helm@3/bin",
+		"/usr/local/opt/helm@3/bin",
+		"/opt/homebrew/opt/terraform/bin",
+		"/usr/local/opt/terraform/bin",
 		"/opt/homebrew/bin",
 		"/opt/homebrew/sbin",
 		"/usr/local/bin",

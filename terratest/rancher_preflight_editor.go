@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -983,7 +984,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		return fmt.Errorf("failed to finalize config file: %w", err)
 	}
 
-	if err := os.WriteFile(configPath, output.Bytes(), 0o644); err != nil {
+	if err := writePrivateConfigAtomically(configPath, output.Bytes()); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
@@ -1054,6 +1055,35 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	viper.Set(settings.CustomHostnameConfigKey, customHostnamePrefix)
 
 	return nil
+}
+
+func writePrivateConfigAtomically(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(dir, ".tool-config-")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func hasNonEmptyString(values []string) bool {

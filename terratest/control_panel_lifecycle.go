@@ -15,6 +15,15 @@ import (
 	"time"
 )
 
+const packagedLifecycleBinaryEnv = "RANCHER_RUNWAY_LIFECYCLE_BIN"
+
+type panelLifecycleInvocation struct {
+	path    string
+	args    []string
+	dir     string
+	display string
+}
+
 func newPanelOperations() map[panelOperationName]*panelOperationState {
 	return map[panelOperationName]*panelOperationState{
 		panelOperationSetup:         {},
@@ -22,6 +31,7 @@ func newPanelOperations() map[panelOperationName]*panelOperationState {
 		panelOperationCleanup:       {},
 		panelOperationLinodeSetup:   {},
 		panelOperationLinodeCleanup: {},
+		panelOperationCleanupBatch:  {},
 		panelOperationSteveLab:      {},
 		panelOperationK3DLab:        {},
 	}
@@ -34,8 +44,32 @@ func allPanelOperationNames() []panelOperationName {
 		panelOperationCleanup,
 		panelOperationLinodeSetup,
 		panelOperationLinodeCleanup,
+		panelOperationCleanupBatch,
 		panelOperationSteveLab,
 		panelOperationK3DLab,
+	}
+}
+
+func parsePanelOperationName(value string) (panelOperationName, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "setup":
+		return panelOperationSetup, true
+	case "readiness":
+		return panelOperationReadiness, true
+	case "cleanup":
+		return panelOperationCleanup, true
+	case "linodesetup":
+		return panelOperationLinodeSetup, true
+	case "linodecleanup":
+		return panelOperationLinodeCleanup, true
+	case "cleanupbatch":
+		return panelOperationCleanupBatch, true
+	case "stevelab":
+		return panelOperationSteveLab, true
+	case "k3dlab":
+		return panelOperationK3DLab, true
+	default:
+		return "", false
 	}
 }
 
@@ -197,6 +231,10 @@ func (p *localControlPanel) startCleanup() error {
 }
 
 func (p *localControlPanel) startCleanupForRun(runID string) error {
+	return p.startCleanupForRunWithBatch(runID, false, nil)
+}
+
+func (p *localControlPanel) startCleanupForRunWithBatch(runID string, batchChild bool, completion chan<- error) error {
 	record, ok := p.readRunRecord(runID)
 	if !ok {
 		return fmt.Errorf("cleanup requires a recorded run: %s", runID)
@@ -205,7 +243,7 @@ func (p *localControlPanel) startCleanupForRun(runID string) error {
 	if isLinodeDockerRecord(record) {
 		operation = panelOperationLinodeCleanup
 	}
-	return p.startPanelCommand(panelCommandSpec{
+	err := p.startPanelCommand(panelCommandSpec{
 		Operation:   operation,
 		DisplayName: "cleanup",
 		TestName:    "TestHACleanup",
@@ -213,7 +251,13 @@ func (p *localControlPanel) startCleanupForRun(runID string) error {
 		RunID:       record.RunID,
 		StartLine:   fmt.Sprintf("[control-panel] Starting canonical cleanup for run %s via go test -run ^TestHACleanup$", record.RunID),
 		SuccessLine: "[control-panel] Cleanup completed successfully",
+		BatchChild:  batchChild,
+		Completion:  completion,
 	})
+	if err == nil && !batchChild {
+		p.clearCompletedCleanupBatch()
+	}
+	return err
 }
 
 func (p *localControlPanel) abortOperation(operation panelOperationName, runID string) error {
@@ -226,6 +270,28 @@ func (p *localControlPanel) abortOperation(operation panelOperationName, runID s
 	if strings.TrimSpace(runID) != "" && !sameRunID(op.RunID, runID) {
 		p.mu.Unlock()
 		return fmt.Errorf("%s is running for run %s, not %s", operation, op.RunID, runID)
+	}
+	if operation == panelOperationCleanupBatch {
+		op.CancelRequested = true
+		op.Output = append(op.Output, "[control-panel] Stop requested for cleanup batch. The current destroy will be interrupted and queued slots will remain recorded.")
+		now := time.Now()
+		op.UpdatedAt = &now
+		pid := op.PID
+		p.persistOperationsLocked()
+		p.mu.Unlock()
+		if pid <= 0 {
+			return nil
+		}
+		return interruptProcessTree(pid)
+	}
+	if operation == panelOperationCleanup || operation == panelOperationLinodeCleanup {
+		batch := p.operationLocked(panelOperationCleanupBatch)
+		if batch.Running && sameRunID(batch.RunID, op.RunID) {
+			batch.CancelRequested = true
+			batch.Output = append(batch.Output, "[control-panel] Stop requested for the current batch destroy. Queued slots will remain recorded.")
+			now := time.Now()
+			batch.UpdatedAt = &now
+		}
 	}
 	pid := op.PID
 	if operation == panelOperationSteveLab {
@@ -247,6 +313,15 @@ func (p *localControlPanel) abortOperation(operation panelOperationName, runID s
 func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if isCloudPanelOperation(spec.Operation) {
+		batch := p.operationLocked(panelOperationCleanupBatch)
+		if batch.Running && !spec.BatchChild {
+			return fmt.Errorf("cleanup batch is already running")
+		}
+		if spec.BatchChild && (!batch.Running || batch.CancelRequested) {
+			return errCleanupBatchCanceled
+		}
+	}
 
 	if p.conflictingOperationRunningLocked(spec.Operation) {
 		return fmt.Errorf("%s is already running", p.runningConflictingOperationNameLocked(spec.Operation))
@@ -266,7 +341,11 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 		}
 		runID = token[:8]
 	}
-	command := fmt.Sprintf("go test -v -run '^%s$' -timeout %s -count=1 ./terratest", spec.TestName, spec.Timeout)
+	invocation, err := p.lifecycleInvocation(spec)
+	if err != nil {
+		return err
+	}
+	command := invocation.display
 
 	if spec.Operation == panelOperationSetup || spec.Operation == panelOperationLinodeSetup {
 		if err := p.prepareTerraformModuleForRun(runID); err != nil {
@@ -297,9 +376,13 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 }
 
 func (p *localControlPanel) runPanelCommand(spec panelCommandSpec) {
-	args := []string{"test", "-v", "-run", fmt.Sprintf("^%s$", spec.TestName), "-timeout", spec.Timeout, "-count=1", "./terratest"}
-	cmd := exec.Command("go", args...)
-	cmd.Dir = p.repoRoot
+	invocation, err := p.lifecycleInvocation(spec)
+	if err != nil {
+		p.finishPanelCommand(spec, err)
+		return
+	}
+	cmd := exec.Command(invocation.path, invocation.args...)
+	cmd.Dir = invocation.dir
 	cmd.Env = p.panelCommandEnv(spec.Operation)
 	cmd.SysProcAttr = panelCommandSysProcAttr()
 
@@ -327,6 +410,57 @@ func (p *localControlPanel) runPanelCommand(spec panelCommandSpec) {
 	wg.Wait()
 
 	p.finishPanelCommand(spec, cmd.Wait())
+}
+
+func (p *localControlPanel) lifecycleInvocation(spec panelCommandSpec) (panelLifecycleInvocation, error) {
+	testPattern := fmt.Sprintf("^%s$", spec.TestName)
+	workspaceVersion := ""
+	if data, err := os.ReadFile(filepath.Join(p.repoRoot, ".rancher-runway-runtime-version")); err == nil {
+		workspaceVersion = strings.TrimSpace(string(data))
+	}
+	if helper := strings.TrimSpace(os.Getenv(packagedLifecycleBinaryEnv)); helper != "" {
+		helper, err := filepath.Abs(helper)
+		if err != nil {
+			return panelLifecycleInvocation{}, fmt.Errorf("resolve packaged lifecycle worker: %w", err)
+		}
+		info, err := os.Stat(helper)
+		if err != nil {
+			return panelLifecycleInvocation{}, fmt.Errorf("packaged lifecycle worker is unavailable at %s: %w", helper, err)
+		}
+		if info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+			return panelLifecycleInvocation{}, fmt.Errorf("packaged lifecycle worker is not executable: %s", helper)
+		}
+		if workspaceVersion != "" {
+			runtimeRoot := filepath.Dir(filepath.Dir(helper))
+			data, err := os.ReadFile(filepath.Join(runtimeRoot, ".rancher-runway-runtime-version"))
+			if err != nil || strings.TrimSpace(string(data)) != workspaceVersion {
+				return panelLifecycleInvocation{}, fmt.Errorf("packaged lifecycle worker does not match workspace runtime %s", workspaceVersion)
+			}
+		}
+		args := []string{
+			"-test.v",
+			"-test.run=" + testPattern,
+			"-test.timeout=" + spec.Timeout,
+			"-test.count=1",
+		}
+		return panelLifecycleInvocation{
+			path:    helper,
+			args:    args,
+			dir:     p.testDir,
+			display: fmt.Sprintf("rancher-runway-lifecycle -test.run='%s' -test.timeout=%s", testPattern, spec.Timeout),
+		}, nil
+	}
+	if workspaceVersion != "" {
+		return panelLifecycleInvocation{}, fmt.Errorf("packaged runtime %s is missing its lifecycle worker", workspaceVersion)
+	}
+
+	args := []string{"test", "-v", "-run", testPattern, "-timeout", spec.Timeout, "-count=1", "./terratest"}
+	return panelLifecycleInvocation{
+		path:    "go",
+		args:    args,
+		dir:     p.repoRoot,
+		display: fmt.Sprintf("go test -v -run '%s' -timeout %s -count=1 ./terratest", testPattern, spec.Timeout),
+	}, nil
 }
 
 func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []string {
@@ -453,10 +587,14 @@ func (p *localControlPanel) appendOperationOutput(operation panelOperationName, 
 	}
 	now := time.Now()
 	op.UpdatedAt = &now
+	p.mirrorCleanupBatchOutputLocked(operation, op.RunID, line, now)
 	p.persistOperationsLocked()
 }
 
 func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error) {
+	if spec.Completion != nil {
+		defer func() { spec.Completion <- err }()
+	}
 	var shouldRunAfterSuccess bool
 	var runID string
 	p.mu.Lock()
@@ -467,12 +605,15 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 	finishedAt := time.Now()
 	op.FinishedAt = &finishedAt
 	op.UpdatedAt = &finishedAt
+	p.clearCleanupBatchPIDLocked(spec.Operation, op.RunID, finishedAt)
 	if err != nil {
 		op.Error = err.Error()
 		op.Output = append(op.Output, fmt.Sprintf("[control-panel] %s finished with error: %s", panelDisplayTitle(spec.DisplayName), err.Error()))
 		p.persistOperationsLocked()
 		p.mu.Unlock()
-		p.updateRunStatusAfterOperation(spec.Operation, runID, false)
+		if !spec.BatchChild {
+			p.updateRunStatusAfterOperation(spec.Operation, runID, false)
+		}
 		return
 	}
 
@@ -482,7 +623,9 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 	shouldRunAfterSuccess = spec.AfterSuccess != nil
 	p.mu.Unlock()
 
-	p.updateRunStatusAfterOperation(spec.Operation, runID, true)
+	if !spec.BatchChild {
+		p.updateRunStatusAfterOperation(spec.Operation, runID, true)
+	}
 	if shouldRunAfterSuccess {
 		spec.AfterSuccess()
 	}
@@ -490,14 +633,20 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 
 func (p *localControlPanel) setOperationPID(operation panelOperationName, pid int) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	op := p.operationLocked(operation)
 	op.PID = pid
 	now := time.Now()
 	op.UpdatedAt = &now
 	op.Output = append(op.Output, fmt.Sprintf("[control-panel] Process pid %d", pid))
+	interruptForBatchCancel := p.mirrorCleanupBatchPIDLocked(operation, op.RunID, pid, now)
 	p.persistOperationsLocked()
+	p.mu.Unlock()
+
+	if interruptForBatchCancel {
+		if err := interruptProcessTree(pid); err != nil {
+			p.appendOperationOutput(operation, fmt.Sprintf("[control-panel] Failed to interrupt cleanup after batch cancellation: %s", err))
+		}
+	}
 }
 
 func (p *localControlPanel) updateRunStatusAfterOperation(operation panelOperationName, runID string, success bool) {
@@ -538,7 +687,7 @@ func (p *localControlPanel) operationLocked(name panelOperationName) *panelOpera
 func (p *localControlPanel) anyOperationRunningLocked() bool {
 	for _, name := range allPanelOperationNames() {
 		op := p.operationLocked(name)
-		if op.Running && op.PID > 0 && !processAlive(op.PID) {
+		if name != panelOperationCleanupBatch && op.Running && op.PID > 0 && !processAlive(op.PID) {
 			now := time.Now()
 			op.Running = false
 			op.PID = 0
@@ -672,6 +821,20 @@ func (p *localControlPanel) markStaleRunningOperationsLocked() {
 	for _, name := range allPanelOperationNames() {
 		op := p.operationLocked(name)
 		if !op.Running {
+			continue
+		}
+		if name == panelOperationCleanupBatch {
+			op.Running = false
+			op.PID = 0
+			op.FinishedAt = &now
+			op.UpdatedAt = &now
+			op.Error = "panel restarted before the cleanup batch reported completion"
+			op.Output = append(op.Output, "[control-panel] Panel restarted before the cleanup batch reported completion; queued run records were preserved.")
+			continue
+		}
+		if op.PID > 0 && processAlive(op.PID) {
+			op.Output = append(op.Output, "[control-panel] Reattached to the still-running lifecycle worker after panel restart.")
+			op.UpdatedAt = &now
 			continue
 		}
 		op.Running = false

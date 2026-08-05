@@ -89,7 +89,12 @@ variable "aws_security_group_id" {
 
 variable "aws_pem_key_name" {
   type        = string
-  description = "Name of the PEM key for SSH access"
+  description = "Name of an existing EC2 key pair in the selected AWS account and region"
+
+  validation {
+    condition     = length(trimspace(var.aws_pem_key_name)) > 0
+    error_message = "aws_pem_key_name must be the name of an existing EC2 key pair, not a local .pem file path."
+  }
 }
 
 variable "aws_rds_password" {

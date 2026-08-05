@@ -59,17 +59,31 @@ const panel = computed(() => state.value?.panel || {});
 const build = computed(() => panel.value?.build || {});
 
 const buildLabel = computed(() => {
+  const version = String(build.value?.version || "").trim().replace(/^v/i, "");
+  const buildNumber = String(build.value?.buildNumber || "").trim();
   const shortCommit = String(build.value?.commitShort || "").trim();
   const modified = Boolean(build.value?.modified);
+  if (version) {
+    const numberLabel = buildNumber ? ` · build ${buildNumber}` : "";
+    return `v${version}${modified ? "*" : ""}${numberLabel}`;
+  }
   return shortCommit ? `Build ${shortCommit}${modified ? "*" : ""}` : "Build unknown";
 });
 
 const buildTitle = computed(() => {
+  const version = String(build.value?.version || "").trim().replace(/^v/i, "");
+  const buildNumber = String(build.value?.buildNumber || "").trim();
   const fullCommit = String(build.value?.commit || "").trim();
   const buildDate = String(build.value?.buildDate || "").trim();
   const modified = Boolean(build.value?.modified);
   const titleParts = [];
 
+  if (version) {
+    titleParts.push(`Version: ${version}`);
+  }
+  if (buildNumber) {
+    titleParts.push(`Build: ${buildNumber}`);
+  }
   if (fullCommit) {
     titleParts.push(`Commit: ${fullCommit}`);
   }
@@ -80,7 +94,7 @@ const buildTitle = computed(() => {
     titleParts.push("Working tree had local changes when this binary was built.");
   }
 
-  return titleParts.length ? titleParts.join("\n") : "No build commit was embedded in this binary.";
+  return titleParts.length ? titleParts.join("\n") : "No build metadata was embedded in this binary.";
 });
 
 const sessionMeta = computed(() => {

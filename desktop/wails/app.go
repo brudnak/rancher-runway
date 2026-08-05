@@ -165,7 +165,7 @@ func (a *App) PanelStatus() DesktopPanelStatus {
 	hydrateDesktopEnvironment()
 
 	if a.url != "" {
-		return DesktopPanelStatus{URL: a.url, RepoRoot: currentRepoHint(), Build: buildinfo.Current(), Error: a.err}
+		return DesktopPanelStatus{URL: a.url, RepoRoot: a.repoRoot, Build: buildinfo.Current(), Error: a.err}
 	}
 
 	repoRoot, err := resolveDesktopRepoRoot()
@@ -227,11 +227,24 @@ func (a *App) panelHandler() (http.Handler, error) {
 }
 
 func resolveDesktopRepoRoot() (string, error) {
-	candidates := []string{
+	if root, packaged, err := resolvePackagedDesktopRuntime(); err != nil {
+		return "", err
+	} else if packaged {
+		return root, nil
+	}
+
+	explicitCandidates := []string{
 		os.Getenv("RANCHER_RUNWAY_REPO"),
 		os.Getenv("HA_RANCHER_REPO"),
-		currentRepoHint(),
 	}
+	for _, candidate := range explicitCandidates {
+		root, err := walkToRepoRoot(candidate)
+		if err == nil {
+			return root, nil
+		}
+	}
+
+	candidates := []string{currentRepoHint()}
 	if cwd, err := os.Getwd(); err == nil {
 		candidates = append(candidates, cwd)
 	}
@@ -302,10 +315,11 @@ func isRepoRoot(dir string) bool {
 	if !strings.Contains(string(data), "module github.com/brudnak/ha-rancher-rke2") {
 		return false
 	}
-	if _, err := os.Stat(filepath.Join(dir, "terratest", "control_panel.go")); err != nil {
-		return false
+	if _, err := os.Stat(filepath.Join(dir, "terratest", "control_panel.go")); err == nil {
+		return true
 	}
-	return true
+	_, err = os.Stat(filepath.Join(dir, runtimeVersionFilename))
+	return err == nil
 }
 
 func hydrateDesktopEnvironment() {
@@ -343,7 +357,11 @@ func mergeLoginShellEnvironment() {
 }
 
 func shouldImportShellEnv(key string) bool {
-	if key == "PATH" || key == "HOME" || key == "KUBECONFIG" || key == "GOPATH" || key == "GOBIN" {
+	switch key {
+	case "RANCHER_RUNWAY_REPO", "HA_RANCHER_REPO", packagedRuntimeOverrideEnv, lifecycleBinaryEnv, managedWorkspaceEnv:
+		return false
+	}
+	if key == "PATH" || key == "KUBECONFIG" || key == "GOPATH" || key == "GOBIN" {
 		return true
 	}
 

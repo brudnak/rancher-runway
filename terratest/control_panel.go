@@ -50,6 +50,11 @@ type localControlPanel struct {
 	awsCacheKey string
 	setupEditor *interactiveServer
 
+	// cleanupBatchRunner is nil in production. Tests may replace it with a
+	// deterministic runner so the batch coordinator can be exercised without
+	// launching Terraform.
+	cleanupBatchRunner func(string) error
+
 	rancherTokens             map[int]string
 	downstreamKubeconfigCache map[string]string
 }
@@ -82,18 +87,19 @@ type GPUInfrastructureDetail struct {
 }
 
 type panelState struct {
-	Panel         panelSessionState      `json:"panel"`
-	Workspace     panelWorkspaceState    `json:"workspace"`
-	Setup         panelOperationSnapshot `json:"setup"`
-	Readiness     panelOperationSnapshot `json:"readiness"`
-	LinodeSetup   panelOperationSnapshot `json:"linodeSetup"`
-	LinodeCleanup panelOperationSnapshot `json:"linodeCleanup"`
-	Steve         steveLabPanelState     `json:"steve"`
-	K3D           k3dLabPanelState       `json:"k3d"`
-	Clusters      panelClusterState      `json:"clusters"`
-	AWS           panelAWSInventoryState `json:"aws"`
-	Cleanup       panelOperationSnapshot `json:"cleanup"`
-	Costs         panelCostHistoryState  `json:"costs"`
+	Panel         panelSessionState         `json:"panel"`
+	Workspace     panelWorkspaceState       `json:"workspace"`
+	Setup         panelOperationSnapshot    `json:"setup"`
+	Readiness     panelOperationSnapshot    `json:"readiness"`
+	LinodeSetup   panelOperationSnapshot    `json:"linodeSetup"`
+	LinodeCleanup panelOperationSnapshot    `json:"linodeCleanup"`
+	Steve         steveLabPanelState        `json:"steve"`
+	K3D           k3dLabPanelState          `json:"k3d"`
+	Clusters      panelClusterState         `json:"clusters"`
+	AWS           panelAWSInventoryState    `json:"aws"`
+	Cleanup       panelOperationSnapshot    `json:"cleanup"`
+	CleanupBatch  panelCleanupBatchSnapshot `json:"cleanupBatch"`
+	Costs         panelCostHistoryState     `json:"costs"`
 }
 
 type panelSessionState struct {
@@ -192,6 +198,7 @@ const (
 	panelOperationCleanup       panelOperationName = "cleanup"
 	panelOperationLinodeSetup   panelOperationName = "linodeSetup"
 	panelOperationLinodeCleanup panelOperationName = "linodeCleanup"
+	panelOperationCleanupBatch  panelOperationName = "cleanupBatch"
 	panelOperationSteveLab      panelOperationName = "steveLab"
 	panelOperationK3DLab        panelOperationName = "k3dLab"
 )
@@ -206,6 +213,13 @@ type panelOperationState struct {
 	RunID      string
 	Command    string
 	UpdatedAt  *time.Time
+
+	// Batch-only fields live on the dedicated cleanupBatch operation so they
+	// are persisted alongside the other lifecycle state.
+	RunIDs          []string
+	CompletedRunIDs []string
+	Failures        []panelCleanupBatchFailure
+	CancelRequested bool
 }
 
 type panelCommandSpec struct {
@@ -218,6 +232,8 @@ type panelCommandSpec struct {
 	SuccessLine    string
 	AfterSuccess   func()
 	AllowWhileDone bool
+	BatchChild     bool
+	Completion     chan<- error
 }
 
 type kubectlPodList struct {
@@ -1174,11 +1190,9 @@ func (p *localControlPanel) handleAbortOperation(w http.ResponseWriter, r *http.
 		return
 	}
 
-	operation := panelOperationName(strings.TrimSpace(strings.ToLower(req.Operation)))
-	switch operation {
-	case panelOperationSetup, panelOperationReadiness, panelOperationCleanup, panelOperationLinodeSetup, panelOperationLinodeCleanup, panelOperationSteveLab, panelOperationK3DLab:
-	default:
-		http.Error(w, "operation must be setup, readiness, cleanup, linodeSetup, linodeCleanup, steveLab, or k3dLab", http.StatusBadRequest)
+	operation, validOperation := parsePanelOperationName(req.Operation)
+	if !validOperation {
+		http.Error(w, "operation must be setup, readiness, cleanup, linodeSetup, linodeCleanup, cleanupBatch, steveLab, or k3dLab", http.StatusBadRequest)
 		return
 	}
 
@@ -1201,14 +1215,51 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		Confirm string `json:"confirm"`
-		RunID   string `json:"runId"`
+		Confirm string   `json:"confirm"`
+		RunID   string   `json:"runId"`
+		RunIDs  []string `json:"runIds"`
+		All     bool     `json:"all"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	confirm := strings.TrimSpace(strings.ToLower(req.Confirm))
+	batchRequested := req.All || req.RunIDs != nil
+	if strings.TrimSpace(req.RunID) != "" && batchRequested {
+		http.Error(w, "runId cannot be combined with all or runIds", http.StatusBadRequest)
+		return
+	}
+	if req.All && req.RunIDs != nil {
+		http.Error(w, "all and runIds are mutually exclusive", http.StatusBadRequest)
+		return
+	}
+	if batchRequested {
+		expectedConfirmation := "destroy selected"
+		if req.All {
+			expectedConfirmation = "destroy all"
+		}
+		if confirm != expectedConfirmation {
+			http.Error(w, "typed confirmation must equal "+expectedConfirmation, http.StatusBadRequest)
+			return
+		}
+
+		runIDs, err := p.resolveCleanupBatchRunIDs(req.RunIDs, req.All)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := p.startCleanupBatch(runIDs); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		writeJSON(w, map[string]any{
+			"status":       "cleanup batch started",
+			"cleanupBatch": p.snapshotCleanupBatch(),
+		})
+		return
+	}
+
 	if confirm != "cleanup" && confirm != "destroy" {
 		http.Error(w, "typed confirmation must equal destroy", http.StatusBadRequest)
 		return
@@ -1358,9 +1409,10 @@ func (p *localControlPanel) buildState() panelState {
 		Clusters: panelClusterState{
 			Items: clusters,
 		},
-		AWS:     p.discoverAWSInventory(workspace.Runs),
-		Cleanup: p.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs),
-		Costs:   discoverCostHistory(),
+		AWS:          p.discoverAWSInventory(workspace.Runs),
+		Cleanup:      p.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs),
+		CleanupBatch: p.snapshotCleanupBatch(),
+		Costs:        discoverCostHistory(),
 	}
 }
 

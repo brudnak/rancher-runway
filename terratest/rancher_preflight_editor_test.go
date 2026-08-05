@@ -12,6 +12,30 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestWritePrivateConfigAtomicallyTightensExistingPermissions(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "tool-config.yml")
+	if err := os.WriteFile(configPath, []byte("old\n"), 0o644); err != nil {
+		t.Fatalf("write existing config: %v", err)
+	}
+	if err := writePrivateConfigAtomically(configPath, []byte("new\n")); err != nil {
+		t.Fatalf("write private config: %v", err)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read private config: %v", err)
+	}
+	if string(data) != "new\n" {
+		t.Fatalf("config = %q, want %q", data, "new\\n")
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatalf("stat private config: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config mode = %o, want 600", got)
+	}
+}
+
 func TestUpdateAutoModeConfigFileRewritesVersionsAndTotalHAs(t *testing.T) {
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "tool-config.yml")

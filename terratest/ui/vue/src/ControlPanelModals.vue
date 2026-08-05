@@ -320,6 +320,7 @@ const logModalKind = computed(() => {
   if (logs.mode === "readiness") return "Readiness logs";
   if (logs.mode === "cleanup") return "Destroy logs";
   if (logs.mode === "linodeCleanup") return "Linode destroy logs";
+  if (logs.mode === "cleanupBatch") return "Destroy batch logs";
   return "Pod logs";
 });
 
@@ -330,6 +331,7 @@ const logModalTitle = computed(() => {
   if (logs.mode === "readiness") return "Readiness";
   if (logs.mode === "cleanup") return "Destroy run";
   if (logs.mode === "linodeCleanup") return "Linode destroy run";
+  if (logs.mode === "cleanupBatch") return "Sequential slot destroy";
   return logs.podName || "No pod selected";
 });
 
@@ -342,6 +344,7 @@ const logModalSubtitle = computed(() => {
   if (logs.mode === "linodeSetup") return "go test -v -run ^TestHaSetup$ -timeout 90m -count=1 ./terratest";
   if (logs.mode === "readiness") return state.value?.readiness?.command || "go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest";
   if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") return "go test -v -run TestHACleanup -timeout 20m ./terratest";
+  if (logs.mode === "cleanupBatch") return "Runs Terraform destroy once per recorded slot and continues past individual failures";
   return `${logs.namespace} • ${logs.clusterId} • ${logs.mode === "live" ? "live stream" : "tail snapshot"}`;
 });
 
@@ -367,6 +370,10 @@ const liveLogStateLabel = computed(() => {
     linodeCleanupRunning: "Linode destroy running",
     linodeCleanupDone: "Linode destroy completed",
     linodeCleanupError: "Linode destroy failed",
+    cleanupBatchRunning: "Destroy batch running",
+    cleanupBatchCanceling: "Destroy batch stopping",
+    cleanupBatchDone: "Destroy batch completed",
+    cleanupBatchError: "Destroy batch finished with failures",
   };
   return states[logs.liveState] || "Idle";
 });
@@ -393,6 +400,10 @@ const liveLogStateIconClass = computed(() => {
     linodeCleanupRunning: "bg-sky-500 animate-pulse",
     linodeCleanupDone: "bg-emerald-500",
     linodeCleanupError: "bg-rose-500",
+    cleanupBatchRunning: "bg-sky-500 animate-pulse",
+    cleanupBatchCanceling: "bg-amber-500 animate-pulse",
+    cleanupBatchDone: "bg-emerald-500",
+    cleanupBatchError: "bg-rose-500",
   };
   return `h-2.5 w-2.5 rounded-full ${states[logs.liveState] || "bg-zinc-400"}`;
 });
@@ -419,6 +430,10 @@ const liveLogStateContainerClass = computed(() => {
     linodeCleanupRunning: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
     linodeCleanupDone: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
     linodeCleanupError: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
+    cleanupBatchRunning: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
+    cleanupBatchCanceling: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300",
+    cleanupBatchDone: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
+    cleanupBatchError: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
   };
   return `mt-3 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${states[logs.liveState] || states.idle}`;
 });
@@ -435,7 +450,7 @@ const stopStreamBtnLabel = computed(() => {
 });
 
 const stopStreamBtnHidden = computed(() => {
-  const operationContext = ["setup", "linodeSetup", "readiness", "cleanup", "linodeCleanup"].includes(logs.mode);
+  const operationContext = ["setup", "linodeSetup", "readiness", "cleanup", "linodeCleanup", "cleanupBatch"].includes(logs.mode);
   return operationContext || logs.liveState.startsWith("cleanup") || logs.liveState.startsWith("setup") || logs.liveState.startsWith("readiness") || logs.liveState.startsWith("linode");
 });
 
@@ -456,7 +471,8 @@ const logWaiting = computed(() => {
   const waitingForCleanup = logs.mode === "cleanup" && logs.liveState === "cleanupRunning";
   const waitingForLinodeSetup = logs.mode === "linodeSetup" && logs.liveState === "linodeSetupRunning";
   const waitingForLinodeCleanup = logs.mode === "linodeCleanup" && logs.liveState === "linodeCleanupRunning";
-  return waitingForLive || waitingForSetup || waitingForReadiness || waitingForCleanup || waitingForLinodeSetup || waitingForLinodeCleanup;
+  const waitingForCleanupBatch = logs.mode === "cleanupBatch" && ["cleanupBatchRunning", "cleanupBatchCanceling"].includes(logs.liveState);
+  return waitingForLive || waitingForSetup || waitingForReadiness || waitingForCleanup || waitingForLinodeSetup || waitingForLinodeCleanup || waitingForCleanupBatch;
 });
 
 const logWaitingMessage = computed(() => {
@@ -483,6 +499,9 @@ const logWaitingMessage = computed(() => {
   }
   if (logs.mode === "linodeCleanup" && logs.liveState === "linodeCleanupRunning") {
     return "Waiting for Linode cleanup output...";
+  }
+  if (logs.mode === "cleanupBatch" && ["cleanupBatchRunning", "cleanupBatchCanceling"].includes(logs.liveState)) {
+    return logs.liveState === "cleanupBatchCanceling" ? "Waiting for the current destroy to stop..." : "Waiting for destroy batch output...";
   }
   if (logs.search.trim() || logs.level !== "all") {
     return "No matching log lines.";

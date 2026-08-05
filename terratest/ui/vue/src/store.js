@@ -43,7 +43,7 @@ export const fullscreen = ref(false);
 // Logs State
 export const logs = reactive({
   show: false,
-  mode: "", // 'live', 'tail', 'docker', 'setup', 'linodeSetup', 'readiness', 'cleanup', 'linodeCleanup'
+  mode: "", // 'live', 'tail', 'docker', 'setup', 'linodeSetup', 'readiness', 'cleanup', 'linodeCleanup', 'cleanupBatch'
   clusterId: "",
   namespace: "",
   podName: "",
@@ -87,7 +87,9 @@ export const preflightChecking = ref(false);
 
 // Cost DB reset & Cleanup states
 export const selectedCleanupRunId = ref("");
+export const selectedCleanupRunIds = ref([]);
 export const cleanupStarting = ref(false);
+export const cleanupBatchStarting = ref(false);
 export const dismissedCleanupResultKey = ref("");
 export const costResetting = ref(false);
 export const localArtifactsCleaning = ref(false);
@@ -155,16 +157,84 @@ export const awsLifecycleRunning = computed(() =>
 export const linodeLifecycleRunning = computed(() =>
   Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running)
 );
+export const cleanupBatchRunning = computed(() => Boolean(state.value?.cleanupBatch?.running));
 export const lifecycleRunning = computed(() =>
-  Boolean(awsLifecycleRunning.value || linodeLifecycleRunning.value)
+  Boolean(awsLifecycleRunning.value || linodeLifecycleRunning.value || cleanupBatchRunning.value || cleanupBatchStarting.value)
 );
 
 export const runIsLinodeDocker = run => run?.deploymentType === "linode-docker-cattle";
 export const runDestroyBlocked = run =>
-  runIsLinodeDocker(run) ? linodeLifecycleRunning.value : awsLifecycleRunning.value;
+  cleanupBatchRunning.value || cleanupBatchStarting.value || (runIsLinodeDocker(run) ? linodeLifecycleRunning.value : awsLifecycleRunning.value);
+
+const cleanupRunIdsInState = () => Array.isArray(state.value?.workspace?.runs)
+  ? state.value.workspace.runs.map(run => String(run?.runId || "").trim()).filter(Boolean)
+  : [];
+
+const dedupeRunIds = runIds => {
+  const selected = [];
+  for (const rawRunId of Array.isArray(runIds) ? runIds : []) {
+    const runId = String(rawRunId || "").trim();
+    if (runId && !selected.some(existing => sameRunKey(existing, runId))) {
+      selected.push(runId);
+    }
+  }
+  return selected;
+};
+
+export const cleanupSelectionLocked = computed(() =>
+  Boolean(bootPending.value || lifecycleRunning.value || cleanupStarting.value || cleanupBatchStarting.value)
+);
+
+export const toggleCleanupRunSelection = runId => {
+  if (cleanupSelectionLocked.value) return;
+  const normalized = String(runId || "").trim();
+  if (!normalized) return;
+  const selected = dedupeRunIds(selectedCleanupRunIds.value);
+  const index = selected.findIndex(existing => sameRunKey(existing, normalized));
+  if (index >= 0) {
+    selected.splice(index, 1);
+  } else {
+    selected.push(normalized);
+  }
+  selectedCleanupRunIds.value = selected;
+};
+
+export const selectAllCleanupRuns = () => {
+  if (cleanupSelectionLocked.value) return;
+  selectedCleanupRunIds.value = cleanupRunIdsInState();
+};
+
+export const clearCleanupRunSelection = () => {
+  if (cleanupSelectionLocked.value) return;
+  selectedCleanupRunIds.value = [];
+};
+
+watch(cleanupRunIdsInState, availableRunIds => {
+  const next = dedupeRunIds(selectedCleanupRunIds.value).filter(selectedRunId =>
+    availableRunIds.some(availableRunId => sameRunKey(availableRunId, selectedRunId))
+  );
+  if (next.length !== selectedCleanupRunIds.value.length || next.some((runId, index) => runId !== selectedCleanupRunIds.value[index])) {
+    selectedCleanupRunIds.value = next;
+  }
+}, { immediate: true });
 
 export const lifecycleBusyDetail = () => {
   const curState = state.value;
+  if (curState?.cleanupBatch?.running || cleanupBatchStarting.value) {
+    const total = Array.isArray(curState?.cleanupBatch?.runIds) ? curState.cleanupBatch.runIds.length : 0;
+    return {
+      busy: true,
+      operation: "cleanupBatch",
+      message: total
+        ? `A destroy batch is processing ${total} run slot${total === 1 ? "" : "s"}. Other lifecycle actions stay locked until it finishes.`
+        : "A destroy batch is starting. Other lifecycle actions stay locked until it finishes.",
+      busyByDeployment: {
+        "ha-rke2": true,
+        "hosted-tenant-k3s": true,
+        "linode-docker-cattle": true,
+      },
+    };
+  }
   if (curState?.setup?.running) {
     return {
       busy: true,
@@ -410,7 +480,9 @@ export const maybeShowGPUReminder = curState => {
     curState?.setup?.running ||
     curState?.readiness?.running ||
     curState?.cleanup?.running ||
+    curState?.cleanupBatch?.running ||
     cleanupStarting.value ||
+    cleanupBatchStarting.value ||
     setupLaunchPendingUntil.value > Date.now()
   );
   if (busy) {
@@ -474,6 +546,9 @@ export const logFilename = () => {
   }
   if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") {
     return `${logs.mode === "linodeCleanup" ? "linode-cleanup" : "cleanup"}${logs.search ? "-filtered" : ""}.log`;
+  }
+  if (logs.mode === "cleanupBatch") {
+    return `cleanup-batch${logs.search ? "-filtered" : ""}.log`;
   }
   if (logs.mode === "steveLive" || logs.mode === "steveLog") {
     return `steve-${logs.podName || "log"}${logs.search ? "-filtered" : ""}.log`;
@@ -762,6 +837,31 @@ export const openCleanupLogs = (linode = false) => {
   openLogModal();
 };
 
+const cleanupBatchLiveState = cleanupBatch => {
+  if (cleanupBatch?.running) return cleanupBatch.cancelRequested ? "cleanupBatchCanceling" : "cleanupBatchRunning";
+  if (cleanupBatch?.error || (Array.isArray(cleanupBatch?.failures) && cleanupBatch.failures.length)) return "cleanupBatchError";
+  if (cleanupBatch?.finishedAt) return "cleanupBatchDone";
+  return "idle";
+};
+
+export const openCleanupBatchLogs = () => {
+  stopStream({ internal: true });
+  setActiveLogContext("cleanupBatch", "local", "terratest", "cleanup-batch");
+  const cleanupBatch = state.value?.cleanupBatch || {};
+  logs.rawText = operationOutput(cleanupBatch).join("\n");
+  logs.liveState = cleanupBatchLiveState(cleanupBatch);
+  renderLogViewer();
+  openLogModal();
+};
+
+const syncCleanupBatchLogModal = currentState => {
+  if (!logs.show || logs.mode !== "cleanupBatch") return;
+  const cleanupBatch = currentState?.cleanupBatch || {};
+  logs.rawText = operationOutput(cleanupBatch).join("\n");
+  logs.liveState = cleanupBatchLiveState(cleanupBatch);
+  renderLogViewer();
+};
+
 export const downloadLogs = () => {
   const text = logs.visibleText || logs.rawText;
   if (!text) {
@@ -954,12 +1054,20 @@ export const runSetup = async () => {
 
 export const abortOperation = async (operation, runId = "", options = {}) => {
   if (!options.skipConfirmation) {
-    const label = operation === "setup" || operation === "linodeSetup" ? "setup" : operation;
+    const cleanupBatchAbort = operation === "cleanupBatch";
+    const label = operation === "setup" || operation === "linodeSetup"
+      ? "setup"
+      : cleanupBatchAbort
+        ? "destroy batch"
+        : operation;
     const confirmed = await requestTypedConfirmation({
-      title: `Stop ${label} process?`,
-      body: `This asks the local ${label} test process to stop and preserves Terraform state plus the run record. It does not destroy AWS resources.`,
+      title: cleanupBatchAbort ? "Stop destroy batch?" : `Stop ${label} process?`,
+      body: cleanupBatchAbort
+        ? "This interrupts the Terraform destroy currently in progress and prevents queued slots from starting. Queued slots stay recorded. The current slot also stays recorded, but its infrastructure may be partially destroyed and should be reviewed before retrying."
+        : `This asks the local ${label} test process to stop and preserves Terraform state plus the run record. It does not destroy AWS resources.`,
       typedValue: "stop",
-      confirmText: "Request stop",
+      confirmText: cleanupBatchAbort ? "Stop destroy batch" : "Request stop",
+      accentText: cleanupBatchAbort ? "Terraform destroy interruption" : "Confirmation required",
     });
     if (!confirmed) {
       return false;
@@ -974,6 +1082,16 @@ export const abortOperation = async (operation, runId = "", options = {}) => {
       method: "POST",
       body: JSON.stringify({ operation, runId, confirm: "stop" }),
     });
+    if (operation === "cleanupBatch") {
+      state.value = {
+        ...(state.value || {}),
+        cleanupBatch: {
+          ...(state.value?.cleanupBatch || {}),
+          cancelRequested: true,
+        },
+      };
+      syncCleanupBatchLogModal(state.value);
+    }
     refreshStatus.value = `Stop requested for ${operation}.`;
     refresh();
     return true;
@@ -1041,7 +1159,7 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
     ? state.value?.linodeCleanup?.running || state.value?.linodeSetup?.running
     : state.value?.cleanup?.running || state.value?.setup?.running || state.value?.readiness?.running;
 
-  if (cleanupStarting.value || destroyBlocked) {
+  if (cleanupStarting.value || cleanupBatchStarting.value || state.value?.cleanupBatch?.running || destroyBlocked) {
     return;
   }
 
@@ -1084,6 +1202,98 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
   } catch (error) {
     refreshStatus.value = error instanceof Error ? error.message : "Cleanup request failed.";
     cleanupStarting.value = false;
+  }
+};
+
+export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRunIds.value } = {}) => {
+  if (bootPending.value || cleanupSelectionLocked.value) return;
+
+  const availableRunIds = cleanupRunIdsInState();
+  const requestedRunIds = all
+    ? availableRunIds
+    : dedupeRunIds(runIds).filter(runId => availableRunIds.some(availableRunId => sameRunKey(availableRunId, runId)));
+  if (!requestedRunIds.length) {
+    refreshStatus.value = all ? "There are no run slots to destroy." : "Select at least one run before starting destroy.";
+    return;
+  }
+
+  const confirmationText = all ? "destroy all" : "destroy selected";
+  const preview = requestedRunIds.slice(0, 6).join(", ");
+  const remaining = requestedRunIds.length - Math.min(requestedRunIds.length, 6);
+  const targetSummary = remaining > 0 ? `${preview}, and ${remaining} more` : preview;
+  const confirmed = await requestTypedConfirmation({
+    title: all
+      ? `Destroy all ${requestedRunIds.length} run slots?`
+      : `Destroy ${requestedRunIds.length} selected run slot${requestedRunIds.length === 1 ? "" : "s"}?`,
+    body: `Terraform destroy will run sequentially for this fixed set: ${targetSummary}. Successful slots are removed; failed slots stay recorded and the batch continues with the remaining targets.`,
+    typedValue: confirmationText,
+    confirmText: all ? "Destroy all slots" : "Destroy selected slots",
+    accentText: all ? "Destroy every recorded slot" : "Bulk destroy confirmation",
+  });
+  if (!confirmed) return;
+
+  // Re-check the client snapshot after the modal was open. The server performs
+  // the authoritative validation and snapshots `all` independently.
+  const currentRunIds = cleanupRunIdsInState();
+  const currentTargets = requestedRunIds.filter(runId => currentRunIds.some(currentRunId => sameRunKey(currentRunId, runId)));
+  const allSnapshotChanged = all && (
+    currentRunIds.length !== requestedRunIds.length ||
+    currentRunIds.some(runId => !requestedRunIds.some(requestedRunId => sameRunKey(requestedRunId, runId)))
+  );
+  if (cleanupSelectionLocked.value) {
+    refreshStatus.value = "A lifecycle operation started while confirmation was open. Wait for it to finish and try again.";
+    return;
+  }
+  if (currentTargets.length !== requestedRunIds.length || allSnapshotChanged) {
+    refreshStatus.value = "Run slots changed while confirmation was open. Review the selection and try again.";
+    return;
+  }
+
+  selectedCleanupRunIds.value = currentTargets;
+  selectedCleanupRunId.value = "";
+  dismissedCleanupResultKey.value = "";
+  cleanupBatchStarting.value = true;
+  refreshStatus.value = all ? "Starting destroy for all run slots..." : "Starting destroy for selected run slots...";
+
+  try {
+    const response = await apiFetch("/api/cleanup", {
+      method: "POST",
+      body: JSON.stringify(all
+        ? { all: true, confirm: "destroy all" }
+        : { runIds: currentTargets, confirm: "destroy selected" }),
+    });
+    const payload = await response.json();
+
+    const startedAt = new Date().toISOString();
+    const acceptedBatch = payload?.cleanupBatch || {};
+    state.value = {
+      ...(state.value || {}),
+      cleanupBatch: {
+        ...(state.value?.cleanupBatch || {}),
+        ...acceptedBatch,
+        running: typeof acceptedBatch.running === "boolean" ? acceptedBatch.running : true,
+        currentRunId: acceptedBatch.currentRunId || "",
+        runIds: Array.isArray(acceptedBatch.runIds) ? acceptedBatch.runIds : currentTargets,
+        completedRunIds: Array.isArray(acceptedBatch.completedRunIds) ? acceptedBatch.completedRunIds : [],
+        failures: Array.isArray(acceptedBatch.failures) ? acceptedBatch.failures : [],
+        cancelRequested: Boolean(acceptedBatch.cancelRequested),
+        startedAt: acceptedBatch.startedAt || startedAt,
+        finishedAt: acceptedBatch.finishedAt || null,
+        error: acceptedBatch.error || "",
+        output: Array.isArray(acceptedBatch.output) && acceptedBatch.output.length
+          ? acceptedBatch.output
+          : [`[control-panel] Destroy batch accepted for ${currentTargets.length} run slot${currentTargets.length === 1 ? "" : "s"}.`],
+      },
+    };
+    cleanupBatchStarting.value = false;
+    refreshStatus.value = `Destroy batch requested for ${currentTargets.length} run slot${currentTargets.length === 1 ? "" : "s"}.`;
+    dispatchSetupLifecycleState();
+    openCleanupBatchLogs();
+    refresh();
+  } catch (error) {
+    cleanupBatchStarting.value = false;
+    refreshStatus.value = error instanceof Error ? error.message : "Bulk cleanup request failed.";
+    dispatchSetupLifecycleState();
   }
 };
 
@@ -1248,12 +1458,21 @@ export const refresh = async () => {
     }));
 
     dispatchSetupLifecycleState();
+    syncCleanupBatchLogModal(fetched);
 
     if (pendingAbortOperation.value && !fetched?.[pendingAbortOperation.value]?.running) {
       pendingAbortOperation.value = "";
     }
     if (cleanupStarting.value && (fetched?.cleanup?.running || fetched?.linodeCleanup?.running)) {
       cleanupStarting.value = false;
+    }
+    if (cleanupBatchStarting.value && (
+      fetched?.cleanupBatch?.running ||
+      fetched?.cleanupBatch?.startedAt ||
+      fetched?.cleanupBatch?.finishedAt ||
+      fetched?.cleanupBatch?.error
+    )) {
+      cleanupBatchStarting.value = false;
     }
     if (bootPending.value) {
       bootPending.value = false;

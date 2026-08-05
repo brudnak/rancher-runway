@@ -2035,7 +2035,7 @@ const validateSetup = () => {
 
   if (!isLinodeDockerDeployment() && !String((pemKeyInput && pemKeyInput.value) || '').trim()) {
     return {
-      message: 'AWS PEM key name is required.',
+      message: 'An AWS EC2 key pair name is required.',
       target: pemKeyInput,
       notice: true
     }
@@ -2504,8 +2504,8 @@ const prepareSetupSubmit = async event => {
     showValidationError(validationError.message, validationError.target)
     if (validationError.notice) {
       await showNoticeModal({
-        title: 'PEM key name required',
-        body: 'Add the AWS PEM key name before resolving the plan. It should match the EC2 key pair name for your AWS account.'
+        title: 'EC2 key pair name required',
+        body: 'Add an existing EC2 key pair name before resolving the plan. It must exist in the selected AWS account and region; do not enter a local .pem file path.'
       })
     }
     return
@@ -2558,8 +2558,8 @@ const prepareSetupSubmit = async event => {
   const pemConfirmed = isLinodeDockerDeployment()
     ? true
     : await showConfirmModal({
-        title: 'Confirm PEM key name',
-        body: `AWS PEM key name is "${tfVars.aws_pem_key_name}". This must match the EC2 key pair you want the run to use.`,
+        title: 'Confirm EC2 key pair name',
+        body: `AWS EC2 key pair name is "${tfVars.aws_pem_key_name}". This must exist in ${currentAWSRegion() || 'us-east-2'} for the AWS account used by this run.`,
         confirmText: 'Use this key'
       })
 

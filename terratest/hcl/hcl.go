@@ -10,6 +10,7 @@ import (
 )
 
 func GenAwsVar(
+	awsRegion,
 	awsPrefix,
 	awsVpc,
 	subnetA,
@@ -31,6 +32,7 @@ func GenAwsVar(
 	serverCount int) {
 	GenAwsVarFile(
 		"../modules/aws/terraform.tfvars",
+		awsRegion,
 		awsPrefix,
 		awsVpc,
 		subnetA,
@@ -55,6 +57,7 @@ func GenAwsVar(
 
 func GenAwsVarFile(
 	path,
+	awsRegion,
 	awsPrefix,
 	awsVpc,
 	subnetA,
@@ -82,15 +85,9 @@ func GenAwsVarFile(
 		return
 	}
 
-	tfVarsFile, err := os.Create(path)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	defer tfVarsFile.Close()
-
 	rootBody := f.Body()
 
+	rootBody.SetAttributeValue("aws_region", cty.StringVal(awsRegion))
 	rootBody.SetAttributeValue("aws_prefix", cty.StringVal(awsPrefix))
 	rootBody.SetAttributeValue("aws_vpc", cty.StringVal(awsVpc))
 	rootBody.SetAttributeValue("aws_subnet_a", cty.StringVal(subnetA))
@@ -111,9 +108,32 @@ func GenAwsVarFile(
 	rootBody.SetAttributeValue("aws_ec2_instance_type", cty.StringVal(awsEC2InstanceType))
 	rootBody.SetAttributeValue("server_count", cty.NumberIntVal(int64(serverCount)))
 
-	_, err = tfVarsFile.Write(f.Bytes())
-	if err != nil {
+	if err := writePrivateFileAtomically(path, f.Bytes()); err != nil {
 		fmt.Println(err)
-		return
 	}
+}
+
+func writePrivateFileAtomically(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".terraform-tfvars-")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }

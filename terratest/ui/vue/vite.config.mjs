@@ -14,7 +14,7 @@ export default defineConfig({
       input: resolve(__dirname, "src/control_panel_header.js"),
       output: {
         entryFileNames: "control_panel_header_vue.js",
-        inlineDynamicImports: true,
+        codeSplitting: false,
       },
     },
   },

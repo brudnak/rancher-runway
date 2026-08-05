@@ -45,7 +45,7 @@ variable "aws_security_group_id" {
 
 variable "aws_pem_key_name" {
   type        = string
-  description = "Optional PEM key name to attach to the EC2 instances."
+  description = "Existing EC2 key pair name to attach to the instances."
   default     = ""
 }
 

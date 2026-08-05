@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/app-bundle-utils.sh
+source "${repo_root}/scripts/app-bundle-utils.sh"
 app_name="${RANCHER_RUNWAY_APP_NAME:-${HA_RANCHER_APP_NAME:-Rancher Runway}}"
 install_dir="${RANCHER_RUNWAY_INSTALL_DIR:-${HA_RANCHER_INSTALL_DIR:-/Applications}}"
 source_app="${repo_root}/desktop/wails/build/bin/${app_name}.app"
@@ -9,7 +11,7 @@ target_app="${install_dir}/${app_name}.app"
 temp_app="${install_dir}/.${app_name}.app.tmp.$$"
 
 cleanup_temp_app() {
-  rm -rf "${temp_app}"
+  rancher_runway_remove_app_tree "${temp_app}"
 }
 trap cleanup_temp_app EXIT
 
@@ -32,14 +34,14 @@ else
   echo "Installing new ${target_app}"
 fi
 
-rm -rf "${temp_app}"
+rancher_runway_remove_app_tree "${temp_app}"
 if command -v ditto >/dev/null 2>&1; then
   ditto "${source_app}" "${temp_app}"
 else
   cp -R "${source_app}" "${temp_app}"
 fi
 
-rm -rf "${target_app}"
+rancher_runway_remove_app_tree "${target_app}"
 mv "${temp_app}" "${target_app}"
 trap - EXIT
 touch "${target_app}"
@@ -52,6 +54,6 @@ echo "Installed ${target_app}"
 echo "Double-click it to open the native Rancher Runway control panel."
 
 if [[ "${RANCHER_RUNWAY_KEEP_WAILS_BUILD_APP:-${HA_RANCHER_KEEP_WAILS_BUILD_APP:-}}" != "1" ]]; then
-  rm -rf "${source_app}"
+  rancher_runway_remove_app_tree "${source_app}"
   echo "Removed build copy ${source_app}"
 fi

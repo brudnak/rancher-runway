@@ -53,6 +53,9 @@ func runHostedTenantSetup(t *testing.T) {
 	if err := validateSecretEnvironment(); err != nil {
 		t.Fatalf("Secret environment preflight failed before provisioning infrastructure: %v", err)
 	}
+	if err := validateConfiguredAWSEC2KeyPair(); err != nil {
+		t.Fatalf("AWS EC2 key pair preflight failed before provisioning infrastructure: %v", err)
+	}
 	if err := prepareDockerHubCredentialsForProvisioning(); err != nil {
 		t.Fatalf("Docker Hub credential preflight failed before provisioning infrastructure: %v", err)
 	}

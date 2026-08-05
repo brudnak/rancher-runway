@@ -6,6 +6,7 @@ copy a `tool-config.yml`, run setup, open the local control panel, and clean up.
 
 ## Start Here
 
+- [Homebrew installation and release process](homebrew-release.md)
 - [GitHub Actions setup](github-actions-setup.md)
 - Sign-off planner CLI: [automation/signoff-plan](../automation/signoff-plan)
 - Terraform state bootstrap: [bootstrap/terraform-state](../bootstrap/terraform-state)

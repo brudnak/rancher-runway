@@ -2,15 +2,32 @@ package buildinfo
 
 import (
 	"fmt"
+	"regexp"
 	"runtime/debug"
 	"strings"
 )
 
-// Commit and BuildDate can be set by release/build scripts with -ldflags.
+const (
+	DevelopmentVersion     = "0.0.0-dev"
+	DevelopmentBuildNumber = "0"
+)
+
+var (
+	semanticVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$`)
+	buildNumberPattern     = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
+)
+
+// Version, BuildNumber, Commit, and BuildDate can be set by release/build
+// scripts with -ldflags. The defaults identify an unversioned local build and
+// remain valid when no release metadata is supplied.
+var Version = DevelopmentVersion
+var BuildNumber = DevelopmentBuildNumber
 var Commit string
 var BuildDate string
 
 type Info struct {
+	Version     string `json:"version"`
+	BuildNumber string `json:"buildNumber"`
 	Commit      string `json:"commit,omitempty"`
 	CommitShort string `json:"commitShort,omitempty"`
 	BuildDate   string `json:"buildDate,omitempty"`
@@ -20,9 +37,11 @@ type Info struct {
 
 func Current() Info {
 	info := Info{
-		Commit:    cleanValue(Commit),
-		BuildDate: cleanValue(BuildDate),
-		Source:    "ldflags",
+		Version:     normalizeVersion(Version),
+		BuildNumber: normalizeBuildNumber(BuildNumber),
+		Commit:      cleanValue(Commit),
+		BuildDate:   cleanValue(BuildDate),
+		Source:      "ldflags",
 	}
 
 	needsVCSFallback := info.Commit == "" || strings.EqualFold(info.Commit, "auto") || strings.EqualFold(info.Commit, "dev")
@@ -48,17 +67,37 @@ func Current() Info {
 
 func DisplayLine() string {
 	info := Current()
+	build := fmt.Sprintf("ha-rancher v%s build %s", info.Version, info.BuildNumber)
 	if info.CommitShort == "" {
-		return "ha-rancher build unknown"
+		return build
 	}
 	suffix := ""
 	if info.Modified {
 		suffix = " modified"
 	}
 	if info.BuildDate != "" {
-		return fmt.Sprintf("ha-rancher build %s%s (%s)", info.CommitShort, suffix, info.BuildDate)
+		return fmt.Sprintf("%s, commit %s%s (%s)", build, info.CommitShort, suffix, info.BuildDate)
 	}
-	return fmt.Sprintf("ha-rancher build %s%s", info.CommitShort, suffix)
+	return fmt.Sprintf("%s, commit %s%s", build, info.CommitShort, suffix)
+}
+
+func normalizeVersion(value string) string {
+	value = cleanValue(value)
+	if strings.HasPrefix(value, "v") || strings.HasPrefix(value, "V") {
+		value = value[1:]
+	}
+	if !semanticVersionPattern.MatchString(value) {
+		return DevelopmentVersion
+	}
+	return value
+}
+
+func normalizeBuildNumber(value string) string {
+	value = cleanValue(value)
+	if !buildNumberPattern.MatchString(value) {
+		return DevelopmentBuildNumber
+	}
+	return value
 }
 
 func shortCommit(commit string) string {

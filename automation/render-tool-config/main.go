@@ -74,7 +74,7 @@ func main() {
 	flag.StringVar(&cfg.AWSAMI, "aws-ami", envOrDefault("AWS_AMI", ""), "AWS AMI ID")
 	flag.StringVar(&cfg.AWSSubnetID, "aws-subnet-id", envOrDefault("AWS_SUBNET_ID", ""), "AWS subnet ID for instances")
 	flag.StringVar(&cfg.AWSSecurityGroup, "aws-security-group-id", envOrDefault("AWS_SECURITY_GROUP_ID", ""), "AWS security group ID")
-	flag.StringVar(&cfg.AWSPemKeyName, "aws-pem-key-name", envOrDefault("AWS_PEM_KEY_NAME", ""), "AWS PEM key name")
+	flag.StringVar(&cfg.AWSPemKeyName, "aws-pem-key-name", envOrDefault("AWS_PEM_KEY_NAME", ""), "AWS EC2 key pair name")
 	flag.StringVar(&cfg.AWSRoute53FQDN, "aws-route53-fqdn", envOrDefault("AWS_ROUTE53_FQDN", ""), "Route53 FQDN")
 	flag.Parse()
 
@@ -164,7 +164,7 @@ func (cfg renderConfig) validate(lane signoffLane) error {
 		"aws ami":               cfg.AWSAMI,
 		"aws subnet id":         cfg.AWSSubnetID,
 		"aws security group id": cfg.AWSSecurityGroup,
-		"aws pem key name":      cfg.AWSPemKeyName,
+		"AWS EC2 key pair name": cfg.AWSPemKeyName,
 		"aws route53 fqdn":      cfg.AWSRoute53FQDN,
 	}
 	var missing []string

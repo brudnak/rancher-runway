@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/app-bundle-utils.sh
+source "${repo_root}/scripts/app-bundle-utils.sh"
 
 resolve_git_dir() {
   local dot_git="${repo_root}/.git"
@@ -86,6 +88,13 @@ if [[ ! -x "${wails_bin}" ]]; then
   echo "Wails CLI was not found at ${wails_bin} after installation." >&2
   exit 1
 fi
+
+# Release packaging intentionally makes its embedded runtime read-only. Older
+# releases were assembled in Wails' shared build output, and Wails does not
+# clean that directory by default. Remove the exact prior app bundle so a
+# development install cannot retain and prefer a stale packaged runtime.
+built_app="${repo_root}/desktop/wails/build/bin/Rancher Runway.app"
+rancher_runway_remove_app_tree "${built_app}"
 
 if [[ ! -x "${repo_root}/node_modules/.bin/tailwindcss" || ! -x "${repo_root}/node_modules/.bin/vite" || ! -d "${repo_root}/node_modules/vue" ]]; then
   (cd "${repo_root}" && npm install)

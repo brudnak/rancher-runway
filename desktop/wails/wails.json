@@ -8,5 +8,11 @@
   "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "Andrew Brudnak"
+  },
+  "info": {
+    "companyName": "Rancher Runway",
+    "productName": "Rancher Runway",
+    "productVersion": "0.0.0",
+    "comments": "Rancher Runway development build"
   }
 }

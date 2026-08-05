@@ -92,7 +92,7 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 			t.Fatalf("AWS prefix preflight failed: %v", err)
 		}
 		if err := settings.ValidateAWSPemKeyNameConfig(); err != nil {
-			t.Fatalf("AWS PEM key preflight failed: %v", err)
+			t.Fatalf("AWS EC2 key pair preflight failed: %v", err)
 		}
 		if err := settings.ValidateOwnerConfig(); err != nil {
 			t.Fatalf("Owner preflight failed: %v", err)
@@ -179,6 +179,7 @@ func terraformVars(totalHAs int, customHostnamePrefix string) map[string]interfa
 		"total_has":                totalHAs,
 		"deployment_type":          deploymentType(),
 		"total_rancher_instances":  hostedTenantRancherInstanceCount(),
+		"aws_region":               configuredAWSRegion(),
 		"aws_prefix":               terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
 		"aws_vpc":                  viper.GetString("tf_vars.aws_vpc"),
 		"aws_subnet_a":             viper.GetString("tf_vars.aws_subnet_a"),
@@ -402,6 +403,7 @@ func cleanupTerraformVarFile() {
 func generateAwsVars() {
 	hcl.GenAwsVarFile(
 		filepath.Join(terraformModuleDir(), "terraform.tfvars"),
+		configuredAWSRegion(),
 		terraformAWSPrefix(viper.GetString("tf_vars.aws_prefix")),
 		viper.GetString("tf_vars.aws_vpc"),
 		viper.GetString("tf_vars.aws_subnet_a"),

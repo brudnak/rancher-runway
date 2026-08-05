@@ -16,6 +16,15 @@ func TestAutomationOutputDirUsesGitHubWorkspace(t *testing.T) {
 	}
 }
 
+func TestAutomationOutputDirPrefersManagedWorkspace(t *testing.T) {
+	managed := filepath.Join(t.TempDir(), "managed-terratest")
+	t.Setenv("RANCHER_RUNWAY_WORKSPACE", managed)
+	t.Setenv("GITHUB_WORKSPACE", filepath.Join(t.TempDir(), "github"))
+	if got, want := automationOutputDir(), filepath.Join(managed, "automation-output"); got != want {
+		t.Fatalf("automationOutputDir() = %q, want %q", got, want)
+	}
+}
+
 func TestAutomationOutputDirFallsBackToPackageDirectory(t *testing.T) {
 	t.Setenv("GITHUB_WORKSPACE", "")
 

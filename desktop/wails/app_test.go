@@ -10,7 +10,6 @@ import (
 func TestShouldImportShellEnv(t *testing.T) {
 	for _, key := range []string{
 		"PATH",
-		"HOME",
 		"KUBECONFIG",
 		"AWS_PROFILE",
 		"DOCKERHUB_USERNAME",
@@ -26,7 +25,18 @@ func TestShouldImportShellEnv(t *testing.T) {
 		})
 	}
 
-	for _, key := range []string{"", "SHELL", "SSH_AUTH_SOCK", "NPM_TOKEN"} {
+	for _, key := range []string{
+		"",
+		"HOME",
+		"SHELL",
+		"SSH_AUTH_SOCK",
+		"NPM_TOKEN",
+		"RANCHER_RUNWAY_REPO",
+		"HA_RANCHER_REPO",
+		packagedRuntimeOverrideEnv,
+		lifecycleBinaryEnv,
+		managedWorkspaceEnv,
+	} {
 		t.Run("skip_"+key, func(t *testing.T) {
 			if shouldImportShellEnv(key) {
 				t.Fatalf("expected %s to be skipped", key)

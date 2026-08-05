@@ -42,7 +42,7 @@ func runHARKE2Setup(t *testing.T) {
 		t.Fatalf("AWS prefix preflight failed: %v", err)
 	}
 	if err := settings.ValidateAWSPemKeyNameConfig(); err != nil {
-		t.Fatalf("AWS PEM key preflight failed: %v", err)
+		t.Fatalf("AWS EC2 key pair preflight failed: %v", err)
 	}
 	if err := settings.ValidateOwnerConfig(); err != nil {
 		t.Fatalf("Owner preflight failed: %v", err)
@@ -70,6 +70,9 @@ func runHARKE2Setup(t *testing.T) {
 
 	if err := validateSecretEnvironment(); err != nil {
 		t.Fatalf("Secret environment preflight failed before provisioning infrastructure: %v", err)
+	}
+	if err := validateConfiguredAWSEC2KeyPair(); err != nil {
+		t.Fatalf("AWS EC2 key pair preflight failed before provisioning infrastructure: %v", err)
 	}
 	if err := prepareDockerHubCredentialsForProvisioning(); err != nil {
 		t.Fatalf("Docker Hub credential preflight failed before provisioning infrastructure: %v", err)

@@ -420,6 +420,10 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 			http.Error(w, fmt.Sprintf("failed to update tool-config.yml: %v", err), http.StatusInternalServerError)
 			return
 		}
+		if err := validateConfiguredAWSEC2KeyPair(); err != nil {
+			http.Error(w, fmt.Sprintf("AWS EC2 key pair preflight failed: %v", err), http.StatusBadRequest)
+			return
+		}
 
 		s.mu.Lock()
 		if s.submitted {

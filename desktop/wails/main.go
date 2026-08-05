@@ -20,6 +20,9 @@ func main() {
 			Handler: app,
 		},
 		BackgroundColour: &options.RGBA{R: 15, G: 18, B: 24, A: 1},
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId: "com.brudnak.rancher-runway",
+		},
 		Mac: &mac.Options{
 			Preferences: &mac.Preferences{
 				FullscreenEnabled: mac.Enabled,

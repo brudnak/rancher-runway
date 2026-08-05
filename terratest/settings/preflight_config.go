@@ -256,7 +256,7 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 	}
 	update.TFVars["aws_prefix"] = normalizedPrefix
 	if strings.ToLower(strings.TrimSpace(update.DeploymentType)) != "linode-docker-cattle" && strings.TrimSpace(update.TFVars["aws_pem_key_name"]) == "" {
-		return fmt.Errorf("tf_vars.aws_pem_key_name must be set")
+		return fmt.Errorf("tf_vars.aws_pem_key_name (AWS EC2 key pair name) must be set")
 	}
 	for _, key := range EditableTFVarKeys {
 		update.TFVars[key] = strings.TrimSpace(update.TFVars[key])
@@ -266,7 +266,7 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 
 func ValidateAWSPemKeyNameConfig() error {
 	if strings.TrimSpace(viper.GetString("tf_vars.aws_pem_key_name")) == "" {
-		return fmt.Errorf("tf_vars.aws_pem_key_name must be set")
+		return fmt.Errorf("tf_vars.aws_pem_key_name (AWS EC2 key pair name) must be set")
 	}
 	return nil
 }

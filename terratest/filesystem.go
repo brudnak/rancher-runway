@@ -118,6 +118,9 @@ func cleanupAutomationOutput() {
 }
 
 func automationOutputDir() string {
+	if workspace := strings.TrimSpace(os.Getenv("RANCHER_RUNWAY_WORKSPACE")); workspace != "" {
+		return filepath.Join(workspace, "automation-output")
+	}
 	if workspace := strings.TrimSpace(os.Getenv("GITHUB_WORKSPACE")); workspace != "" {
 		return filepath.Join(workspace, "automation-output")
 	}

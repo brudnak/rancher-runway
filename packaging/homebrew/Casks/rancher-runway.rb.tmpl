@@ -1,0 +1,22 @@
+cask "rancher-runway" do
+  version "@VERSION@"
+  sha256 "@SHA256@"
+
+  url "https://github.com/@RELEASE_REPOSITORY@/releases/download/@RELEASE_TAG@/@ASSET_NAME@",
+      verified: "github.com/@RELEASE_REPOSITORY@/"
+  name "Rancher Runway"
+  desc "Provision and validate disposable Rancher environments"
+  homepage "https://github.com/@RELEASE_REPOSITORY@"
+
+  depends_on macos: :monterey
+  depends_on formula: ["hashicorp/tap/terraform", "helm@3", "kubernetes-cli"]
+
+  app "Rancher Runway.app"
+
+  zap trash: [
+    "~/Library/Application Support/Rancher Runway",
+    "~/Library/Caches/com.brudnak.rancher-runway",
+    "~/Library/Preferences/com.brudnak.rancher-runway.plist",
+    "~/Library/Saved Application State/com.brudnak.rancher-runway.savedState",
+  ]
+end

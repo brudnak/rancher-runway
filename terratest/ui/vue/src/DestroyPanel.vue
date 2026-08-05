@@ -4,8 +4,8 @@
       <div>
         <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Destroy Slots</h2>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          Choose exactly one recorded run slot to destroy. Setup, readiness, and destroy are serialized so Terraform state, AWS actions, and logs stay unambiguous.
-          The slot record is removed only after Terraform destroy succeeds.
+          Destroy one slot immediately, select several slots for a sequential batch, or explicitly destroy all recorded slots.
+          A slot record is removed only after its Terraform destroy succeeds; failures remain available to retry.
         </p>
       </div>
       <div :class="cleanupStatusClass">
@@ -32,6 +32,117 @@
     </div>
 
     <div v-if="activeDestroyTab === 'slots'" id="destroySlotsPane">
+      <div
+        v-if="runs.length"
+        class="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]"
+      >
+        <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div class="min-w-0">
+            <div class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+              {{ selectedCount }} of {{ runs.length }} slot{{ runs.length === 1 ? '' : 's' }} selected
+            </div>
+            <div class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+              Bulk destroys run one slot at a time and continue past failures. Other lifecycle actions stay locked until the batch finishes.
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2 xl:justify-end">
+            <button
+              type="button"
+              @click="selectAllCleanupRuns"
+              :disabled="bulkActionsLocked || allRunsSelected"
+              :class="bulkActionsLocked || allRunsSelected ? disabledCompactButtonClass : secondaryCompactButtonClass"
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              @click="clearCleanupRunSelection"
+              :disabled="bulkActionsLocked || selectedCount === 0"
+              :class="bulkActionsLocked || selectedCount === 0 ? disabledCompactButtonClass : secondaryCompactButtonClass"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              @click="handleDestroySelected"
+              :disabled="bulkActionsLocked || selectedCount === 0"
+              :title="bulkActionTitle('selected')"
+              :class="bulkActionsLocked || selectedCount === 0 ? disabledButtonClass : dangerButtonClass"
+            >
+              <span v-if="cleanupBatchStarting" class="spinner mr-2 !h-4 !w-4 !border-2"></span>
+              Destroy selected<span v-if="selectedCount"> ({{ selectedCount }})</span>
+            </button>
+            <button
+              type="button"
+              @click="handleDestroyAll"
+              :disabled="bulkActionsLocked || runs.length === 0"
+              :title="bulkActionTitle('all')"
+              :class="bulkActionsLocked || runs.length === 0 ? disabledButtonClass : destroyAllButtonClass"
+            >
+              Destroy all ({{ runs.length }})
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-if="batchVisible"
+        class="mt-4 overflow-hidden rounded-xl border"
+        :class="batchPanelClass"
+        aria-live="polite"
+      >
+        <div class="p-4">
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <span v-if="cleanupBatch.running" class="spinner !h-4 !w-4 !border-2"></span>
+                <h3 class="text-sm font-semibold">{{ batchHeading }}</h3>
+                <span v-if="cleanupBatch.cancelRequested" class="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
+                  Cancel requested
+                </span>
+              </div>
+              <p class="mt-1 text-sm leading-6 opacity-80">{{ batchSummary }}</p>
+            </div>
+            <div class="flex shrink-0 flex-wrap gap-2 sm:justify-end">
+              <button
+                v-if="cleanupBatch.running"
+                type="button"
+                @click="handleStopBatch"
+                :disabled="batchStopLocked"
+                :title="batchStopLocked ? 'The stop request is already being processed.' : 'Interrupt the current Terraform destroy and preserve every queued slot.'"
+                :class="batchStopLocked ? disabledCompactButtonClass : stopBatchButtonClass"
+              >
+                <span v-if="batchStopPending" class="spinner mr-2 !h-3.5 !w-3.5 !border-2"></span>
+                {{ batchStopLocked ? 'Stop requested' : 'Stop batch' }}
+              </button>
+              <button type="button" @click="openCleanupBatchLogs" :class="secondaryCompactButtonClass">
+                Open batch logs
+              </button>
+            </div>
+          </div>
+          <div v-if="batchTotal" class="mt-4">
+            <div class="mb-1.5 flex justify-between gap-3 text-xs font-semibold">
+              <span>{{ batchProcessedCount }} of {{ batchTotal }} processed</span>
+              <span>{{ batchProgressPercent }}%</span>
+            </div>
+            <div class="h-2 overflow-hidden rounded-full bg-black/10 dark:bg-white/10">
+              <div class="h-full rounded-full bg-current transition-[width] duration-300" :style="{ width: `${batchProgressPercent}%` }"></div>
+            </div>
+          </div>
+          <div v-if="batchFailures.length" class="mt-4 grid gap-2">
+            <div class="text-xs font-semibold uppercase tracking-wide">Failed slots</div>
+            <div
+              v-for="failure in batchFailures"
+              :key="failure.runId || failure.error"
+              class="rounded-lg border border-rose-300/60 bg-white/60 px-3 py-2 text-sm dark:border-rose-500/30 dark:bg-black/15"
+            >
+              <span class="font-semibold">{{ failure.runId || 'Unknown run' }}</span>
+              <span class="ml-1 break-words opacity-80">— {{ failure.error || 'Destroy failed' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div id="cleanupSlots" class="mt-5 grid gap-3">
         <div
           v-if="!runs.length && bootPending"
@@ -47,7 +158,7 @@
         </div>
 
         <div
-          v-if="selectedRunId"
+          v-if="selectedRunId && !selectedCount"
           class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-100"
         >
           Selected run {{ selectedRunId }}. Destroy is typed-confirmed and uses the recorded Terraform target for that slot.
@@ -62,6 +173,19 @@
           <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
+                <label
+                  class="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-zinc-600 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-300"
+                  :class="bulkActionsLocked ? 'cursor-not-allowed opacity-55' : 'cursor-pointer'"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="isBulkSelected(run)"
+                    :disabled="bulkActionsLocked"
+                    @change="toggleCleanupRunSelection(run.runId)"
+                    class="h-4 w-4 rounded border-zinc-300 accent-emerald-500"
+                  />
+                  Select
+                </label>
                 <h3 class="text-base font-semibold text-zinc-950 dark:text-zinc-50">Run {{ run.runId || "unknown" }}</h3>
                 <span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">
                   {{ (run.status || "recorded").replaceAll("_", " ") }}
@@ -83,6 +207,18 @@
                   class="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300"
                 >
                   Starting destroy
+                </span>
+                <span
+                  v-else-if="batchQueued(run)"
+                  class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-300"
+                >
+                  Queued
+                </span>
+                <span
+                  v-if="batchFailureForRun(run)"
+                  class="rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                >
+                  Batch destroy failed
                 </span>
               </div>
               <div v-if="run.updatedAt" class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Updated {{ timeLabel(run.updatedAt) }}</div>
@@ -129,6 +265,15 @@
 
       <div id="cleanupActions" class="mt-5 flex flex-wrap justify-end gap-3">
         <button
+          v-if="batchVisible"
+          type="button"
+          @click="openCleanupBatchLogs"
+          :class="secondaryButtonClass"
+        >
+          Open batch logs
+        </button>
+        <button
+          v-else
           type="button"
           @click="openCleanupLogs(runIsLinodeDocker(activeCleanup))"
           :class="secondaryButtonClass"
@@ -195,7 +340,6 @@
       </div>
       <div class="mb-4 flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03] sm:flex-row sm:items-start sm:justify-between">
         <div class="min-w-0">
-          <h3 class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Post-destroy artifact cleanup</h3>
           <p class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
             {{ artifactsStatusText }}
           </p>
@@ -224,15 +368,25 @@ import {
   bootPending,
   activeDestroyTab,
   selectedCleanupRunId as selectedRunId,
+  selectedCleanupRunIds,
   cleanupStarting,
+  cleanupBatchStarting,
+  cleanupSelectionLocked,
+  pendingAbortOperation,
   dismissedCleanupResultKey,
   costResetting,
   localArtifactsCleaning,
   lifecycleRunning,
   setActiveDestroyTab,
   openCleanupLogs,
+  openCleanupBatchLogs,
   openLocalPath,
   runCleanup,
+  runCleanupBatch,
+  abortOperation,
+  toggleCleanupRunSelection,
+  selectAllCleanupRuns,
+  clearCleanupRunSelection,
   resetCostLedger,
   cleanLocalArtifacts,
 } from "./store.js";
@@ -240,11 +394,77 @@ import {
 const secondaryButtonClass = "rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]";
 const disabledButtonClass = "rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400";
 const dangerButtonClass = "rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400";
+const destroyAllButtonClass = "rounded-lg border border-rose-300 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20";
+const secondaryCompactButtonClass = "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]";
+const disabledCompactButtonClass = "rounded-lg bg-zinc-200 px-3 py-2 text-xs font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400";
+const stopBatchButtonClass = "rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/20";
 
 const activeTabClass = "rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-zinc-900 shadow-sm dark:bg-white/[0.08] dark:text-zinc-100";
 const inactiveTabClass = "rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-white/[0.06]";
 
 const runs = computed(() => Array.isArray(state.value?.workspace?.runs) ? state.value.workspace.runs : []);
+const cleanupBatch = computed(() => state.value?.cleanupBatch || {});
+const batchRunIds = computed(() => Array.isArray(cleanupBatch.value?.runIds) ? cleanupBatch.value.runIds : []);
+const batchCompletedRunIds = computed(() => Array.isArray(cleanupBatch.value?.completedRunIds) ? cleanupBatch.value.completedRunIds : []);
+const batchFailures = computed(() => Array.isArray(cleanupBatch.value?.failures)
+  ? cleanupBatch.value.failures.filter(failure => failure && (failure.runId || failure.error))
+  : []);
+const batchStopPending = computed(() => pendingAbortOperation.value === "cleanupBatch");
+const batchStopLocked = computed(() => Boolean(cleanupBatch.value?.cancelRequested || batchStopPending.value));
+const batchTotal = computed(() => batchRunIds.value.length);
+const batchProcessedCount = computed(() => {
+  const processed = [];
+  for (const runId of batchCompletedRunIds.value) {
+    if (!processed.some(existing => sameRunKey(existing, runId))) processed.push(runId);
+  }
+  for (const failure of batchFailures.value) {
+    if (failure.runId && !processed.some(existing => sameRunKey(existing, failure.runId))) processed.push(failure.runId);
+  }
+  return processed.length;
+});
+const batchProgressPercent = computed(() => batchTotal.value
+  ? Math.min(100, Math.round((batchProcessedCount.value / batchTotal.value) * 100))
+  : 0);
+const batchVisible = computed(() => Boolean(
+  cleanupBatch.value?.running ||
+  cleanupBatch.value?.startedAt ||
+  cleanupBatch.value?.finishedAt ||
+  cleanupBatch.value?.error ||
+  batchRunIds.value.length ||
+  batchFailures.value.length
+));
+const batchHeading = computed(() => {
+  if (cleanupBatch.value?.running) return cleanupBatch.value.cancelRequested ? "Stopping destroy batch" : "Destroy batch running";
+  if (batchFailures.value.length) return "Destroy batch finished with failures";
+  if (cleanupBatch.value?.error) return "Destroy batch stopped with an error";
+  if (cleanupBatch.value?.finishedAt) return "Destroy batch completed";
+  return "Destroy batch";
+});
+const batchSummary = computed(() => {
+  const currentRunId = String(cleanupBatch.value?.currentRunId || cleanupBatch.value?.runId || "").trim();
+  if (cleanupBatch.value?.running && currentRunId) {
+    return `Currently destroying run ${currentRunId}. ${batchCompletedRunIds.value.length} succeeded and ${batchFailures.value.length} failed so far.`;
+  }
+  if (cleanupBatch.value?.running) {
+    return `Preparing the next slot. ${batchCompletedRunIds.value.length} succeeded and ${batchFailures.value.length} failed so far.`;
+  }
+  if (cleanupBatch.value?.error) {
+    return `${batchCompletedRunIds.value.length} succeeded and ${batchFailures.value.length} failed. ${cleanupBatch.value.error}`;
+  }
+  return `${batchCompletedRunIds.value.length} succeeded and ${batchFailures.value.length} failed${cleanupBatch.value?.finishedAt ? `; finished ${timeLabel(cleanupBatch.value.finishedAt)}` : ""}.`;
+});
+const batchPanelClass = computed(() => cleanupBatch.value?.running
+  ? cleanupBatch.value?.cancelRequested
+    ? "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100"
+    : "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100"
+  : batchFailures.value.length || cleanupBatch.value?.error
+    ? "border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-100"
+    : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-100");
+const selectedCount = computed(() => selectedCleanupRunIds.value.length);
+const allRunsSelected = computed(() => runs.value.length > 0 && runs.value.every(run =>
+  selectedCleanupRunIds.value.some(runId => sameRunKey(runId, run?.runId))
+));
+const bulkActionsLocked = computed(() => cleanupSelectionLocked.value);
 const activeCleanup = computed(() => {
   const linodeCleanup = state.value?.linodeCleanup || {};
   if (linodeCleanup.running || linodeCleanup.finishedAt || linodeCleanup.error) {
@@ -304,19 +524,30 @@ const setupRunningForRun = run => runIsLinodeDocker(run) ? Boolean(state.value?.
 const cleanupRunningForRun = run => runIsLinodeDocker(run) ? Boolean(state.value?.linodeCleanup?.running) : Boolean(state.value?.cleanup?.running);
 const readinessRunningForRun = run => !runIsLinodeDocker(run) && Boolean(state.value?.readiness?.running);
 const pendingDestroy = run => Boolean(cleanupStarting.value && sameRunKey(selectedRunId.value, run?.runId));
-const destroying = run => Boolean(cleanupRunningForRun(run) && sameRunKey(cleanupForRun(run)?.runId, run?.runId));
-const isSelected = run => Boolean(selectedRunId.value && sameRunKey(selectedRunId.value, run?.runId));
-const slotCardClass = run => destroying(run) || pendingDestroy(run)
+const batchDestroying = run => Boolean(cleanupBatch.value?.running && sameRunKey(cleanupBatch.value?.currentRunId || cleanupBatch.value?.runId, run?.runId));
+const destroying = run => Boolean(batchDestroying(run) || (cleanupRunningForRun(run) && sameRunKey(cleanupForRun(run)?.runId, run?.runId)));
+const isBulkSelected = run => selectedCleanupRunIds.value.some(runId => sameRunKey(runId, run?.runId));
+const isSelected = run => isBulkSelected(run) || Boolean(selectedRunId.value && sameRunKey(selectedRunId.value, run?.runId));
+const batchFailureForRun = run => batchFailures.value.find(failure => sameRunKey(failure.runId, run?.runId));
+const batchQueued = run => Boolean(
+  cleanupBatch.value?.running &&
+  batchRunIds.value.some(runId => sameRunKey(runId, run?.runId)) &&
+  !batchDestroying(run) &&
+  !batchCompletedRunIds.value.some(runId => sameRunKey(runId, run?.runId)) &&
+  !batchFailureForRun(run)
+);
+const slotCardClass = run => batchFailureForRun(run)
+  ? "border-rose-200 bg-rose-50/60 dark:border-rose-500/25 dark:bg-rose-500/10"
+  : destroying(run) || pendingDestroy(run)
   ? "border-sky-200 bg-sky-50/60 dark:border-sky-500/25 dark:bg-sky-500/10"
   : isSelected(run)
     ? "border-emerald-200 bg-emerald-50/60 dark:border-emerald-500/25 dark:bg-emerald-500/10"
     : "border-zinc-200 bg-white dark:border-white/10 dark:bg-white/[0.03]";
 const slotDestroyDisabled = run => Boolean(
-  bootPending.value ||
+  bulkActionsLocked.value ||
   setupRunningForRun(run) ||
   readinessRunningForRun(run) ||
-  cleanupRunningForRun(run) ||
-  cleanupStarting.value
+  cleanupRunningForRun(run)
 );
 const slotDestroyTitle = run => bootPending.value
   ? "Startup safety check is still loading run slots and operation state."
@@ -326,6 +557,8 @@ const slotDestroyTitle = run => bootPending.value
       ? "Wait for readiness checks to finish before destroying a run slot."
       : cleanupRunningForRun(run)
         ? "Wait for the current destroy to finish before starting another one."
+        : cleanupBatch.value?.running || cleanupBatchStarting.value
+          ? "Wait for the destroy batch to finish before starting another destroy."
         : cleanupStarting.value
           ? "Destroy request is being submitted."
           : `Destroy run ${run?.runId || "slot"}`;
@@ -341,6 +574,8 @@ const slotDestroyLabel = run => destroying(run)
           ? "Readiness running"
           : cleanupRunningForRun(run)
             ? "Destroy running"
+            : cleanupBatch.value?.running || cleanupBatchStarting.value
+              ? "Batch destroy running"
             : "Destroy this slot";
 
 const cleanupResultKey = cleanup => {
@@ -397,7 +632,25 @@ const handleDestroySlot = runId => {
   runCleanup(runId);
 };
 
+const handleDestroySelected = () => runCleanupBatch({ runIds: selectedCleanupRunIds.value });
+const handleDestroyAll = () => runCleanupBatch({ all: true });
+const handleStopBatch = () => {
+  if (batchStopLocked.value) return;
+  abortOperation("cleanupBatch");
+};
+const bulkActionTitle = mode => {
+  if (bootPending.value) return "Startup safety check is still loading run slots and operation state.";
+  if (bulkActionsLocked.value) return "Wait for the active lifecycle operation or destroy request to finish.";
+  if (mode === "selected" && selectedCount.value === 0) return "Select at least one run slot first.";
+  return mode === "all"
+    ? `Destroy all ${runs.value.length} recorded run slots sequentially.`
+    : `Destroy ${selectedCount.value} selected run slot${selectedCount.value === 1 ? "" : "s"} sequentially.`;
+};
+
 const cleanupStatusTone = computed(() => {
+  if (cleanupBatch.value?.running || cleanupBatchStarting.value) return "running";
+  if (batchVisible.value && (batchFailures.value.length || cleanupBatch.value?.error)) return "error";
+  if (batchVisible.value && cleanupBatch.value?.finishedAt) return "success";
   const cleanup = activeCleanup.value;
   if (cleanup?.running) return "running";
   if (cleanup?.finishedAt && !cleanup?.error && !cleanupDismissed.value) return "success";
@@ -406,6 +659,19 @@ const cleanupStatusTone = computed(() => {
 });
 
 const cleanupStatusLabel = computed(() => {
+  if (cleanupBatchStarting.value) return "Starting destroy batch";
+  if (cleanupBatch.value?.running) {
+    const currentRunId = cleanupBatch.value?.currentRunId || cleanupBatch.value?.runId;
+    return currentRunId
+      ? `Destroying ${currentRunId} (${batchProcessedCount.value}/${batchTotal.value} processed)`
+      : `Destroy batch running (${batchProcessedCount.value}/${batchTotal.value} processed)`;
+  }
+  if (batchVisible.value && (batchFailures.value.length || cleanupBatch.value?.error)) {
+    return `Batch finished: ${batchCompletedRunIds.value.length} succeeded, ${batchFailures.value.length} failed`;
+  }
+  if (batchVisible.value && cleanupBatch.value?.finishedAt) {
+    return `Batch finished: ${batchCompletedRunIds.value.length} succeeded`;
+  }
   const cleanup = activeCleanup.value;
   if (cleanup?.running) {
     return `Destroy running${cleanup.runId ? ` for ${cleanup.runId}` : ""}${cleanup.startedAt ? ` since ${new Date(cleanup.startedAt).toLocaleTimeString()}` : ""}`;
@@ -431,7 +697,7 @@ const cleanupStatusClass = computed(() => {
 
 const cleanupResultFinished = computed(() => {
   const cleanup = activeCleanup.value;
-  return Boolean(cleanup?.finishedAt && !cleanupDismissed.value);
+  return Boolean(!batchVisible.value && cleanup?.finishedAt && !cleanupDismissed.value);
 });
 
 // Cost ledger status & artifacts cleanup bindings
