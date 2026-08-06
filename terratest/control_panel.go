@@ -49,6 +49,7 @@ type localControlPanel struct {
 	awsCache    panelAWSInventoryState
 	awsCacheKey string
 	setupEditor *interactiveServer
+	imageLookup *imageLookupService
 
 	// cleanupBatchRunner is nil in production. Tests may replace it with a
 	// deterministic runner so the batch coordinator can be exercised without
@@ -386,6 +387,9 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/static/", p.handleControlPanelStaticAsset)
 	mux.HandleFunc("/api/preflight", p.handlePreflight)
 	mux.HandleFunc("/api/state", p.handleState)
+	mux.HandleFunc("/api/images/search", p.handleImageLookupSearch)
+	mux.HandleFunc("/api/images/inspect", p.handleImageLookupInspect)
+	mux.HandleFunc("/api/images/build-yaml/source", p.handleImageLookupSourceBuildYAML)
 	mux.HandleFunc("/api/logs", p.handleLogs)
 	mux.HandleFunc("/api/logs/stream", p.handleLogStream)
 	mux.HandleFunc("/api/docker-logs", p.handleDockerLogs)

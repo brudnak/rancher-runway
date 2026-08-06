@@ -374,7 +374,7 @@ export const setPanelFullscreen = async nextFullscreen => {
 
 // Tab management
 export const setActivePanelTab = tab => {
-  const availableTabs = new Set(["setup", "runs", "clusters", "aws", "destroy", "settings", "k3d", "steve"]);
+  const availableTabs = new Set(["setup", "runs", "clusters", "aws", "images", "destroy", "settings", "k3d", "steve"]);
   activeTab.value = availableTabs.has(tab) ? tab : "runs";
   localStorage.setItem("rancherControlPanelTab", activeTab.value);
   window.dispatchEvent(new CustomEvent("rancher-control-panel:tab", { detail: { tab: activeTab.value } }));

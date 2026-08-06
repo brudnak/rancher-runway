@@ -120,6 +120,9 @@ Use the app tabs as the main lifecycle:
   pod visibility, recent logs, and active leader details.
 - **AWS Inventory** shows resources associated with recorded slots and owner
   tags.
+- **Image Lookup** searches Rancher server, agent, and webhook tags across
+  Docker Hub and the Rancher/SUSE registries, or inspects a custom image
+  repository.
 - **Destroy** removes provisioned cloud resources for a selected run slot.
 - **Costs** shows cleanup estimates and the local cost ledger.
 - **Settings** holds local app preferences such as GPU reminders.
@@ -136,6 +139,43 @@ The app protects active work:
 - Development `make setup` installs refuse to replace an open app.
 - Setup, readiness, and cleanup operations are serialized where shared state
   would collide.
+
+### Image Lookup
+
+Image Lookup is a read-only registry browser for finding and comparing Rancher
+builds without a Docker daemon or `skopeo` command line workflow.
+
+- Search Docker Hub, `stgregistry.suse.com`, `registry.rancher.com`, and
+  `registry.suse.com` together or one at a time.
+- Browse `rancher/rancher`, `rancher/rancher-agent`, and
+  `rancher/rancher-webhook`, or paste a custom public HTTPS repository.
+- Filter head, development, alpha, RCS, RC, and stable tags, then sort each
+  result group naturally or alphabetically. Architecture-suffixed tags are
+  grouped with their base build.
+- Select a tag to inspect its digest, image and upload timestamps, platforms,
+  configuration, labels, environment, entrypoint, OCI build history, layers,
+  and sizes. For Rancher images, the selected platform's webhook version is
+  highlighted in the overview when it is declared in the image environment.
+- When an image contains `build.yaml`, the detail drawer safely reads the
+  bounded eligible image layers and renders both a structured view and the
+  original YAML. Oversized layers are reported as skipped instead of being
+  downloaded without a safety bound.
+- If the embedded scan is incomplete but the image declares an exact GitHub
+  source repository and commit, an explicit **Fetch from declared source**
+  action can retrieve that revision's root `build.yaml` through the configured
+  GitHub CLI login. Canonical GitHub clone URLs ending in `.git` are supported;
+  Rancher Prime images can fall back to the public `rancher/rancher` repository
+  only when the image declares an exact OSS commit in
+  `org.opencontainers.image.oss.revision`. The UI shows the effective
+  repository, revision, and provenance rather than claiming the file was
+  embedded in the image.
+
+Registry authentication uses credentials already available through the local
+container registry credential helpers. Docker Hub can also use
+`DOCKERHUB_USERNAME` and `DOCKERHUB_PASSWORD` from the app environment.
+Private declared-source metadata additionally requires an authenticated `gh`
+CLI session with access to the repository; Rancher Runway never asks the
+browser for a GitHub token.
 
 ## Local Labs
 

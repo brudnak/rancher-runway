@@ -47,6 +47,13 @@
   </section>
 
   <section
+    v-show="activeTab === 'images'"
+    class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20 sm:p-5"
+  >
+    <ImageLookupPanel />
+  </section>
+
+  <section
     v-show="activeTab === 'destroy'"
     class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20 sm:p-5"
   >
@@ -80,6 +87,7 @@ import { activeTab, refreshStatus, openLogModal } from "./store.js";
 import AwsInventoryPanel from "./AwsInventoryPanel.vue";
 import ClustersPanel from "./ClustersPanel.vue";
 import DestroyPanel from "./DestroyPanel.vue";
+import ImageLookupPanel from "./ImageLookupPanel.vue";
 import K3DLabPanel from "./K3DLabPanel.vue";
 import PreflightPanel from "./PreflightPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";
