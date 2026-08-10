@@ -32,7 +32,8 @@ const (
 var rancherRegistryHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout}
 var rancherRegistryBaseURLs = map[string]string{}
 var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)-[0-9a-fA-F]{7,40}-head$`)
-var rcsVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+-rcs-\d+\.\d+$`)
+// RCS build IDs are alphanumeric, for example 2.16.0-rcs-0844.1 and 2.15.0-rcs-e20f.1.
+var rcsVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+-rcs-[0-9a-zA-Z]+\.\d+$`)
 var supportMatrixURLVersionPattern = regexp.MustCompile(`rancher-v(\d+)-(\d+)-(\d+)/?`)
 var rancherLookupHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout}
 
@@ -515,7 +516,8 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 		return "rc", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
 	case rcsVersionPattern.MatchString(version):
 		parts := strings.Split(version, "-")
-		return "rc", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
+		// Returns "rcs" to ensure the resolver uses the staging registry (stgregistry.suse.com)
+		return "rcs", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
 	case releasePattern.MatchString(version):
 		return "release", strings.Join(strings.Split(version, ".")[:2], "."), nil
 	default:
@@ -605,6 +607,8 @@ func chooseRancherSourceCandidates(requestedDistro, buildType string) ([]string,
 			return []string{"optimus-rancher-alpha", "optimus-rancher-latest", "rancher-alpha", "rancher-latest"}, "community-staging", []string{"Alpha build requested, trying community alpha/staging chart sources first"}
 		case "rc":
 			return []string{"optimus-rancher-latest", "rancher-latest"}, "community-staging", []string{"RC build requested, trying community staging chart sources first"}
+		case "rcs":
+			return []string{"optimus-rancher-latest", "rancher-latest"}, "community-staging", []string{"RCS build requested, trying community staging chart sources first"}
 		default:
 			return []string{"rancher-latest", "optimus-rancher-latest"}, "community", []string{"Released community build requested"}
 		}
@@ -616,6 +620,8 @@ func chooseRancherSourceCandidates(requestedDistro, buildType string) ([]string,
 			return []string{"rancher-prime", "optimus-rancher-alpha", "optimus-rancher-latest", "rancher-alpha", "rancher-latest"}, "community-staging", []string{"Alpha build requested in auto mode, favoring Prime/staging chart sources before community charts"}
 		case "rc":
 			return []string{"rancher-prime", "optimus-rancher-latest", "rancher-latest"}, "community-staging", []string{"RC build requested in auto mode, favoring Prime/staging chart sources before community charts"}
+		case "rcs":
+			return []string{"rancher-prime", "optimus-rancher-latest", "rancher-latest"}, "community-staging", []string{"RCS build requested in auto mode, favoring Prime/staging chart sources before community charts"}
 		default:
 			return []string{"rancher-prime", "optimus-rancher-latest", "rancher-latest"}, "community", []string{"Released build requested in auto mode, favoring Prime/staging chart sources before community charts"}
 		}

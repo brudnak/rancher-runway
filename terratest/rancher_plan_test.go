@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -186,12 +187,45 @@ func TestClassifyRancherVersionAllowsCommitHead(t *testing.T) {
 }
 
 func TestClassifyRancherVersionAllowsRCSServerBuild(t *testing.T) {
-	buildType, minorLine, err := classifyRancherVersion("2.16.0-rcs-0844.1")
-	if err != nil {
-		t.Fatalf("expected RCS build to be valid, got error: %v", err)
+	tests := []struct {
+		name          string
+		version       string
+		wantMinorLine string
+	}{
+		{name: "numeric build id", version: "2.16.0-rcs-0844.1", wantMinorLine: "2.16"},
+		{name: "hex build id", version: "2.15.0-rcs-e20f.1", wantMinorLine: "2.15"},
 	}
-	if buildType != "rc" || minorLine != "2.16" {
-		t.Fatalf("expected RCS build classification for 2.16 RC, got buildType=%q minorLine=%q", buildType, minorLine)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buildType, minorLine, err := classifyRancherVersion(tt.version)
+			if err != nil {
+				t.Fatalf("expected RCS build to be valid, got error: %v", err)
+			}
+			if buildType != "rcs" || minorLine != tt.wantMinorLine {
+				t.Fatalf("expected RCS build classification for %s, got buildType=%q minorLine=%q", tt.wantMinorLine, buildType, minorLine)
+			}
+		})
+	}
+}
+
+func TestRCSBuildsUseStagingSources(t *testing.T) {
+	for _, requestedDistro := range []string{"auto", "community"} {
+		repoCandidates, resolvedDistro, _ := chooseRancherSourceCandidates(requestedDistro, "rcs")
+		if resolvedDistro != "community-staging" {
+			t.Fatalf("expected RCS build in %s mode to resolve community-staging, got %q", requestedDistro, resolvedDistro)
+		}
+		if !slices.Contains(repoCandidates, "optimus-rancher-latest") {
+			t.Fatalf("expected RCS build in %s mode to include staging chart candidates, got %v", requestedDistro, repoCandidates)
+		}
+	}
+
+	image, tag, agent, _ := resolveImageSettings("2.15.0-rcs-e20f.1", "rcs", "community-staging")
+	if image != "stgregistry.suse.com/rancher/rancher" || tag != "v2.15.0-rcs-e20f.1" {
+		t.Fatalf("expected staging Rancher image for an RCS build, got image=%q tag=%q", image, tag)
+	}
+	if agent != "stgregistry.suse.com/rancher/rancher-agent:v2.15.0-rcs-e20f.1" {
+		t.Fatalf("expected staging agent image for an RCS build, got %q", agent)
 	}
 }
 

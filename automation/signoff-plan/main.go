@@ -29,7 +29,7 @@ const (
 var (
 	alphaVersionRE      = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-alpha(\d+)$`)
 	prereleaseVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-(?:alpha|rc)(\d+)$`)
-	rcsVersionRE        = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-rcs-\d+\.(\d+)$`)
+	rcsVersionRE        = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-rcs-[0-9a-zA-Z]+\.(\d+)$`)
 	releaseVersionRE    = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
 	webhookBuildRE      = regexp.MustCompile(`(?m)^\s*webhookVersion:\s*["']?([^"'\s]+)["']?\s*$`)
 	errNoRecentAlpha    = errors.New("no recent Rancher alpha release found")
