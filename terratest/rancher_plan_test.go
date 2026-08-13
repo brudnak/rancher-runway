@@ -162,6 +162,7 @@ func TestExplicitAgentImageOverrideSupportsCustomImagesAndRCSBuilds(t *testing.T
 		{name: "custom image", requestedVersion: "docker.io/example/rancher:fix", isCustomImage: true, want: true},
 		{name: "RCS build", requestedVersion: "2.16.0-rcs-0844.1", want: true},
 		{name: "RCS build with v prefix", requestedVersion: "v2.16.0-rcs-0844.1", want: true},
+		{name: "compact RCS build", requestedVersion: "2.15.1-rcs-c936", want: true},
 		{name: "released version", requestedVersion: "2.15.3", want: false},
 		{name: "standard RC", requestedVersion: "2.16.0-rc1", want: false},
 	}
@@ -194,6 +195,7 @@ func TestClassifyRancherVersionAllowsRCSServerBuild(t *testing.T) {
 	}{
 		{name: "numeric build id", version: "2.16.0-rcs-0844.1", wantMinorLine: "2.16"},
 		{name: "hex build id", version: "2.15.0-rcs-e20f.1", wantMinorLine: "2.15"},
+		{name: "compact build", version: "2.15.1-rcs-c936", wantMinorLine: "2.15"},
 	}
 
 	for _, tt := range tests {
@@ -774,12 +776,16 @@ func TestResolveImageSettingsAllowsMixedReleaseAndAlphaSources(t *testing.T) {
 }
 
 func TestResolveImageSettingsUsesStagingServerAndAgentForRCSBuild(t *testing.T) {
-	image, tag, agent, _ := resolveImageSettings("2.16.0-rcs-0844.1", "rc", "community-staging")
-	if image != "stgregistry.suse.com/rancher/rancher" || tag != "v2.16.0-rcs-0844.1" {
-		t.Fatalf("expected staging Rancher image for RCS build, got image=%q tag=%q", image, tag)
-	}
-	if agent != "stgregistry.suse.com/rancher/rancher-agent:v2.16.0-rcs-0844.1" {
-		t.Fatalf("expected staging agent image for RCS build, got %q", agent)
+	for _, version := range []string{"2.16.0-rcs-0844.1", "2.15.1-rcs-c936"} {
+		t.Run(version, func(t *testing.T) {
+			image, tag, agent, _ := resolveImageSettings(version, "rcs", "community-staging")
+			if image != "stgregistry.suse.com/rancher/rancher" || tag != "v"+version {
+				t.Fatalf("expected staging Rancher image for RCS build, got image=%q tag=%q", image, tag)
+			}
+			if agent != "stgregistry.suse.com/rancher/rancher-agent:v"+version {
+				t.Fatalf("expected staging agent image for RCS build, got %q", agent)
+			}
+		})
 	}
 }
 
@@ -825,8 +831,10 @@ func TestRancherLatestTagOnlyDoesNotClearCommitHeadImages(t *testing.T) {
 }
 
 func TestRancherLatestTagOnlyDoesNotClearRCSStagingImages(t *testing.T) {
-	if shouldUseRancherLatestTagOnly("rc", "rancher-latest", "2.16.0-rcs-0844.1") {
-		t.Fatal("RCS builds must keep explicit staging image settings")
+	for _, version := range []string{"2.16.0-rcs-0844.1", "2.15.1-rcs-c936"} {
+		if shouldUseRancherLatestTagOnly("rcs", "rancher-latest", version) {
+			t.Fatalf("RCS build %s must keep explicit staging image settings", version)
+		}
 	}
 
 	const serverImage = "stgregistry.suse.com/rancher/rancher"
@@ -834,7 +842,7 @@ func TestRancherLatestTagOnlyDoesNotClearRCSStagingImages(t *testing.T) {
 	const agentImage = "stgregistry.suse.com/rancher/rancher-agent:v2.16.0-rcs-0844.1"
 	wantExplanation := []string{"Using exact staging Rancher and agent images"}
 	gotServer, gotTag, gotAgent, gotExplanation, applied := applyRancherLatestTagOnlySettings(
-		"rc", "rancher-latest", "2.16.0-rcs-0844.1", serverImage, imageTag, agentImage, wantExplanation,
+		"rcs", "rancher-latest", "2.16.0-rcs-0844.1", serverImage, imageTag, agentImage, wantExplanation,
 	)
 	if applied {
 		t.Fatal("RCS build unexpectedly entered tag-only mode")

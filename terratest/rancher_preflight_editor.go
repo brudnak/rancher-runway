@@ -444,7 +444,7 @@ func editAutoModePreflightWithBrowser(configPath string, versions []string) erro
         return (
           '<div class="row">' +
             '<div class="ha-label">HA ' + (index + 1) + '</div>' +
-            '<div><input type="text" value="' + escapeHtml(version) + '" data-index="' + index + '" placeholder="2.16.0-rcs-0844.1 or docker.io/user/rancher:tag" /></div>' +
+            '<div><input type="text" value="' + escapeHtml(version) + '" data-index="' + index + '" placeholder="2.15.1-rcs-c936 or docker.io/user/rancher:tag" /></div>' +
             '<div><button class="secondary remove" type="button" data-remove-index="' + index + '"' + removeDisabled + '>Remove</button></div>' +
           '</div>'
         );

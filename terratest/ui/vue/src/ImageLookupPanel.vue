@@ -60,7 +60,7 @@
             type="search"
             autocomplete="off"
             :disabled="searchLoading"
-            placeholder="2.16.0-rcs-0844.1, head, commit SHA..."
+            placeholder="2.15.1-rcs-c936, head, commit SHA..."
             class="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3.5 text-sm font-semibold text-zinc-900 outline-none placeholder:font-normal placeholder:text-zinc-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-white/10 dark:bg-zinc-900 dark:text-white dark:placeholder:text-zinc-500"
             @input="syncQuickFilterFromQuery($event.target.value)"
           />

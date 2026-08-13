@@ -29,7 +29,7 @@ const (
 var (
 	alphaVersionRE      = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-alpha(\d+)$`)
 	prereleaseVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-(?:alpha|rc)(\d+)$`)
-	rcsVersionRE        = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-rcs-[0-9a-zA-Z]+\.(\d+)$`)
+	rcsVersionRE        = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-rcs-[0-9A-Za-z]+(?:\.(\d+))?$`)
 	releaseVersionRE    = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
 	webhookBuildRE      = regexp.MustCompile(`(?m)^\s*webhookVersion:\s*["']?([^"'\s]+)["']?\s*$`)
 	errNoRecentAlpha    = errors.New("no recent Rancher alpha release found")
@@ -140,7 +140,7 @@ func main() {
 	var ignoreLedger bool
 	var maxAgeDays int
 
-	flag.StringVar(&targetVersion, "rancher-version", "", "target Rancher alpha, RC, or RCS tag, for example v2.14.1-alpha6, v2.15.0-rc2, or v2.16.0-rcs-0844.1")
+	flag.StringVar(&targetVersion, "rancher-version", "", "target Rancher alpha, RC, or RCS tag, for example v2.14.1-alpha6, v2.15.0-rc2, or v2.15.1-rcs-c936")
 	flag.StringVar(&previousVersion, "previous-rancher-version", "", "previous Rancher release tag; resolved automatically when omitted")
 	flag.StringVar(&webhookImage, "webhook-image", "", "candidate webhook image; when omitted, probes staging SUSE, Prime, public SUSE, then Docker Hub for the target webhook tag")
 	flag.StringVar(&signingPolicy, "signing-policy", "auto", "required, report-only, skip, or auto")
@@ -1075,7 +1075,7 @@ func parsePrereleaseVersion(value string) (semver, error) {
 		match = rcsVersionRE.FindStringSubmatch(strings.TrimSpace(value))
 	}
 	if len(match) != 5 {
-		return semver{}, fmt.Errorf("target Rancher version must be an alpha, RC, or RCS tag like v2.14.1-alpha6, v2.15.0-rc2, or v2.16.0-rcs-0844.1")
+		return semver{}, fmt.Errorf("target Rancher version must be an alpha, RC, or RCS tag like v2.14.1-alpha6, v2.15.0-rc2, v2.16.0-rcs-0844.1, or v2.15.1-rcs-c936")
 	}
 	return parseVersionParts(value, match)
 }
@@ -1102,7 +1102,7 @@ func parseVersionParts(raw string, match []string) (semver, error) {
 		return semver{}, err
 	}
 	alpha := 0
-	if len(match) > 4 {
+	if len(match) > 4 && match[4] != "" {
 		alpha, err = strconv.Atoi(match[4])
 		if err != nil {
 			return semver{}, err

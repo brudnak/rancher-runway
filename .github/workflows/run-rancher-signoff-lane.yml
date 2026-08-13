@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       rancher_version:
-        description: Target Rancher alpha, RC, or RCS, for example v2.16.0-rcs-0844.1.
+        description: Target Rancher alpha, RC, or RCS, for example v2.15.1-rcs-c936.
         required: true
         type: string
       lane:

@@ -233,7 +233,7 @@ you are most likely to care about:
   supported RKE2 version, and installer checksum details.
 - `rancher.version` or `rancher.versions` selects the Rancher build or builds.
   Auto mode accepts releases, alpha/RC/RCS versions such as
-  `2.16.0-rcs-0844.1`, `head`, minor-line head builds
+  `2.15.1-rcs-c936` and `2.16.0-rcs-0844.1`, `head`, minor-line head builds
   such as `2.13-head`, commit-specific head image tags, and exact custom server
   images such as `docker.io/example/rancher:my-fix` or its matching
   `rancher-agent` image. Runway derives the sibling image with the same tag, verifies both,

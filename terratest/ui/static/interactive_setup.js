@@ -1073,7 +1073,7 @@ const renderRows = () => {
 			`<div class="${rowClass}">`,
 			`<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
 			'<div class="grid gap-2">',
-			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="2.16.0-rcs-0844.1 or docker.io/user/rancher:tag" />`,
+			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="2.15.1-rcs-c936 or docker.io/user/rancher:tag" />`,
 			`<label class="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-400"><input type="checkbox" data-agent-derive-index="${index}"${derivesAgent ? ' checked' : ''} /> Derive matching rancher-agent image</label>`,
 			`<input type="hidden" name="agentImages" value="${escapeHtml(agentImage)}" data-agent-hidden-index="${index}" />`,
 			`<input class="${inputClass}${derivesAgent ? ' hidden' : ''}" type="text" value="${escapeHtml(agentImage)}" data-agent-index="${index}" placeholder="docker.io/user/rancher-agent:tag" />`,
@@ -1675,6 +1675,7 @@ const renderCustomHostname = () => {
 }
 
 const normalizeVersion = value => String(value || '').trim().replace(/^[vV]/, '')
+const rcsRancherVersionPattern = /^\d+\.\d+\.\d+-rcs-[0-9A-Za-z]+(?:\.\d+)?$/
 
 const normalizedVersions = () => versions.map(version => normalizeVersion(version))
 
@@ -1724,7 +1725,7 @@ const buildSeedHelmCommand = index => {
   const chartVersion = version && version !== 'head' ? version : '2.14.0'
   const password = String(bootstrapPasswordInputEl?.value || config.bootstrapPassword || 'change-me').replaceAll('\\', '\\\\').replaceAll("'", "'\\''")
   const imageTag = manualImageTagForVersion(version)
-  const rcsBuild = /^\d+\.\d+\.\d+-rcs-\d+\.\d+$/.test(version)
+  const rcsBuild = rcsRancherVersionPattern.test(version)
   const lines = [
     `helm install rancher ${chartAlias}/rancher \\`,
     '  --namespace cattle-system \\',
@@ -1751,7 +1752,7 @@ const deriveAgentImage = value => {
 	if (/\/rancher-agent:[^/]+$/.test(image)) return image
 	if (/\/rancher:[^/]+$/.test(image)) return image.replace(/\/rancher:([^/]+)$/, '/rancher-agent:$1')
 	const version = normalizeVersion(image)
-	if (/^\d+\.\d+\.\d+-rcs-\d+\.\d+$/.test(version)) {
+	if (rcsRancherVersionPattern.test(version)) {
 		return `stgregistry.suse.com/rancher/rancher-agent:v${version}`
 	}
 	return ''

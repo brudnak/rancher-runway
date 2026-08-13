@@ -86,6 +86,7 @@ func TestParsePrereleaseVersionAcceptsAlphaRCAndRCS(t *testing.T) {
 		{name: "alpha", value: "v2.14.1-alpha6", want: "v2.14.1-alpha6"},
 		{name: "rc without prefix", value: "2.15.0-rc2", want: "v2.15.0-rc2"},
 		{name: "rcs without prefix", value: "2.16.0-rcs-0844.1", want: "v2.16.0-rcs-0844.1"},
+		{name: "compact rcs without prefix", value: "2.15.1-rcs-c936", want: "v2.15.1-rcs-c936"},
 	}
 
 	for _, tt := range tests {
@@ -120,6 +121,28 @@ func TestBuildPlanAcceptsRancherRCSTag(t *testing.T) {
 	}
 	if got.Lanes[2].UpgradeToRancher != "v2.16.0-rcs-0844.1" {
 		t.Fatalf("expected upgrade lane to target RCS, got %#v", got.Lanes[2])
+	}
+}
+
+func TestBuildPlanAcceptsCompactRancherRCSTag(t *testing.T) {
+	client := fakeGitHubClient(t, map[string]string{
+		"/rancher/rancher/v2.15.1-rcs-c936/build.yaml":               `webhookVersion: 110.0.1+up0.11.1-rcs-c936`,
+		"/rancher/rancher/v2.15.0/build.yaml":                        `webhookVersion: 110.0.0+up0.11.0`,
+		"/stg/v2/rancher/rancher-webhook/manifests/v0.11.1-rcs-c936": "ok",
+	})
+
+	got, err := buildPlan(context.Background(), client, "2.15.1-rcs-c936", "v2.15.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.11.1-rcs-c936", "auto", "", "rancher-runway/signoff", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TargetVersion != "v2.15.1-rcs-c936" {
+		t.Fatalf("expected compact RCS target version, got %s", got.TargetVersion)
+	}
+	if got.TargetWebhookTag != "v0.11.1-rcs-c936" {
+		t.Fatalf("expected compact RCS webhook tag, got %s", got.TargetWebhookTag)
+	}
+	if got.Lanes[2].UpgradeToRancher != "v2.15.1-rcs-c936" {
+		t.Fatalf("expected upgrade lane to target compact RCS, got %#v", got.Lanes[2])
 	}
 }
 

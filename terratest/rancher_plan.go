@@ -32,8 +32,10 @@ const (
 var rancherRegistryHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout}
 var rancherRegistryBaseURLs = map[string]string{}
 var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)-[0-9a-fA-F]{7,40}-head$`)
-// RCS build IDs are alphanumeric, for example 2.16.0-rcs-0844.1 and 2.15.0-rcs-e20f.1.
-var rcsVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+-rcs-[0-9a-zA-Z]+\.\d+$`)
+
+// RCS build IDs are alphanumeric and may use compact or dotted forms, for example
+// 2.15.1-rcs-c936, 2.16.0-rcs-0844.1, and 2.15.0-rcs-e20f.1.
+var rcsVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+-rcs-[0-9A-Za-z]+(?:\.\d+)?$`)
 var supportMatrixURLVersionPattern = regexp.MustCompile(`rancher-v(\d+)-(\d+)-(\d+)/?`)
 var rancherLookupHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout}
 

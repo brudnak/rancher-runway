@@ -97,7 +97,7 @@ generated Linode root password before noisy provisioning steps.
 After environments, secrets, and variables are configured:
 
 1. Run `Plan Rancher Sign-Off` manually for a known alpha, RC, or RCS
-   prerelease, for example `v2.16.0-rcs-0844.1`, with `dispatch_runs=false`.
+   prerelease, for example `v2.15.1-rcs-c936`, with `dispatch_runs=false`.
 2. Run `Run Rancher Sign-Off Lane` with:
    - `rancher_version`: `v2.15.0-rc2`
    - `lane`: `framework-regression`
@@ -132,7 +132,8 @@ Use `signoff-targets.json` as the source of truth for manually selected targets:
 ```
 
 Target versions may be alpha tags such as `v2.14.1-alpha7`, RC tags such as
-`v2.15.0-rc2`, or RCS tags such as `v2.16.0-rcs-0844.1`.
+`v2.15.0-rc2`, or RCS tags in compact or dotted form, such as
+`v2.15.1-rcs-c936` or `v2.16.0-rcs-0844.1`.
 
 To keep a target in the file without planning it, set `enabled` to `false`.
 

@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       rancher_version:
-        description: Optional Rancher alpha, RC, or RCS, for example v2.16.0-rcs-0844.1. Leave blank to use signoff-targets.json.
+        description: Optional Rancher alpha, RC, or RCS, for example v2.15.1-rcs-c936. Leave blank to use signoff-targets.json.
         required: false
         type: string
       previous_rancher_version:
