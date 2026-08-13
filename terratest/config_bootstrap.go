@@ -11,6 +11,7 @@ const starterToolConfigYAML = `rancher:
   mode: auto
   version: ""
   distro: auto
+  preferred_image_registries: []
   bootstrap_password: ""
   auto_approve: false
 

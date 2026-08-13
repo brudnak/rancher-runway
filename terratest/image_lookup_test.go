@@ -660,6 +660,43 @@ func TestImageLookupInspectOCIIndexConfigLayersAndBuildYAML(t *testing.T) {
 	}
 }
 
+func TestImageLookupInspectCanSkipOptionalDockerHubTagMetadata(t *testing.T) {
+	registryServer := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
+	defer registryServer.Close()
+	pushImageLookupSourceFixture(t, registryServer, "v2.14-head", nil)
+
+	target, err := url.Parse(registryServer.URL)
+	if err != nil {
+		t.Fatalf("parse registry fixture URL: %v", err)
+	}
+	var hubRequests atomic.Int32
+	service := newImageLookupTestService(t, registryServer)
+	service.allowHTTP = false
+	service.transport = imageLookupTestRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Hostname() == "hub.docker.com" {
+			hubRequests.Add(1)
+			return nil, errors.New("optional Docker Hub metadata is unavailable")
+		}
+		cloned := request.Clone(request.Context())
+		cloned.URL.Scheme = target.Scheme
+		cloned.URL.Host = target.Host
+		cloned.Host = target.Host
+		return registryServer.Client().Transport.RoundTrip(cloned)
+	})
+
+	result, err := service.Inspect(context.Background(), imageLookupInspectRequest{
+		Reference:       "docker.io/rancher/rancher:v2.14-head",
+		Platform:        "linux/amd64",
+		SkipTagMetadata: true,
+	})
+	if err != nil {
+		t.Fatalf("Inspect with tag metadata disabled: %v", err)
+	}
+	if result.Digest == "" || hubRequests.Load() != 0 {
+		t.Fatalf("manifest inspection result=%#v optional metadata requests=%d", result, hubRequests.Load())
+	}
+}
+
 func TestImageLookupBoundedHistoryKeepsLatestEntriesAndBoundsText(t *testing.T) {
 	created := time.Date(2026, time.August, 5, 12, 0, 0, 0, time.UTC)
 	history := make([]v1.History, imageLookupMaxHistoryEntries+2)
@@ -1236,6 +1273,12 @@ type imageLookupAnonymousTestKeychain struct{}
 
 func (imageLookupAnonymousTestKeychain) Resolve(authn.Resource) (authn.Authenticator, error) {
 	return authn.Anonymous, nil
+}
+
+type imageLookupTestRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn imageLookupTestRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
 }
 
 func imageLookupTestServerHost(t *testing.T, server *httptest.Server) string {

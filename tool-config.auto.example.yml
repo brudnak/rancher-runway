@@ -4,6 +4,10 @@ rancher:
     - "2.13-head"
     - "2.13.4"
   distro: auto
+  # Optional strict selection; fixed priority is staging, Prime, SUSE registry, then Docker Hub.
+  # A source is eligible only when both rancher/rancher and rancher/rancher-agent have the exact tag.
+  # Empty/omitted preserves Runway's automatic registry behavior.
+  preferred_image_registries: []
   webhook_image: "" # Optional complete registry/repository:tag override for Rancher's managed webhook chart.
   bootstrap_password: "change-me"
   auto_approve: false

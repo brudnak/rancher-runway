@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	goversion "github.com/hashicorp/go-version"
 	"github.com/spf13/viper"
 	"golang.org/x/net/html"
@@ -145,6 +146,10 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 	if err != nil {
 		return nil, err
 	}
+	preferredRegistries, err := settings.NormalizePreferredImageRegistries(viper.GetStringSlice("rancher.preferred_image_registries"))
+	if err != nil {
+		return nil, err
+	}
 
 	requestedDistro := strings.ToLower(strings.TrimSpace(viper.GetString("rancher.distro")))
 	if requestedDistro == "" {
@@ -156,11 +161,28 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		return nil, fmt.Errorf("rancher.bootstrap_password must be set when rancher.mode=auto")
 	}
 
+	preferredImageResolutions := make([]*preferredRancherImageResolution, len(requestedVersions))
 	repoAliases := map[string]bool{}
-	for _, requestedVersion := range requestedVersions {
+	for planIndex, requestedVersion := range requestedVersions {
+		_, isCustomImage, err := parseCustomRancherImageRequest(requestedVersion)
+		if err != nil {
+			return nil, err
+		}
 		buildType, _, err := classifyRancherVersionOrImage(requestedVersion)
 		if err != nil {
 			return nil, err
+		}
+		if requestedDistro == "prime" && buildType != "release" {
+			return nil, fmt.Errorf("prime distro requires a released Rancher version like 2.13.4")
+		}
+		if len(preferredRegistries) > 0 && agentImageOverrides[planIndex] != "" && !isCustomImage {
+			return nil, fmt.Errorf("rancher.preferred_image_registries cannot be combined with rancher.agent_images[%d]; the preferred registry must supply the matching server and agent image pair", planIndex)
+		}
+		if len(preferredRegistries) > 0 && !isCustomImage {
+			preferredImageResolutions[planIndex], err = resolvePreferredRancherImageSettings(requestedVersion, preferredRegistries)
+			if err != nil {
+				return nil, fmt.Errorf("verify preferred Rancher images for %s: %w", requestedVersion, err)
+			}
 		}
 		repoCandidates, _, _ := chooseRancherSourceCandidates(requestedDistro, buildType)
 		for _, repoAlias := range repoCandidates {
@@ -186,11 +208,12 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		if err != nil {
 			return nil, err
 		}
-		if requestedDistro == "prime" && buildType != "release" {
-			return nil, fmt.Errorf("prime distro requires a released Rancher version like 2.13.4")
-		}
+		preferredImageResolution := preferredImageResolutions[planIndex]
 
 		repoCandidates, resolvedDistro, explanation := chooseRancherSourceCandidates(requestedDistro, buildType)
+		if len(preferredRegistries) > 0 && isCustomImage {
+			explanation = append(explanation, "Preferred registry checkboxes were ignored because the exact custom image reference controls its registry")
+		}
 		chartRequest := requestedVersion
 		if isCustomImage {
 			chartRequest = "head"
@@ -230,14 +253,14 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 				imageExplanation = []string{fmt.Sprintf("Using exact RCS staging Rancher image %s and explicitly supplied agent image %s", rancherImage+":"+rancherImageTag, agentImage)}
 			}
 		}
-		if buildType == "head" && isCommitHeadRancherVersion(requestedVersion) {
+		if buildType == "head" && isCommitHeadRancherVersion(requestedVersion) && preferredImageResolution == nil {
 			rancherImage, rancherImageTag, agentImage, imageExplanation, err = resolveCommitHeadImageSettings(requestedVersion)
 			if err != nil {
 				return nil, fmt.Errorf("resolve Rancher image settings for %s: %w", requestedVersion, err)
 			}
 		}
 		var rancherLatestTagOnly bool
-		if !isCustomImage {
+		if !isCustomImage && preferredImageResolution == nil {
 			rancherImage, rancherImageTag, agentImage, imageExplanation, rancherLatestTagOnly = applyRancherLatestTagOnlySettings(
 				buildType,
 				chartRepoAlias,
@@ -248,13 +271,13 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 				imageExplanation,
 			)
 		}
-		if buildType != "release" && chartVersion == requestedVersion && chartRepoAlias == "rancher-prime" && !isRCSServerBuild(requestedVersion) {
+		if preferredImageResolution == nil && buildType != "release" && chartVersion == requestedVersion && chartRepoAlias == "rancher-prime" && !isRCSServerBuild(requestedVersion) {
 			rancherImage = ""
 			rancherImageTag = ""
 			agentImage = ""
 			explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s, so no Rancher image overrides are needed", chartRepoAlias, chartVersion))
 		}
-		if buildType != "release" && chartVersion == requestedVersion && isExactCommunityPrereleaseChart(chartRepoAlias) {
+		if preferredImageResolution == nil && buildType != "release" && chartVersion == requestedVersion && isExactCommunityPrereleaseChart(chartRepoAlias) {
 			if rancherLatestTagOnly {
 				explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with community image defaults", chartRepoAlias, chartVersion))
 			} else if err := validateResolvedRancherImages(rancherImage, rancherImageTag, agentImage); err != nil {
@@ -270,18 +293,43 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 				explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with explicit staging Rancher image overrides", chartRepoAlias, chartVersion))
 			}
 		}
-		if buildType != "release" && chartVersion == requestedVersion && isExactStagingPrereleaseChart(chartRepoAlias) {
+		if preferredImageResolution == nil && buildType != "release" && chartVersion == requestedVersion && isExactStagingPrereleaseChart(chartRepoAlias) {
 			explanation = append(explanation, fmt.Sprintf("Using exact chart match %s/rancher@%s with explicit staging Rancher image overrides", chartRepoAlias, chartVersion))
 		}
 		if rancherLatestTagOnly {
 			explanation = append(explanation, fmt.Sprintf("Using rancher-latest for this %s build, so only the Rancher image tag is overridden to %s", buildType, rancherImageTag))
 		}
-		if buildType == "release" && chartRepoAlias == "rancher-prime" {
+		if preferredImageResolution == nil && buildType == "release" && chartRepoAlias == "rancher-prime" {
 			rancherImage = "registry.rancher.com/rancher/rancher"
 			explanation = append(explanation, fmt.Sprintf("Using Prime chart and Prime Rancher image for released version %s", requestedVersion))
 		}
-		if err := validateResolvedRancherImages(rancherImage, rancherImageTag, agentImage); err != nil {
-			return nil, fmt.Errorf("validate Rancher image settings for %s: %w", requestedVersion, err)
+
+		resolvedImageRegistry := ""
+		rancherImageDigest := ""
+		agentImageDigest := ""
+		imageBuildVersion := ""
+		imageSourceURL := ""
+		imageSourceRevision := ""
+		imageSourceOSSRevision := ""
+		imageSourceCommitURL := ""
+		if preferredImageResolution != nil {
+			rancherImage = preferredImageResolution.RancherImage
+			rancherImageTag = preferredImageResolution.RancherImageTag
+			agentImage = preferredImageResolution.AgentImage
+			resolvedImageRegistry = preferredImageResolution.Registry
+			rancherImageDigest = preferredImageResolution.RancherProvenance.Digest
+			agentImageDigest = preferredImageResolution.AgentProvenance.Digest
+			imageBuildVersion = preferredImageResolution.RancherProvenance.BuildVersion
+			imageSourceURL = preferredImageResolution.RancherProvenance.SourceURL
+			imageSourceRevision = preferredImageResolution.RancherProvenance.Revision
+			imageSourceOSSRevision = preferredImageResolution.RancherProvenance.OSSRevision
+			imageSourceCommitURL = rancherImageSourceCommitURL(imageSourceURL, imageSourceRevision)
+			imageExplanation = preferredImageResolutionExplanation(preferredImageResolution, preferredRegistries)
+		}
+		if preferredImageResolution == nil {
+			if err := validateResolvedRancherImages(rancherImage, rancherImageTag, agentImage); err != nil {
+				return nil, fmt.Errorf("validate Rancher image settings for %s: %w", requestedVersion, err)
+			}
 		}
 		explanation = append(explanation, imageExplanation...)
 		if isCustomImage || compatibilityBaseline != requestedVersion {
@@ -326,24 +374,37 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			return nil, fmt.Errorf("configure Rancher webhook image for %s: %w", requestedVersion, err)
 		}
 
+		var appliedPreferredRegistries []string
+		if preferredImageResolution != nil {
+			appliedPreferredRegistries = append([]string(nil), preferredRegistries...)
+		}
 		plans = append(plans, &RancherResolvedPlan{
-			Mode:                   "auto",
-			RequestedVersion:       requestedVersion,
-			RequestedDistro:        requestedDistro,
-			BuildType:              buildType,
-			ResolvedDistro:         resolvedDistro,
-			ChartRepoAlias:         chartRepoAlias,
-			ChartVersion:           chartVersion,
-			RancherImage:           rancherImage,
-			RancherImageTag:        rancherImageTag,
-			AgentImage:             agentImage,
-			UseRancherImageFields:  useRancherImageFields,
-			CompatibilityBaseline:  compatibilityBaseline,
-			SupportMatrixURL:       supportMatrixURL,
-			RecommendedRKE2Version: recommendedRKE2Version,
-			InstallerSHA256:        installerSHA256,
-			HelmCommands:           helmCommands,
-			Explanation:            explanation,
+			Mode:                     "auto",
+			RequestedVersion:         requestedVersion,
+			RequestedDistro:          requestedDistro,
+			PreferredImageRegistries: appliedPreferredRegistries,
+			BuildType:                buildType,
+			ResolvedDistro:           resolvedDistro,
+			ResolvedImageRegistry:    resolvedImageRegistry,
+			ChartRepoAlias:           chartRepoAlias,
+			ChartVersion:             chartVersion,
+			RancherImage:             rancherImage,
+			RancherImageTag:          rancherImageTag,
+			AgentImage:               agentImage,
+			RancherImageDigest:       rancherImageDigest,
+			AgentImageDigest:         agentImageDigest,
+			ImageBuildVersion:        imageBuildVersion,
+			ImageSourceURL:           imageSourceURL,
+			ImageSourceRevision:      imageSourceRevision,
+			ImageSourceOSSRevision:   imageSourceOSSRevision,
+			ImageSourceCommitURL:     imageSourceCommitURL,
+			UseRancherImageFields:    useRancherImageFields,
+			CompatibilityBaseline:    compatibilityBaseline,
+			SupportMatrixURL:         supportMatrixURL,
+			RecommendedRKE2Version:   recommendedRKE2Version,
+			InstallerSHA256:          installerSHA256,
+			HelmCommands:             helmCommands,
+			Explanation:              explanation,
 		})
 	}
 

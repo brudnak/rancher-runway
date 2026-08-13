@@ -311,14 +311,78 @@ tf_vars:
 	}
 }
 
-func TestCurrentEditablePreflightConfigIncludesWebhookImage(t *testing.T) {
+func TestCurrentEditablePreflightConfigIncludesImageSettings(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
 	viper.Set("rancher.webhook_image", "  stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1  ")
+	viper.Set("rancher.preferred_image_registries", []string{"stgregistry.suse.com", "docker.io"})
 
 	config := settings.CurrentEditablePreflightConfig()
 	if config.WebhookImage != "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1" {
 		t.Fatalf("unexpected editable webhook image: %q", config.WebhookImage)
+	}
+	if strings.Join(config.PreferredImageRegistries, ",") != "stgregistry.suse.com,docker.io" {
+		t.Fatalf("unexpected editable preferred registries: %#v", config.PreferredImageRegistries)
+	}
+}
+
+func TestUpdateAutoModeConfigFilePersistsPreferredImageRegistries(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+
+	configPath := filepath.Join(t.TempDir(), "tool-config.yml")
+	initialConfig := `rancher:
+  mode: auto
+  versions:
+    - "2.14-head"
+  bootstrap_password: "old-password"
+total_has: 1
+user:
+  first_name: "Old"
+  last_name: "Owner"
+tf_vars:
+  aws_prefix: "old"
+  aws_pem_key_name: "old-key"
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	update := settings.PreflightConfigUpdate{
+		Mode:                     "auto",
+		Versions:                 []string{"2.14-head"},
+		Distro:                   "auto",
+		PreferredImageRegistries: []string{"stgregistry.suse.com", "docker.io", "stgregistry.suse.com"},
+		BootstrapPassword:        "new-password",
+		UserFirstName:            "Ada",
+		UserLastName:             "Lovelace",
+		TFVars: map[string]string{
+			"aws_prefix":       "atb",
+			"aws_pem_key_name": "qa-key",
+		},
+	}
+	if err := updateAutoModeConfigFile(configPath, update); err != nil {
+		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var parsed struct {
+		Rancher struct {
+			PreferredImageRegistries []string `yaml:"preferred_image_registries"`
+		} `yaml:"rancher"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	want := "stgregistry.suse.com,docker.io"
+	if got := strings.Join(parsed.Rancher.PreferredImageRegistries, ","); got != want {
+		t.Fatalf("persisted registries = %q, want %q", got, want)
+	}
+	if got := strings.Join(viper.GetStringSlice("rancher.preferred_image_registries"), ","); got != want {
+		t.Fatalf("in-memory registries = %q, want %q", got, want)
 	}
 }
 
@@ -446,6 +510,9 @@ func TestUpdateAutoModeConfigFileWritesManualModeCommandsAndChecksums(t *testing
   mode: auto
   versions:
     - "2.14.1"
+  preferred_image_registries:
+    - "stgregistry.suse.com"
+    - "docker.io"
 rke2:
   preload_images: true
   server_count: 1
@@ -454,6 +521,7 @@ total_has: 1
 	if err := os.WriteFile(configPath, []byte(initialConfig), 0o644); err != nil {
 		t.Fatalf("failed to write temp config: %v", err)
 	}
+	viper.Set("rancher.preferred_image_registries", []string{"stgregistry.suse.com", "docker.io"})
 
 	checksum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	helmCommand := `helm install rancher rancher-latest/rancher \
@@ -463,11 +531,19 @@ total_has: 1
   --set tls=external \
   --set agentTLSMode=system-store`
 	if err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
-		Mode:             "manual",
-		HelmCommands:     []string{helmCommand},
-		K8SVersions:      []string{"v1.34.6+rke2r1"},
-		InstallerSHA256s: []string{checksum},
-		ServerCount:      1,
+		Mode:              "manual",
+		HelmCommands:      []string{helmCommand},
+		K8SVersions:       []string{"v1.34.6+rke2r1"},
+		InstallerSHA256s:  []string{checksum},
+		Distro:            "auto",
+		BootstrapPassword: "admin",
+		UserFirstName:     "Ada",
+		UserLastName:      "Lovelace",
+		TFVars: map[string]string{
+			"aws_prefix":       "atb",
+			"aws_pem_key_name": "qa-key",
+		},
+		ServerCount: 1,
 	}); err != nil {
 		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
 	}
@@ -492,6 +568,10 @@ total_has: 1
 	}
 	if parsed.Rancher["mode"] != "manual" {
 		t.Fatalf("expected rancher.mode manual, got %#v", parsed.Rancher["mode"])
+	}
+	rawRegistries, ok := parsed.Rancher["preferred_image_registries"].([]interface{})
+	if !ok || len(rawRegistries) != 2 || rawRegistries[0] != "stgregistry.suse.com" || rawRegistries[1] != "docker.io" {
+		t.Fatalf("manual mode did not preserve preferred registries: %#v", parsed.Rancher["preferred_image_registries"])
 	}
 	if _, exists := parsed.Rancher["versions"]; exists {
 		t.Fatalf("expected rancher.versions to be removed in manual mode")
@@ -645,8 +725,41 @@ func TestBuildResolvedPlansDialogMessageLabelsHostedTenantK3SPlans(t *testing.T)
 	}
 }
 
+func TestBuildResolvedPlansDialogMessageIncludesRegistryProvenance(t *testing.T) {
+	revision := strings.Repeat("c", 40)
+	digest := "sha256:" + strings.Repeat("a", 64)
+	message := buildResolvedPlansDialogMessage([]*RancherResolvedPlan{{
+		RequestedVersion:         "2.14-head",
+		ResolvedDistro:           "community",
+		PreferredImageRegistries: []string{"stgregistry.suse.com", "docker.io"},
+		ResolvedImageRegistry:    "stgregistry.suse.com",
+		RancherImage:             "stgregistry.suse.com/rancher/rancher",
+		RancherImageTag:          "v2.14-head",
+		AgentImage:               "stgregistry.suse.com/rancher/rancher-agent:v2.14-head",
+		RancherImageDigest:       digest,
+		AgentImageDigest:         "sha256:" + strings.Repeat("b", 64),
+		ImageBuildVersion:        "v2.14-head-build42",
+		ImageSourceRevision:      revision,
+		ImageSourceCommitURL:     "https://github.com/rancher/rancher/commit/" + revision,
+	}})
+
+	for _, want := range []string{
+		"Registry preference: stgregistry.suse.com → docker.io",
+		"Resolved registry: stgregistry.suse.com",
+		"Selected image: stgregistry.suse.com/rancher/rancher:v2.14-head",
+		"Observed image OCI digest (resolution time): " + digest,
+		"Selected agent image: stgregistry.suse.com/rancher/rancher-agent:v2.14-head",
+		"Image build tag: v2.14-head-build42",
+		"Image source commit: https://github.com/rancher/rancher/commit/" + revision,
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected plan message to contain %q:\n%s", want, message)
+		}
+	}
+}
+
 func TestDecodePreflightConfigUpdateRequestFromHTMXForm(t *testing.T) {
-	body := strings.NewReader("deploymentType=hosted-tenant-k3s&versions=head&versions=v2.14-head&distro=community&bootstrapPassword=secret&webhookImage=stgregistry.suse.com%2Francher%2Francher-webhook%3Av0.12.1-rcs-0844.1&preloadImages=true&serverCount=5&hostedRDSPassword=S3curePass1&hostedEC2InstanceType=m5.xlarge&userFirstName=Ada&userLastName=Lovelace&customHostnameEnabled=true&customHostname=demo&tfVars.aws_prefix=ATB&tfVars.aws_pem_key_name=qa-key&tfVars.aws_route53_fqdn=qa.rancher.space")
+	body := strings.NewReader("deploymentType=hosted-tenant-k3s&versions=head&versions=v2.14-head&distro=community&preferredImageRegistries=stgregistry.suse.com&preferredImageRegistries=docker.io&bootstrapPassword=secret&webhookImage=stgregistry.suse.com%2Francher%2Francher-webhook%3Av0.12.1-rcs-0844.1&preloadImages=true&serverCount=5&hostedRDSPassword=S3curePass1&hostedEC2InstanceType=m5.xlarge&userFirstName=Ada&userLastName=Lovelace&customHostnameEnabled=true&customHostname=demo&tfVars.aws_prefix=ATB&tfVars.aws_pem_key_name=qa-key&tfVars.aws_route53_fqdn=qa.rancher.space")
 	req := httptest.NewRequest("POST", "/submit", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
@@ -662,6 +775,9 @@ func TestDecodePreflightConfigUpdateRequestFromHTMXForm(t *testing.T) {
 	}
 	if update.WebhookImage != "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1" {
 		t.Fatalf("unexpected decoded webhook image: %q", update.WebhookImage)
+	}
+	if strings.Join(update.PreferredImageRegistries, ",") != "stgregistry.suse.com,docker.io" {
+		t.Fatalf("unexpected decoded preferred registries: %#v", update.PreferredImageRegistries)
 	}
 	if update.ServerCount != 5 || update.HostedRDSPassword != "S3curePass1" || update.HostedEC2InstanceType != "m5.xlarge" {
 		t.Fatalf("unexpected hosted tenant settings: %#v", update)

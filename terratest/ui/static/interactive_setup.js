@@ -18,6 +18,7 @@ let installerSHA256s = Array.isArray(setupData.installerSHA256s) ? setupData.ins
 let resolveInstallerSHA = setupData.resolveInstallerSHA !== false
 let config = setupData.config || {
   distro: 'auto',
+	preferredImageRegistries: [],
   bootstrapPassword: '',
   webhookImage: '',
   preloadImages: false,
@@ -124,6 +125,8 @@ const rancherSettingsPanelEl = byId('rancherSettingsPanel')
 const rancherSettingsTitleEl = byId('rancherSettingsTitle')
 const rancherSettingsDescriptionEl = byId('rancherSettingsDescription')
 const distroFieldEl = byId('distroField')
+const preferredImageRegistriesFieldsetEl = byId('preferredImageRegistriesFieldset')
+const preferredImageRegistryCheckboxEls = setupQueryAll('input[name="preferredImageRegistries"]')
 const linodeDockerHubSelectEl = byId('linodeDockerHubSelect')
 const linodeCustomImageInputEl = byId('linodeCustomImageInput')
 const linodeCustomImageLockToggleEl = byId('linodeCustomImageLockToggle')
@@ -377,13 +380,20 @@ const renderPlanCards = planText => {
       <code class="setup-code-line-code">${escapeHtml(line || ' ')}</code>
     </div>
   `).join('')
+	const renderDetailValue = detail => {
+		const value = String(detail.value || '')
+		if (detail.label === 'Image source commit' && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/commit\/[0-9a-fA-F]{40}$/.test(value)) {
+			return `<a class="text-emerald-700 underline decoration-emerald-400 underline-offset-2 hover:text-emerald-600 dark:text-emerald-300" href="${escapeHtml(value)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(value)}">${escapeHtml(value)}</a>`
+		}
+		return escapeHtml(value || '-')
+	}
 
   planCardsEl.innerHTML = cards.map(card => {
     const details = card.details.length
       ? card.details.map(detail => `
         <div class="rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-3 dark:border-white/10 dark:bg-zinc-950/30">
           <div class="text-xs font-semibold uppercase tracking-wide text-zinc-600 dark:text-zinc-300">${escapeHtml(detail.label)}</div>
-          <div class="mt-1 break-words text-sm font-semibold text-zinc-950 dark:text-zinc-100">${escapeHtml(detail.value || '-')}</div>
+          <div class="mt-1 break-words text-sm font-semibold text-zinc-950 dark:text-zinc-100">${renderDetailValue(detail)}</div>
         </div>
       `).join('')
       : `<div class="text-sm text-zinc-500 dark:text-zinc-400">No resolved metadata was emitted for this ${emptyLabel}.</div>`
@@ -702,6 +712,7 @@ const showValidationError = (message, target) => {
 
 const clearValidationError = () => {
   editorErrorBoxEl.textContent = ''
+	lastResolverFailure = ''
 }
 
 const showConfirmModal = ({ title, body, confirmText = 'Continue', cancelText = 'Go back', showCancel = true }) => new Promise(resolve => {
@@ -712,6 +723,7 @@ const showConfirmModal = ({ title, body, confirmText = 'Continue', cancelText = 
 
   let settled = false
   const previousBodyOverflow = document.body.style.overflow
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
 
   const settle = result => {
     if (settled) {
@@ -726,6 +738,7 @@ const showConfirmModal = ({ title, body, confirmText = 'Continue', cancelText = 
     confirmModalEl.removeEventListener('click', backdropCancel)
     document.removeEventListener('keydown', escapeCancel)
     document.body.style.overflow = previousBodyOverflow
+    previouslyFocused?.focus({ preventScroll: true })
     resolve(result)
   }
 
@@ -739,6 +752,23 @@ const showConfirmModal = ({ title, body, confirmText = 'Continue', cancelText = 
   const escapeCancel = event => {
     if (event.key === 'Escape') {
       cancel()
+      return
+    }
+    if (event.key === 'Tab') {
+      const focusable = [confirmModalCancelEl, confirmModalConfirmEl].filter(element => !element.classList.contains('hidden') && !element.disabled)
+      if (!focusable.length) {
+        event.preventDefault()
+        return
+      }
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
     }
   }
 
@@ -776,10 +806,11 @@ const showResolverFailure = message => {
     return
   }
   lastResolverFailure = normalized
+  const preferredRegistryFailure = /preferred registr|verify preferred Rancher images/i.test(normalized)
   showNoticeModal({
-    title: 'Rancher plan resolution failed',
+    title: preferredRegistryFailure ? 'Preferred Rancher image unavailable' : 'Rancher plan resolution failed',
     body: normalized,
-    confirmText: 'Review setup'
+    confirmText: preferredRegistryFailure ? 'Review registries' : 'Review setup'
   })
 }
 
@@ -882,6 +913,10 @@ const loadSystemReadiness = async () => {
 
 const renderEditableConfig = () => {
   distroSelectEl.value = config.distro || 'auto'
+	const preferredRegistries = new Set(Array.isArray(config.preferredImageRegistries) ? config.preferredImageRegistries : [])
+	preferredImageRegistryCheckboxEls.forEach(checkbox => {
+		checkbox.checked = preferredRegistries.has(checkbox.value)
+	})
   bootstrapPasswordInputEl.value = config.bootstrapPassword || ''
   if (webhookImageInputEl) {
     webhookImageInputEl.value = config.webhookImage || ''
@@ -964,6 +999,7 @@ const renderDeploymentType = () => {
   rke2ServerLayoutFieldsetEl?.classList.toggle('hidden', hosted || linode)
   gpuWorkerBoxEl?.classList.toggle('hidden', hosted || linode)
   distroFieldEl?.classList.toggle('hidden', linode)
+	preferredImageRegistriesFieldsetEl?.classList.toggle('hidden', linode || setupMode !== 'auto')
   webhookImageFieldEl?.classList.toggle('hidden', linode)
   preloadImagesLabelEl?.classList.toggle('hidden', linode)
   rancherSettingsPanelEl?.classList.toggle('hidden', false)
@@ -1447,6 +1483,7 @@ const renderMode = () => {
   } else {
     renderRows()
   }
+	preferredImageRegistriesFieldsetEl?.classList.toggle('hidden', isLinodeDockerDeployment() || setupMode !== 'auto')
   if (manualAddBtnEl) {
     const manualAddLocked = singleHARunLocked() || isHostedTenantDeployment() || isLinodeDockerDeployment()
     manualAddBtnEl.disabled = submitting || manualAddLocked
@@ -2296,6 +2333,9 @@ const setSubmittingState = nextSubmitting => {
   renderLinodeSshRootPasswordGenerateState()
   resolveInstallerSHAToggleEl.disabled = nextSubmitting
   distroSelectEl.disabled = nextSubmitting
+	preferredImageRegistryCheckboxEls.forEach(checkbox => {
+		checkbox.disabled = nextSubmitting || isLinodeDockerDeployment() || setupMode !== 'auto'
+	})
   bootstrapPasswordInputEl.disabled = nextSubmitting
   bootstrapPasswordToggleEl.disabled = nextSubmitting
   if (webhookImageInputEl) {
@@ -3344,6 +3384,7 @@ customHostnameInputEl.addEventListener('input', event => {
 })
 
 webhookImageInputEl?.addEventListener('input', clearValidationError)
+preferredImageRegistryCheckboxEls.forEach(checkbox => checkbox.addEventListener('change', clearValidationError))
 
 editorCancelBtnEl.addEventListener('click', cancelEditor)
 setupFormEl.addEventListener('submit', prepareSetupSubmit)

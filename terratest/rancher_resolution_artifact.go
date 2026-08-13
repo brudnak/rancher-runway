@@ -8,22 +8,31 @@ import (
 )
 
 type rancherResolutionArtifact struct {
-	Phase                  string   `json:"phase"`
-	HAIndex                int      `json:"ha_index"`
-	RequestedVersion       string   `json:"requested_version,omitempty"`
-	RequestedDistro        string   `json:"requested_distro,omitempty"`
-	BuildType              string   `json:"build_type,omitempty"`
-	ResolvedDistro         string   `json:"resolved_distro,omitempty"`
-	ChartRepoAlias         string   `json:"chart_repo_alias,omitempty"`
-	ChartVersion           string   `json:"chart_version,omitempty"`
-	ChartSource            string   `json:"chart_source,omitempty"`
-	RancherImage           string   `json:"rancher_image,omitempty"`
-	RancherImageTag        string   `json:"rancher_image_tag,omitempty"`
-	AgentImage             string   `json:"agent_image,omitempty"`
-	UseRancherImageFields  bool     `json:"use_rancher_image_fields,omitempty"`
-	CompatibilityBaseline  string   `json:"compatibility_baseline,omitempty"`
-	RecommendedRKE2Version string   `json:"recommended_rke2_version,omitempty"`
-	ResolutionNotes        []string `json:"resolution_notes,omitempty"`
+	Phase                    string   `json:"phase"`
+	HAIndex                  int      `json:"ha_index"`
+	RequestedVersion         string   `json:"requested_version,omitempty"`
+	RequestedDistro          string   `json:"requested_distro,omitempty"`
+	PreferredImageRegistries []string `json:"preferred_image_registries,omitempty"`
+	BuildType                string   `json:"build_type,omitempty"`
+	ResolvedDistro           string   `json:"resolved_distro,omitempty"`
+	ResolvedImageRegistry    string   `json:"resolved_image_registry,omitempty"`
+	ChartRepoAlias           string   `json:"chart_repo_alias,omitempty"`
+	ChartVersion             string   `json:"chart_version,omitempty"`
+	ChartSource              string   `json:"chart_source,omitempty"`
+	RancherImage             string   `json:"rancher_image,omitempty"`
+	RancherImageTag          string   `json:"rancher_image_tag,omitempty"`
+	AgentImage               string   `json:"agent_image,omitempty"`
+	RancherImageDigest       string   `json:"rancher_image_digest,omitempty"`
+	AgentImageDigest         string   `json:"agent_image_digest,omitempty"`
+	ImageBuildVersion        string   `json:"image_build_version,omitempty"`
+	ImageSourceURL           string   `json:"image_source_url,omitempty"`
+	ImageSourceRevision      string   `json:"image_source_revision,omitempty"`
+	ImageSourceOSSRevision   string   `json:"image_source_oss_revision,omitempty"`
+	ImageSourceCommitURL     string   `json:"image_source_commit_url,omitempty"`
+	UseRancherImageFields    bool     `json:"use_rancher_image_fields,omitempty"`
+	CompatibilityBaseline    string   `json:"compatibility_baseline,omitempty"`
+	RecommendedRKE2Version   string   `json:"recommended_rke2_version,omitempty"`
+	ResolutionNotes          []string `json:"resolution_notes,omitempty"`
 }
 
 func writeRancherResolutionArtifact(phase string, instanceNum int, plan *RancherResolvedPlan) error {
@@ -31,22 +40,31 @@ func writeRancherResolutionArtifact(phase string, instanceNum int, plan *Rancher
 		return nil
 	}
 	artifact := rancherResolutionArtifact{
-		Phase:                  phase,
-		HAIndex:                instanceNum,
-		RequestedVersion:       plan.RequestedVersion,
-		RequestedDistro:        plan.RequestedDistro,
-		BuildType:              plan.BuildType,
-		ResolvedDistro:         plan.ResolvedDistro,
-		ChartRepoAlias:         plan.ChartRepoAlias,
-		ChartVersion:           plan.ChartVersion,
-		ChartSource:            rancherChartSource(plan),
-		RancherImage:           plan.RancherImage,
-		RancherImageTag:        plan.RancherImageTag,
-		AgentImage:             plan.AgentImage,
-		UseRancherImageFields:  plan.UseRancherImageFields,
-		CompatibilityBaseline:  plan.CompatibilityBaseline,
-		RecommendedRKE2Version: plan.RecommendedRKE2Version,
-		ResolutionNotes:        plan.Explanation,
+		Phase:                    phase,
+		HAIndex:                  instanceNum,
+		RequestedVersion:         plan.RequestedVersion,
+		RequestedDistro:          plan.RequestedDistro,
+		PreferredImageRegistries: append([]string(nil), plan.PreferredImageRegistries...),
+		BuildType:                plan.BuildType,
+		ResolvedDistro:           plan.ResolvedDistro,
+		ResolvedImageRegistry:    plan.ResolvedImageRegistry,
+		ChartRepoAlias:           plan.ChartRepoAlias,
+		ChartVersion:             plan.ChartVersion,
+		ChartSource:              rancherChartSource(plan),
+		RancherImage:             plan.RancherImage,
+		RancherImageTag:          plan.RancherImageTag,
+		AgentImage:               plan.AgentImage,
+		RancherImageDigest:       plan.RancherImageDigest,
+		AgentImageDigest:         plan.AgentImageDigest,
+		ImageBuildVersion:        plan.ImageBuildVersion,
+		ImageSourceURL:           plan.ImageSourceURL,
+		ImageSourceRevision:      plan.ImageSourceRevision,
+		ImageSourceOSSRevision:   plan.ImageSourceOSSRevision,
+		ImageSourceCommitURL:     plan.ImageSourceCommitURL,
+		UseRancherImageFields:    plan.UseRancherImageFields,
+		CompatibilityBaseline:    plan.CompatibilityBaseline,
+		RecommendedRKE2Version:   plan.RecommendedRKE2Version,
+		ResolutionNotes:          plan.Explanation,
 	}
 	data, err := json.MarshalIndent(artifact, "", "  ")
 	if err != nil {

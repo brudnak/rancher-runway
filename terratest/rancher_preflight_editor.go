@@ -779,6 +779,13 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if err != nil {
 		return err
 	}
+	if update.TFVars != nil && (mode != "auto" || linodeDocker) {
+		// Registry controls are hidden outside HA/hosted auto mode. Preserve the
+		// saved selection instead of treating an omitted form field as a clear.
+		viperConfigMu.RLock()
+		update.PreferredImageRegistries = viper.GetStringSlice("rancher.preferred_image_registries")
+		viperConfigMu.RUnlock()
+	}
 	if err := settings.NormalizePreflightConfigUpdate(&update); err != nil {
 		return err
 	}
@@ -874,6 +881,11 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	rancherNode := ensureMappingValue(root, "rancher")
 	if update.TFVars != nil {
 		setStringValue(rancherNode, "distro", update.Distro)
+		if len(update.PreferredImageRegistries) == 0 {
+			deleteMappingKey(rancherNode, "preferred_image_registries")
+		} else {
+			setStringSequenceValue(rancherNode, "preferred_image_registries", update.PreferredImageRegistries)
+		}
 		setStringValue(rancherNode, "bootstrap_password", update.BootstrapPassword)
 		if update.WebhookImage == "" {
 			deleteMappingKey(rancherNode, "webhook_image")
@@ -1019,6 +1031,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	}
 	if update.TFVars != nil {
 		viper.Set("rancher.distro", update.Distro)
+		viper.Set("rancher.preferred_image_registries", update.PreferredImageRegistries)
 		viper.Set("rancher.bootstrap_password", update.BootstrapPassword)
 		viper.Set("rancher.webhook_image", update.WebhookImage)
 		viper.Set("user.first_name", update.UserFirstName)

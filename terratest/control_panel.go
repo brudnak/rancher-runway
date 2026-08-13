@@ -43,13 +43,14 @@ type localControlPanel struct {
 	baseURL              string
 	doneCh               chan error
 
-	mu          sync.Mutex
-	operations  map[panelOperationName]*panelOperationState
-	awsMu       sync.Mutex
-	awsCache    panelAWSInventoryState
-	awsCacheKey string
-	setupEditor *interactiveServer
-	imageLookup *imageLookupService
+	mu              sync.Mutex
+	operations      map[panelOperationName]*panelOperationState
+	awsMu           sync.Mutex
+	awsCache        panelAWSInventoryState
+	awsCacheKey     string
+	setupEditor     *interactiveServer
+	imageLookup     *imageLookupService
+	prBuildVerifier *prBuildVerifierService
 
 	// cleanupBatchRunner is nil in production. Tests may replace it with a
 	// deterministic runner so the batch coordinator can be exercised without
@@ -390,6 +391,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/images/search", p.handleImageLookupSearch)
 	mux.HandleFunc("/api/images/inspect", p.handleImageLookupInspect)
 	mux.HandleFunc("/api/images/build-yaml/source", p.handleImageLookupSourceBuildYAML)
+	mux.HandleFunc("/api/pr-builds/verify", p.handlePRBuildVerify)
 	mux.HandleFunc("/api/logs", p.handleLogs)
 	mux.HandleFunc("/api/logs/stream", p.handleLogStream)
 	mux.HandleFunc("/api/docker-logs", p.handleDockerLogs)

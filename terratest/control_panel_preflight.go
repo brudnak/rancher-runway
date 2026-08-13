@@ -167,6 +167,9 @@ func panelAutoModeConfigBlockers(totalHAs int) []string {
 	default:
 		blockers = append(blockers, "rancher.distro must be auto, community, or prime")
 	}
+	if _, err := settings.NormalizePreferredImageRegistries(viper.GetStringSlice("rancher.preferred_image_registries")); err != nil {
+		blockers = append(blockers, err.Error())
+	}
 
 	if strings.TrimSpace(viper.GetString("rancher.bootstrap_password")) == "" {
 		blockers = append(blockers, "rancher.bootstrap_password")

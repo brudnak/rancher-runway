@@ -117,6 +117,7 @@ type imageLookupInspectRequest struct {
 	Reference        string `json:"reference"`
 	Platform         string `json:"platform"`
 	IncludeBuildYAML bool   `json:"includeBuildYaml"`
+	SkipTagMetadata  bool   `json:"-"`
 }
 
 type imageLookupSourceBuildYAMLRequest struct {
@@ -553,7 +554,7 @@ func (s *imageLookupService) Inspect(ctx context.Context, request imageLookupIns
 		response.Size += layer.Size
 	}
 
-	if parsed.registry == "docker.io" && parsed.tag != "" {
+	if !request.SkipTagMetadata && parsed.registry == "docker.io" && parsed.tag != "" {
 		if metadata, metadataErr := s.dockerHubTag(ctx, parsed.repository, parsed.tag); metadataErr == nil {
 			response.UploadedAt = imageLookupFormatTime(metadata.TagLastPushed)
 		} else if ctx.Err() == nil {
@@ -1792,7 +1793,11 @@ func imageLookupExecCommand(ctx context.Context, executable string, arguments, e
 		return nil, errImageLookupCommandOutputLimit
 	}
 	if err != nil {
-		return nil, err
+		// Preserve bounded stdout for callers that deliberately request structured
+		// status information (for example, `gh api --include`). Callers must still
+		// treat the accompanying error as authoritative and must not expose the raw
+		// command output without validating it first.
+		return stdout.buffer.Bytes(), err
 	}
 	return stdout.buffer.Bytes(), nil
 }

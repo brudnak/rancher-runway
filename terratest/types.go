@@ -31,26 +31,35 @@ type TerraformOutputs struct {
 }
 
 type RancherResolvedPlan struct {
-	Mode                   string
-	RequestedVersion       string
-	RequestedDistro        string
-	BuildType              string
-	ResolvedDistro         string
-	ChartRepoAlias         string
-	ChartVersion           string
-	RancherImage           string
-	RancherImageTag        string
-	AgentImage             string
-	UseRancherImageFields  bool
-	CompatibilityBaseline  string
-	SupportMatrixURL       string
-	RecommendedRKE2Version string
-	InstallerSHA256        string
-	RecommendedK3SVersion  string
-	K3SInstallerSHA256     string
-	K3SAirgapImageSHA256   string
-	HelmCommands           []string
-	Explanation            []string
+	Mode                     string
+	RequestedVersion         string
+	RequestedDistro          string
+	PreferredImageRegistries []string
+	BuildType                string
+	ResolvedDistro           string
+	ResolvedImageRegistry    string
+	ChartRepoAlias           string
+	ChartVersion             string
+	RancherImage             string
+	RancherImageTag          string
+	AgentImage               string
+	RancherImageDigest       string
+	AgentImageDigest         string
+	ImageBuildVersion        string
+	ImageSourceURL           string
+	ImageSourceRevision      string
+	ImageSourceOSSRevision   string
+	ImageSourceCommitURL     string
+	UseRancherImageFields    bool
+	CompatibilityBaseline    string
+	SupportMatrixURL         string
+	RecommendedRKE2Version   string
+	InstallerSHA256          string
+	RecommendedK3SVersion    string
+	K3SInstallerSHA256       string
+	K3SAirgapImageSHA256     string
+	HelmCommands             []string
+	Explanation              []string
 }
 
 type helmSearchResult struct {

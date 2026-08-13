@@ -370,6 +370,12 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 		if plan.ResolvedDistro != "" {
 			sectionLines = append(sectionLines, "Resolved runtime: "+plan.ResolvedDistro)
 		}
+		if len(plan.PreferredImageRegistries) > 0 {
+			sectionLines = append(sectionLines, "Registry preference: "+strings.Join(plan.PreferredImageRegistries, " → "))
+		}
+		if plan.ResolvedImageRegistry != "" {
+			sectionLines = append(sectionLines, "Resolved registry: "+plan.ResolvedImageRegistry)
+		}
 		if plan.ChartRepoAlias != "" && plan.ChartVersion != "" {
 			sectionLines = append(sectionLines, fmt.Sprintf("Selected chart: %s/rancher@%s", plan.ChartRepoAlias, plan.ChartVersion))
 		}
@@ -381,6 +387,32 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 			sectionLines = append(sectionLines, "Selected image: "+image)
 		} else if plan.RancherImageTag != "" {
 			sectionLines = append(sectionLines, "Selected image tag: "+plan.RancherImageTag)
+		}
+		if plan.RancherImageDigest != "" {
+			sectionLines = append(sectionLines, "Observed image OCI digest (resolution time): "+plan.RancherImageDigest)
+		}
+		if plan.AgentImage != "" {
+			sectionLines = append(sectionLines, "Selected agent image: "+plan.AgentImage)
+		}
+		if plan.AgentImageDigest != "" {
+			sectionLines = append(sectionLines, "Observed agent OCI digest (resolution time): "+plan.AgentImageDigest)
+		}
+		if plan.ResolvedImageRegistry != "" {
+			if plan.ImageBuildVersion != "" {
+				sectionLines = append(sectionLines, "Image build tag: "+plan.ImageBuildVersion)
+			} else {
+				sectionLines = append(sectionLines, "Image build tag: not declared by image")
+			}
+			if plan.ImageSourceCommitURL != "" {
+				sectionLines = append(sectionLines, "Image source commit: "+plan.ImageSourceCommitURL)
+			} else if plan.ImageSourceRevision != "" {
+				sectionLines = append(sectionLines, "Image source revision: "+plan.ImageSourceRevision+" (source link not declared or not canonical)")
+			} else {
+				sectionLines = append(sectionLines, "Image source commit: not declared by image")
+			}
+			if plan.ImageSourceOSSRevision != "" {
+				sectionLines = append(sectionLines, "Image OSS revision: "+plan.ImageSourceOSSRevision)
+			}
 		}
 		if plan.CompatibilityBaseline != "" {
 			sectionLines = append(sectionLines, "Validation: "+plan.CompatibilityBaseline)
@@ -412,6 +444,12 @@ func logResolvedPlans(plans []*RancherResolvedPlan) {
 		log.Printf("[resolver] Requested distro: %s", plan.RequestedDistro)
 		log.Printf("[resolver] Build type: %s", plan.BuildType)
 		log.Printf("[resolver] Resolved distro: %s", plan.ResolvedDistro)
+		if len(plan.PreferredImageRegistries) > 0 {
+			log.Printf("[resolver] Preferred image registries: %s", strings.Join(plan.PreferredImageRegistries, ", "))
+		}
+		if plan.ResolvedImageRegistry != "" {
+			log.Printf("[resolver] Resolved image registry: %s", plan.ResolvedImageRegistry)
+		}
 		log.Printf("[resolver] Chart repo: %s", plan.ChartRepoAlias)
 		log.Printf("[resolver] Chart version: %s", plan.ChartVersion)
 		log.Printf("[resolver] Rancher image: %s", plan.RancherImage)
@@ -420,6 +458,20 @@ func logResolvedPlans(plans []*RancherResolvedPlan) {
 		}
 		if plan.AgentImage != "" {
 			log.Printf("[resolver] Rancher agent image: %s", plan.AgentImage)
+		}
+		if plan.RancherImageDigest != "" {
+			log.Printf("[resolver] Rancher image OCI digest: %s", plan.RancherImageDigest)
+		}
+		if plan.AgentImageDigest != "" {
+			log.Printf("[resolver] Rancher agent OCI digest: %s", plan.AgentImageDigest)
+		}
+		if plan.ImageBuildVersion != "" {
+			log.Printf("[resolver] Image build tag: %s", plan.ImageBuildVersion)
+		}
+		if plan.ImageSourceCommitURL != "" {
+			log.Printf("[resolver] Image source commit: %s", plan.ImageSourceCommitURL)
+		} else if plan.ResolvedImageRegistry != "" {
+			log.Printf("[resolver] Image source commit: not declared by image")
 		}
 		log.Printf("[resolver] Compatibility baseline: %s", plan.CompatibilityBaseline)
 		log.Printf("[resolver] Support matrix: %s", plan.SupportMatrixURL)

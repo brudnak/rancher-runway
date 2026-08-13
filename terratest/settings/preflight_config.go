@@ -10,6 +10,13 @@ import (
 
 var ownerNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z .'-]{0,63}$`)
 
+var PreferredImageRegistryOptions = []string{
+	"stgregistry.suse.com",
+	"registry.rancher.com",
+	"registry.suse.com",
+	"docker.io",
+}
+
 var EditableTFVarKeys = []string{
 	"aws_region",
 	"aws_prefix",
@@ -61,21 +68,22 @@ func normalizeOwnerNamePart(value string) string {
 }
 
 type EditablePreflightConfig struct {
-	Distro                string            `json:"distro"`
-	BootstrapPassword     string            `json:"bootstrapPassword"`
-	WebhookImage          string            `json:"webhookImage"`
-	PreloadImages         bool              `json:"preloadImages"`
-	ServerCount           int               `json:"serverCount"`
-	GPUWorker             GPUWorkerConfig   `json:"gpuWorker"`
-	DeploymentType        string            `json:"deploymentType"`
-	HostedRDSPassword     string            `json:"hostedRDSPassword"`
-	HostedEC2InstanceType string            `json:"hostedEC2InstanceType"`
-	LinodeDockerHub       string            `json:"linodeDockerHub"`
-	LinodeCustomImage     string            `json:"linodeCustomImage"`
-	LinodeSSHRootPassword string            `json:"linodeSSHRootPassword"`
-	UserFirstName         string            `json:"userFirstName"`
-	UserLastName          string            `json:"userLastName"`
-	TFVars                map[string]string `json:"tfVars"`
+	Distro                   string            `json:"distro"`
+	PreferredImageRegistries []string          `json:"preferredImageRegistries"`
+	BootstrapPassword        string            `json:"bootstrapPassword"`
+	WebhookImage             string            `json:"webhookImage"`
+	PreloadImages            bool              `json:"preloadImages"`
+	ServerCount              int               `json:"serverCount"`
+	GPUWorker                GPUWorkerConfig   `json:"gpuWorker"`
+	DeploymentType           string            `json:"deploymentType"`
+	HostedRDSPassword        string            `json:"hostedRDSPassword"`
+	HostedEC2InstanceType    string            `json:"hostedEC2InstanceType"`
+	LinodeDockerHub          string            `json:"linodeDockerHub"`
+	LinodeCustomImage        string            `json:"linodeCustomImage"`
+	LinodeSSHRootPassword    string            `json:"linodeSSHRootPassword"`
+	UserFirstName            string            `json:"userFirstName"`
+	UserLastName             string            `json:"userLastName"`
+	TFVars                   map[string]string `json:"tfVars"`
 }
 
 type GPUWorkerConfig struct {
@@ -177,26 +185,27 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 	}
 
 	return EditablePreflightConfig{
-		Distro:                distro,
-		BootstrapPassword:     viper.GetString("rancher.bootstrap_password"),
-		WebhookImage:          strings.TrimSpace(viper.GetString("rancher.webhook_image")),
-		PreloadImages:         preloadImages,
-		ServerCount:           CurrentRKE2ServerCount(),
-		GPUWorker:             CurrentGPUWorkerConfig(),
-		DeploymentType:        deploymentType,
-		HostedRDSPassword:     viper.GetString("tf_vars.aws_rds_password"),
-		HostedEC2InstanceType: strings.TrimSpace(viper.GetString("tf_vars.aws_ec2_instance_type")),
-		LinodeDockerHub:       linodeDockerHub,
-		LinodeCustomImage:     linodeCustomImage,
-		LinodeSSHRootPassword: viper.GetString("linode.ssh_root_password"),
-		UserFirstName:         OwnerFirstName(),
-		UserLastName:          OwnerLastName(),
-		TFVars:                tfVars,
+		Distro:                   distro,
+		PreferredImageRegistries: CurrentPreferredImageRegistries(),
+		BootstrapPassword:        viper.GetString("rancher.bootstrap_password"),
+		WebhookImage:             strings.TrimSpace(viper.GetString("rancher.webhook_image")),
+		PreloadImages:            preloadImages,
+		ServerCount:              CurrentRKE2ServerCount(),
+		GPUWorker:                CurrentGPUWorkerConfig(),
+		DeploymentType:           deploymentType,
+		HostedRDSPassword:        viper.GetString("tf_vars.aws_rds_password"),
+		HostedEC2InstanceType:    strings.TrimSpace(viper.GetString("tf_vars.aws_ec2_instance_type")),
+		LinodeDockerHub:          linodeDockerHub,
+		LinodeCustomImage:        linodeCustomImage,
+		LinodeSSHRootPassword:    viper.GetString("linode.ssh_root_password"),
+		UserFirstName:            OwnerFirstName(),
+		UserLastName:             OwnerLastName(),
+		TFVars:                   tfVars,
 	}
 }
 
 func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
-	if update.TFVars == nil && strings.TrimSpace(update.Distro) == "" && strings.TrimSpace(update.BootstrapPassword) == "" && strings.TrimSpace(update.WebhookImage) == "" && strings.TrimSpace(update.UserFirstName) == "" && strings.TrimSpace(update.UserLastName) == "" {
+	if update.TFVars == nil && strings.TrimSpace(update.Distro) == "" && len(update.PreferredImageRegistries) == 0 && strings.TrimSpace(update.BootstrapPassword) == "" && strings.TrimSpace(update.WebhookImage) == "" && strings.TrimSpace(update.UserFirstName) == "" && strings.TrimSpace(update.UserLastName) == "" {
 		return nil
 	}
 
@@ -209,6 +218,11 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 	default:
 		return fmt.Errorf("rancher.distro must be auto, community, or prime")
 	}
+	preferredRegistries, err := NormalizePreferredImageRegistries(update.PreferredImageRegistries)
+	if err != nil {
+		return err
+	}
+	update.PreferredImageRegistries = preferredRegistries
 
 	update.BootstrapPassword = strings.TrimSpace(update.BootstrapPassword)
 	if update.BootstrapPassword == "" {
@@ -262,6 +276,47 @@ func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {
 		update.TFVars[key] = strings.TrimSpace(update.TFVars[key])
 	}
 	return nil
+}
+
+func CurrentPreferredImageRegistries() []string {
+	registries, err := NormalizePreferredImageRegistries(viper.GetStringSlice("rancher.preferred_image_registries"))
+	if err != nil {
+		return nil
+	}
+	return registries
+}
+
+func NormalizePreferredImageRegistries(values []string) ([]string, error) {
+	allowed := make(map[string]struct{}, len(PreferredImageRegistryOptions))
+	for _, registry := range PreferredImageRegistryOptions {
+		allowed[registry] = struct{}{}
+	}
+
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		registry := strings.ToLower(strings.TrimSpace(value))
+		if registry == "" || registry == "auto" {
+			continue
+		}
+		if _, ok := allowed[registry]; !ok {
+			return nil, fmt.Errorf("rancher.preferred_image_registries contains unsupported registry %q; choose from %s", value, strings.Join(PreferredImageRegistryOptions, ", "))
+		}
+		if _, duplicate := seen[registry]; duplicate {
+			continue
+		}
+		seen[registry] = struct{}{}
+	}
+
+	// Checkboxes have a fixed visible priority. Canonicalize YAML and API input
+	// to that same order so a saved selection round-trips without changing which
+	// registry wins.
+	normalized := make([]string, 0, len(seen))
+	for _, registry := range PreferredImageRegistryOptions {
+		if _, selected := seen[registry]; selected {
+			normalized = append(normalized, registry)
+		}
+	}
+	return normalized, nil
 }
 
 func ValidateAWSPemKeyNameConfig() error {

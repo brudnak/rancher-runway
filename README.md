@@ -123,6 +123,9 @@ Use the app tabs as the main lifecycle:
 - **Image Lookup** searches Rancher server, agent, and webhook tags across
   Docker Hub and the Rancher/SUSE registries, or inspects a custom image
   repository.
+- **PR Image Check** resolves a GitHub pull request commit and checks whether
+  Rancher head images across all known registries declare that commit in their
+  source ancestry.
 - **Destroy** removes provisioned cloud resources for a selected run slot.
 - **Costs** shows cleanup estimates and the local cost ledger.
 - **Settings** holds local app preferences such as GPU reminders.
@@ -176,6 +179,32 @@ container registry credential helpers. Docker Hub can also use
 Private declared-source metadata additionally requires an authenticated `gh`
 CLI session with access to the repository; Rancher Runway never asks the
 browser for a GitHub token.
+
+### PR Image Check
+
+PR Image Check answers whether a pull request's Git commit is represented in a
+specific Rancher head image such as `2.14-head`.
+
+- Paste an exact `https://github.com/{owner}/{repository}/pull/{number}` URL
+  and enter `head` or a minor-line head tag such as `2.14-head`.
+- For a merged PR, the verifier uses GitHub's integration commit. For an open
+  or otherwise unmerged PR, it checks the current PR head commit and labels the
+  result accordingly.
+- The tool inspects the exact Rancher server and agent tag in SUSE staging,
+  Rancher Prime, SUSE Registry, and Docker Hub. Missing tags and registry
+  access errors remain isolated so evidence from the other registries is still
+  shown.
+- Each result records the observed OCI digest, selected `linux/amd64` manifest
+  digest, build label, source repository, and declared Git revision. GitHub's
+  commit comparison establishes whether that revision is the selected PR
+  commit or a descendant of it. Prime images can use their declared Rancher OSS
+  revision for a `rancher/rancher` PR.
+
+The result is provenance evidence, not a binary attestation: image labels are
+producer-declared, a later commit can revert a change, and an equivalent
+cherry-pick has a different SHA. Head tags are mutable, so re-check immediately
+before testing. GitHub PR and ancestry lookups use the configured `gh` CLI
+login; the browser never receives a GitHub token.
 
 ## Local Labs
 
@@ -246,6 +275,16 @@ you are most likely to care about:
   validates its anonymously readable manifest and passes the override only to
   Rancher's managed webhook chart. `RANCHER_WEBHOOK_IMAGE` remains an
   environment-level override for upgrade and lifecycle validation runs.
+- `rancher.preferred_image_registries` is an optional strict allow-list for
+  exact Rancher server and agent image tags. The setup UI exposes SUSE staging,
+  Rancher Prime, SUSE registry, and Docker Hub as checkboxes. Runway tries only
+  the checked registries in that fixed priority order, requires both images in
+  the same registry, and fails before Terraform starts if no complete pair exists. An
+  empty or omitted list preserves the current automatic behavior. The approval
+  plan records the resolution-time OCI digests and shows the OCI build version
+  and linked GitHub commit when the image declares canonical source labels.
+  Docker Hub verification uses the credentials Runway installs on the nodes;
+  the other selected registries must be anonymously pullable by those nodes.
 - `user.first_name` and `user.last_name` tag cloud resources with an owner.
 - `tf_vars.aws_prefix` is the base resource prefix. Run slots derive unique
   per-run prefixes from it.

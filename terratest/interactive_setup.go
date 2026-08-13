@@ -743,33 +743,34 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 	}
 
 	return settings.PreflightConfigUpdate{
-		DeploymentType:        r.FormValue("deploymentType"),
-		Mode:                  r.FormValue("mode"),
-		Versions:              r.Form["versions"],
-		AgentImages:           r.Form["agentImages"],
-		HelmCommands:          r.Form["helmCommands"],
-		K8SVersions:           r.Form["k8sVersions"],
-		InstallerSHA256s:      r.Form["installerSHA256s"],
-		ResolveInstallerSHA:   parseHTMLBool(r.FormValue("resolveInstallerSHA")),
-		Distro:                r.FormValue("distro"),
-		BootstrapPassword:     r.FormValue("bootstrapPassword"),
-		WebhookImage:          r.FormValue("webhookImage"),
-		PreloadImages:         parseHTMLBool(r.FormValue("preloadImages")),
-		ServerCount:           parseHTMLInt(r.FormValue("serverCount")),
-		GPUWorkerEnabled:      parseHTMLBool(r.FormValue("gpuWorkerEnabled")),
-		GPUWorkerProfile:      r.FormValue("gpuWorkerProfile"),
-		GPUWorkerAMI:          r.FormValue("gpuWorkerAmi"),
-		GPUWorkerSubnetID:     r.FormValue("gpuWorkerSubnetId"),
-		HostedRDSPassword:     r.FormValue("hostedRDSPassword"),
-		HostedEC2InstanceType: r.FormValue("hostedEC2InstanceType"),
-		LinodeDockerHub:       r.FormValue("linodeDockerHub"),
-		LinodeCustomImage:     r.FormValue("linodeCustomImage"),
-		LinodeSSHRootPassword: r.FormValue("linodeSSHRootPassword"),
-		UserFirstName:         r.FormValue("userFirstName"),
-		UserLastName:          r.FormValue("userLastName"),
-		TFVars:                tfVars,
-		CustomHostnameEnabled: parseHTMLBool(r.FormValue("customHostnameEnabled")),
-		CustomHostnameInput:   r.FormValue("customHostname"),
+		DeploymentType:           r.FormValue("deploymentType"),
+		Mode:                     r.FormValue("mode"),
+		Versions:                 r.Form["versions"],
+		AgentImages:              r.Form["agentImages"],
+		HelmCommands:             r.Form["helmCommands"],
+		K8SVersions:              r.Form["k8sVersions"],
+		InstallerSHA256s:         r.Form["installerSHA256s"],
+		ResolveInstallerSHA:      parseHTMLBool(r.FormValue("resolveInstallerSHA")),
+		Distro:                   r.FormValue("distro"),
+		PreferredImageRegistries: r.Form["preferredImageRegistries"],
+		BootstrapPassword:        r.FormValue("bootstrapPassword"),
+		WebhookImage:             r.FormValue("webhookImage"),
+		PreloadImages:            parseHTMLBool(r.FormValue("preloadImages")),
+		ServerCount:              parseHTMLInt(r.FormValue("serverCount")),
+		GPUWorkerEnabled:         parseHTMLBool(r.FormValue("gpuWorkerEnabled")),
+		GPUWorkerProfile:         r.FormValue("gpuWorkerProfile"),
+		GPUWorkerAMI:             r.FormValue("gpuWorkerAmi"),
+		GPUWorkerSubnetID:        r.FormValue("gpuWorkerSubnetId"),
+		HostedRDSPassword:        r.FormValue("hostedRDSPassword"),
+		HostedEC2InstanceType:    r.FormValue("hostedEC2InstanceType"),
+		LinodeDockerHub:          r.FormValue("linodeDockerHub"),
+		LinodeCustomImage:        r.FormValue("linodeCustomImage"),
+		LinodeSSHRootPassword:    r.FormValue("linodeSSHRootPassword"),
+		UserFirstName:            r.FormValue("userFirstName"),
+		UserLastName:             r.FormValue("userLastName"),
+		TFVars:                   tfVars,
+		CustomHostnameEnabled:    parseHTMLBool(r.FormValue("customHostnameEnabled")),
+		CustomHostnameInput:      r.FormValue("customHostname"),
 	}, nil
 }
 
@@ -824,17 +825,7 @@ func (s *interactiveServer) runResolution() {
 	tap.flush()
 
 	if err != nil {
-		s.mu.Lock()
-		s.resolveErr = err.Error()
-		s.phase = phaseEditor
-		s.submitted = false
-		s.mu.Unlock()
-		s.broadcast(interactiveEvent{Type: "error", Error: err.Error()})
-		s.broadcast(interactiveEvent{Type: "phase", Phase: phaseEditor})
-		select {
-		case s.resultCh <- interactiveResult{plans: nil, err: fmt.Errorf("plan resolution failed: %w", err)}:
-		default:
-		}
+		s.returnResolutionFailureToEditor(err)
 		return
 	}
 
@@ -848,6 +839,19 @@ func (s *interactiveServer) runResolution() {
 
 	s.broadcast(interactiveEvent{Type: "plan", Plan: planText})
 	s.broadcast(interactiveEvent{Type: "phase", Phase: phaseReview})
+}
+
+func (s *interactiveServer) returnResolutionFailureToEditor(err error) {
+	s.mu.Lock()
+	s.resolveErr = err.Error()
+	s.phase = phaseEditor
+	s.submitted = false
+	s.mu.Unlock()
+
+	// Resolution failures are editable. Keep standalone and embedded setup
+	// sessions alive so the user can change the registry selection and retry.
+	s.broadcast(interactiveEvent{Type: "error", Error: err.Error()})
+	s.broadcast(interactiveEvent{Type: "phase", Phase: phaseEditor})
 }
 
 func (s *interactiveServer) appendLog(line string) {
