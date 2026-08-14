@@ -264,12 +264,17 @@ you are most likely to care about:
   Auto mode accepts releases, alpha/RC/RCS versions such as
   `2.15.1-rcs-c936` and `2.16.0-rcs-0844.1`, `head`, minor-line head builds
   such as `2.13-head`, commit-specific head image tags, and exact custom server
-  images such as `docker.io/example/rancher:my-fix` or its matching
-  `rancher-agent` image. Runway derives the sibling image with the same tag, verifies both,
-  and resolves the latest released community chart as the compatibility baseline.
+  images such as `bigkevmcd/rancher:v2.16-da0ab2f1dc-head`,
+  `docker.io/example/rancher:my-fix`, or their matching `rancher-agent` images.
+  Docker Hub namespace shorthand is accepted. Runway derives the sibling image
+  with the same tag, verifies both, and uses a recognizable version in the image
+  tag to select the Rancher release line for chart and Kubernetes compatibility
+  lookup. Opaque tags fall back to the latest released community chart.
   Turn off agent-image derivation in the setup UI to provide both references.
   Custom images and RCS builds support this explicit override; per-HA values
-  are stored in `rancher.agent_images`.
+  are stored in `rancher.agent_images`. Linode Docker keeps image tags in the
+  version rows and selects an exact repository separately through its custom
+  image source (or `linode.dockerhub`).
 - `rancher.webhook_image` optionally pins a complete webhook image such as
   `stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1`. The app
   validates its anonymously readable manifest and passes the override only to

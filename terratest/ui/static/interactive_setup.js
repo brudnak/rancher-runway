@@ -41,6 +41,7 @@ const hostedTenantMinInstances = 2
 const hostedTenantMaxInstances = 4
 const linodeDockerMaxInstances = 6
 const deploymentVersionSets = new Map([[deploymentType, versions.slice()]])
+const deploymentAgentImageSets = new Map([[deploymentType, agentImages.slice()]])
 const advancedDetailsOpenByDeployment = new Map([
   ['ha-rke2', false],
   ['hosted-tenant-k3s', false],
@@ -90,6 +91,8 @@ const autoModePanelEl = byId('autoModePanel')
 const manualModePanelEl = byId('manualModePanel')
 const modeSummaryEl = byId('modeSummary')
 const modeValueEl = byId('modeValue')
+const autoVersionsTitleEl = byId('autoVersionsTitle')
+const autoVersionsHelpEl = byId('autoVersionsHelp')
 const rowsEl = byId('rows')
 const manualRowsEl = byId('manualRows')
 const manualAddBtnEl = byId('manualAddBtn')
@@ -647,6 +650,7 @@ const maximumAutoRows = () => isHostedTenantDeployment()
 
 const saveDeploymentVersions = () => {
   deploymentVersionSets.set(deploymentType, versions.slice())
+  deploymentAgentImageSets.set(deploymentType, agentImages.slice())
 }
 
 const saveAdvancedDetailsState = () => {
@@ -680,6 +684,7 @@ const switchDeploymentType = nextDeploymentType => {
   saveAdvancedDetailsState()
   deploymentType = nextDeploymentType
   versions = (deploymentVersionSets.get(nextDeploymentType) || seedVersionsForDeployment(nextDeploymentType)).slice()
+  agentImages = (deploymentAgentImageSets.get(nextDeploymentType) || []).slice()
   clearValidationError()
   renderDeploymentType()
   renderCustomHostname()
@@ -993,6 +998,14 @@ const renderDeploymentType = () => {
   haRke2DeploymentBtnEl?.setAttribute('aria-pressed', !hosted && !linode ? 'true' : 'false')
   hostedTenantDeploymentBtnEl?.setAttribute('aria-pressed', hosted ? 'true' : 'false')
   linodeDockerDeploymentBtnEl?.setAttribute('aria-pressed', linode ? 'true' : 'false')
+  if (autoVersionsTitleEl) {
+    autoVersionsTitleEl.textContent = linode ? 'Rancher versions or image tags' : 'Rancher versions or exact images'
+  }
+  if (autoVersionsHelpEl) {
+    autoVersionsHelpEl.textContent = linode
+      ? 'Enter a Rancher version or image tag in each row. To use an exact Docker Hub namespace or custom registry, select Custom image source in the Linode settings below; do not paste a full image reference here.'
+      : 'Examples: 2.14-head, head, or bigkevmcd/rancher:v2.16-da0ab2f1dc-head. Docker Hub shorthand is accepted. For a custom image, its matching server or agent image is derived automatically, and a version-like tag selects the Rancher line used for Kubernetes compatibility lookup. A leading v on a version selector is stripped when saved; exact image tags are preserved.'
+  }
   hostedTenantPanelEl?.classList.toggle('hidden', !hosted)
   linodeDockerPanelEl?.classList.toggle('hidden', !linode)
   customHostnameBoxEl?.classList.toggle('hidden', hosted || linode)
@@ -1104,15 +1117,21 @@ const renderRows = () => {
 		const label = autoRowLabel(index)
 		const agentImage = String(agentImages[index] || '')
 		const derivesAgent = !agentImage.trim()
+		const versionPlaceholder = isLinodeDockerDeployment()
+			? '2.16-da0ab2f1dc-head'
+			: '2.15.1-rcs-c936 or bigkevmcd/rancher:v2.16-da0ab2f1dc-head'
+		const agentControls = isLinodeDockerDeployment() ? '' : [
+			`<label class="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-400"><input type="checkbox" data-agent-derive-index="${index}"${derivesAgent ? ' checked' : ''} /> Derive matching rancher-agent image</label>`,
+			`<input type="hidden" name="agentImages" value="${escapeHtml(agentImage)}" data-agent-hidden-index="${index}" />`,
+			`<input class="${inputClass}${derivesAgent ? ' hidden' : ''}" type="text" value="${escapeHtml(agentImage)}" data-agent-index="${index}" placeholder="docker.io/user/rancher-agent:tag" />`
+		].join('')
 
 		return [
 			`<div class="${rowClass}">`,
 			`<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
 			'<div class="grid gap-2">',
-			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="2.15.1-rcs-c936 or docker.io/user/rancher:tag" />`,
-			`<label class="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-400"><input type="checkbox" data-agent-derive-index="${index}"${derivesAgent ? ' checked' : ''} /> Derive matching rancher-agent image</label>`,
-			`<input type="hidden" name="agentImages" value="${escapeHtml(agentImage)}" data-agent-hidden-index="${index}" />`,
-			`<input class="${inputClass}${derivesAgent ? ' hidden' : ''}" type="text" value="${escapeHtml(agentImage)}" data-agent-index="${index}" placeholder="docker.io/user/rancher-agent:tag" />`,
+			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="${versionPlaceholder}" />`,
+			agentControls,
 			'</div>',
 			`<div><button class="${removeButtonClass}" type="button" data-remove-index="${index}"${removeDisabled}>Remove</button></div>`,
       '</div>'
@@ -1135,7 +1154,7 @@ const renderRows = () => {
           ? 'Custom Rancher URL is limited to one HA.'
           : ''
 
-	rowsEl.querySelectorAll('input[data-index]').forEach(input => {
+  rowsEl.querySelectorAll('input[data-index]').forEach(input => {
     input.addEventListener('input', event => {
       versions[Number(event.target.getAttribute('data-index'))] = event.target.value
       saveDeploymentVersions()
@@ -1144,25 +1163,27 @@ const renderRows = () => {
       linodeImageSearchTag = ''
       renderLinodeImageSearch()
       clearValidationError()
-	})
+	  })
+  })
 
-	rowsEl.querySelectorAll('input[data-agent-derive-index]').forEach(toggle => {
-		toggle.addEventListener('change', event => {
-			const index = Number(event.target.getAttribute('data-agent-derive-index'))
-			agentImages[index] = event.target.checked ? '' : deriveAgentImage(versions[index])
-			renderRows()
-		})
-	})
+  rowsEl.querySelectorAll('input[data-agent-derive-index]').forEach(toggle => {
+	  toggle.addEventListener('change', event => {
+		  const index = Number(event.target.getAttribute('data-agent-derive-index'))
+		  agentImages[index] = event.target.checked ? '' : deriveAgentImage(versions[index])
+		  saveDeploymentVersions()
+		  renderRows()
+	  })
+  })
 
-	rowsEl.querySelectorAll('input[data-agent-index]').forEach(input => {
-		input.addEventListener('input', event => {
-			const index = Number(event.target.getAttribute('data-agent-index'))
-			agentImages[index] = event.target.value
-			const hidden = rowsEl.querySelector(`input[data-agent-hidden-index="${index}"]`)
-			if (hidden) hidden.value = event.target.value
-			clearValidationError()
-		})
-	})
+  rowsEl.querySelectorAll('input[data-agent-index]').forEach(input => {
+	  input.addEventListener('input', event => {
+		  const index = Number(event.target.getAttribute('data-agent-index'))
+		  agentImages[index] = event.target.value
+		  saveDeploymentVersions()
+		  const hidden = rowsEl.querySelector(`input[data-agent-hidden-index="${index}"]`)
+		  if (hidden) hidden.value = event.target.value
+		  clearValidationError()
+	  })
   })
 
   rowsEl.querySelectorAll('button[data-remove-index]').forEach(button => {
@@ -1711,7 +1732,15 @@ const renderCustomHostname = () => {
   renderMode()
 }
 
-const normalizeVersion = value => String(value || '').trim().replace(/^[vV]/, '')
+const normalizeVersion = value => {
+  const normalized = String(value || '').trim()
+  return normalized.includes('/') ? normalized : normalized.replace(/^[vV]/, '')
+}
+const looksLikeExactImageReference = value => {
+  const normalized = String(value || '').trim()
+  const lastSlash = normalized.lastIndexOf('/')
+  return lastSlash >= 0 && (normalized.lastIndexOf(':') > lastSlash || normalized.lastIndexOf('@') > lastSlash)
+}
 const rcsRancherVersionPattern = /^\d+\.\d+\.\d+-rcs-[0-9A-Za-z]+(?:\.\d+)?$/
 
 const normalizedVersions = () => versions.map(version => normalizeVersion(version))
@@ -1983,6 +2012,13 @@ const validateSetup = () => {
   if (isLinodeDockerDeployment()) {
     if (setupMode !== 'auto') {
       return { message: 'Linode Docker setup currently supports auto mode only.', target: autoModeBtnEl }
+    }
+    const exactImageIndex = trimmed.findIndex(looksLikeExactImageReference)
+    if (exactImageIndex >= 0) {
+      return {
+        message: 'Use a version or image tag in each Linode row, then select the exact repository under Custom image source below.',
+        target: rowsEl.querySelector(`input[data-index="${exactImageIndex}"]`)
+      }
     }
     if (linodeDockerHubSelectEl?.value === 'custom' && !String(linodeCustomImageInputEl?.value || '').trim()) {
       return { message: 'Custom image source is selected, but no image path is set.', target: linodeCustomImageInputEl }

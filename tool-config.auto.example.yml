@@ -3,6 +3,10 @@ rancher:
   versions:
     - "2.13-head"
     - "2.13.4"
+    # Exact Docker Hub images are also accepted, for example:
+    # - "bigkevmcd/rancher:v2.16-da0ab2f1dc-head"
+  # Optional agent_images entries must align with custom-image or RCS rows.
+  # Omit them to derive the matching sibling image automatically.
   distro: auto
   # Optional strict selection; fixed priority is staging, Prime, SUSE registry, then Docker Hub.
   # A source is eligible only when both rancher/rancher and rancher/rancher-agent have the exact tag.

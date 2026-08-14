@@ -111,6 +111,163 @@ func TestClassifyRancherCustomImageAsHead(t *testing.T) {
 	}
 }
 
+func TestDockerHubShorthandCustomImageRetainsCompatibilityLine(t *testing.T) {
+	image := "bigkevmcd/rancher:v2.16-da0ab2f1dc-head"
+	buildType, minorLine, err := classifyRancherVersionOrImage(image)
+	if err != nil {
+		t.Fatalf("classifyRancherVersionOrImage returned error: %v", err)
+	}
+	if buildType != "head" || minorLine != "2.16" {
+		t.Fatalf("expected 2.16 head classification, got buildType=%q minorLine=%q", buildType, minorLine)
+	}
+
+	request, ok, err := parseCustomRancherImageRequest(image)
+	if err != nil {
+		t.Fatalf("parseCustomRancherImageRequest returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected a custom image request")
+	}
+	if request.serverRepository != "docker.io/bigkevmcd/rancher" {
+		t.Fatalf("unexpected server repository %q", request.serverRepository)
+	}
+	if request.tag != "v2.16-da0ab2f1dc-head" {
+		t.Fatalf("unexpected image tag %q", request.tag)
+	}
+	if request.agentImage != "docker.io/bigkevmcd/rancher-agent:v2.16-da0ab2f1dc-head" {
+		t.Fatalf("unexpected agent image %q", request.agentImage)
+	}
+	if hint := rancherVersionHintFromImageTag(request.tag); hint != "2.16-da0ab2f1dc-head" {
+		t.Fatalf("unexpected compatibility version hint %q", hint)
+	}
+}
+
+func TestCustomImageVersionHintUsesMinorPrefixForOpaqueBuildTag(t *testing.T) {
+	if hint := rancherVersionHintFromImageTag("v2.16-my-local-fix"); hint != "2.16-head" {
+		t.Fatalf("expected 2.16 compatibility hint, got %q", hint)
+	}
+	if hint := rancherVersionHintFromImageTag("my-local-fix"); hint != "" {
+		t.Fatalf("expected an opaque tag to use the generic head fallback, got %q", hint)
+	}
+}
+
+func TestReleaseLookingCustomImageRemainsAnImageOverride(t *testing.T) {
+	const image = "example/rancher:v2.16.0"
+	buildType, minorLine, err := classifyRancherVersionOrImage(image)
+	if err != nil {
+		t.Fatalf("classifyRancherVersionOrImage returned error: %v", err)
+	}
+	if buildType != "head" || minorLine != "2.16" {
+		t.Fatalf("expected custom image override with 2.16 compatibility, got buildType=%q minorLine=%q", buildType, minorLine)
+	}
+	if hint := rancherVersionHintFromImageTag("v2.16.0"); hint != "2.16.0" {
+		t.Fatalf("expected exact release compatibility hint, got %q", hint)
+	}
+}
+
+func TestParseRegistryImageUsesDockerHubForNamespaceShorthand(t *testing.T) {
+	tests := []struct {
+		name           string
+		image          string
+		wantRegistry   string
+		wantRepository string
+	}{
+		{
+			name:           "Docker Hub namespace",
+			image:          "bigkevmcd/rancher:v2.16-da0ab2f1dc-head",
+			wantRegistry:   "docker.io",
+			wantRepository: "bigkevmcd/rancher",
+		},
+		{
+			name:           "explicit registry",
+			image:          "registry.example.com/team/rancher:v2.16-head",
+			wantRegistry:   "registry.example.com",
+			wantRepository: "team/rancher",
+		},
+		{
+			name:           "registry with port",
+			image:          "localhost:5000/team/rancher:v2.16-head",
+			wantRegistry:   "localhost:5000",
+			wantRepository: "team/rancher",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry, repository, tag, err := parseRegistryImage(tt.image)
+			if err != nil {
+				t.Fatalf("parseRegistryImage returned error: %v", err)
+			}
+			if registry != tt.wantRegistry || repository != tt.wantRepository || tag == "" {
+				t.Fatalf("parseRegistryImage(%q) = registry %q, repository %q, tag %q", tt.image, registry, repository, tag)
+			}
+		})
+	}
+}
+
+func TestNormalizeCustomAgentImageCanonicalizesDockerHubShorthand(t *testing.T) {
+	image, err := normalizeCustomAgentImage("bigkevmcd/rancher-agent:v2.16-da0ab2f1dc-head")
+	if err != nil {
+		t.Fatalf("normalizeCustomAgentImage returned error: %v", err)
+	}
+	if image != "docker.io/bigkevmcd/rancher-agent:v2.16-da0ab2f1dc-head" {
+		t.Fatalf("unexpected canonical agent image %q", image)
+	}
+}
+
+func TestBuildAutoHelmCommandUsesExactDockerHubImagePair(t *testing.T) {
+	command := buildAutoHelmCommand(
+		rancherHelmOperationInstall,
+		"rancher-latest",
+		"2.16.1",
+		"admin",
+		"docker.io/bigkevmcd/rancher",
+		"v2.16-da0ab2f1dc-head",
+		"docker.io/bigkevmcd/rancher-agent:v2.16-da0ab2f1dc-head",
+		true,
+	)
+	for _, want := range []string{
+		"--set image.registry=docker.io",
+		"--set image.repository=bigkevmcd/rancher",
+		"--set image.tag=v2.16-da0ab2f1dc-head",
+		"--set 'extraEnv[0].value=docker.io/bigkevmcd/rancher-agent:v2.16-da0ab2f1dc-head'",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("expected exact-image Helm command to contain %q, got:\n%s", want, command)
+		}
+	}
+}
+
+func TestValidateResolvedRancherImagesUsesDockerHubNamespacePaths(t *testing.T) {
+	const tag = "v2.16-da0ab2f1dc-head"
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	previousBases := rancherRegistryBaseURLs
+	rancherRegistryBaseURLs = map[string]string{"docker.io": server.URL}
+	t.Cleanup(func() { rancherRegistryBaseURLs = previousBases })
+
+	err := validateResolvedRancherImages(
+		"docker.io/bigkevmcd/rancher",
+		tag,
+		"docker.io/bigkevmcd/rancher-agent:"+tag,
+	)
+	if err != nil {
+		t.Fatalf("validateResolvedRancherImages returned error: %v", err)
+	}
+	want := []string{
+		"/v2/bigkevmcd/rancher/manifests/" + tag,
+		"/v2/bigkevmcd/rancher-agent/manifests/" + tag,
+	}
+	if !slices.Equal(requests, want) {
+		t.Fatalf("unexpected registry requests: got %#v, want %#v", requests, want)
+	}
+}
+
 func TestCustomRancherImageRequiresRancherRepository(t *testing.T) {
 	_, ok, err := parseCustomRancherImageRequest("docker.io/tomleb/not-rancher:test")
 	if !ok || err == nil {

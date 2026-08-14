@@ -33,6 +33,7 @@ const (
 var rancherRegistryHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout}
 var rancherRegistryBaseURLs = map[string]string{}
 var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)-[0-9a-fA-F]{7,40}-head$`)
+var customImageMinorLinePattern = regexp.MustCompile(`(?i)^v?(\d+\.\d+)(?:[._-]|$)`)
 
 // RCS build IDs are alphanumeric and may use compact or dotted forms, for example
 // 2.15.1-rcs-c936, 2.16.0-rcs-0844.1, and 2.15.0-rcs-e20f.1.
@@ -216,7 +217,10 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		}
 		chartRequest := requestedVersion
 		if isCustomImage {
-			chartRequest = "head"
+			chartRequest = rancherVersionHintFromImageTag(customImage.tag)
+			if chartRequest == "" {
+				chartRequest = "head"
+			}
 		}
 		chartRepoAlias, chartVersion, compatibilityBaseline, err := resolveChartAndBaseline(repoCandidates, chartRequest, minorLine, buildType)
 		if err != nil {
@@ -243,10 +247,11 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			if !allowsExplicitAgentImageOverride(requestedVersion, isCustomImage) {
 				return nil, fmt.Errorf("rancher.agent_images[%d] requires a custom Rancher server or agent image, or an RCS build, in rancher.versions[%d]", planIndex, planIndex)
 			}
-			if err := validateCustomAgentImage(explicitAgentImage); err != nil {
+			canonicalAgentImage, err := normalizeCustomAgentImage(explicitAgentImage)
+			if err != nil {
 				return nil, fmt.Errorf("rancher.agent_images[%d]: %w", planIndex, err)
 			}
-			agentImage = explicitAgentImage
+			agentImage = canonicalAgentImage
 			if isCustomImage {
 				imageExplanation = []string{fmt.Sprintf("Using exact custom Rancher image %s and explicitly supplied agent image %s", rancherImage+":"+rancherImageTag, agentImage)}
 			} else {
@@ -299,7 +304,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		if rancherLatestTagOnly {
 			explanation = append(explanation, fmt.Sprintf("Using rancher-latest for this %s build, so only the Rancher image tag is overridden to %s", buildType, rancherImageTag))
 		}
-		if preferredImageResolution == nil && buildType == "release" && chartRepoAlias == "rancher-prime" {
+		if preferredImageResolution == nil && buildType == "release" && chartRepoAlias == "rancher-prime" && !isCustomImage {
 			rancherImage = "registry.rancher.com/rancher/rancher"
 			explanation = append(explanation, fmt.Sprintf("Using Prime chart and Prime Rancher image for released version %s", requestedVersion))
 		}
@@ -430,15 +435,20 @@ func getRequestedAgentImageOverrides(totalHAs int) ([]string, error) {
 	return overrides, nil
 }
 
-func validateCustomAgentImage(image string) error {
-	_, repository, _, err := parseRegistryImage(image)
+func normalizeCustomAgentImage(image string) (string, error) {
+	registry, repository, tag, err := parseRegistryImage(image)
 	if err != nil {
-		return fmt.Errorf("invalid custom Rancher agent image %q: %w", image, err)
+		return "", fmt.Errorf("invalid custom Rancher agent image %q: %w", image, err)
 	}
 	if pathBase := repository[strings.LastIndex(repository, "/")+1:]; pathBase != "rancher-agent" {
-		return fmt.Errorf("custom Rancher agent image repository must end in /rancher-agent, got %q", image)
+		return "", fmt.Errorf("custom Rancher agent image repository must end in /rancher-agent, got %q", image)
 	}
-	return nil
+	return registry + "/" + repository + ":" + tag, nil
+}
+
+func validateCustomAgentImage(image string) error {
+	_, err := normalizeCustomAgentImage(image)
+	return err
 }
 
 func allowsExplicitAgentImageOverride(requestedVersion string, isCustomImage bool) bool {
@@ -534,6 +544,9 @@ func rke2ChecksumForVersion(version string) (string, error) {
 
 func normalizeVersionInput(value string) string {
 	value = strings.TrimSpace(value)
+	if strings.Contains(value, "/") {
+		return value
+	}
 	value = strings.TrimPrefix(value, "v")
 	value = strings.TrimPrefix(value, "V")
 	return value
@@ -589,13 +602,39 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 }
 
 func classifyRancherVersionOrImage(value string) (buildType string, minorLine string, err error) {
-	if _, ok, imageErr := parseCustomRancherImageRequest(value); ok || imageErr != nil {
+	if image, ok, imageErr := parseCustomRancherImageRequest(value); ok || imageErr != nil {
 		if imageErr != nil {
 			return "", "", imageErr
+		}
+		if versionHint := rancherVersionHintFromImageTag(image.tag); versionHint != "" {
+			_, minorLine, err := classifyRancherVersion(versionHint)
+			if err != nil {
+				return "", "", err
+			}
+			// A custom reference remains an image override even when its tag looks
+			// like a release. The hint selects compatibility; it must not make the
+			// resolver replace or require an exact released image/chart path.
+			return "head", minorLine, nil
 		}
 		return "head", "", nil
 	}
 	return classifyRancherVersion(value)
+}
+
+func rancherVersionHintFromImageTag(tag string) string {
+	tag = normalizeVersionInput(tag)
+	if _, _, err := classifyRancherVersion(tag); err == nil {
+		return tag
+	}
+
+	// Local image tags often add a free-form suffix to a Rancher minor line.
+	// Retain that line for chart and support-matrix lookup while continuing to
+	// treat an otherwise opaque custom tag as generic head.
+	matches := customImageMinorLinePattern.FindStringSubmatch(tag)
+	if len(matches) == 2 {
+		return matches[1] + "-head"
+	}
+	return ""
 }
 
 func parseCustomRancherImageRequest(value string) (customRancherImageRequest, bool, error) {
@@ -1286,22 +1325,21 @@ func setRegistryManifestAcceptHeader(req *http.Request) {
 }
 
 func parseRegistryImage(image string) (registry, repository, tag string, err error) {
-	image = strings.TrimSpace(image)
-	tagStart := strings.LastIndex(image, ":")
-	if tagStart < 0 || tagStart == len(image)-1 {
-		return "", "", "", fmt.Errorf("image must include a tag: %s", image)
+	trimmed := strings.TrimSpace(image)
+	lastSlash := strings.LastIndex(trimmed, "/")
+	if strings.LastIndex(trimmed, ":") <= lastSlash && strings.LastIndex(trimmed, "@") <= lastSlash {
+		return "", "", "", fmt.Errorf("image must include a tag: %s", trimmed)
 	}
-	slash := strings.Index(image, "/")
-	if slash < 0 || slash > tagStart {
-		return "", "", "", fmt.Errorf("image must include a registry and repository: %s", image)
+	// Use the same OCI reference normalization as Image Lookup so namespace-only
+	// Docker Hub references do not get mistaken for registry hostnames.
+	parsed, parseErr := newImageLookupService().parseReference(image, true)
+	if parseErr != nil {
+		return "", "", "", parseErr
 	}
-	registry = image[:slash]
-	repository = image[slash+1 : tagStart]
-	tag = image[tagStart+1:]
-	if registry == "" || repository == "" || tag == "" {
-		return "", "", "", fmt.Errorf("invalid image reference: %s", image)
+	if parsed.tag == "" {
+		return "", "", "", fmt.Errorf("image must include a tag: %s", trimmed)
 	}
-	return registry, repository, tag, nil
+	return parsed.registry, parsed.repository, parsed.tag, nil
 }
 
 func registryBaseURL(registry string) string {

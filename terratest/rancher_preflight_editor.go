@@ -356,11 +356,11 @@ func editAutoModePreflightWithBrowser(configPath string, versions []string) erro
       <div class="panel">
         <div class="row-header">
           <div>HA</div>
-          <div>Rancher Version</div>
+          <div>Rancher Version or Exact Image</div>
           <div>Remove</div>
         </div>
         <div class="rows" id="rows"></div>
-        <div class="field-help">Examples: 2.14-head, 2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head, or head. Leading v is stripped when saved.</div>
+        <div class="field-help">Examples: 2.14-head, head, or bigkevmcd/rancher:v2.16-da0ab2f1dc-head. Docker Hub shorthand is accepted, and a version-like image tag selects the Rancher line used for Kubernetes compatibility lookup. A leading v on a version selector is stripped when saved; exact image tags are preserved.</div>
         <div class="custom-hostname" id="customHostnameBox" data-enabled="false">
           <label class="checkbox-row">
             <input id="customHostnameToggle" type="checkbox" />
@@ -444,7 +444,7 @@ func editAutoModePreflightWithBrowser(configPath string, versions []string) erro
         return (
           '<div class="row">' +
             '<div class="ha-label">HA ' + (index + 1) + '</div>' +
-            '<div><input type="text" value="' + escapeHtml(version) + '" data-index="' + index + '" placeholder="2.15.1-rcs-c936 or docker.io/user/rancher:tag" /></div>' +
+            '<div><input type="text" value="' + escapeHtml(version) + '" data-index="' + index + '" placeholder="2.15.1-rcs-c936 or bigkevmcd/rancher:v2.16-da0ab2f1dc-head" /></div>' +
             '<div><button class="secondary remove" type="button" data-remove-index="' + index + '"' + removeDisabled + '>Remove</button></div>' +
           '</div>'
         );
@@ -483,7 +483,8 @@ func editAutoModePreflightWithBrowser(configPath string, versions []string) erro
     }
 
     function normalizeVersion(value) {
-      return String(value || '').trim().replace(/^[vV]/, '');
+      const normalized = String(value || '').trim();
+      return normalized.includes('/') ? normalized : normalized.replace(/^[vV]/, '');
     }
 
     function normalizedVersions() {
@@ -766,10 +767,15 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	case "auto":
 		normalizedVersions, err = normalizePreflightVersions(update.Versions)
 		if err == nil {
-			if update.AgentImages == nil {
+			if linodeDocker {
+				err = validateLinodeDockerVersionInputs(normalizedVersions)
+				update.AgentImages = make([]string, len(normalizedVersions))
+			} else if update.AgentImages == nil {
 				update.AgentImages = currentAgentImageOverrides(normalizedVersions)
 			}
-			update.AgentImages, err = normalizePreflightAgentImages(update.AgentImages, len(normalizedVersions))
+			if err == nil {
+				update.AgentImages, err = normalizePreflightAgentImages(update.AgentImages, len(normalizedVersions))
+			}
 		}
 	case "manual":
 		normalizedHelmCommands, normalizedK8SVersions, installerSHA256s, err = normalizeManualPreflight(update)
@@ -1008,6 +1014,12 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	switch mode {
 	case "auto":
 		viper.Set("rancher.versions", normalizedVersions)
+		viper.Set("rancher.agent_image", "")
+		if hasNonEmptyString(update.AgentImages) {
+			viper.Set("rancher.agent_images", update.AgentImages)
+		} else {
+			viper.Set("rancher.agent_images", []string{})
+		}
 		viper.Set("rancher.helm_commands", []string{})
 		viper.Set("total_has", len(normalizedVersions))
 		if hostedTenant {
@@ -1017,6 +1029,8 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		}
 	case "manual":
 		viper.Set("rancher.versions", []string{})
+		viper.Set("rancher.agent_image", "")
+		viper.Set("rancher.agent_images", []string{})
 		viper.Set("rancher.helm_commands", normalizedHelmCommands)
 		viper.Set("k8s.versions", normalizedK8SVersions)
 		viper.Set("k8s.version", "")

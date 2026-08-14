@@ -97,6 +97,134 @@ tf_vars:
 	}
 }
 
+func TestUpdateAutoModeConfigFilePreservesExactDockerHubImage(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	const image = "bigkevmcd/rancher:v2.16-da0ab2f1dc-head"
+	configPath := filepath.Join(t.TempDir(), "tool-config.yml")
+	initialConfig := `rancher:
+  mode: auto
+  version: "2.15-head"
+  bootstrap_password: "admin"
+total_has: 1
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	if err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		Versions: []string{image},
+	}); err != nil {
+		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read updated config: %v", err)
+	}
+	var parsed struct {
+		Rancher struct {
+			Versions []string `yaml:"versions"`
+		} `yaml:"rancher"`
+	}
+	if err := yaml.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("failed to parse updated config: %v", err)
+	}
+	if len(parsed.Rancher.Versions) != 1 || parsed.Rancher.Versions[0] != image {
+		t.Fatalf("expected exact image in saved rancher.versions, got %#v", parsed.Rancher.Versions)
+	}
+	if got := viper.GetStringSlice("rancher.versions"); len(got) != 1 || got[0] != image {
+		t.Fatalf("expected exact image in runtime config, got %#v", got)
+	}
+}
+
+func TestUpdateAutoModeConfigFileSynchronizesAgentImageOverrides(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	viper.Set("rancher.agent_image", "docker.io/old/rancher-agent:old")
+	viper.Set("rancher.agent_images", []string{"docker.io/old/rancher-agent:old"})
+	configPath := filepath.Join(t.TempDir(), "tool-config.yml")
+	initialConfig := `rancher:
+  mode: auto
+  versions:
+    - "docker.io/old/rancher:old"
+  agent_image: "docker.io/old/rancher-agent:old"
+  agent_images:
+    - "docker.io/old/rancher-agent:old"
+total_has: 1
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	const serverImage = "bigkevmcd/rancher:v2.16-da0ab2f1dc-head"
+	const agentImage = "bigkevmcd/rancher-agent:v2.16-da0ab2f1dc-head"
+	if err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		Versions:    []string{serverImage},
+		AgentImages: []string{agentImage},
+	}); err != nil {
+		t.Fatalf("updateAutoModeConfigFile returned error: %v", err)
+	}
+	if got := viper.GetStringSlice("rancher.agent_images"); len(got) != 1 || got[0] != agentImage {
+		t.Fatalf("expected live agent override %q, got %#v", agentImage, got)
+	}
+	if got := viper.GetString("rancher.agent_image"); got != "" {
+		t.Fatalf("expected legacy single agent override to be cleared, got %q", got)
+	}
+
+	if err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		Versions:    []string{serverImage},
+		AgentImages: []string{""},
+	}); err != nil {
+		t.Fatalf("clear derived-agent override: %v", err)
+	}
+	if got := viper.GetStringSlice("rancher.agent_images"); len(got) != 0 {
+		t.Fatalf("expected live agent overrides to be cleared, got %#v", got)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("failed to read updated config: %v", err)
+	}
+	var parsed struct {
+		Rancher map[string]interface{} `yaml:"rancher"`
+	}
+	if err := yaml.Unmarshal(content, &parsed); err != nil {
+		t.Fatalf("failed to parse updated config: %v", err)
+	}
+	if _, exists := parsed.Rancher["agent_images"]; exists {
+		t.Fatalf("expected saved agent_images override to be removed, got %#v", parsed.Rancher)
+	}
+	if _, exists := parsed.Rancher["agent_image"]; exists {
+		t.Fatalf("expected saved legacy agent_image override to be removed, got %#v", parsed.Rancher)
+	}
+}
+
+func TestUpdateAutoModeConfigFileRejectsExactImageInLinodeVersionRows(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	configPath := filepath.Join(t.TempDir(), "tool-config.yml")
+	initialConfig := `deployment:
+  type: linode-docker-cattle
+rancher:
+  mode: auto
+  versions:
+    - "2.16-head"
+total_has: 1
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o600); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		DeploymentType: deploymentTypeLinodeDocker,
+		Versions:       []string{"bigkevmcd/rancher:v2.16-da0ab2f1dc-head"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "Linode custom image source") {
+		t.Fatalf("expected Linode exact-image guidance, got %v", err)
+	}
+}
+
 func TestUpdateAutoModeConfigFileWritesCustomHostnameAndNormalizesVersion(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
@@ -631,6 +759,24 @@ func TestNormalizePreflightVersionsAcceptsLeadingV(t *testing.T) {
 	}
 	if versions[0] != "2.14-head" || versions[1] != "2.13.5" {
 		t.Fatalf("expected leading v to be stripped, got %#v", versions)
+	}
+}
+
+func TestNormalizePreflightVersionsPreservesExactImage(t *testing.T) {
+	const image = "bigkevmcd/rancher:v2.16-da0ab2f1dc-head"
+	versions, err := normalizePreflightVersions([]string{image})
+	if err != nil {
+		t.Fatalf("normalizePreflightVersions returned error: %v", err)
+	}
+	if len(versions) != 1 || versions[0] != image {
+		t.Fatalf("expected exact image to be preserved, got %#v", versions)
+	}
+}
+
+func TestNormalizeVersionInputDoesNotStripDockerNamespace(t *testing.T) {
+	const image = "vteam/rancher:v2.16-head"
+	if got := normalizeVersionInput(image); got != image {
+		t.Fatalf("normalizeVersionInput(%q) = %q", image, got)
 	}
 }
 

@@ -59,8 +59,21 @@ func validateLinodeDockerConfig(totalInstances int) error {
 	if err := validateLinodeRootPassword(linodeRootPassword()); err != nil {
 		return err
 	}
-	if len(linodeRancherVersions(totalInstances)) != totalInstances {
+	versions := linodeRancherVersions(totalInstances)
+	if len(versions) != totalInstances {
 		return fmt.Errorf("rancher.versions must contain %d version(s)", totalInstances)
+	}
+	if err := validateLinodeDockerVersionInputs(versions); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateLinodeDockerVersionInputs(versions []string) error {
+	for i, version := range versions {
+		if imageLookupLooksLikeReference(version) {
+			return fmt.Errorf("rancher.versions[%d] must be a version or tag for Linode Docker, not a full image reference; select the exact repository with linode.dockerhub or the setup UI's Linode custom image source", i)
+		}
 	}
 	return nil
 }

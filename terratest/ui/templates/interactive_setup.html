@@ -179,12 +179,12 @@
 
               <div id="autoModePanel">
               <div class="mb-3 flex items-center justify-between gap-3">
-                <h2 class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">Rancher versions</h2>
+                <h2 id="autoVersionsTitle" class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">Rancher versions or exact images</h2>
                 <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="addBtn" type="button">Add HA</button>
               </div>
               <div class="grid gap-2" id="rows"></div>
-              <div class="mx-2 mt-3 text-sm font-normal text-zinc-500 dark:text-zinc-400">
-                Examples: 2.14-head, head, docker.io/user/rancher:my-fix, or docker.io/user/rancher-agent:my-fix. For a custom image, its matching server or agent image is derived automatically. Leading v is stripped when saved.
+              <div id="autoVersionsHelp" class="mx-2 mt-3 text-sm font-normal text-zinc-500 dark:text-zinc-400">
+                Examples: 2.14-head, head, or bigkevmcd/rancher:v2.16-da0ab2f1dc-head. Docker Hub shorthand is accepted. For a custom image, its matching server or agent image is derived automatically, and a version-like tag selects the Rancher line used for Kubernetes compatibility lookup. A leading v on a version selector is stripped when saved; exact image tags are preserved.
               </div>
               </div>
 

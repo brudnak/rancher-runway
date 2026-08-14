@@ -44,6 +44,16 @@ func TestNormalizeDockerRancherTagAddsLeadingVExceptPlainHead(t *testing.T) {
 	}
 }
 
+func TestValidateLinodeDockerVersionInputsRejectsFullImageReference(t *testing.T) {
+	if err := validateLinodeDockerVersionInputs([]string{"2.16-da0ab2f1dc-head"}); err != nil {
+		t.Fatalf("expected a Linode image tag to be accepted, got %v", err)
+	}
+	err := validateLinodeDockerVersionInputs([]string{"bigkevmcd/rancher:v2.16-da0ab2f1dc-head"})
+	if err == nil || !strings.Contains(err.Error(), "linode.dockerhub") {
+		t.Fatalf("expected exact-repository guidance, got %v", err)
+	}
+}
+
 func TestResolveLinodeDockerImageSourceAutoFindsFirstRegistryWithAllTags(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
