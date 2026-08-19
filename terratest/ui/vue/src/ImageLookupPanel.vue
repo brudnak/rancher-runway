@@ -623,6 +623,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { writeTextToClipboard } from "./clipboard.js";
 import { apiFetch } from "./store.js";
 
 const registryOptions = [
@@ -1328,7 +1329,7 @@ const copyText = async (value, successMessage) => {
   value = String(value || "");
   if (!value) return;
   try {
-    await navigator.clipboard.writeText(value);
+    await writeTextToClipboard(value);
     copyNotice.value = successMessage;
   } catch (_) {
     copyNotice.value = "Clipboard access is unavailable.";

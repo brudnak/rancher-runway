@@ -1,4 +1,5 @@
 import { ref, reactive, computed, watch } from "vue";
+import { writeTextToClipboard } from "./clipboard.js";
 import {
   escapeHtml,
   highlightLogLine,
@@ -882,17 +883,13 @@ export const downloadLogs = () => {
 
 // Clipboard copy helpers
 export const copyTextToClipboard = async (text, successMessage) => {
-  if (!navigator.clipboard) {
-    refreshStatus.value = "Clipboard access is unavailable in this browser.";
-    return false;
-  }
   const value = String(text || "").trim();
   if (!value) {
     refreshStatus.value = "No value is available to copy yet.";
     return false;
   }
   try {
-    await navigator.clipboard.writeText(value);
+    await writeTextToClipboard(value);
     refreshStatus.value = successMessage;
     return true;
   } catch (error) {
@@ -977,7 +974,7 @@ export const copyKubeconfig = async clusterId => {
 
   try {
     const response = await apiFetch(`/api/kubeconfig?cluster=${encodeURIComponent(clusterId)}`, { headers: { Accept: "application/x-yaml" } });
-    await navigator.clipboard.writeText(await response.text());
+    await writeTextToClipboard(await response.text());
     refreshStatus.value = "Copied kubeconfig to clipboard.";
   } catch (error) {
     refreshStatus.value = error instanceof Error ? error.message : "Failed to copy kubeconfig.";
@@ -999,7 +996,7 @@ export const copyHelmInstallCommand = async (clusterId, mode = "install") => {
 
   try {
     const response = await apiFetch(`/api/helm-command?cluster=${encodeURIComponent(clusterId)}${upgradeMode ? "&mode=upgrade" : ""}`);
-    await navigator.clipboard.writeText(await response.text());
+    await writeTextToClipboard(await response.text());
     refreshStatus.value = upgradeMode ? "Copied prepared Helm upgrade command to clipboard." : "Copied Helm install command to clipboard.";
     if (upgradeMode) {
       upgradeCommandModalOpen.value = true;

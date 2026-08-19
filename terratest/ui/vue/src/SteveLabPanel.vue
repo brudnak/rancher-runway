@@ -830,6 +830,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { writeTextToClipboard } from "./clipboard.js";
 import { streamSteveLogs } from "./store.js";
 
 const setupData = JSON.parse(document.getElementById("control-panel-data")?.textContent || "{}");
@@ -1192,7 +1193,7 @@ const copyText = async (value, message) => {
     return;
   }
   try {
-    await navigator.clipboard.writeText(value);
+    await writeTextToClipboard(value);
     setNotice(message);
     addToast(message, "success");
   } catch {

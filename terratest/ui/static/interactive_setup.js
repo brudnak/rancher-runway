@@ -252,7 +252,11 @@ const escapeHtml = value => String(value)
   .replaceAll('"', '&quot;')
 
 const copyTextToClipboard = async text => {
-  if (!navigator.clipboard) {
+  if (typeof window.runtime?.ClipboardSetText === 'function') {
+    await window.runtime.ClipboardSetText(text)
+    return
+  }
+  if (typeof navigator.clipboard?.writeText !== 'function') {
     throw new Error('Clipboard access is unavailable in this browser.')
   }
   await navigator.clipboard.writeText(text)

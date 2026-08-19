@@ -47,6 +47,84 @@ echo "Rancher installation complete!"`
 	}
 }
 
+func TestExtractHelmCommandFromInstallScriptFindsRancherAfterOtherHelmCommands(t *testing.T) {
+	script := `#!/bin/bash
+set -Eeuo pipefail
+
+qa_default_tls_diagnostics() {
+  helm history rancher --namespace cattle-system --max 10 >&2 || true
+}
+
+echo "Installing pinned cert-manager before Rancher..."
+helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
+  --namespace cert-manager \
+  --version v1.21.1
+kubectl --namespace cert-manager rollout status deployment/cert-manager
+
+echo "Installing Rancher with the chart's default self-signed TLS values..."
+helm install 'rancher' 'rancher-latest/rancher' \
+  '--namespace' \
+  'cattle-system' \
+  '--version' \
+  '2.15.0' \
+  '--set' \
+  'tls=external'
+kubectl --namespace cattle-system rollout status deployment/rancher --timeout=20m`
+
+	command, err := extractHelmCommandFromInstallScript(script)
+	if err != nil {
+		t.Fatalf("extractHelmCommandFromInstallScript returned error: %v", err)
+	}
+	if !strings.HasPrefix(command, "helm install 'rancher' 'rancher-latest/rancher'") {
+		t.Fatalf("expected quoted Rancher install command, got:\n%s", command)
+	}
+	if strings.Contains(command, "cert-manager") || strings.Contains(command, "kubectl") {
+		t.Fatalf("expected only the Rancher Helm command, got:\n%s", command)
+	}
+
+	upgradeCommand, err := prepareHelmUpgradeCommand(command)
+	if err != nil {
+		t.Fatalf("prepareHelmUpgradeCommand returned error: %v", err)
+	}
+	if !strings.HasPrefix(upgradeCommand, "helm upgrade --install 'rancher' 'rancher-latest/rancher'") {
+		t.Fatalf("expected prepared upgrade command, got:\n%s", upgradeCommand)
+	}
+}
+
+func TestExtractHelmCommandFromInstallScriptIgnoresNonRancherInstalls(t *testing.T) {
+	script := `#!/bin/bash
+helm install cert-manager oci://quay.io/jetstack/charts/cert-manager \
+  --namespace cert-manager`
+
+	if _, err := extractHelmCommandFromInstallScript(script); err == nil || !strings.Contains(err.Error(), "no Rancher Helm install command found") {
+		t.Fatalf("expected missing Rancher install error, got %v", err)
+	}
+}
+
+func TestExtractHelmCommandFromInstallScriptAcceptsUpgradeInstall(t *testing.T) {
+	script := `#!/bin/bash
+echo "Installing Rancher..."
+helm upgrade --install rancher rancher-latest/rancher \
+  --namespace cattle-system \
+  --version 2.15.0`
+
+	command, err := extractHelmCommandFromInstallScript(script)
+	if err != nil {
+		t.Fatalf("extractHelmCommandFromInstallScript returned error: %v", err)
+	}
+	if !strings.HasPrefix(command, "helm upgrade --install rancher rancher-latest/rancher") {
+		t.Fatalf("expected Rancher upgrade --install command, got:\n%s", command)
+	}
+
+	prepared, err := prepareHelmUpgradeCommand(command)
+	if err != nil {
+		t.Fatalf("prepareHelmUpgradeCommand returned error: %v", err)
+	}
+	if prepared != command {
+		t.Fatalf("expected upgrade --install preparation to be idempotent, got:\n%s", prepared)
+	}
+}
+
 func TestPrepareHelmUpgradeCommandFromInstall(t *testing.T) {
 	command := `helm install rancher rancher-latest/rancher \
   --namespace cattle-system \

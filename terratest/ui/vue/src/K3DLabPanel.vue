@@ -544,6 +544,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { writeTextToClipboard } from "./clipboard.js";
 
 const setupData = JSON.parse(document.getElementById("control-panel-data")?.textContent || "{}");
 const token = setupData.token || "";
@@ -770,7 +771,7 @@ const rowActionLabel = (cluster, action, idle, busy) => (
 const copyText = async (value, message) => {
   if (!value) return;
   try {
-    await navigator.clipboard.writeText(value);
+    await writeTextToClipboard(value);
     setNotice(message);
   } catch {
     setNotice(value, "info");

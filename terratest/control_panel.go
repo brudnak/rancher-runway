@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -919,6 +920,7 @@ func (p *localControlPanel) handleDockerLogs(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "cluster is required", http.StatusBadRequest)
 		return
 	}
+
 	cluster, err := p.clusterByID(clusterID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -1043,10 +1045,19 @@ func (p *localControlPanel) handleHelmCommandDownload(w http.ResponseWriter, r *
 		return
 	}
 
-	cluster, err := p.clusterByID(clusterID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
+	// A Helm command is stored beside the local HA kubeconfig. Resolve that
+	// cluster directly from its run record so copying the command does not wait
+	// for the live Terraform, kubectl, and downstream-cluster discovery used by
+	// the rest of the cluster panel. Fall back for non-local and legacy cases so
+	// their existing lookup and error behavior remains unchanged.
+	cluster, found := p.recordedLocalHAClusterByID(clusterID)
+	if !found {
+		var err error
+		cluster, err = p.clusterByID(clusterID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 	}
 
 	command, err := p.helmCommandForCluster(cluster)
@@ -2447,6 +2458,105 @@ func (p *localControlPanel) clusterByID(clusterID string) (clusterView, error) {
 	return clusterView{}, fmt.Errorf("cluster %s not found", clusterID)
 }
 
+// recordedLocalHAClusterByID resolves the one cluster kind whose artifact path
+// is completely described by a run record. It intentionally does not replace
+// clusterByID: downstream, hosted-tenant, and Linode clusters still require the
+// full discovery path used by their callers.
+func (p *localControlPanel) recordedLocalHAClusterByID(clusterID string) (clusterView, bool) {
+	runID, haIndex, ok := parseLocalHAClusterID(clusterID)
+	if !ok {
+		return clusterView{}, false
+	}
+
+	var record panelRunRecord
+	if runID != "" {
+		var found bool
+		record, found = p.readRunRecord(runID)
+		if !found || !sameRunID(record.RunID, runID) {
+			return clusterView{}, false
+		}
+	} else {
+		// Unscoped IDs are emitted only for the pre-run legacy artifact layout.
+		// Do not let one alias a scoped run's recorded HA output directory.
+		if len(p.listRunRecords()) != 0 {
+			return clusterView{}, false
+		}
+		record = panelRunRecord{
+			RunID:        "",
+			TotalHAs:     p.totalHAs,
+			HAOutputRoot: p.currentHAOutputRoot(),
+		}
+	}
+
+	if deployment := strings.TrimSpace(record.DeploymentType); deployment != "" && deployment != deploymentTypeHARKE2 {
+		return clusterView{}, false
+	}
+	totalHAs := record.TotalHAs
+	if totalHAs < 1 {
+		totalHAs = p.totalHAs
+	}
+	if haIndex < 1 || haIndex > totalHAs {
+		return clusterView{}, false
+	}
+
+	haDir := p.haInstanceDirForRun(record, haIndex)
+	if !pathExists(haDir) && !p.operationRunning(panelOperationSetup) && !p.operationRunning(panelOperationReadiness) {
+		// Terraform output or downstream records can also make a cluster visible.
+		// Let full discovery handle those uncommon cases to preserve its behavior.
+		return clusterView{}, false
+	}
+
+	canonicalRunID := ""
+	if runID != "" {
+		canonicalRunID = safeRunPathSegment(record.RunID)
+	}
+	kubeconfigPath := filepath.Join(haDir, "kube_config.yaml")
+	return clusterView{
+		ID:             localClusterIDForRun(canonicalRunID, haIndex),
+		RunID:          canonicalRunID,
+		Type:           "local",
+		DeploymentType: deploymentTypeHARKE2,
+		HAIndex:        haIndex,
+		Name:           runScopedClusterName(canonicalRunID, fmt.Sprintf("HA %d Local", haIndex)),
+		KubeconfigPath: kubeconfigPath,
+		DownloadName:   runScopedDownloadName(canonicalRunID, fmt.Sprintf("local-ha-%d.yaml", haIndex)),
+		Available:      pathExists(kubeconfigPath),
+	}, true
+}
+
+func parseLocalHAClusterID(clusterID string) (string, int, bool) {
+	clusterID = strings.TrimSpace(clusterID)
+	if !strings.HasSuffix(clusterID, "-local") {
+		return "", 0, false
+	}
+
+	prefix := strings.TrimSuffix(clusterID, "-local")
+	runID := ""
+	indexText := ""
+	if strings.HasPrefix(prefix, "ha-") {
+		indexText = strings.TrimPrefix(prefix, "ha-")
+	} else if strings.HasPrefix(prefix, "run-") {
+		runAndIndex := strings.TrimPrefix(prefix, "run-")
+		separator := strings.LastIndex(runAndIndex, "-ha-")
+		if separator <= 0 {
+			return "", 0, false
+		}
+		runID = runAndIndex[:separator]
+		indexText = runAndIndex[separator+len("-ha-"):]
+		if runID == "unknown" || safeRunPathSegment(runID) != runID {
+			return "", 0, false
+		}
+	} else {
+		return "", 0, false
+	}
+
+	haIndex, err := strconv.Atoi(indexText)
+	if err != nil || haIndex < 1 || localClusterIDForRun(runID, haIndex) != clusterID {
+		return "", 0, false
+	}
+	return runID, haIndex, true
+}
+
 func (p *localControlPanel) kubeconfigContentForDownload(cluster clusterView) ([]byte, string, error) {
 	filename := strings.TrimSpace(cluster.DownloadName)
 	if filename == "" {
@@ -2549,36 +2659,53 @@ func (p *localControlPanel) helmCommandForCluster(cluster clusterView) (string, 
 
 func extractHelmCommandFromInstallScript(script string) (string, error) {
 	lines := strings.Split(script, "\n")
-	var command []string
-	capturing := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !capturing {
-			if trimmed == `echo "Installing Rancher..."` {
-				capturing = true
-			}
+	for start := 0; start < len(lines); start++ {
+		if !strings.HasPrefix(strings.TrimSpace(lines[start]), "helm ") {
 			continue
 		}
-		if trimmed == "" {
-			if len(command) == 0 {
-				continue
-			}
-			break
+
+		end := start
+		for shellLineContinues(lines[end]) && end+1 < len(lines) {
+			end++
 		}
-		if strings.HasPrefix(trimmed, "echo ") {
-			break
+		candidate := strings.TrimSpace(strings.Join(lines[start:end+1], "\n"))
+		fields, err := parseHelmCommandFields(candidate)
+		if err != nil {
+			start = end
+			continue
 		}
-		command = append(command, line)
+		invocation, err := manualHelmInvocationFromFields(fields)
+		if err == nil && helmInvocationInstalls(invocation) && strings.HasSuffix(invocation.chartRef, "/rancher") {
+			return candidate, nil
+		}
+		start = end
 	}
 
-	result := strings.TrimSpace(strings.Join(command, "\n"))
-	if result == "" {
-		return "", fmt.Errorf("no Helm install command found")
+	return "", fmt.Errorf("no Rancher Helm install command found")
+}
+
+func helmInvocationInstalls(invocation manualHelmInvocation) bool {
+	if invocation.operation == "install" {
+		return true
 	}
-	if !strings.HasPrefix(strings.TrimSpace(result), "helm ") {
-		return "", fmt.Errorf("install command does not start with helm")
+	if invocation.operation != "upgrade" {
+		return false
 	}
-	return result, nil
+	for _, arg := range invocation.trailingArgs {
+		if arg == "--install" {
+			return true
+		}
+	}
+	return false
+}
+
+func shellLineContinues(line string) bool {
+	trimmed := strings.TrimRight(line, " \t\r")
+	backslashes := 0
+	for i := len(trimmed) - 1; i >= 0 && trimmed[i] == '\\'; i-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
 }
 
 func prepareHelmUpgradeCommand(command string) (string, error) {
