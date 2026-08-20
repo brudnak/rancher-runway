@@ -437,6 +437,75 @@ WARNING: Kubernetes configuration file is world-readable. This is insecure.
 	}
 }
 
+func TestFilterHelmSearchResultsByRepoAliasRejectsFuzzyMatches(t *testing.T) {
+	const targetVersion = "2.15.1-dd124b489440ca731df3c45205e782e6750912af-head"
+	results := []helmSearchResult{
+		{Name: "optimus-rancher-latest/rancher", Version: targetVersion, AppVersion: "v" + targetVersion},
+		{Name: "rancher-latest/rancher-webhook", Version: "110.0.2+up0.11.1-rc.3"},
+		{Name: "rancher-latest/rancher", Version: "2.15.0", AppVersion: "v2.15.0"},
+	}
+
+	filtered := filterHelmSearchResultsByRepoAlias(results, "rancher-latest")
+	if len(filtered) != 1 {
+		t.Fatalf("expected one exact rancher-latest chart result, got %#v", filtered)
+	}
+	if filtered[0].Name != "rancher-latest/rancher" || filtered[0].Version != "2.15.0" {
+		t.Fatalf("unexpected exact chart result: %#v", filtered[0])
+	}
+	if hasChartVersion(filtered, targetVersion) {
+		t.Fatalf("fuzzy Optimus result leaked into rancher-latest results: %#v", filtered)
+	}
+}
+
+func TestSearchHelmRepoVersionsRejectsFuzzyRepositoryMatches(t *testing.T) {
+	const targetVersion = "2.15.1-dd124b489440ca731df3c45205e782e6750912af-head"
+	fakeHelm := `#!/bin/sh
+printf '%s\n' '[{"name":"optimus-rancher-latest/rancher","version":"` + targetVersion + `","app_version":"v` + targetVersion + `"},{"name":"rancher-latest/rancher","version":"2.15.0","app_version":"v2.15.0"}]'
+`
+	installFakeHelm(t, fakeHelm)
+
+	results, err := searchHelmRepoVersions("rancher-latest")
+	if err != nil {
+		t.Fatalf("search rancher-latest: %v", err)
+	}
+	if len(results) != 1 || results[0].Name != "rancher-latest/rancher" || results[0].Version != "2.15.0" {
+		t.Fatalf("fuzzy Optimus chart leaked into rancher-latest results: %#v", results)
+	}
+}
+
+func TestFindExactRequestedChartAcrossReposUsesPlainGlobalSearch(t *testing.T) {
+	const targetVersion = "2.15.1-dd124b489440ca731df3c45205e782e6750912af-head"
+	fakeHelm := `#!/bin/sh
+if [ "$1" = "search" ] && [ "$2" = "repo" ] && [ "$3" = "rancher" ] && [ "$4" = "--devel" ]; then
+  printf '%s\n' '[{"name":"rancher-latest/rancher","version":"2.15.0","app_version":"v2.15.0"},{"name":"optimus-rancher-latest/rancher","version":"` + targetVersion + `","app_version":"v` + targetVersion + `"}]'
+else
+  printf '%s\n' '[]'
+fi
+`
+	installFakeHelm(t, fakeHelm)
+
+	match, err := findExactRequestedChartAcrossRepos(
+		[]string{"rancher-prime", "rancher-latest", "optimus-rancher-latest"},
+		targetVersion,
+	)
+	if err != nil {
+		t.Fatalf("find exact requested chart: %v", err)
+	}
+	if match.repoAlias != "optimus-rancher-latest" || match.chartVersion != targetVersion {
+		t.Fatalf("expected exact Optimus chart, got %#v", match)
+	}
+}
+
+func installFakeHelm(t *testing.T, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "helm")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake Helm executable: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestPrereleaseChartClassification(t *testing.T) {
 	if !isExactStagingPrereleaseChart("optimus-rancher-alpha") {
 		t.Fatal("expected optimus alpha charts to be staging prerelease charts")
@@ -1714,6 +1783,34 @@ rancherImage: stgregistry.suse.com/rancher/rancher
 
 	if valuesSupportTopLevelRancherImageFields(values) {
 		t.Fatal("expected nested image fields not to count as Rancher image field support")
+	}
+}
+
+func TestRequireResolvedRancherChartImageFieldSupportFailsClosed(t *testing.T) {
+	binDir := t.TempDir()
+	helmScript := `#!/bin/sh
+printf '%s\n' 'Error: chart "2.15.1-deadbeef-head" matching 2.15.1-deadbeef-head not found' >&2
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(binDir, "helm"), []byte(helmScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	supported, err := requireResolvedRancherChartImageFieldSupport("rancher-latest", "2.15.1-deadbeef-head")
+	if err == nil {
+		t.Fatal("expected an unfetchable resolved chart to fail preflight")
+	}
+	if supported {
+		t.Fatal("an unfetchable resolved chart cannot support image fields")
+	}
+	for _, want := range []string{
+		"inspect resolved Rancher chart rancher-latest/rancher@2.15.1-deadbeef-head before use",
+		"helm show values failed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got %v", want, err)
+		}
 	}
 }
 

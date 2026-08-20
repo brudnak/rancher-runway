@@ -362,10 +362,9 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		if isCustomImage || compatibilityBaseline != requestedVersion {
 			explanation = append(explanation, fmt.Sprintf("Using %s as the latest released compatibility baseline for the %s release line", compatibilityBaseline, minorLine))
 		}
-		useRancherImageFields, err := chartSupportsRancherImageFields(chartRepoAlias, chartVersion)
+		useRancherImageFields, err := requireResolvedRancherChartImageFieldSupport(chartRepoAlias, chartVersion)
 		if err != nil {
-			log.Printf("[resolver] Failed to inspect image field support for %s/rancher@%s: %v", chartRepoAlias, chartVersion, err)
-			explanation = append(explanation, fmt.Sprintf("Could not inspect %s/rancher@%s for image.* support, using legacy Rancher image chart values", chartRepoAlias, chartVersion))
+			return nil, err
 		} else if useRancherImageFields {
 			explanation = append(explanation, fmt.Sprintf("Using current image.registry/image.repository/image.tag chart values for %s/rancher@%s", chartRepoAlias, chartVersion))
 		} else {
@@ -995,6 +994,12 @@ func searchHelmRepoVersions(repoAlias string) ([]helmSearchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse helm search results for %s: %w", repoAlias, err)
 	}
+	// `helm search repo` treats chartRef as a fuzzy search term. For example,
+	// querying rancher-latest/rancher can also return
+	// optimus-rancher-latest/rancher. Keep only the exact chart here so a head
+	// version published by Optimus cannot be attributed to rancher-latest and
+	// later rendered into an install command for the wrong repository.
+	results = filterHelmSearchResultsByRepoAlias(results, repoAlias)
 	if len(results) > 0 {
 		return results, nil
 	}
@@ -1014,7 +1019,10 @@ func searchHelmRepoVersions(repoAlias string) ([]helmSearchResult, error) {
 }
 
 func searchAllHelmRepoVersions() ([]helmSearchResult, error) {
-	output, err := exec.Command("helm", "search", "repo", "--regexp", ".*/rancher$", "--devel", "--versions", "-o", "json").CombinedOutput()
+	// Helm's regexp search can omit prerelease rows even when it returns stable
+	// versions for the same chart. Use the plain keyword search so exact head
+	// versions remain visible; callers filter the fuzzy results by repo/chart.
+	output, err := exec.Command("helm", "search", "repo", "rancher", "--devel", "--versions", "-o", "json").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to query helm repo globally for rancher charts: %w", err)
 	}
@@ -1048,10 +1056,10 @@ func parseHelmSearchResults(output []byte) ([]helmSearchResult, error) {
 }
 
 func filterHelmSearchResultsByRepoAlias(results []helmSearchResult, repoAlias string) []helmSearchResult {
-	chartRefPrefix := repoAlias + "/"
+	chartRef := repoAlias + "/rancher"
 	filteredResults := make([]helmSearchResult, 0)
 	for _, result := range results {
-		if strings.HasPrefix(result.Name, chartRefPrefix) {
+		if result.Name == chartRef {
 			filteredResults = append(filteredResults, result)
 		}
 	}
@@ -1983,6 +1991,14 @@ func chartSupportsRancherImageFields(chartRepoAlias, chartVersion string) (bool,
 		return false, fmt.Errorf("helm show values failed: %w", err)
 	}
 	return valuesSupportTopLevelRancherImageFields(string(output)), nil
+}
+
+func requireResolvedRancherChartImageFieldSupport(chartRepoAlias, chartVersion string) (bool, error) {
+	supported, err := chartSupportsRancherImageFields(chartRepoAlias, chartVersion)
+	if err != nil {
+		return false, fmt.Errorf("inspect resolved Rancher chart %s/rancher@%s before use: %w", chartRepoAlias, chartVersion, err)
+	}
+	return supported, nil
 }
 
 func valuesSupportTopLevelRancherImageFields(values string) bool {

@@ -49,8 +49,10 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 		log.Printf("Created directory %s", absHADir)
 	}
 
-	helmCommands := viper.GetStringSlice("rancher.helm_commands")
-	helmCommand := helmCommands[instanceNum-1]
+	helmCommand, err := resolvedRancherInstallCommand(instanceNum, resolvedPlan)
+	if err != nil {
+		return err
+	}
 	helmCommand = rancherHelmCommandForHA(helmCommand, haOutputs.RancherURL)
 
 	CreateInstallScript(helmCommand, haDir)
@@ -154,6 +156,33 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 	}
 
 	return nil
+}
+
+func resolvedRancherInstallCommand(instanceNum int, resolvedPlan *RancherResolvedPlan) (string, error) {
+	if instanceNum < 1 {
+		return "", fmt.Errorf("HA instance number must be at least 1, got %d", instanceNum)
+	}
+	if resolvedPlan != nil {
+		if len(resolvedPlan.HelmCommands) != 1 {
+			return "", fmt.Errorf("resolved Rancher plan for HA %d has %d Helm commands; expected exactly one", instanceNum, len(resolvedPlan.HelmCommands))
+		}
+		command := strings.TrimSpace(resolvedPlan.HelmCommands[0])
+		if command == "" {
+			return "", fmt.Errorf("resolved Rancher plan for HA %d has an empty Helm command", instanceNum)
+		}
+		return command, nil
+	}
+
+	// Preserve the legacy/manual setup path when a resolved plan is unavailable.
+	helmCommands := viper.GetStringSlice("rancher.helm_commands")
+	if instanceNum > len(helmCommands) {
+		return "", fmt.Errorf("rancher.helm_commands has %d entries; cannot select HA %d", len(helmCommands), instanceNum)
+	}
+	command := strings.TrimSpace(helmCommands[instanceNum-1])
+	if command == "" {
+		return "", fmt.Errorf("rancher.helm_commands[%d] is empty", instanceNum-1)
+	}
+	return command, nil
 }
 
 func rancherHelmCommandForHA(helmCommand, rancherURL string) string {
