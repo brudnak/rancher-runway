@@ -26,7 +26,8 @@ func TestLedgerRecordsSuccessfulLane(t *testing.T) {
   "lanes": [
     {
       "name": "webhook-fresh-install",
-      "install_rancher": "v2.14.1-alpha7"
+      "install_rancher": "v2.14.1-alpha7",
+      "install_rancher_distro": "auto"
     }
   ]
 }`
@@ -55,6 +56,7 @@ func TestLedgerRecordsSuccessfulLane(t *testing.T) {
 			ReleaseLine:          plan.ReleaseLine,
 			TargetVersion:        plan.TargetVersion,
 			InstallRancher:       lane.InstallRancher,
+			InstallRancherDistro: lane.InstallRancherDistro,
 			WebhookImage:         plan.WebhookImage,
 			PreviousWebhookBuild: plan.PreviousWebhookBuild,
 			PreviousWebhookTag:   plan.PreviousWebhookTag,
@@ -85,6 +87,7 @@ func TestLedgerRecordsSuccessfulLane(t *testing.T) {
 		`"previous_webhook_build": "109.0.0+up0.10.0"`,
 		`"signing_policy": "required"`,
 		`"signing_registry": "stgregistry.suse.com"`,
+		`"install_rancher_distro": "auto"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected ledger to contain %s:\n%s", want, got)

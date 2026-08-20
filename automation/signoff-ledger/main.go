@@ -33,10 +33,12 @@ type signoffPlan struct {
 }
 
 type signoffLane struct {
-	Name                 string `json:"name"`
-	InstallRancher       string `json:"install_rancher"`
-	UpgradeToRancher     string `json:"upgrade_to_rancher"`
-	WebhookOverrideImage string `json:"webhook_override_image"`
+	Name                   string `json:"name"`
+	InstallRancher         string `json:"install_rancher"`
+	InstallRancherDistro   string `json:"install_rancher_distro"`
+	UpgradeToRancher       string `json:"upgrade_to_rancher"`
+	UpgradeToRancherDistro string `json:"upgrade_to_rancher_distro"`
+	WebhookOverrideImage   string `json:"webhook_override_image"`
 }
 
 type ledger struct {
@@ -97,7 +99,9 @@ type entry struct {
 	TargetVersion        string             `json:"target_version"`
 	PreviousVersion      string             `json:"previous_version,omitempty"`
 	InstallRancher       string             `json:"install_rancher"`
+	InstallRancherDistro string             `json:"install_rancher_distro,omitempty"`
 	UpgradeToRancher     string             `json:"upgrade_to_rancher,omitempty"`
+	UpgradeRancherDistro string             `json:"upgrade_to_rancher_distro,omitempty"`
 	WebhookChanged       bool               `json:"webhook_changed"`
 	WebhookImage         string             `json:"webhook_image,omitempty"`
 	WebhookOverride      string             `json:"webhook_override_image,omitempty"`
@@ -196,7 +200,9 @@ func main() {
 		TargetVersion:        plan.TargetVersion,
 		PreviousVersion:      plan.PreviousVersion,
 		InstallRancher:       lane.InstallRancher,
+		InstallRancherDistro: lane.InstallRancherDistro,
 		UpgradeToRancher:     lane.UpgradeToRancher,
+		UpgradeRancherDistro: lane.UpgradeToRancherDistro,
 		WebhookChanged:       plan.WebhookChanged,
 		WebhookImage:         plan.WebhookImage,
 		WebhookOverride:      lane.WebhookOverrideImage,

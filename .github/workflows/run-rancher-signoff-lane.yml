@@ -812,6 +812,8 @@ jobs:
                 end;
               {
                 requested_version: (.requested_version // null),
+                requested_distro: (.requested_distro // null),
+                resolved_distro: (.resolved_distro // null),
                 resolved_image_registry: (.resolved_image_registry // null),
                 rancher_image_reference: rancher_reference,
                 rancher_image_tag: (.rancher_image_tag // null),
@@ -821,6 +823,8 @@ jobs:
                 image_source_url: (.image_source_url // null),
                 image_source_revision: (.image_source_revision // null),
                 image_source_oss_revision: (.image_source_oss_revision // null),
+                chart_repo_alias: (.chart_repo_alias // null),
+                chart_version: (.chart_version // null),
                 chart_source: (.chart_source // null)
               }
             ' "$path"
@@ -863,6 +867,8 @@ jobs:
               webhook_image: ($plan.webhook_image // null),
               terraform_state_key: ($lane_plan.terraform_state_key // ""),
               aws_prefix: ($lane_plan.aws_prefix // ""),
+              install_rancher_distro: ($lane_plan.install_rancher_distro // null),
+              upgrade_to_rancher_distro: ($lane_plan.upgrade_to_rancher_distro // null),
               rancher_resolution: {
                 install: $install_resolution,
                 upgrade: $upgrade_resolution

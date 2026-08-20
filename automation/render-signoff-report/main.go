@@ -26,14 +26,16 @@ type signoffPlan struct {
 }
 
 type signoffLane struct {
-	Name                 string `json:"name"`
-	InstallRancher       string `json:"install_rancher"`
-	UpgradeToRancher     string `json:"upgrade_to_rancher"`
-	ProvisionDownstream  bool   `json:"provision_downstream"`
-	WebhookOverrideImage string `json:"webhook_override_image"`
-	TerraformStateKey    string `json:"terraform_state_key"`
-	AWSPrefix            string `json:"aws_prefix"`
-	Description          string `json:"description"`
+	Name                   string `json:"name"`
+	InstallRancher         string `json:"install_rancher"`
+	InstallRancherDistro   string `json:"install_rancher_distro"`
+	UpgradeToRancher       string `json:"upgrade_to_rancher"`
+	UpgradeToRancherDistro string `json:"upgrade_to_rancher_distro"`
+	ProvisionDownstream    bool   `json:"provision_downstream"`
+	WebhookOverrideImage   string `json:"webhook_override_image"`
+	TerraformStateKey      string `json:"terraform_state_key"`
+	AWSPrefix              string `json:"aws_prefix"`
+	Description            string `json:"description"`
 }
 
 type skippedLane struct {
@@ -132,13 +134,15 @@ func renderReport(plan signoffPlan, outputDir, activeLane string, generatedAt ti
 	fmt.Fprintf(&b, "- Signing policy: `%s` for `%s`\n\n", plan.SigningPolicy, plan.SigningRegistry)
 
 	fmt.Fprintf(&b, "## Lanes\n\n")
-	fmt.Fprintf(&b, "| Lane | Install | Upgrade | Downstream | Webhook override |\n")
-	fmt.Fprintf(&b, "| --- | --- | --- | --- | --- |\n")
+	fmt.Fprintf(&b, "| Lane | Install | Install distro | Upgrade | Upgrade distro | Downstream | Webhook override |\n")
+	fmt.Fprintf(&b, "| --- | --- | --- | --- | --- | --- | --- |\n")
 	for _, lane := range plan.Lanes {
-		fmt.Fprintf(&b, "| `%s` | `%s` | %s | `%t` | %s |\n",
+		fmt.Fprintf(&b, "| `%s` | `%s` | `%s` | %s | %s | `%t` | %s |\n",
 			lane.Name,
 			lane.InstallRancher,
+			valueOr(lane.InstallRancherDistro, "auto"),
 			codeOrDash(lane.UpgradeToRancher),
+			codeOrDash(lane.UpgradeToRancherDistro),
 			lane.ProvisionDownstream,
 			codeOrDash(lane.WebhookOverrideImage))
 	}
@@ -151,6 +155,8 @@ func renderReport(plan signoffPlan, outputDir, activeLane string, generatedAt ti
 
 	resolutionColumns := []string{
 		"requested_version",
+		"requested_distro",
+		"resolved_distro",
 		"resolved_image_registry",
 		"rancher_image_reference",
 		"rancher_image_digest",
@@ -158,6 +164,7 @@ func renderReport(plan signoffPlan, outputDir, activeLane string, generatedAt ti
 		"agent_image_digest",
 		"image_source_revision",
 		"image_source_oss_revision",
+		"chart_source",
 	}
 	writeMetadataTable(&b, "Rancher Install Resolution", installResolutions, resolutionColumns)
 	writeMetadataTable(&b, "Rancher Upgrade Resolution", upgradeResolutions, resolutionColumns)

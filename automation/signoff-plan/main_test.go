@@ -232,6 +232,15 @@ func TestBuildPlanMarksPatchQualifiedPrimeHead(t *testing.T) {
 	if got.RancherDistro != "prime" || got.RancherImageSource != "https://github.com/rancher/rancher-prime.git" || got.RancherImageRevision != privateSHA || got.RancherOSSRevision != ossSHA {
 		t.Fatalf("unexpected Prime provenance: %#v", got)
 	}
+	if got.Lanes[0].InstallRancherDistro != "prime" || got.Lanes[1].InstallRancherDistro != "prime" {
+		t.Fatalf("fresh Prime lanes did not use Prime distro: %#v", got.Lanes)
+	}
+	if got.Lanes[2].InstallRancherDistro != "auto" || got.Lanes[2].UpgradeToRancherDistro != "prime" {
+		t.Fatalf("upgrade lane did not separate baseline and target distros: %#v", got.Lanes[2])
+	}
+	if len(got.Lanes) < 4 || got.Lanes[3].InstallRancherDistro != "auto" {
+		t.Fatalf("candidate-on-previous lane did not use automatic baseline distro: %#v", got.Lanes)
+	}
 	if got.Lanes[2].UpgradeToRancher != serverRef {
 		t.Fatalf("Prime upgrade target was not pinned: %#v", got.Lanes[2])
 	}

@@ -36,6 +36,9 @@ func TestHAUpgradeRancher(t *testing.T) {
 	if upgradeVersion == "" {
 		t.Skip("RANCHER_UPGRADE_VERSION is not set; skipping Rancher upgrade")
 	}
+	if err := applyRancherUpgradeDistroFromEnv(); err != nil {
+		t.Fatalf("Rancher upgrade distro preflight failed: %v", err)
+	}
 	if err := validateRancherWebhookImage(configuredRancherWebhookImage()); err != nil {
 		t.Fatalf("Rancher webhook image preflight failed: %v", err)
 	}
@@ -133,6 +136,70 @@ func TestHAUpgradeRancher(t *testing.T) {
 		if err := configureDownstreamRancherWebhookImage(webhookImage); err != nil {
 			t.Fatalf("downstream Rancher webhook configuration failed: %v", err)
 		}
+	}
+}
+
+func applyRancherUpgradeDistroFromEnv() error {
+	distro := strings.ToLower(strings.TrimSpace(os.Getenv("RANCHER_UPGRADE_DISTRO")))
+	if distro == "" {
+		return nil
+	}
+	switch distro {
+	case "auto", "community", "prime":
+		viper.Set("rancher.distro", distro)
+		return nil
+	default:
+		return fmt.Errorf("RANCHER_UPGRADE_DISTRO must be auto, community, or prime, got %q", distro)
+	}
+}
+
+func TestApplyRancherUpgradeDistroFromEnv(t *testing.T) {
+	tests := []struct {
+		name        string
+		envValue    string
+		initial     string
+		want        string
+		wantErrText string
+	}{
+		{
+			name:     "upgrade phase overrides install distro",
+			envValue: " Prime ",
+			initial:  "auto",
+			want:     "prime",
+		},
+		{
+			name:     "missing phase distro preserves legacy config",
+			envValue: "",
+			initial:  "community",
+			want:     "community",
+		},
+		{
+			name:        "invalid phase distro is rejected",
+			envValue:    "enterprise",
+			initial:     "auto",
+			want:        "auto",
+			wantErrText: "must be auto, community, or prime",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			viper.Reset()
+			viper.Set("rancher.distro", tt.initial)
+			t.Setenv("RANCHER_UPGRADE_DISTRO", tt.envValue)
+
+			err := applyRancherUpgradeDistroFromEnv()
+			if tt.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrText) {
+					t.Fatalf("expected error containing %q, got %v", tt.wantErrText, err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got := viper.GetString("rancher.distro"); got != tt.want {
+				t.Fatalf("expected rancher.distro %q, got %q", tt.want, got)
+			}
+		})
 	}
 }
 

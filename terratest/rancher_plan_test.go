@@ -486,6 +486,59 @@ func TestChooseRancherSourceCandidatesAutoReleasePrefersPrimeBeforeCommunity(t *
 	}
 }
 
+func TestChooseRancherSourceCandidatesPrimeHeadAllowsLifecycleFallbacks(t *testing.T) {
+	candidates, distro, explanation := chooseRancherSourceCandidates("prime", "head")
+	want := []string{"rancher-prime", "rancher-latest", "optimus-rancher-latest"}
+	if strings.Join(candidates, ",") != strings.Join(want, ",") {
+		t.Fatalf("expected %v, got %v", want, candidates)
+	}
+	if distro != "prime" {
+		t.Fatalf("expected Prime image semantics, got %q", distro)
+	}
+	if len(explanation) == 0 || !strings.Contains(explanation[0], "fallback") {
+		t.Fatalf("expected lifecycle fallback explanation, got %v", explanation)
+	}
+
+	releaseCandidates, _, _ := chooseRancherSourceCandidates("prime", "release")
+	if len(releaseCandidates) != 1 || releaseCandidates[0] != "rancher-prime" {
+		t.Fatalf("released Prime resolution must remain strict, got %v", releaseCandidates)
+	}
+}
+
+func TestResolveChartAndBaselinePrimeHeadSelectsExactOptimusChart(t *testing.T) {
+	target := "2.15.1-dd124b489440ca731df3c45205e782e6750912af-head"
+	binDir := t.TempDir()
+	helmScript := `#!/bin/sh
+case "$3" in
+  rancher-prime/rancher)
+    printf '%s\n' '[{"name":"rancher-prime/rancher","version":"2.14.4","app_version":"v2.14.4"}]'
+    ;;
+  rancher-latest/rancher)
+    printf '%s\n' '[{"name":"rancher-latest/rancher","version":"2.15.0","app_version":"v2.15.0"}]'
+    ;;
+  optimus-rancher-latest/rancher)
+    printf '%s\n' '[{"name":"optimus-rancher-latest/rancher","version":"2.15.1-dd124b489440ca731df3c45205e782e6750912af-head","app_version":"v2.15.1-dd124b489440ca731df3c45205e782e6750912af-head"}]'
+    ;;
+  *)
+    printf '%s\n' '[{"name":"rancher-prime/rancher","version":"2.14.4","app_version":"v2.14.4"},{"name":"rancher-latest/rancher","version":"2.15.0","app_version":"v2.15.0"},{"name":"optimus-rancher-latest/rancher","version":"2.15.1-dd124b489440ca731df3c45205e782e6750912af-head","app_version":"v2.15.1-dd124b489440ca731df3c45205e782e6750912af-head"}]'
+    ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(binDir, "helm"), []byte(helmScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	candidates, _, _ := chooseRancherSourceCandidates("prime", "head")
+	repo, chart, baseline, err := resolveChartAndBaseline(candidates, target, "2.15", "head")
+	if err != nil {
+		t.Fatalf("resolve Prime head chart: %v", err)
+	}
+	if repo != "optimus-rancher-latest" || chart != target || baseline != "2.15.0" {
+		t.Fatalf("unexpected Prime head resolution: repo=%q chart=%q baseline=%q", repo, chart, baseline)
+	}
+}
+
 func TestRancherModeInfersAutoFromVersionsWithoutHelmCommands(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)

@@ -107,6 +107,19 @@ func TestLaneWorkflowUsesParentResolvedTargetWithoutLosingRequestedAlias(t *test
 	if !strings.Contains(planScript, `"-rancher-version" "$TARGET_RANCHER_VERSION"`) {
 		t.Fatal("lane planner is not invoked with the resolved target environment variable")
 	}
+	receiptScript := workflowStepScript(t, workflow, "run-lane", "Write lane receipt")
+	for _, field := range []string{
+		"install_rancher_distro",
+		"upgrade_to_rancher_distro",
+		"requested_distro",
+		"resolved_distro",
+		"chart_repo_alias",
+		"chart_version",
+	} {
+		if !strings.Contains(receiptScript, field) {
+			t.Fatalf("lane receipt does not retain %s", field)
+		}
+	}
 }
 
 func readActionsWorkflow(t *testing.T, name string) actionsWorkflow {

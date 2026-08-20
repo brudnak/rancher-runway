@@ -85,14 +85,16 @@ type planSet struct {
 }
 
 type lane struct {
-	Name                 string `json:"name"`
-	InstallRancher       string `json:"install_rancher"`
-	UpgradeToRancher     string `json:"upgrade_to_rancher,omitempty"`
-	ProvisionDownstream  bool   `json:"provision_downstream"`
-	WebhookOverrideImage string `json:"webhook_override_image,omitempty"`
-	TerraformStateKey    string `json:"terraform_state_key,omitempty"`
-	AWSPrefix            string `json:"aws_prefix,omitempty"`
-	Description          string `json:"description"`
+	Name                   string `json:"name"`
+	InstallRancher         string `json:"install_rancher"`
+	InstallRancherDistro   string `json:"install_rancher_distro"`
+	UpgradeToRancher       string `json:"upgrade_to_rancher,omitempty"`
+	UpgradeToRancherDistro string `json:"upgrade_to_rancher_distro,omitempty"`
+	ProvisionDownstream    bool   `json:"provision_downstream"`
+	WebhookOverrideImage   string `json:"webhook_override_image,omitempty"`
+	TerraformStateKey      string `json:"terraform_state_key,omitempty"`
+	AWSPrefix              string `json:"aws_prefix,omitempty"`
+	Description            string `json:"description"`
 }
 
 type skippedLane struct {
@@ -420,23 +422,27 @@ func buildPlan(ctx context.Context, client githubClient, targetVersion, previous
 	webhookChanged := targetWebhookTag != previousWebhookTag
 	lanes := []lane{
 		{
-			Name:                laneFrameworkRegression,
-			InstallRancher:      targetInstallReference,
-			ProvisionDownstream: false,
-			Description:         fmt.Sprintf("Fresh install %s, run framework regression suites against the local cluster.", targetVersion),
+			Name:                 laneFrameworkRegression,
+			InstallRancher:       targetInstallReference,
+			InstallRancherDistro: rancherDistro,
+			ProvisionDownstream:  false,
+			Description:          fmt.Sprintf("Fresh install %s, run framework regression suites against the local cluster.", targetVersion),
 		},
 		{
-			Name:                laneWebhookFreshInstall,
-			InstallRancher:      targetInstallReference,
-			ProvisionDownstream: true,
-			Description:         fmt.Sprintf("Fresh install %s, provision downstream Linode, run webhook suite.", targetVersion),
+			Name:                 laneWebhookFreshInstall,
+			InstallRancher:       targetInstallReference,
+			InstallRancherDistro: rancherDistro,
+			ProvisionDownstream:  true,
+			Description:          fmt.Sprintf("Fresh install %s, provision downstream Linode, run webhook suite.", targetVersion),
 		},
 		{
-			Name:                laneWebhookUpgrade,
-			InstallRancher:      previousVersion,
-			UpgradeToRancher:    targetInstallReference,
-			ProvisionDownstream: true,
-			Description:         fmt.Sprintf("Install %s, provision downstream Linode, upgrade to %s, run webhook suite.", previousVersion, targetVersion),
+			Name:                   laneWebhookUpgrade,
+			InstallRancher:         previousVersion,
+			InstallRancherDistro:   "auto",
+			UpgradeToRancher:       targetInstallReference,
+			UpgradeToRancherDistro: rancherDistro,
+			ProvisionDownstream:    true,
+			Description:            fmt.Sprintf("Install %s, provision downstream Linode, upgrade to %s, run webhook suite.", previousVersion, targetVersion),
 		},
 	}
 
@@ -445,6 +451,7 @@ func buildPlan(ctx context.Context, client githubClient, targetVersion, previous
 		lanes = append(lanes, lane{
 			Name:                 laneWebhookCandidateOnPrevious,
 			InstallRancher:       previousVersion,
+			InstallRancherDistro: "auto",
 			ProvisionDownstream:  true,
 			WebhookOverrideImage: webhookImage,
 			Description:          fmt.Sprintf("Install %s, provision downstream Linode, override local and downstream webhook to %s, run webhook suite.", previousVersion, webhookImage),

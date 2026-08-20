@@ -163,6 +163,12 @@ generated plan and receipt identify what that run actually tested.
 Parent-planned lanes receive that immutable resolved tag, so the alias cannot
 move between planning and execution.
 
+Prime head images and Prime chart availability do not always begin on the same
+day. Prime-head chart resolution therefore prefers the Prime repository, then
+an exact Optimus staging chart, and finally a same-line community chart
+baseline while retaining the exact staging Prime server/agent images. Released
+Prime targets remain strict and do not fall back to community charts.
+
 To keep a target in the file without planning it, set `enabled` to `false`.
 
 Use `keep_infra_on_failure=true` only for manual debugging. It can leave AWS and
@@ -174,7 +180,10 @@ The sign-off workflow uploads one compact JSON receipt per lane. The receipt
 keeps operational recovery fields such as `terraform_state_key` and `aws_prefix`
 and a field-allowlisted install/upgrade image resolution. That resolution records
 the requested alias, exact Rancher server and agent references, registry,
-digests, source revisions, and chart source needed to audit a mutable-head run.
+digests, source revisions, phase-specific distro, and chart source needed to
+audit a mutable-head run. Upgrade lanes resolve the previous stable install in
+`auto` mode, then apply the target build's Prime/community chart policy only to
+the upgrade phase.
 The receipt omits live Rancher URLs, kubeconfigs, generated environment files,
 raw Terraform outputs, copied logs, and the unsanitized resolution files.
 

@@ -744,6 +744,9 @@ func applyRancherLatestTagOnlySettings(
 func chooseRancherSourceCandidates(requestedDistro, buildType string) ([]string, string, []string) {
 	switch requestedDistro {
 	case "prime":
+		if buildType == "head" {
+			return []string{"rancher-prime", "rancher-latest", "optimus-rancher-latest"}, "prime", []string{"Prime head build requested; preferring Prime charts, then exact staging or same-line community chart fallbacks"}
+		}
 		return []string{"rancher-prime"}, "prime", []string{"Prime distro was requested explicitly"}
 	case "community":
 		switch buildType {

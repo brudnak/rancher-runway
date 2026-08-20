@@ -80,11 +80,14 @@ func TestRenderToolConfigPreservesAutoDistroForUpgradeLane(t *testing.T) {
 }
 
 func TestEffectiveRancherDistroUsesPlanUnlessExplicitlyOverridden(t *testing.T) {
-	if got := effectiveRancherDistro("", "prime"); got != "prime" {
-		t.Fatalf("expected planned Prime distro, got %q", got)
+	if got := effectiveRancherDistro("", "community", "prime"); got != "community" {
+		t.Fatalf("expected lane install distro, got %q", got)
 	}
-	if got := effectiveRancherDistro("community", "prime"); got != "community" {
+	if got := effectiveRancherDistro("community", "prime", "auto"); got != "community" {
 		t.Fatalf("expected explicit distro override, got %q", got)
+	}
+	if got := effectiveRancherDistro("", "", "prime"); got != "prime" {
+		t.Fatalf("expected legacy plan distro fallback, got %q", got)
 	}
 	if got := effectiveRancherDistro("", ""); got != "auto" {
 		t.Fatalf("expected legacy auto fallback, got %q", got)
@@ -111,11 +114,14 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 
 	planJSON := `{
   "webhook_image": "stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5",
+	"rancher_distro": "prime",
   "lanes": [
     {
       "name": "webhook-fresh-install",
       "install_rancher": "v2.14.1-alpha6",
+	  "install_rancher_distro": "community",
       "upgrade_to_rancher": "v2.14.1-alpha7",
+	  "upgrade_to_rancher_distro": "prime",
       "terraform_state_key": "state/key.tfstate",
       "aws_prefix": "gha-23456789-wf"
     }
@@ -160,13 +166,14 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 	if cfg.AWSPrefix == "" {
 		cfg.AWSPrefix = lane.AWSPrefix
 	}
+	cfg.RancherDistro = effectiveRancherDistro("", lane.InstallRancherDistro, plan.RancherDistro)
 	if err := cfg.validate(lane); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(cfg.OutputPath, []byte(renderToolConfig(cfg, lane)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env, err := renderEnvOutput(plan, lane)
+	env, err := renderEnvOutput(plan, lane, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,6 +189,7 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 	assertContains(t, string(output), `server_count: 3`)
 	assertContains(t, string(output), `first_name: "Ada"`)
 	assertContains(t, string(output), `last_name: "Lovelace"`)
+	assertContains(t, string(output), `distro: "community"`)
 
 	envOutput, err := os.ReadFile(envPath)
 	if err != nil {
@@ -190,6 +198,7 @@ func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 	assertContains(t, string(envOutput), "TF_STATE_KEY=state/key.tfstate")
 	assertContains(t, string(envOutput), "SIGNOFF_AWS_PREFIX=gha-23456789-wf")
 	assertContains(t, string(envOutput), "RANCHER_UPGRADE_VERSION=v2.14.1-alpha7")
+	assertContains(t, string(envOutput), "RANCHER_UPGRADE_DISTRO=prime")
 	assertContains(t, string(envOutput), "RANCHER_WEBHOOK_IMAGE=stgregistry.suse.com/rancher/rancher-webhook:v0.10.1-rc.5")
 }
 
@@ -200,6 +209,7 @@ func TestRenderEnvOutputRejectsNewlineInjection(t *testing.T) {
 			Name:           "webhook-fresh-install",
 			InstallRancher: "v2.14.1-alpha7",
 		},
+		"",
 	)
 	if err == nil {
 		t.Fatal("expected newline injection to be rejected")
@@ -214,11 +224,43 @@ func TestRenderEnvOutputPrefersLaneWebhookOverride(t *testing.T) {
 			InstallRancher:       "v2.14.0",
 			WebhookOverrideImage: "registry.rancher.com/rancher/rancher-webhook:v0.10.1-rc.5",
 		},
+		"",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertContains(t, env, "RANCHER_WEBHOOK_IMAGE=registry.rancher.com/rancher/rancher-webhook:v0.10.1-rc.5")
+}
+
+func TestRenderEnvOutputUsesUpgradeDistroOnlyForUpgradeLane(t *testing.T) {
+	plan := signoffPlan{RancherDistro: "prime"}
+	upgradeLane := signoffLane{
+		Name:                   "webhook-upgrade",
+		InstallRancher:         "v2.15.0",
+		InstallRancherDistro:   "auto",
+		UpgradeToRancher:       "stgregistry.suse.com/rancher/rancher:v2.15.1-deadbeef-head",
+		UpgradeToRancherDistro: "prime",
+	}
+
+	env, err := renderEnvOutput(plan, upgradeLane, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, env, "RANCHER_UPGRADE_DISTRO=prime")
+
+	overridden, err := renderEnvOutput(plan, upgradeLane, "community")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, overridden, "RANCHER_UPGRADE_DISTRO=community")
+
+	freshEnv, err := renderEnvOutput(plan, signoffLane{Name: "webhook-fresh-install", InstallRancher: "v2.15.0"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(freshEnv, "RANCHER_UPGRADE_DISTRO=") {
+		t.Fatalf("fresh lane unexpectedly exported an upgrade distro: %q", freshEnv)
+	}
 }
 
 func TestRenderConfigRequiresOwnerName(t *testing.T) {

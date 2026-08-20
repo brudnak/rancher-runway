@@ -17,12 +17,14 @@ type signoffPlan struct {
 }
 
 type signoffLane struct {
-	Name                 string `json:"name"`
-	InstallRancher       string `json:"install_rancher"`
-	UpgradeToRancher     string `json:"upgrade_to_rancher"`
-	WebhookOverrideImage string `json:"webhook_override_image"`
-	TerraformStateKey    string `json:"terraform_state_key"`
-	AWSPrefix            string `json:"aws_prefix"`
+	Name                   string `json:"name"`
+	InstallRancher         string `json:"install_rancher"`
+	InstallRancherDistro   string `json:"install_rancher_distro"`
+	UpgradeToRancher       string `json:"upgrade_to_rancher"`
+	UpgradeToRancherDistro string `json:"upgrade_to_rancher_distro"`
+	WebhookOverrideImage   string `json:"webhook_override_image"`
+	TerraformStateKey      string `json:"terraform_state_key"`
+	AWSPrefix              string `json:"aws_prefix"`
 }
 
 type renderConfig struct {
@@ -93,11 +95,12 @@ func main() {
 	if err != nil {
 		fatalf("read plan: %v", err)
 	}
-	cfg.RancherDistro = effectiveRancherDistro(cfg.RancherDistro, plan.RancherDistro)
 	lane, err := findLane(plan, cfg.LaneName)
 	if err != nil {
 		fatalf("find lane: %v", err)
 	}
+	distroOverride := cfg.RancherDistro
+	cfg.RancherDistro = effectiveRancherDistro(distroOverride, lane.InstallRancherDistro, plan.RancherDistro)
 	if strings.TrimSpace(cfg.AWSPrefix) == "" {
 		cfg.AWSPrefix = lane.AWSPrefix
 	}
@@ -114,7 +117,7 @@ func main() {
 	}
 
 	if cfg.EnvOutputPath != "" {
-		env, err := renderEnvOutput(plan, lane)
+		env, err := renderEnvOutput(plan, lane, distroOverride)
 		if err != nil {
 			fatalf("render env output: %v", err)
 		}
@@ -124,12 +127,14 @@ func main() {
 	}
 }
 
-func effectiveRancherDistro(override, planned string) string {
+func effectiveRancherDistro(override string, planned ...string) string {
 	if override = strings.TrimSpace(override); override != "" {
 		return override
 	}
-	if planned = strings.TrimSpace(planned); planned != "" {
-		return planned
+	for _, value := range planned {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
 	}
 	return "auto"
 }
@@ -244,7 +249,7 @@ tf_vars:
 	)
 }
 
-func renderEnvOutput(plan signoffPlan, lane signoffLane) (string, error) {
+func renderEnvOutput(plan signoffPlan, lane signoffLane, distroOverride string) (string, error) {
 	var b strings.Builder
 	if err := writeGitHubEnvLine(&b, "TF_STATE_KEY", lane.TerraformStateKey); err != nil {
 		return "", err
@@ -254,6 +259,12 @@ func renderEnvOutput(plan signoffPlan, lane signoffLane) (string, error) {
 	}
 	if err := writeGitHubEnvLine(&b, "RANCHER_UPGRADE_VERSION", lane.UpgradeToRancher); err != nil {
 		return "", err
+	}
+	if strings.TrimSpace(lane.UpgradeToRancher) != "" {
+		upgradeDistro := effectiveRancherDistro(distroOverride, lane.UpgradeToRancherDistro, plan.RancherDistro)
+		if err := writeGitHubEnvLine(&b, "RANCHER_UPGRADE_DISTRO", upgradeDistro); err != nil {
+			return "", err
+		}
 	}
 	webhookImage := plan.WebhookImage
 	if lane.WebhookOverrideImage != "" {

@@ -65,9 +65,10 @@ func TestRenderReportIncludesNonSecretMetadata(t *testing.T) {
 		SigningPolicy:      "required",
 		SigningRegistry:    "stgregistry.suse.com",
 		Lanes: []signoffLane{{
-			Name:                "webhook-fresh-install",
-			InstallRancher:      "v2.14.1-alpha6",
-			ProvisionDownstream: true,
+			Name:                 "webhook-fresh-install",
+			InstallRancher:       "v2.14.1-alpha6",
+			InstallRancherDistro: "auto",
+			ProvisionDownstream:  true,
 		}},
 	}, dir, "webhook-fresh-install", time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -111,6 +112,8 @@ func TestRenderReportIncludesMutableHeadResolutionIdentity(t *testing.T) {
   "phase": "upgrade",
   "ha_index": 1,
   "requested_version": "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
+  "requested_distro": "prime",
+  "resolved_distro": "prime",
   "preferred_image_registries": ["stgregistry.suse.com", "docker.io"],
   "resolved_image_registry": "stgregistry.suse.com",
   "rancher_image": "stgregistry.suse.com/rancher/rancher",
@@ -119,7 +122,8 @@ func TestRenderReportIncludesMutableHeadResolutionIdentity(t *testing.T) {
   "rancher_image_digest": "`+rancherDigest+`",
   "agent_image_digest": "`+agentDigest+`",
   "image_source_revision": "`+revision+`",
-  "image_source_oss_revision": "`+ossRevision+`"
+  "image_source_oss_revision": "`+ossRevision+`",
+  "chart_source": "optimus-rancher-latest/rancher@`+tag+`"
 }`)
 
 	report, err := renderReport(signoffPlan{TargetVersion: "v2.14-head"}, dir, "", time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC))
@@ -139,6 +143,8 @@ func TestRenderReportIncludesMutableHeadResolutionIdentity(t *testing.T) {
 		"`" + agentDigest + "`",
 		"`" + revision + "`",
 		"`" + ossRevision + "`",
+		"`prime`",
+		"`optimus-rancher-latest/rancher@" + tag + "`",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("expected report to contain %q:\n%s", want, report)
