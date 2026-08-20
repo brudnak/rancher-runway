@@ -333,14 +333,49 @@ func TestExplicitAgentImageOverrideSupportsCustomImagesAndRCSBuilds(t *testing.T
 	}
 }
 
-func TestClassifyRancherVersionAllowsCommitHead(t *testing.T) {
-	version := "2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
-	buildType, minorLine, err := classifyRancherVersion(version)
-	if err != nil {
-		t.Fatalf("expected commit head to be valid, got error: %v", err)
+func TestClassifyRancherVersionAllowsCommitHeads(t *testing.T) {
+	for _, test := range []struct {
+		version   string
+		minorLine string
+	}{
+		{version: "2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head", minorLine: "2.13"},
+		{version: "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head", minorLine: "2.14"},
+	} {
+		t.Run(test.version, func(t *testing.T) {
+			buildType, minorLine, err := classifyRancherVersion(test.version)
+			if err != nil {
+				t.Fatalf("expected commit head to be valid, got error: %v", err)
+			}
+			if buildType != "head" || minorLine != test.minorLine {
+				t.Fatalf("expected commit head classification for its minor line, got buildType=%q minorLine=%q", buildType, minorLine)
+			}
+		})
 	}
-	if buildType != "head" || minorLine != "2.13" {
-		t.Fatalf("expected commit head classification for 2.13, got buildType=%q minorLine=%q", buildType, minorLine)
+}
+
+func TestPrimeDistroAllowsPatchHeadAndExactCustomHead(t *testing.T) {
+	if err := validateRequestedRancherDistro("prime", "head", "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head", false); err != nil {
+		t.Fatalf("expected patch-qualified Prime head to be accepted: %v", err)
+	}
+	if err := validateRequestedRancherDistro("prime", "head", "stgregistry.suse.com/rancher/rancher:v2.14-head", true); err != nil {
+		t.Fatalf("expected an exact custom head image to be accepted: %v", err)
+	}
+	if err := validateRequestedRancherDistro("prime", "head", "2.14-head", false); err == nil {
+		t.Fatal("expected an unqualified bare head tag to remain ambiguous for Prime")
+	}
+}
+
+func TestAutoDistroInfersPrimeForPatchQualifiedHead(t *testing.T) {
+	primeHead := "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
+	if got, inferred := effectiveRequestedRancherDistro("auto", primeHead); got != "prime" || !inferred {
+		t.Fatalf("expected %s to infer Prime, got distro=%q inferred=%t", primeHead, got, inferred)
+	}
+	communityHead := "2.15-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
+	if got, inferred := effectiveRequestedRancherDistro("auto", communityHead); got != "auto" || inferred {
+		t.Fatalf("expected %s to remain auto, got distro=%q inferred=%t", communityHead, got, inferred)
+	}
+	if got, inferred := effectiveRequestedRancherDistro("community", primeHead); got != "community" || inferred {
+		t.Fatalf("explicit community distro was overridden: distro=%q inferred=%t", got, inferred)
 	}
 }
 

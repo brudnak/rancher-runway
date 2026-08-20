@@ -79,6 +79,30 @@ func TestRenderToolConfigPreservesAutoDistroForUpgradeLane(t *testing.T) {
 	}
 }
 
+func TestEffectiveRancherDistroUsesPlanUnlessExplicitlyOverridden(t *testing.T) {
+	if got := effectiveRancherDistro("", "prime"); got != "prime" {
+		t.Fatalf("expected planned Prime distro, got %q", got)
+	}
+	if got := effectiveRancherDistro("community", "prime"); got != "community" {
+		t.Fatalf("expected explicit distro override, got %q", got)
+	}
+	if got := effectiveRancherDistro("", ""); got != "auto" {
+		t.Fatalf("expected legacy auto fallback, got %q", got)
+	}
+}
+
+func TestRenderToolConfigPreservesResolvedPrimeHeadImage(t *testing.T) {
+	cfg := renderConfig{RancherDistro: "prime"}
+	lane := signoffLane{
+		Name:           "webhook-fresh-install",
+		InstallRancher: "stgregistry.suse.com/rancher/rancher:v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
+	}
+
+	rendered := renderToolConfig(cfg, lane)
+	assertContains(t, rendered, `version: "stgregistry.suse.com/rancher/rancher:v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"`)
+	assertContains(t, rendered, `distro: "prime"`)
+}
+
 func TestRendererWritesConfigAndEnvOutput(t *testing.T) {
 	tempDir := t.TempDir()
 	planPath := filepath.Join(tempDir, "plan.json")

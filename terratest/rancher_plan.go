@@ -32,7 +32,8 @@ const (
 
 var rancherRegistryHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout}
 var rancherRegistryBaseURLs = map[string]string{}
-var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)-[0-9a-fA-F]{7,40}-head$`)
+var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)(?:\.\d+)?-[0-9a-fA-F]{7,40}-head$`)
+var primeCommitHeadVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+-[0-9a-fA-F]{7,40}-head$`)
 var customImageMinorLinePattern = regexp.MustCompile(`(?i)^v?(\d+\.\d+)(?:[._-]|$)`)
 
 // RCS build IDs are alphanumeric and may use compact or dotted forms, for example
@@ -173,8 +174,9 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		if err != nil {
 			return nil, err
 		}
-		if requestedDistro == "prime" && buildType != "release" {
-			return nil, fmt.Errorf("prime distro requires a released Rancher version like 2.13.4")
+		versionDistro, _ := effectiveRequestedRancherDistro(requestedDistro, requestedVersion)
+		if err := validateRequestedRancherDistro(versionDistro, buildType, requestedVersion, isCustomImage); err != nil {
+			return nil, err
 		}
 		if len(preferredRegistries) > 0 && agentImageOverrides[planIndex] != "" && !isCustomImage {
 			return nil, fmt.Errorf("rancher.preferred_image_registries cannot be combined with rancher.agent_images[%d]; the preferred registry must supply the matching server and agent image pair", planIndex)
@@ -185,7 +187,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 				return nil, fmt.Errorf("verify preferred Rancher images for %s: %w", requestedVersion, err)
 			}
 		}
-		repoCandidates, _, _ := chooseRancherSourceCandidates(requestedDistro, buildType)
+		repoCandidates, _, _ := chooseRancherSourceCandidates(versionDistro, buildType)
 		for _, repoAlias := range repoCandidates {
 			repoAliases[repoAlias] = true
 		}
@@ -211,7 +213,11 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		}
 		preferredImageResolution := preferredImageResolutions[planIndex]
 
-		repoCandidates, resolvedDistro, explanation := chooseRancherSourceCandidates(requestedDistro, buildType)
+		versionDistro, inferredPrimeHead := effectiveRequestedRancherDistro(requestedDistro, requestedVersion)
+		repoCandidates, resolvedDistro, explanation := chooseRancherSourceCandidates(versionDistro, buildType)
+		if inferredPrimeHead {
+			explanation = []string{"Patch-qualified Prime head selected Prime chart sources automatically"}
+		}
 		if len(preferredRegistries) > 0 && isCustomImage {
 			explanation = append(explanation, "Preferred registry checkboxes were ignored because the exact custom image reference controls its registry")
 		}
@@ -330,8 +336,24 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			imageSourceOSSRevision = preferredImageResolution.RancherProvenance.OSSRevision
 			imageSourceCommitURL = rancherImageSourceCommitURL(imageSourceURL, imageSourceRevision)
 			imageExplanation = preferredImageResolutionExplanation(preferredImageResolution, preferredRegistries)
+		} else if isCustomImage {
+			exactImageResolution, inspectErr := inspectExplicitRancherImagePair(rancherImage, rancherImageTag, agentImage)
+			if inspectErr != nil {
+				return nil, fmt.Errorf("verify exact Rancher image pair for %s: %w", requestedVersion, inspectErr)
+			}
+			resolvedImageRegistry = exactImageResolution.Registry
+			rancherImageDigest = exactImageResolution.RancherProvenance.Digest
+			agentImageDigest = exactImageResolution.AgentProvenance.Digest
+			imageBuildVersion = exactImageResolution.RancherProvenance.BuildVersion
+			imageSourceURL = exactImageResolution.RancherProvenance.SourceURL
+			imageSourceRevision = exactImageResolution.RancherProvenance.Revision
+			imageSourceOSSRevision = exactImageResolution.RancherProvenance.OSSRevision
+			imageSourceCommitURL = rancherImageSourceCommitURL(imageSourceURL, imageSourceRevision)
+			imageExplanation = append(imageExplanation,
+				fmt.Sprintf("Recorded resolution-time OCI digests and provenance for the exact image pair in %s", exactImageResolution.RegistryLabel),
+			)
 		}
-		if preferredImageResolution == nil {
+		if preferredImageResolution == nil && !isCustomImage {
 			if err := validateResolvedRancherImages(rancherImage, rancherImageTag, agentImage); err != nil {
 				return nil, fmt.Errorf("validate Rancher image settings for %s: %w", requestedVersion, err)
 			}
@@ -582,8 +604,8 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 		parts := strings.Split(version, "-")
 		return "head", parts[0], nil
 	case commitHeadVersionPattern.MatchString(version):
-		parts := strings.Split(version, "-")
-		return "head", parts[0], nil
+		matches := commitHeadVersionPattern.FindStringSubmatch(version)
+		return "head", matches[1], nil
 	case alphaPattern.MatchString(version):
 		parts := strings.Split(version, "-")
 		return "alpha", strings.Join(strings.Split(parts[0], ".")[:2], "."), nil
@@ -669,6 +691,28 @@ func parseCustomRancherImageRequest(value string) (customRancherImageRequest, bo
 
 func isCommitHeadRancherVersion(version string) bool {
 	return commitHeadVersionPattern.MatchString(strings.TrimSpace(version))
+}
+
+func isPrimeCommitHeadRancherVersion(version string) bool {
+	return primeCommitHeadVersionPattern.MatchString(normalizeVersionInput(version))
+}
+
+func validateRequestedRancherDistro(requestedDistro, buildType, requestedVersion string, isCustomImage bool) error {
+	if requestedDistro != "prime" || buildType == "release" {
+		return nil
+	}
+	if buildType == "head" && (isCustomImage || isPrimeCommitHeadRancherVersion(requestedVersion)) {
+		return nil
+	}
+	return fmt.Errorf("prime distro requires a released Rancher version, an exact custom image, or a patch-qualified Prime head like 2.14.5-{SHA}-head")
+}
+
+func effectiveRequestedRancherDistro(requestedDistro, requestedVersion string) (string, bool) {
+	requestedDistro = strings.ToLower(strings.TrimSpace(requestedDistro))
+	if requestedDistro == "auto" && isPrimeCommitHeadRancherVersion(requestedVersion) {
+		return "prime", true
+	}
+	return requestedDistro, false
 }
 
 func isRCSServerBuild(version string) bool {

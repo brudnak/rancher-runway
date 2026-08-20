@@ -5,8 +5,12 @@ on:
   workflow_dispatch:
     inputs:
       rancher_version:
-        description: Target Rancher alpha, RC, or RCS, for example v2.15.1-rcs-c936.
+        description: Target build (head, vX.Y-head, vX.Y-SHA-head, vX.Y.Z-SHA-head, alpha, RC, or RCS).
         required: true
+        type: string
+      resolved_rancher_version:
+        description: Immutable target selected by the parent planner. Leave blank for direct manual runs.
+        required: false
         type: string
       lane:
         description: Validation lane to run.
@@ -75,6 +79,8 @@ jobs:
     environment: rancher-signoff
     env:
       GH_TOKEN: ${{ github.token }}
+      REQUESTED_RANCHER_VERSION: ${{ inputs.rancher_version }}
+      TARGET_RANCHER_VERSION: ${{ inputs.resolved_rancher_version || inputs.rancher_version }}
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
@@ -178,7 +184,7 @@ jobs:
           set -euo pipefail
 
           args=(
-            "-rancher-version" "${{ inputs.rancher_version }}"
+            "-rancher-version" "$TARGET_RANCHER_VERSION"
             "-signing-policy" "${{ inputs.signing_policy }}"
             "-run-id" "${{ github.run_id }}"
             "-ignore-ledger"
@@ -195,7 +201,20 @@ jobs:
           fi
 
           "$RUNNER_TEMP/signoff-plan" "${args[@]}"
-          echo "RANCHER_WEBHOOK_CHART_VERSION=$(jq -r '.target_webhook_build' signoff-plan.json)" >> "$GITHUB_ENV"
+          release_line="$(jq -r '.release_line // empty' signoff-plan.json)"
+          if [[ "$release_line" =~ ^v?([0-9]+)\.([0-9]+)$ ]]; then
+            release_major="${BASH_REMATCH[1]}"
+            release_minor="${BASH_REMATCH[2]}"
+          else
+            echo "Planner returned invalid release_line '$release_line'; expected vMAJOR.MINOR" >&2
+            exit 1
+          fi
+          {
+            echo "RANCHER_RELEASE_LINE=$release_line"
+            echo "RANCHER_RELEASE_MAJOR=$release_major"
+            echo "RANCHER_RELEASE_MINOR=$release_minor"
+            echo "RANCHER_WEBHOOK_CHART_VERSION=$(jq -r '.target_webhook_build' signoff-plan.json)"
+          } >> "$GITHUB_ENV"
 
       - name: Install slsactl
         run: |
@@ -345,9 +364,12 @@ jobs:
 
           env_file="automation-output/downstream-ha-1.env"
           suites=("TestWebhookTestSuite")
-          version="${{ inputs.rancher_version }}"
-          version="${version#v}"
-          IFS='.' read -r rancher_major rancher_minor _ <<< "$version"
+          rancher_major="${RANCHER_RELEASE_MAJOR:-}"
+          rancher_minor="${RANCHER_RELEASE_MINOR:-}"
+          if ! [[ "$rancher_major" =~ ^[0-9]+$ && "$rancher_minor" =~ ^[0-9]+$ ]]; then
+            echo "Validated Rancher release line is unavailable: ${RANCHER_RELEASE_LINE:-<unset>}" >&2
+            exit 1
+          fi
           if [ "${{ inputs.lane }}" = "framework-regression" ]; then
             env_file="automation-output/local-suite-ha-1.env"
             suites=(
@@ -355,7 +377,7 @@ jobs:
               "TestSchemaChangesTestSuite"
               "TestNodeAnnotationsTestSuite"
             )
-            if [ "$rancher_major" -eq 2 ] && [ "$rancher_minor" -le 11 ]; then
+            if (( rancher_major == 2 && rancher_minor <= 11 )); then
               suites+=("TestVaiTestSuite/TestVaiDisabled")
             else
               suites+=("TestVaiTestSuite/TestVaiEnabled")
@@ -363,7 +385,7 @@ jobs:
           fi
           if [ "${{ inputs.lane }}" != "framework-regression" ] && \
              [ "${{ inputs.lane }}" != "webhook-candidate-on-previous" ] && \
-             { [ "$rancher_major" -gt 2 ] || { [ "$rancher_major" -eq 2 ] && [ "$rancher_minor" -ge 14 ]; }; }; then
+             (( rancher_major > 2 || (rancher_major == 2 && rancher_minor >= 14) )); then
             suites+=("TestWebhookSecuritySettingsTestSuite")
           fi
           if [ ! -s "$env_file" ]; then
@@ -679,7 +701,7 @@ jobs:
             --arg repo "https://github.com/rancher/tests.git" \
             --arg ref "$tests_ref" \
             --arg lane "${{ inputs.lane }}" \
-            --arg rancher_version "${{ inputs.rancher_version }}" \
+            --arg rancher_version "$TARGET_RANCHER_VERSION" \
             --slurpfile results "$results_tmp" \
             '{repo: $repo, ref: $ref, lane: $lane, rancher_version: $rancher_version, results: $results[0]}' \
             > "$results_json"
@@ -719,7 +741,6 @@ jobs:
         id: lane_receipt
         if: always()
         env:
-          TARGET_RANCHER_VERSION: ${{ inputs.rancher_version }}
           PREVIOUS_RANCHER_VERSION: ${{ github.event.inputs.previous_rancher_version || '' }}
           WEBHOOK_IMAGE: ${{ github.event.inputs.webhook_image || '' }}
           SIGNING_POLICY: ${{ inputs.signing_policy }}
@@ -746,7 +767,7 @@ jobs:
           else
             target_json='{}'
             if [ -s signoff-targets.json ]; then
-              target_json="$(jq -c --arg version "$TARGET_RANCHER_VERSION" '
+              target_json="$(jq -c --arg version "$REQUESTED_RANCHER_VERSION" '
                 ((.targets // [])
                   | map(select(.rancher_version == $version))
                   | first) // {}
@@ -774,10 +795,47 @@ jobs:
             })' automation-output/rancher-test-results.json)"
           fi
 
+          sanitize_resolution() {
+            local path="$1"
+            if [ ! -s "$path" ] || ! jq -e 'type == "object"' "$path" >/dev/null 2>&1; then
+              printf '%s' 'null'
+              return
+            fi
+            jq -c '
+              def rancher_reference:
+                if (.rancher_image_reference // "") != "" then
+                  .rancher_image_reference
+                elif (.rancher_image // "") != "" and (.rancher_image_tag // "") != "" then
+                  "\(.rancher_image):\(.rancher_image_tag)"
+                else
+                  null
+                end;
+              {
+                requested_version: (.requested_version // null),
+                resolved_image_registry: (.resolved_image_registry // null),
+                rancher_image_reference: rancher_reference,
+                rancher_image_tag: (.rancher_image_tag // null),
+                agent_image: (.agent_image // null),
+                rancher_image_digest: (.rancher_image_digest // null),
+                agent_image_digest: (.agent_image_digest // null),
+                image_source_url: (.image_source_url // null),
+                image_source_revision: (.image_source_revision // null),
+                image_source_oss_revision: (.image_source_oss_revision // null),
+                chart_source: (.chart_source // null)
+              }
+            ' "$path"
+          }
+          install_resolution="$(sanitize_resolution automation-output/rancher-resolution-install-ha-1.json)"
+          upgrade_resolution="$(sanitize_resolution automation-output/rancher-resolution-upgrade-ha-1.json)"
+
           jq -n \
             --argjson plan "$plan_json" \
             --argjson lane_plan "$lane_plan" \
             --argjson tests "$tests_json" \
+            --argjson install_resolution "$install_resolution" \
+            --argjson upgrade_resolution "$upgrade_resolution" \
+            --arg requested_target_version "$REQUESTED_RANCHER_VERSION" \
+            --arg resolved_target_version "$TARGET_RANCHER_VERSION" \
             --arg lane "${{ inputs.lane }}" \
             --arg status "${{ job.status }}" \
             --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -794,7 +852,9 @@ jobs:
             --arg delete_downstream "$DELETE_DOWNSTREAM_OUTCOME" \
             --arg cleanup "$CLEANUP_OUTCOME" \
             '{
-              target_version: ($plan.target_version // ""),
+              target_version: ($plan.target_version // $resolved_target_version),
+              requested_target_version: $requested_target_version,
+              resolved_target_version: $resolved_target_version,
               previous_version: ($plan.previous_version // null),
               lane: $lane,
               status: $status,
@@ -803,6 +863,10 @@ jobs:
               webhook_image: ($plan.webhook_image // null),
               terraform_state_key: ($lane_plan.terraform_state_key // ""),
               aws_prefix: ($lane_plan.aws_prefix // ""),
+              rancher_resolution: {
+                install: $install_resolution,
+                upgrade: $upgrade_resolution
+              },
               steps: {
                 setup: $setup,
                 ready: $ready,
@@ -833,7 +897,8 @@ jobs:
             echo "## Rancher sign-off lane"
             echo ""
             echo "- Lane: \`${{ inputs.lane }}\`"
-            echo "- Rancher version: \`${{ inputs.rancher_version }}\`"
+            echo "- Requested Rancher version: \`$REQUESTED_RANCHER_VERSION\`"
+            echo "- Resolved Rancher version: \`$TARGET_RANCHER_VERSION\`"
             echo "- Upgrade version: \`${RANCHER_UPGRADE_VERSION:-none}\`"
             echo "- RKE2 server count: \`${{ inputs.rke2_server_count }}\`"
             echo "- Terraform state key: \`${TF_STATE_KEY:-unset}\`"

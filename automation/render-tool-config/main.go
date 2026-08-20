@@ -11,6 +11,7 @@ import (
 
 type signoffPlan struct {
 	TargetVersion string        `json:"target_version"`
+	RancherDistro string        `json:"rancher_distro"`
 	WebhookImage  string        `json:"webhook_image"`
 	Lanes         []signoffLane `json:"lanes"`
 }
@@ -59,7 +60,7 @@ func main() {
 	flag.StringVar(&cfg.OutputPath, "output", "tool-config.yml", "tool-config.yml output path")
 	flag.StringVar(&cfg.EnvOutputPath, "env-output", "", "optional GitHub env output path")
 	flag.StringVar(&cfg.BootstrapPassword, "bootstrap-password", envOrDefault("RANCHER_BOOTSTRAP_PASSWORD", ""), "Rancher bootstrap password")
-	flag.StringVar(&cfg.RancherDistro, "rancher-distro", envOrDefault("RANCHER_DISTRO", "auto"), "Rancher distro")
+	flag.StringVar(&cfg.RancherDistro, "rancher-distro", envOrDefault("RANCHER_DISTRO", ""), "Rancher distro override; defaults to the sign-off plan")
 	flag.StringVar(&preloadImages, "preload-images", envOrDefault("RKE2_PRELOAD_IMAGES", "true"), "whether to preload RKE2 images")
 	flag.IntVar(&cfg.ServerCount, "server-count", envIntOrDefault("RKE2_SERVER_COUNT", 3), "RKE2 server nodes per Rancher cluster; must be 1, 3, or 5")
 	flag.StringVar(&autoApprove, "auto-approve", envOrDefault("RANCHER_AUTO_APPROVE", "true"), "whether Rancher plan approval is automatic")
@@ -92,6 +93,7 @@ func main() {
 	if err != nil {
 		fatalf("read plan: %v", err)
 	}
+	cfg.RancherDistro = effectiveRancherDistro(cfg.RancherDistro, plan.RancherDistro)
 	lane, err := findLane(plan, cfg.LaneName)
 	if err != nil {
 		fatalf("find lane: %v", err)
@@ -120,6 +122,16 @@ func main() {
 			fatalf("write %s: %v", cfg.EnvOutputPath, err)
 		}
 	}
+}
+
+func effectiveRancherDistro(override, planned string) string {
+	if override = strings.TrimSpace(override); override != "" {
+		return override
+	}
+	if planned = strings.TrimSpace(planned); planned != "" {
+		return planned
+	}
+	return "auto"
 }
 
 func readPlan(path string) (signoffPlan, error) {

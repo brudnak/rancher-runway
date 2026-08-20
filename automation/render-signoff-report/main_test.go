@@ -85,6 +85,67 @@ func TestRenderReportIncludesNonSecretMetadata(t *testing.T) {
 	}
 }
 
+func TestRenderReportIncludesMutableHeadResolutionIdentity(t *testing.T) {
+	dir := t.TempDir()
+	revision := strings.Repeat("a", 40)
+	ossRevision := strings.Repeat("b", 40)
+	rancherDigest := "sha256:" + strings.Repeat("c", 64)
+	agentDigest := "sha256:" + strings.Repeat("d", 64)
+	tag := "v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
+
+	mustWrite(t, filepath.Join(dir, "rancher-resolution-install-ha-1.json"), `{
+  "phase": "install",
+  "ha_index": 1,
+  "requested_version": "v2.14-head",
+  "preferred_image_registries": ["stgregistry.suse.com", "docker.io"],
+  "resolved_image_registry": "stgregistry.suse.com",
+  "rancher_image": "stgregistry.suse.com/rancher/rancher",
+  "rancher_image_tag": "v2.14-head",
+  "agent_image": "stgregistry.suse.com/rancher/rancher-agent:v2.14-head",
+  "rancher_image_digest": "sha256:`+strings.Repeat("e", 64)+`",
+  "agent_image_digest": "sha256:`+strings.Repeat("f", 64)+`",
+  "image_source_revision": "`+strings.Repeat("1", 40)+`",
+  "image_source_oss_revision": "`+strings.Repeat("2", 40)+`"
+}`)
+	mustWrite(t, filepath.Join(dir, "rancher-resolution-upgrade-ha-1.json"), `{
+  "phase": "upgrade",
+  "ha_index": 1,
+  "requested_version": "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
+  "preferred_image_registries": ["stgregistry.suse.com", "docker.io"],
+  "resolved_image_registry": "stgregistry.suse.com",
+  "rancher_image": "stgregistry.suse.com/rancher/rancher",
+  "rancher_image_tag": "`+tag+`",
+  "agent_image": "stgregistry.suse.com/rancher/rancher-agent:`+tag+`",
+  "rancher_image_digest": "`+rancherDigest+`",
+  "agent_image_digest": "`+agentDigest+`",
+  "image_source_revision": "`+revision+`",
+  "image_source_oss_revision": "`+ossRevision+`"
+}`)
+
+	report, err := renderReport(signoffPlan{TargetVersion: "v2.14-head"}, dir, "", time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"## Rancher Install Resolution",
+		"## Rancher Upgrade Resolution",
+		"`v2.14-head`",
+		"`stgregistry.suse.com/rancher/rancher:v2.14-head`",
+		"`2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head`",
+		"`stgregistry.suse.com/rancher/rancher:" + tag + "`",
+		"`stgregistry.suse.com/rancher/rancher-agent:" + tag + "`",
+		"`" + rancherDigest + "`",
+		"`" + agentDigest + "`",
+		"`" + revision + "`",
+		"`" + ossRevision + "`",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("expected report to contain %q:\n%s", want, report)
+		}
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {

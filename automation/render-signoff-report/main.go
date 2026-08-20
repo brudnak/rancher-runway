@@ -85,6 +85,14 @@ func readPlan(path string) (signoffPlan, error) {
 }
 
 func renderReport(plan signoffPlan, outputDir, activeLane string, generatedAt time.Time) (string, error) {
+	installResolutions, err := readMetadataFiles(filepath.Join(outputDir, "rancher-resolution-install-ha-*.json"))
+	if err != nil {
+		return "", err
+	}
+	upgradeResolutions, err := readMetadataFiles(filepath.Join(outputDir, "rancher-resolution-upgrade-ha-*.json"))
+	if err != nil {
+		return "", err
+	}
 	downstream, err := readMetadataFiles(filepath.Join(outputDir, "downstream-ha-*.json"))
 	if err != nil {
 		return "", err
@@ -106,6 +114,8 @@ func renderReport(plan signoffPlan, outputDir, activeLane string, generatedAt ti
 		return "", err
 	}
 	rancherTests := expandRancherTestRows(rancherTestRuns)
+	installResolutions = expandRancherResolutionRows(installResolutions)
+	upgradeResolutions = expandRancherResolutionRows(upgradeResolutions)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s Sign-Off Report\n\n", valueOr(plan.TargetVersion, "Rancher Alpha"))
@@ -139,6 +149,18 @@ func renderReport(plan signoffPlan, outputDir, activeLane string, generatedAt ti
 		}
 	}
 
+	resolutionColumns := []string{
+		"requested_version",
+		"resolved_image_registry",
+		"rancher_image_reference",
+		"rancher_image_digest",
+		"agent_image",
+		"agent_image_digest",
+		"image_source_revision",
+		"image_source_oss_revision",
+	}
+	writeMetadataTable(&b, "Rancher Install Resolution", installResolutions, resolutionColumns)
+	writeMetadataTable(&b, "Rancher Upgrade Resolution", upgradeResolutions, resolutionColumns)
 	writeMetadataTable(&b, "Downstream Linode", downstream, []string{"ha_index", "k3s_version"})
 	writeMetadataTable(&b, "Webhook Signing", signingRuns, []string{"target_version", "webhook_image", "signing_policy", "enforced", "signature_verified", "provenance_verified", "sbom_verified", "verification_error"})
 	writeMetadataTable(&b, "Local Suite Targets", localSuites, []string{"ha_index"})
@@ -147,6 +169,35 @@ func renderReport(plan signoffPlan, outputDir, activeLane string, generatedAt ti
 	writeMetadataTable(&b, "Rancher Test Results", rancherTests, []string{"ref", "lane", "suite", "package", "test_run", "junit", "conclusion"})
 
 	return b.String(), nil
+}
+
+func expandRancherResolutionRows(resolutions []metadata) []metadata {
+	for _, resolution := range resolutions {
+		resolution["rancher_image_reference"] = imageReference(
+			metadataString(resolution["rancher_image"]),
+			metadataString(resolution["rancher_image_tag"]),
+		)
+	}
+	return resolutions
+}
+
+func imageReference(image, tag string) string {
+	image = strings.TrimSpace(image)
+	tag = strings.TrimSpace(tag)
+	if image == "" {
+		return tag
+	}
+	if tag == "" {
+		return image
+	}
+	return image + ":" + tag
+}
+
+func metadataString(value interface{}) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
 }
 
 func expandRancherTestRows(testRuns []metadata) []metadata {

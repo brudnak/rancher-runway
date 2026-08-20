@@ -11,15 +11,19 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 )
 
-const imageLookupVersionLabel = "org.opencontainers.image.version"
+const (
+	imageLookupVersionLabel            = "org.opencontainers.image.version"
+	imageLookupCanonicalReferenceLabel = "org.opensuse.reference"
+)
 
 type rancherImageProvenance struct {
-	Reference    string
-	Digest       string
-	BuildVersion string
-	SourceURL    string
-	Revision     string
-	OSSRevision  string
+	Reference          string
+	Digest             string
+	BuildVersion       string
+	SourceURL          string
+	Revision           string
+	OSSRevision        string
+	CanonicalReference string
 }
 
 type preferredRancherImageResolution struct {
@@ -76,6 +80,9 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 		}
 
 		if serverFound && agentFound {
+			if err := validateExactHeadImagePair(tag, serverProvenance, agentProvenance); err != nil {
+				return nil, err
+			}
 			return &preferredRancherImageResolution{
 				Registry:          registry,
 				RegistryLabel:     preferredRancherRegistryLabel(registry),
@@ -95,6 +102,47 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 	}
 
 	return nil, fmt.Errorf("preferred registries do not contain a complete Rancher server/agent image pair for %s: %s. No unselected registry fallback was attempted", tag, strings.Join(misses, "; "))
+}
+
+func inspectExplicitRancherImagePair(serverRepository, tag, agentReference string) (*preferredRancherImageResolution, error) {
+	serverReference := strings.TrimSpace(serverRepository) + ":" + strings.TrimSpace(tag)
+	registry, _, _, err := parseRegistryImage(serverReference)
+	if err != nil {
+		return nil, err
+	}
+
+	serverCtx, serverCancel := context.WithTimeout(context.Background(), rancherResolverHTTPTimeout)
+	serverProvenance, serverFound, serverErr := inspectPreferredRancherImage(serverCtx, serverReference)
+	serverCancel()
+	if serverErr != nil {
+		return nil, fmt.Errorf("could not inspect exact Rancher server image %s: %w", serverReference, serverErr)
+	}
+	if !serverFound {
+		return nil, fmt.Errorf("exact Rancher server image %s was not found", serverReference)
+	}
+
+	agentCtx, agentCancel := context.WithTimeout(context.Background(), rancherResolverHTTPTimeout)
+	agentProvenance, agentFound, agentErr := inspectPreferredRancherImage(agentCtx, agentReference)
+	agentCancel()
+	if agentErr != nil {
+		return nil, fmt.Errorf("could not inspect exact Rancher agent image %s: %w", agentReference, agentErr)
+	}
+	if !agentFound {
+		return nil, fmt.Errorf("exact Rancher agent image %s was not found", agentReference)
+	}
+	if err := validateExactHeadImagePair(tag, serverProvenance, agentProvenance); err != nil {
+		return nil, err
+	}
+
+	return &preferredRancherImageResolution{
+		Registry:          registry,
+		RegistryLabel:     preferredRancherRegistryLabel(registry),
+		RancherImage:      strings.TrimSpace(serverRepository),
+		RancherImageTag:   strings.TrimSpace(tag),
+		AgentImage:        strings.TrimSpace(agentReference),
+		RancherProvenance: serverProvenance,
+		AgentProvenance:   agentProvenance,
+	}, nil
 }
 
 func inspectRancherImageReference(ctx context.Context, reference string) (rancherImageProvenance, bool, error) {
@@ -119,13 +167,31 @@ func inspectRancherImageReferenceWithService(ctx context.Context, service *image
 
 	labels := response.Config.Labels
 	return rancherImageProvenance{
-		Reference:    response.Reference,
-		Digest:       response.Digest,
-		BuildVersion: safeOCIProvenanceLabel(labels[imageLookupVersionLabel]),
-		SourceURL:    safeOCIProvenanceLabel(labels[imageLookupSourceLabel]),
-		Revision:     safeOCIProvenanceLabel(labels[imageLookupRevisionLabel]),
-		OSSRevision:  safeOCIProvenanceLabel(labels[imageLookupOSSRevisionLabel]),
+		Reference:          response.Reference,
+		Digest:             response.Digest,
+		BuildVersion:       safeOCIProvenanceLabel(labels[imageLookupVersionLabel]),
+		SourceURL:          safeOCIProvenanceLabel(labels[imageLookupSourceLabel]),
+		Revision:           safeOCIProvenanceLabel(labels[imageLookupRevisionLabel]),
+		OSSRevision:        safeOCIProvenanceLabel(labels[imageLookupOSSRevisionLabel]),
+		CanonicalReference: safeOCIProvenanceLabel(labels[imageLookupCanonicalReferenceLabel]),
 	}, true, nil
+}
+
+func validateExactHeadImagePair(tag string, server, agent rancherImageProvenance) error {
+	normalizedTag := normalizeVersionInput(tag)
+	if !isCommitHeadRancherVersion(normalizedTag) {
+		return nil
+	}
+	expectedTag := normalizeDockerRancherTag(normalizedTag)
+	_, _, serverCanonicalTag, serverErr := parseRegistryImage(server.CanonicalReference)
+	_, _, agentCanonicalTag, agentErr := parseRegistryImage(agent.CanonicalReference)
+	if serverErr != nil || agentErr != nil || serverCanonicalTag == "" || agentCanonicalTag == "" {
+		return fmt.Errorf("exact Rancher head image pair %s did not declare canonical server and agent org.opensuse.reference labels", expectedTag)
+	}
+	if serverCanonicalTag != expectedTag || agentCanonicalTag != expectedTag {
+		return fmt.Errorf("exact Rancher head image pair %s has mismatched canonical tags: server %s, agent %s", expectedTag, serverCanonicalTag, agentCanonicalTag)
+	}
+	return nil
 }
 
 // Preferred-image verification must match what provisioned nodes can pull.

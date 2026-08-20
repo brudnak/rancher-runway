@@ -140,3 +140,128 @@ func TestReadRancherResolutionMissingPathIsOptional(t *testing.T) {
 		t.Fatalf("expected nil result, got %+v", result)
 	}
 }
+
+func TestRancherHeadResolutionIdentitySurvivesLedgerRoundTrip(t *testing.T) {
+	tempDir := t.TempDir()
+	resolutionPath := filepath.Join(tempDir, "rancher-resolution-upgrade-ha-1.json")
+	ledgerPath := filepath.Join(tempDir, "signoff-ledger.json")
+	tag := "v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
+	revision := strings.Repeat("a", 40)
+	ossRevision := strings.Repeat("b", 40)
+	rancherDigest := "sha256:" + strings.Repeat("c", 64)
+	agentDigest := "sha256:" + strings.Repeat("d", 64)
+	sourceURL := "https://github.com/rancher/rancher-prime"
+	commitURL := "https://github.com/rancher/rancher/commit/" + ossRevision
+
+	resolutionJSON := `{
+  "phase": "upgrade",
+  "ha_index": 1,
+  "requested_version": "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
+  "requested_distro": "auto",
+  "preferred_image_registries": ["stgregistry.suse.com", "docker.io"],
+  "build_type": "head",
+  "resolved_distro": "prime-staging",
+  "resolved_image_registry": "stgregistry.suse.com",
+  "chart_repo_alias": "rancher-prime",
+  "chart_version": "2.14.5",
+  "chart_source": "rancher-prime/rancher@2.14.5",
+  "rancher_image": "stgregistry.suse.com/rancher/rancher",
+  "rancher_image_tag": "v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
+  "agent_image": "stgregistry.suse.com/rancher/rancher-agent:v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
+  "rancher_image_digest": "` + rancherDigest + `",
+  "agent_image_digest": "` + agentDigest + `",
+  "image_build_version": "v2.14.5-prime-head-build-42",
+  "image_source_url": "https://github.com/rancher/rancher-prime",
+  "image_source_revision": "` + revision + `",
+  "image_source_oss_revision": "` + ossRevision + `",
+  "image_source_commit_url": "https://github.com/rancher/rancher/commit/` + ossRevision + `",
+  "use_rancher_image_fields": true,
+  "compatibility_baseline": "2.14.5",
+  "recommended_rke2_version": "v1.33.4+rke2r1",
+  "resolution_notes": ["selected the exact Prime head image pair"]
+}`
+	if err := os.WriteFile(resolutionPath, []byte(resolutionJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resolution, err := readRancherResolution(resolutionPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution == nil {
+		t.Fatal("expected Rancher resolution")
+	}
+	if resolution.ResolvedImageRegistry != "stgregistry.suse.com" || resolution.RancherImageDigest != rancherDigest || resolution.AgentImageDigest != agentDigest {
+		t.Fatalf("resolution image identity was not decoded: %+v", resolution)
+	}
+	if len(resolution.PreferredImageRegistries) != 2 || resolution.ImageSourceRevision != revision || resolution.ImageSourceOSSRevision != ossRevision || !resolution.UseRancherImageFields {
+		t.Fatalf("resolution provenance was not decoded: %+v", resolution)
+	}
+
+	l := ledger{SchemaVersion: ledgerSchemaVersion, Entries: map[string]map[string]entry{
+		"v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head": {
+			"webhook-upgrade": {
+				Status:            "success",
+				CoveragePolicy:    currentCoveragePolicy,
+				RunID:             "123",
+				Lane:              "webhook-upgrade",
+				ReleaseLine:       "v2.14",
+				TargetVersion:     "v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
+				InstallRancher:    "v2.14.5",
+				UpgradeToRancher:  "v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
+				UpgradeResolution: resolution,
+				CompletedAt:       "2026-08-20T17:00:00Z",
+			},
+		},
+	}}
+	if err := writeLedger(ledgerPath, l); err != nil {
+		t.Fatal(err)
+	}
+
+	roundTripped, err := readLedger(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := roundTripped.Entries["v2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"]["webhook-upgrade"].UpgradeResolution
+	if got == nil {
+		t.Fatal("expected upgrade resolution in ledger")
+	}
+	if got.RequestedVersion != "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head" {
+		t.Fatalf("requested head version was lost: %+v", got)
+	}
+	if got.RancherImage != "stgregistry.suse.com/rancher/rancher" || got.RancherImageTag != tag || got.AgentImage != "stgregistry.suse.com/rancher/rancher-agent:"+tag {
+		t.Fatalf("exact Rancher image pair was lost: %+v", got)
+	}
+	if got.RancherImageDigest != rancherDigest || got.AgentImageDigest != agentDigest || got.ImageBuildVersion != "v2.14.5-prime-head-build-42" {
+		t.Fatalf("image digests/build identity were lost: %+v", got)
+	}
+	if got.ImageSourceURL != sourceURL || got.ImageSourceRevision != revision || got.ImageSourceOSSRevision != ossRevision || got.ImageSourceCommitURL != commitURL {
+		t.Fatalf("image provenance was lost: %+v", got)
+	}
+	if got.ResolvedImageRegistry != "stgregistry.suse.com" || strings.Join(got.PreferredImageRegistries, ",") != "stgregistry.suse.com,docker.io" || !got.UseRancherImageFields {
+		t.Fatalf("image resolution settings were lost: %+v", got)
+	}
+
+	ledgerJSON, err := os.ReadFile(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		`"preferred_image_registries"`,
+		`"resolved_image_registry"`,
+		`"rancher_image_tag"`,
+		`"rancher_image_digest"`,
+		`"agent_image"`,
+		`"agent_image_digest"`,
+		`"image_build_version"`,
+		`"image_source_url"`,
+		`"image_source_revision"`,
+		`"image_source_oss_revision"`,
+		`"image_source_commit_url"`,
+		`"use_rancher_image_fields"`,
+	} {
+		if !strings.Contains(string(ledgerJSON), field) {
+			t.Fatalf("expected ledger JSON to retain %s:\n%s", field, ledgerJSON)
+		}
+	}
+}

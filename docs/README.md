@@ -29,9 +29,11 @@ automation-only secrets.
 
 The original repository can layer scheduled GitHub Actions on top:
 
-1. Watch for new Rancher alpha releases.
-2. Resolve the webhook candidate from `build.yaml`.
-3. Plan the sign-off bundle based on whether the alpha changed webhook versions.
+1. Select Rancher head builds or prereleases for validation.
+2. Resolve a publication-aware, exact Rancher server/agent image pair and the
+   webhook candidate from build metadata.
+3. Plan the sign-off bundle based on whether the target build changed webhook
+   versions.
 4. Use a persistent S3/DynamoDB Terraform backend for isolated per-lane state.
 5. Render report artifacts.
 6. Clean up all AWS and Linode resources.
@@ -41,9 +43,12 @@ forks can ignore it unless they intentionally configure their own cloud accounts
 
 Current workflow layers:
 
-- `signoff-plan.yml`: manual planner from `signoff-targets.json` or one input
-  Rancher version. Dispatch skips lanes that are already active or already
-  successful on the current branch unless `rerun_successful_lanes=true`.
+- `signoff-plan.yml`: manual planner from `signoff-targets.json` or one supported
+  head/prerelease Rancher version. Dispatch suppresses identical active lanes
+  and successful immutable targets unless `rerun_successful_lanes=true`.
+  Mutable `head` and `vX.Y-head` aliases are reconsidered after active runs
+  finish so a successful run against an older image does not make the alias
+  permanently stale.
 - `bootstrap-terraform-state.yml`: manual S3/DynamoDB backend bootstrap, plan-only unless `apply=true`.
 - `run-rancher-signoff-lane.yml`: manual sign-off lane runner for
   `framework-regression`, `webhook-fresh-install`, `webhook-upgrade`, or

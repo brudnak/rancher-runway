@@ -102,6 +102,331 @@ func TestParsePrereleaseVersionAcceptsAlphaRCAndRCS(t *testing.T) {
 	}
 }
 
+func TestParseTargetVersionAcceptsHeadForms(t *testing.T) {
+	fullSHA := strings.Repeat("a", 40)
+	tests := []struct {
+		name           string
+		value          string
+		wantRaw        string
+		wantMajor      int
+		wantMinor      int
+		wantPatch      int
+		wantPatchKnown bool
+		wantCommit     string
+	}{
+		{name: "plain", value: "head", wantRaw: "head"},
+		{name: "minor alias", value: "2.16-head", wantRaw: "v2.16-head", wantMajor: 2, wantMinor: 16},
+		{name: "community commit", value: "v2.14-abcdef0-head", wantRaw: "v2.14-abcdef0-head", wantMajor: 2, wantMinor: 14, wantCommit: "abcdef0"},
+		{name: "prime patch commit", value: "2.14.5-" + fullSHA + "-head", wantRaw: "v2.14.5-" + fullSHA + "-head", wantMajor: 2, wantMinor: 14, wantPatch: 5, wantPatchKnown: true, wantCommit: fullSHA},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseTargetVersion(tt.value)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.Raw != tt.wantRaw || got.Kind != "head" || got.Major != tt.wantMajor || got.Minor != tt.wantMinor || got.Patch != tt.wantPatch || got.PatchSpecified != tt.wantPatchKnown || got.Commit != tt.wantCommit {
+				t.Fatalf("parseTargetVersion(%q) = %#v", tt.value, got)
+			}
+		})
+	}
+}
+
+func TestParseTargetVersionRejectsMalformedHeadCommit(t *testing.T) {
+	for _, value := range []string{
+		"v2.14-abc123-head",
+		"v2.14-nothex00-head",
+		"v2.14.5-xyz9876-head",
+		"v2.14.5-head",
+	} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := parseTargetVersion(value); err == nil {
+				t.Fatalf("expected %q to be rejected", value)
+			}
+		})
+	}
+}
+
+func TestBuildPlanAcceptsCommunityCommitHeadAndPinsExactImages(t *testing.T) {
+	const (
+		tagSHA    = "abcdef0"
+		fullSHA   = "abcdef0123456789abcdef0123456789abcdef01"
+		targetTag = "v2.14-" + tagSHA + "-head"
+		serverRef = "stgregistry.suse.com/rancher/rancher:" + targetTag
+		agentRef  = "stgregistry.suse.com/rancher/rancher-agent:" + targetTag
+	)
+	client := fakeGitHubClient(t, map[string]string{
+		"/rancher/rancher/" + fullSHA + "/build.yaml":             `webhookVersion: 109.0.6+up0.10.10-rc.3`,
+		"/rancher/rancher/v2.14.4/build.yaml":                     `webhookVersion: 109.0.5+up0.10.9`,
+		"/stg/v2/rancher/rancher-webhook/manifests/v0.10.10-rc.3": "ok",
+	})
+	client.inspectImage = fixtureImageInspector(map[string]imageInspectionFixture{
+		serverRef: {
+			Found: true,
+			Metadata: rancherImageMetadata{
+				Digest:             "sha256:" + strings.Repeat("1", 64),
+				Source:             "https://github.com/rancher/rancher",
+				Revision:           fullSHA,
+				CanonicalReference: "rancher/rancher:" + targetTag,
+			},
+		},
+		agentRef: {
+			Found:    true,
+			Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("2", 64), CanonicalReference: "rancher/rancher-agent:" + targetTag},
+		},
+	})
+
+	got, err := buildPlan(context.Background(), client, targetTag, "v2.14.4", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.10-rc.3", "auto", "", "rancher-runway/signoff", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TargetVersion != targetTag || got.ResolvedTargetVersion != "" || got.ReleaseLine != "v2.14" {
+		t.Fatalf("unexpected target identity: %#v", got)
+	}
+	if got.RancherDistro != "auto" || got.RancherImageRegistry != "stgregistry.suse.com" || got.RancherImage != serverRef || got.RancherAgentImage != agentRef {
+		t.Fatalf("unexpected Rancher image resolution: %#v", got)
+	}
+	if got.RancherImageDigest != "sha256:"+strings.Repeat("1", 64) || got.RancherAgentDigest != "sha256:"+strings.Repeat("2", 64) || got.RancherImageRevision != fullSHA {
+		t.Fatalf("unexpected Rancher provenance: %#v", got)
+	}
+	if got.Lanes[0].InstallRancher != serverRef || got.Lanes[1].InstallRancher != serverRef {
+		t.Fatalf("fresh target lanes were not pinned to %s: %#v", serverRef, got.Lanes)
+	}
+	if got.Lanes[2].InstallRancher != "v2.14.4" || got.Lanes[2].UpgradeToRancher != serverRef {
+		t.Fatalf("upgrade lane did not keep the stable install and exact target image: %#v", got.Lanes[2])
+	}
+}
+
+func TestBuildPlanMarksPatchQualifiedPrimeHead(t *testing.T) {
+	const (
+		ossSHA     = "97845ced7ee6df9a36cae65ded9bbb73e14500b5"
+		privateSHA = "a4af84edd99705d3dc9b36a60fc06131e4afd6ee"
+		targetTag  = "v2.14.5-" + ossSHA + "-head"
+		serverRef  = "stgregistry.suse.com/rancher/rancher:" + targetTag
+		agentRef   = "stgregistry.suse.com/rancher/rancher-agent:" + targetTag
+	)
+	client := fakeGitHubClient(t, map[string]string{
+		"/rancher/rancher/" + ossSHA + "/build.yaml":              `webhookVersion: 109.0.6+up0.10.10-rc.3`,
+		"/rancher/rancher/v2.14.4/build.yaml":                     `webhookVersion: 109.0.5+up0.10.9`,
+		"/stg/v2/rancher/rancher-webhook/manifests/v0.10.10-rc.3": "ok",
+	})
+	client.inspectImage = fixtureImageInspector(map[string]imageInspectionFixture{
+		serverRef: {
+			Found: true,
+			Metadata: rancherImageMetadata{
+				Digest:             "sha256:" + strings.Repeat("3", 64),
+				Source:             "https://github.com/rancher/rancher-prime.git",
+				Revision:           privateSHA,
+				OSSRevision:        ossSHA,
+				CanonicalReference: "rancher/rancher:" + targetTag,
+			},
+		},
+		agentRef: {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("4", 64), CanonicalReference: "rancher/rancher-agent:" + targetTag}},
+	})
+
+	got, err := buildPlan(context.Background(), client, targetTag, "v2.14.4", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.10-rc.3", "auto", "", "rancher-runway/signoff", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.RancherDistro != "prime" || got.RancherImageSource != "https://github.com/rancher/rancher-prime.git" || got.RancherImageRevision != privateSHA || got.RancherOSSRevision != ossSHA {
+		t.Fatalf("unexpected Prime provenance: %#v", got)
+	}
+	if got.Lanes[2].UpgradeToRancher != serverRef {
+		t.Fatalf("Prime upgrade target was not pinned: %#v", got.Lanes[2])
+	}
+}
+
+func TestBuildPlanPinsMovingHeadAliasToCanonicalPair(t *testing.T) {
+	const (
+		sha          = "1234567890abcdef1234567890abcdef12345678"
+		aliasTag     = "v2.14-head"
+		canonicalTag = "v2.14-" + sha + "-head"
+		aliasServer  = "stgregistry.suse.com/rancher/rancher:" + aliasTag
+		aliasAgent   = "stgregistry.suse.com/rancher/rancher-agent:" + aliasTag
+		exactServer  = "stgregistry.suse.com/rancher/rancher:" + canonicalTag
+		exactAgent   = "stgregistry.suse.com/rancher/rancher-agent:" + canonicalTag
+	)
+	client := fakeGitHubClient(t, map[string]string{
+		"/rancher/rancher/" + sha + "/build.yaml":                 `webhookVersion: 109.0.6+up0.10.10-rc.3`,
+		"/rancher/rancher/v2.14.4/build.yaml":                     `webhookVersion: 109.0.5+up0.10.9`,
+		"/stg/v2/rancher/rancher-webhook/manifests/v0.10.10-rc.3": "ok",
+	})
+	digest := "sha256:" + strings.Repeat("5", 64)
+	var calls []string
+	client.inspectImage = recordingFixtureImageInspector(&calls, map[string]imageInspectionFixture{
+		aliasServer: {Found: true, Metadata: rancherImageMetadata{Digest: digest, Source: "https://github.com/rancher/rancher", Revision: sha, CanonicalReference: "rancher/rancher:" + canonicalTag}},
+		aliasAgent:  {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("6", 64), CanonicalReference: "rancher/rancher-agent:" + canonicalTag}},
+		exactServer: {Found: true, Metadata: rancherImageMetadata{Digest: digest, Source: "https://github.com/rancher/rancher", Revision: sha, CanonicalReference: "rancher/rancher:" + canonicalTag}},
+		exactAgent:  {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("6", 64), CanonicalReference: "rancher/rancher-agent:" + canonicalTag}},
+	})
+
+	got, err := buildPlan(context.Background(), client, aliasTag, "v2.14.4", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.10-rc.3", "auto", "", "rancher-runway/signoff", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.TargetVersion != aliasTag || got.ResolvedTargetVersion != canonicalTag {
+		t.Fatalf("expected requested alias plus resolved tag, got target=%s resolved=%s", got.TargetVersion, got.ResolvedTargetVersion)
+	}
+	if got.RancherImage != exactServer || got.RancherAgentImage != exactAgent || got.Lanes[0].InstallRancher != exactServer || got.Lanes[2].UpgradeToRancher != exactServer {
+		t.Fatalf("moving alias was not pinned to its exact pair: %#v", got)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "docker.io/") {
+			t.Fatalf("staging pair was complete, but Docker Hub was inspected: %v", calls)
+		}
+	}
+}
+
+func TestResolveHeadTargetUsesDockerOnlyForPlainHead(t *testing.T) {
+	const (
+		sha          = "abcdef0123456789abcdef0123456789abcdef01"
+		canonicalTag = "v2.16-" + sha + "-head"
+		aliasServer  = "docker.io/rancher/rancher:head"
+		aliasAgent   = "docker.io/rancher/rancher-agent:head"
+		exactServer  = "docker.io/rancher/rancher:" + canonicalTag
+		exactAgent   = "docker.io/rancher/rancher-agent:" + canonicalTag
+	)
+	var calls []string
+	client := githubClient{inspectImage: recordingFixtureImageInspector(&calls, map[string]imageInspectionFixture{
+		aliasServer: {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:plain", Source: "https://github.com/rancher/rancher", Revision: sha, Version: "main", CanonicalReference: "rancher/rancher:" + canonicalTag}},
+		aliasAgent:  {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:plain-agent", CanonicalReference: "rancher/rancher-agent:" + canonicalTag}},
+		exactServer: {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:plain", Source: "https://github.com/rancher/rancher", Revision: sha, CanonicalReference: "rancher/rancher:" + canonicalTag}},
+		exactAgent:  {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:plain-agent", CanonicalReference: "rancher/rancher-agent:" + canonicalTag}},
+	})}
+	requested, err := parseTargetVersion("head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, pair, buildRef, err := client.resolveHeadTarget(context.Background(), requested)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved.Raw != canonicalTag || pair.Registry != "docker.io" || pair.Server.Reference != exactServer || buildRef != sha {
+		t.Fatalf("unexpected plain head resolution: target=%#v pair=%#v buildRef=%s", resolved, pair, buildRef)
+	}
+	for _, call := range calls {
+		if strings.HasPrefix(call, "stgregistry.suse.com/") {
+			t.Fatalf("plain head must not inspect staging: %v", calls)
+		}
+	}
+}
+
+func TestResolveMovingPrimeHeadUsesOSSRevision(t *testing.T) {
+	const (
+		ossSHA       = "97845ced7ee6df9a36cae65ded9bbb73e14500b5"
+		privateSHA   = "a4af84edd99705d3dc9b36a60fc06131e4afd6ee"
+		aliasTag     = "v2.14-head"
+		canonicalTag = "v2.14.5-" + ossSHA + "-head"
+		aliasServer  = "stgregistry.suse.com/rancher/rancher:" + aliasTag
+		aliasAgent   = "stgregistry.suse.com/rancher/rancher-agent:" + aliasTag
+		exactServer  = "stgregistry.suse.com/rancher/rancher:" + canonicalTag
+		exactAgent   = "stgregistry.suse.com/rancher/rancher-agent:" + canonicalTag
+	)
+	serverMetadata := rancherImageMetadata{
+		Digest:             "sha256:" + strings.Repeat("8", 64),
+		Source:             "https://github.com/rancher/rancher-prime.git",
+		Revision:           privateSHA,
+		OSSRevision:        ossSHA,
+		CanonicalReference: "rancher/rancher:" + canonicalTag,
+	}
+	client := githubClient{inspectImage: fixtureImageInspector(map[string]imageInspectionFixture{
+		aliasServer: {Found: true, Metadata: serverMetadata},
+		aliasAgent:  {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("9", 64), CanonicalReference: "rancher/rancher-agent:" + canonicalTag}},
+		exactServer: {Found: true, Metadata: serverMetadata},
+		exactAgent:  {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("9", 64), CanonicalReference: "rancher/rancher-agent:" + canonicalTag}},
+	})}
+	requested, err := parseTargetVersion(aliasTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, pair, buildRef, err := client.resolveHeadTarget(context.Background(), requested)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resolved.Raw != canonicalTag || !resolved.PatchSpecified || resolved.Patch != 5 || pair.Server.Reference != exactServer || buildRef != ossSHA {
+		t.Fatalf("unexpected Prime alias resolution: target=%#v pair=%#v buildRef=%s", resolved, pair, buildRef)
+	}
+}
+
+func TestResolveHeadTargetDoesNotMixRegistries(t *testing.T) {
+	const (
+		tag     = "v2.15-abcdef0-head"
+		fullSHA = "abcdef0123456789abcdef0123456789abcdef01"
+	)
+	client := githubClient{inspectImage: fixtureImageInspector(map[string]imageInspectionFixture{
+		"stgregistry.suse.com/rancher/rancher:" + tag:       {Found: true},
+		"stgregistry.suse.com/rancher/rancher-agent:" + tag: {Found: false},
+		"docker.io/rancher/rancher:" + tag:                  {Found: true, Metadata: rancherImageMetadata{Source: "https://github.com/rancher/rancher", Revision: fullSHA, CanonicalReference: "rancher/rancher:" + tag}},
+		"docker.io/rancher/rancher-agent:" + tag:            {Found: true, Metadata: rancherImageMetadata{CanonicalReference: "rancher/rancher-agent:" + tag}},
+	})}
+	requested, err := parseTargetVersion(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, pair, _, err := client.resolveHeadTarget(context.Background(), requested)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if pair.Registry != "docker.io" || !strings.HasPrefix(pair.Server.Reference, "docker.io/") || !strings.HasPrefix(pair.Agent.Reference, "docker.io/") {
+		t.Fatalf("expected one complete Docker pair, got %#v", pair)
+	}
+}
+
+func TestResolveHeadTargetRejectsCommitProvenanceMismatch(t *testing.T) {
+	const tag = "v2.15-abcdef0-head"
+	client := githubClient{inspectImage: fixtureImageInspector(map[string]imageInspectionFixture{
+		"stgregistry.suse.com/rancher/rancher:" + tag: {
+			Found: true,
+			Metadata: rancherImageMetadata{
+				Source:             "https://github.com/rancher/rancher",
+				Revision:           "1234567890abcdef1234567890abcdef12345678",
+				CanonicalReference: "rancher/rancher:" + tag,
+			},
+		},
+		"stgregistry.suse.com/rancher/rancher-agent:" + tag: {Found: true, Metadata: rancherImageMetadata{CanonicalReference: "rancher/rancher-agent:" + tag}},
+	})}
+	requested, err := parseTargetVersion(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = client.resolveHeadTarget(context.Background(), requested)
+	if err == nil || !strings.Contains(err.Error(), "image provenance identifies public revision") {
+		t.Fatalf("expected provenance mismatch, got %v", err)
+	}
+}
+
+func TestResolveHeadTargetRejectsMismatchedAgentCanonicalTag(t *testing.T) {
+	const (
+		tag     = "v2.15-abcdef0-head"
+		fullSHA = "abcdef0123456789abcdef0123456789abcdef01"
+	)
+	client := githubClient{inspectImage: fixtureImageInspector(map[string]imageInspectionFixture{
+		"stgregistry.suse.com/rancher/rancher:" + tag: {
+			Found: true,
+			Metadata: rancherImageMetadata{
+				Source:             "https://github.com/rancher/rancher",
+				Revision:           fullSHA,
+				CanonicalReference: "rancher/rancher:" + tag,
+			},
+		},
+		"stgregistry.suse.com/rancher/rancher-agent:" + tag: {
+			Found: true,
+			Metadata: rancherImageMetadata{
+				CanonicalReference: "rancher/rancher-agent:v2.15-1234567-head",
+			},
+		},
+	})}
+	requested, err := parseTargetVersion(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = client.resolveHeadTarget(context.Background(), requested)
+	if err == nil || !strings.Contains(err.Error(), "mismatched canonical tags") {
+		t.Fatalf("expected mismatched agent provenance to be rejected, got %v", err)
+	}
+}
+
 func TestBuildPlanAcceptsRancherRCSTag(t *testing.T) {
 	client := fakeGitHubClient(t, map[string]string{
 		"/rancher/rancher/v2.16.0-rcs-0844.1/build.yaml":               `webhookVersion: 111.0.0+up0.12.1-rcs-0844.1`,
@@ -504,6 +829,66 @@ func TestLatestAlphasPerLineReturnsNoRecentAlphaError(t *testing.T) {
 	}
 }
 
+func TestResolvePreviousReleaseForUnpatchedHeadUsesLatestSameLine(t *testing.T) {
+	client := fakeGitHubClient(t, map[string]string{
+		"/repos/rancher/rancher/releases": `[
+			{"tag_name":"v2.15.0","prerelease":false},
+			{"tag_name":"v2.14.4","prerelease":false},
+			{"tag_name":"v2.14.3","prerelease":false},
+			{"tag_name":"v2.13.9","prerelease":false}
+		]`,
+	})
+	target, err := parseTargetVersion("v2.14-head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.resolvePreviousRelease(context.Background(), target)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v2.14.4" {
+		t.Fatalf("expected latest v2.14 release, got %s", got)
+	}
+}
+
+func TestResolvePreviousReleaseForPatchHeadFallsBackToEarlierSameLine(t *testing.T) {
+	client := fakeGitHubClient(t, map[string]string{
+		"/repos/rancher/rancher/releases": `[
+			{"tag_name":"v2.14.5","prerelease":false},
+			{"tag_name":"v2.14.3","prerelease":false},
+			{"tag_name":"v2.13.9","prerelease":false}
+		]`,
+	})
+	target, err := parseTargetVersion("v2.14.5-abcdef0-head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.resolvePreviousRelease(context.Background(), target)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v2.14.3" {
+		t.Fatalf("expected earlier same-line release v2.14.3, got %s", got)
+	}
+}
+
+func TestResolvePreviousReleaseForPatchHeadPrefersPatchMinusOne(t *testing.T) {
+	client := fakeGitHubClient(t, map[string]string{
+		"/repos/rancher/rancher/releases/tags/v2.14.4": `{}`,
+	})
+	target, err := parseTargetVersion("v2.14.5-abcdef0-head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.resolvePreviousRelease(context.Background(), target)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "v2.14.4" {
+		t.Fatalf("expected patch-minus-one release v2.14.4, got %s", got)
+	}
+}
+
 func TestNormalizeTargetListKeepsEnabledUniqueTargets(t *testing.T) {
 	disabled := false
 	targets := normalizeTargetList(targetList{Targets: []targetSpec{
@@ -525,6 +910,13 @@ func TestNormalizeTargetListKeepsEnabledUniqueTargets(t *testing.T) {
 	}
 	if target.SigningPolicy != "required" {
 		t.Fatalf("unexpected signing policy: %#v", target)
+	}
+}
+
+func TestNormalizeTargetListPreservesPlainHead(t *testing.T) {
+	targets := normalizeTargetList(targetList{Targets: []targetSpec{{RancherVersion: " head "}}})
+	if len(targets.Targets) != 1 || targets.Targets[0].RancherVersion != "head" {
+		t.Fatalf("plain head was not normalized correctly: %#v", targets.Targets)
 	}
 }
 
@@ -613,5 +1005,32 @@ func fakeGitHubClient(t *testing.T, responses map[string]string) githubClient {
 			"registry.suse.com":    server.URL + "/suse",
 			"docker.io":            server.URL + "/docker",
 		},
+	}
+}
+
+type imageInspectionFixture struct {
+	Metadata rancherImageMetadata
+	Found    bool
+	Err      error
+}
+
+func fixtureImageInspector(fixtures map[string]imageInspectionFixture) rancherImageInspector {
+	return recordingFixtureImageInspector(nil, fixtures)
+}
+
+func recordingFixtureImageInspector(calls *[]string, fixtures map[string]imageInspectionFixture) rancherImageInspector {
+	return func(_ context.Context, reference string) (rancherImageMetadata, bool, error) {
+		if calls != nil {
+			*calls = append(*calls, reference)
+		}
+		fixture, ok := fixtures[reference]
+		if !ok {
+			return rancherImageMetadata{Reference: reference}, false, nil
+		}
+		metadata := fixture.Metadata
+		if metadata.Reference == "" {
+			metadata.Reference = reference
+		}
+		return metadata, fixture.Found, fixture.Err
 	}
 }

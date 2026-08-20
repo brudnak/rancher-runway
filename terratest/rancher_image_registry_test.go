@@ -80,6 +80,64 @@ func TestResolvePreferredRancherImageSettingsFailsClosedForSelectedRegistry(t *t
 	}
 }
 
+func TestInspectExplicitRancherImagePairRecordsBothDigests(t *testing.T) {
+	previousInspector := inspectPreferredRancherImage
+	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
+
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+		digestCharacter := "a"
+		if strings.Contains(reference, "rancher-agent") {
+			digestCharacter = "b"
+		}
+		return rancherImageProvenance{
+			Reference:          reference,
+			Digest:             "sha256:" + strings.Repeat(digestCharacter, 64),
+			SourceURL:          "https://github.com/rancher/rancher-prime",
+			Revision:           strings.Repeat("c", 40),
+			CanonicalReference: strings.TrimPrefix(reference, "stgregistry.suse.com/"),
+		}, true, nil
+	}
+
+	tag := "v2.14.5-" + strings.Repeat("d", 40) + "-head"
+	resolution, err := inspectExplicitRancherImagePair(
+		"stgregistry.suse.com/rancher/rancher",
+		tag,
+		"stgregistry.suse.com/rancher/rancher-agent:"+tag,
+	)
+	if err != nil {
+		t.Fatalf("inspectExplicitRancherImagePair returned error: %v", err)
+	}
+	if resolution.Registry != "stgregistry.suse.com" {
+		t.Fatalf("unexpected registry %q", resolution.Registry)
+	}
+	if resolution.RancherProvenance.Digest != "sha256:"+strings.Repeat("a", 64) || resolution.AgentProvenance.Digest != "sha256:"+strings.Repeat("b", 64) {
+		t.Fatalf("unexpected pair provenance: %#v", resolution)
+	}
+}
+
+func TestInspectExplicitRancherImagePairRejectsMismatchedAgentProvenance(t *testing.T) {
+	previousInspector := inspectPreferredRancherImage
+	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
+
+	tag := "v2.14.5-" + strings.Repeat("d", 40) + "-head"
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+		canonical := "rancher/rancher:" + tag
+		if strings.Contains(reference, "rancher-agent") {
+			canonical = "rancher/rancher-agent:v2.14.5-" + strings.Repeat("e", 40) + "-head"
+		}
+		return rancherImageProvenance{Reference: reference, CanonicalReference: canonical}, true, nil
+	}
+
+	_, err := inspectExplicitRancherImagePair(
+		"stgregistry.suse.com/rancher/rancher",
+		tag,
+		"stgregistry.suse.com/rancher/rancher-agent:"+tag,
+	)
+	if err == nil || !strings.Contains(err.Error(), "mismatched canonical tags") {
+		t.Fatalf("expected mismatched agent provenance to be rejected, got %v", err)
+	}
+}
+
 func TestResolvePreferredRancherImageSettingsSurfacesLookupErrorWithoutFallback(t *testing.T) {
 	previousInspector := inspectPreferredRancherImage
 	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
@@ -154,17 +212,18 @@ func TestInspectRancherImageReferenceWithServiceExtractsProvenanceAndMapsNotFoun
 	service := newImageLookupTestService(t, registryServer)
 	revision := strings.Repeat("d", 40)
 	reference, digest := pushImageLookupSourceFixture(t, registryServer, "v2.14-head", map[string]string{
-		imageLookupVersionLabel:     "v2.14-head-build-42",
-		imageLookupSourceLabel:      "https://github.com/rancher/rancher",
-		imageLookupRevisionLabel:    revision,
-		imageLookupOSSRevisionLabel: strings.Repeat("e", 40),
+		imageLookupVersionLabel:            "v2.14-head-build-42",
+		imageLookupSourceLabel:             "https://github.com/rancher/rancher",
+		imageLookupRevisionLabel:           revision,
+		imageLookupOSSRevisionLabel:        strings.Repeat("e", 40),
+		imageLookupCanonicalReferenceLabel: "rancher/rancher:v2.14-head",
 	})
 
 	provenance, found, err := inspectRancherImageReferenceWithService(context.Background(), service, reference)
 	if err != nil {
 		t.Fatalf("inspect fixture: %v", err)
 	}
-	if !found || provenance.Reference != reference || provenance.Digest != digest || provenance.BuildVersion != "v2.14-head-build-42" || provenance.SourceURL != "https://github.com/rancher/rancher" || provenance.Revision != revision {
+	if !found || provenance.Reference != reference || provenance.Digest != digest || provenance.BuildVersion != "v2.14-head-build-42" || provenance.SourceURL != "https://github.com/rancher/rancher" || provenance.Revision != revision || provenance.CanonicalReference != "rancher/rancher:v2.14-head" {
 		t.Fatalf("unexpected provenance: found=%v provenance=%#v", found, provenance)
 	}
 

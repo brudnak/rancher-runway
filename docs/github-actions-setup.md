@@ -1,7 +1,7 @@
 # GitHub Actions Setup
 
-This repo can run disposable Rancher alpha and RC sign-off lanes in GitHub
-Actions while still keeping local `tool-config.yml` usage unchanged.
+This repo can run disposable Rancher head-build and prerelease sign-off lanes in
+GitHub Actions while still keeping local `tool-config.yml` usage unchanged.
 
 The GitHub Actions path is intentionally environment-gated:
 
@@ -88,7 +88,7 @@ generated Linode root password before noisy provisioning steps.
 
 | Workflow | Creates cloud resources | Notes |
 | --- | --- | --- |
-| `signoff-plan.yml` | no, but it can dispatch the runner | Manual plan generation from `signoff-targets.json` or a single input version. Dispatch skips lanes already active or already successful on the current branch unless `rerun_successful_lanes=true`. |
+| `signoff-plan.yml` | no, but it can dispatch the runner | Manual plan generation from `signoff-targets.json` or a single head/prerelease input. Dispatch suppresses an identical active lane. It also skips a previously successful immutable target unless `rerun_successful_lanes=true`; mutable `head` and `vX.Y-head` aliases are always reconsidered after the active run finishes. |
 | `bootstrap-terraform-state.yml` | yes, only when `apply=true` | Creates or updates the persistent S3/DynamoDB backend. |
 | `run-rancher-signoff-lane.yml` | yes | Runs one Rancher sign-off lane, optionally with Linode downstreams and direct `rancher/tests` suite runs, then cleans up. |
 
@@ -96,8 +96,8 @@ generated Linode root password before noisy provisioning steps.
 
 After environments, secrets, and variables are configured:
 
-1. Run `Plan Rancher Sign-Off` manually for a known alpha, RC, or RCS
-   prerelease, for example `v2.15.1-rcs-c936`, with `dispatch_runs=false`.
+1. Run `Plan Rancher Sign-Off` manually for a known immutable target, such as
+   `v2.15.1-rcs-c936`, with `dispatch_runs=false`.
 2. Run `Run Rancher Sign-Off Lane` with:
    - `rancher_version`: `v2.15.0-rc2`
    - `lane`: `framework-regression`
@@ -113,8 +113,8 @@ After environments, secrets, and variables are configured:
    disabled for Rancher 2.11 and older and VAI enabled for Rancher 2.12 and
    newer. Downstream webhook lanes run webhook security settings for Rancher
    2.14 and newer when the actual Rancher chart should contain those settings.
-6. For normal use, edit `signoff-targets.json` with the alpha, RC, or RCS versions you
-   care about and run `Plan Rancher Sign-Off` manually with
+6. For normal use, edit `signoff-targets.json` with the head builds or
+   prereleases you care about and run `Plan Rancher Sign-Off` manually with
    `dispatch_runs=true`.
 
 ## Target Selection
@@ -131,9 +131,37 @@ Use `signoff-targets.json` as the source of truth for manually selected targets:
 }
 ```
 
-Target versions may be alpha tags such as `v2.14.1-alpha7`, RC tags such as
-`v2.15.0-rc2`, or RCS tags in compact or dotted form, such as
-`v2.15.1-rcs-c936` or `v2.16.0-rcs-0844.1`.
+Supported target forms are:
+
+| Form | Example | Mutability |
+| --- | --- | --- |
+| Current community head | `head` | Mutable alias. |
+| Minor-line head | `v2.15-head` | Mutable alias. |
+| Community commit head | `v2.15-0123456789abcdef-head` | Immutable commit build. |
+| Prime patch commit head | `v2.14.5-0123456789abcdef-head` | Immutable commit build; the numeric patch replaces the `Z` in the general `vX.Y.Z-SHA-head` form. |
+| Alpha | `v2.14.1-alpha7` | Immutable prerelease. |
+| RC | `v2.15.0-rc2` | Immutable prerelease. |
+| RCS | `v2.15.1-rcs-c936` or `v2.16.0-rcs-0844.1` | Immutable prerelease. |
+
+Prefer a commit-specific head tag for sign-off. It identifies one build, makes
+receipts reproducible, and lets the planner safely deduplicate a lane that has
+already succeeded. The mutable `head` and `vX.Y-head` aliases are useful for
+continuous smoke testing, but their contents can change without their workflow
+run title changing. The planner therefore does not suppress them because an
+older run with that title succeeded. It still suppresses an identical active
+run, so concurrent planners do not launch duplicate lanes.
+
+Head image publication changes as a release line moves through its lifecycle.
+Current community lines can publish on Docker Hub, while Prime-only lines
+publish on `stgregistry.suse.com`. Resolution is publication-aware: the planner
+locates an exact tag for which both `rancher/rancher` and
+`rancher/rancher-agent` exist in the same supported registry and declare the
+same canonical head tag, then records those exact image references for the
+lane. Do not infer the registry from the version number or assume a line remains
+on Docker Hub. For a mutable alias, the exact resolved references in the
+generated plan and receipt identify what that run actually tested.
+Parent-planned lanes receive that immutable resolved tag, so the alias cannot
+move between planning and execution.
 
 To keep a target in the file without planning it, set `enabled` to `false`.
 
@@ -144,8 +172,11 @@ Linode resources running.
 
 The sign-off workflow uploads one compact JSON receipt per lane. The receipt
 keeps operational recovery fields such as `terraform_state_key` and `aws_prefix`
-but omits live Rancher URLs, kubeconfigs, generated environment files, raw
-Terraform outputs, and copied logs.
+and a field-allowlisted install/upgrade image resolution. That resolution records
+the requested alias, exact Rancher server and agent references, registry,
+digests, source revisions, and chart source needed to audit a mutable-head run.
+The receipt omits live Rancher URLs, kubeconfigs, generated environment files,
+raw Terraform outputs, copied logs, and the unsanitized resolution files.
 
 It does not upload:
 

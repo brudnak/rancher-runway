@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       rancher_version:
-        description: Optional Rancher alpha, RC, or RCS, for example v2.15.1-rcs-c936. Leave blank to use signoff-targets.json.
+        description: Optional target (head, vX.Y-head, vX.Y-SHA-head, vX.Y.Z-SHA-head, alpha, RC, or RCS). Blank uses signoff-targets.json.
         required: false
         type: string
       previous_rancher_version:
@@ -37,7 +37,7 @@ on:
         default: 4
         type: number
       rerun_successful_lanes:
-        description: Dispatch lanes again even if a matching run already succeeded on this branch.
+        description: Re-dispatch successful immutable lanes. Mutable head aliases are always reconsidered.
         required: true
         default: false
         type: boolean
@@ -138,6 +138,7 @@ jobs:
               | ($plan.lanes // [])[]
               | {
                   rancher_version: $plan.target_version,
+                  resolved_rancher_version: ($plan.resolved_target_version // $plan.target_version),
                   lane: .name,
                   previous_rancher_version: ($plan.previous_version // ""),
                   webhook_image: ($plan.webhook_image // ""),
@@ -169,12 +170,15 @@ jobs:
             --argjson rerun_successful "$RERUN_SUCCESSFUL_LANES" \
             '
               def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
+              def mutable_head($lane):
+                ($lane.rancher_version == "head") or
+                ($lane.rancher_version | test("^v?[0-9]+\\.[0-9]+-head$"));
               ($active[0] | map(.displayTitle) | unique) as $active_titles
               | ($successful[0] | map(.displayTitle) | unique) as $successful_titles
               | [$queue[0][]
                   | title(.) as $display_title
                   | select(($active_titles | index($display_title)) | not)
-                  | select($rerun_successful or (($successful_titles | index($display_title)) | not))]
+                  | select($rerun_successful or mutable_head(.) or (($successful_titles | index($display_title)) | not))]
             ' > automation-output/signoff-dispatch-queue.json
 
           raw_queue_count="$(jq 'length' automation-output/signoff-dispatch-queue-raw.json)"
@@ -189,9 +193,13 @@ jobs:
             if $rerun_successful then 0
             else
               def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
+              def mutable_head($lane):
+                ($lane.rancher_version == "head") or
+                ($lane.rancher_version | test("^v?[0-9]+\\.[0-9]+-head$"));
               ($successful[0] | map(.displayTitle) | unique) as $successful_titles
               | [$queue[0][]
                   | title(.) as $display_title
+                  | select(mutable_head(.) | not)
                   | select(($successful_titles | index($display_title)) != null)] | length
             end
           ')"
@@ -316,6 +324,7 @@ jobs:
 
           jq -c '.[]' automation-output/signoff-dispatch-selected.json | while IFS= read -r item; do
             rancher_version="$(jq -r '.rancher_version' <<<"$item")"
+            resolved_rancher_version="$(jq -r '.resolved_rancher_version' <<<"$item")"
             lane="$(jq -r '.lane' <<<"$item")"
             previous_rancher_version="$(jq -r '.previous_rancher_version' <<<"$item")"
             webhook_image="$(jq -r '.webhook_image' <<<"$item")"
@@ -326,6 +335,7 @@ jobs:
               workflow run run-rancher-signoff-lane.yml
               --ref "$REF_NAME"
               -f "rancher_version=$rancher_version"
+              -f "resolved_rancher_version=$resolved_rancher_version"
               -f "lane=$lane"
               -f "signing_policy=$signing_policy"
               -f "rke2_server_count=$rke2_server_count"

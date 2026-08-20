@@ -14,6 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 const (
@@ -31,28 +37,43 @@ var (
 	prereleaseVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-(?:alpha|rc)(\d+)$`)
 	rcsVersionRE        = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-rcs-[0-9A-Za-z]+(?:\.(\d+))?$`)
 	releaseVersionRE    = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
+	headVersionRE       = regexp.MustCompile(`^v?(\d+)\.(\d+)-head$`)
+	headCommitVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)(?:\.(\d+))?-([0-9a-fA-F]{7,40})-head$`)
+	imageVersionLineRE  = regexp.MustCompile(`(?i)(?:^|-)v?(\d+)\.(\d+)(?:$|[.-])`)
+	gitRevisionRE       = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
+	fullGitRevisionRE   = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 	webhookBuildRE      = regexp.MustCompile(`(?m)^\s*webhookVersion:\s*["']?([^"'\s]+)["']?\s*$`)
 	errNoRecentAlpha    = errors.New("no recent Rancher alpha release found")
 )
 
 type plan struct {
-	TargetVersion        string        `json:"target_version"`
-	ReleaseLine          string        `json:"release_line"`
-	PreviousVersion      string        `json:"previous_version"`
-	TargetWebhookBuild   string        `json:"target_webhook_build"`
-	TargetWebhookTag     string        `json:"target_webhook_tag"`
-	PreviousWebhookBuild string        `json:"previous_webhook_build"`
-	PreviousWebhookTag   string        `json:"previous_webhook_tag"`
-	WebhookChanged       bool          `json:"webhook_changed"`
-	WebhookImage         string        `json:"webhook_image"`
-	SigningPolicyInput   string        `json:"signing_policy_input"`
-	SigningPolicy        string        `json:"signing_policy"`
-	SigningRegistry      string        `json:"signing_registry"`
-	RunID                string        `json:"run_id,omitempty"`
-	StateKeyRoot         string        `json:"state_key_root,omitempty"`
-	Lanes                []lane        `json:"lanes"`
-	SkippedLanes         []skippedLane `json:"skipped_lanes,omitempty"`
-	GeneratedAt          string        `json:"generated_at"`
+	ResolvedTargetVersion string        `json:"resolved_target_version,omitempty"`
+	TargetVersion         string        `json:"target_version"`
+	ReleaseLine           string        `json:"release_line"`
+	PreviousVersion       string        `json:"previous_version"`
+	RancherDistro         string        `json:"rancher_distro"`
+	RancherImageRegistry  string        `json:"rancher_image_registry,omitempty"`
+	RancherImage          string        `json:"rancher_image,omitempty"`
+	RancherAgentImage     string        `json:"rancher_agent_image,omitempty"`
+	RancherImageDigest    string        `json:"rancher_image_digest,omitempty"`
+	RancherAgentDigest    string        `json:"rancher_agent_image_digest,omitempty"`
+	RancherImageSource    string        `json:"rancher_image_source,omitempty"`
+	RancherImageRevision  string        `json:"rancher_image_revision,omitempty"`
+	RancherOSSRevision    string        `json:"rancher_image_oss_revision,omitempty"`
+	TargetWebhookBuild    string        `json:"target_webhook_build"`
+	TargetWebhookTag      string        `json:"target_webhook_tag"`
+	PreviousWebhookBuild  string        `json:"previous_webhook_build"`
+	PreviousWebhookTag    string        `json:"previous_webhook_tag"`
+	WebhookChanged        bool          `json:"webhook_changed"`
+	WebhookImage          string        `json:"webhook_image"`
+	SigningPolicyInput    string        `json:"signing_policy_input"`
+	SigningPolicy         string        `json:"signing_policy"`
+	SigningRegistry       string        `json:"signing_registry"`
+	RunID                 string        `json:"run_id,omitempty"`
+	StateKeyRoot          string        `json:"state_key_root,omitempty"`
+	Lanes                 []lane        `json:"lanes"`
+	SkippedLanes          []skippedLane `json:"skipped_lanes,omitempty"`
+	GeneratedAt           string        `json:"generated_at"`
 }
 
 type planSet struct {
@@ -103,11 +124,14 @@ type ledgerEntry struct {
 }
 
 type semver struct {
-	Major int
-	Minor int
-	Patch int
-	Alpha int
-	Raw   string
+	Major          int
+	Minor          int
+	Patch          int
+	Alpha          int
+	Raw            string
+	Kind           string
+	PatchSpecified bool
+	Commit         string
 }
 
 type release struct {
@@ -122,6 +146,25 @@ type githubClient struct {
 	apiBaseURL       string
 	rawBaseURL       string
 	registryBaseURLs map[string]string
+	inspectImage     rancherImageInspector
+}
+
+type rancherImageMetadata struct {
+	Reference          string
+	Digest             string
+	Source             string
+	Revision           string
+	OSSRevision        string
+	Version            string
+	CanonicalReference string
+}
+
+type rancherImageInspector func(context.Context, string) (rancherImageMetadata, bool, error)
+
+type rancherImagePair struct {
+	Registry string
+	Server   rancherImageMetadata
+	Agent    rancherImageMetadata
 }
 
 func main() {
@@ -140,7 +183,7 @@ func main() {
 	var ignoreLedger bool
 	var maxAgeDays int
 
-	flag.StringVar(&targetVersion, "rancher-version", "", "target Rancher alpha, RC, or RCS tag, for example v2.14.1-alpha6, v2.15.0-rc2, or v2.15.1-rcs-c936")
+	flag.StringVar(&targetVersion, "rancher-version", "", "target Rancher head, commit head, alpha, RC, or RCS tag, for example v2.14-head, v2.14.5-{SHA}-head, or v2.15.1-rcs-c936")
 	flag.StringVar(&previousVersion, "previous-rancher-version", "", "previous Rancher release tag; resolved automatically when omitted")
 	flag.StringVar(&webhookImage, "webhook-image", "", "candidate webhook image; when omitted, probes staging SUSE, Prime, public SUSE, then Docker Hub for the target webhook tag")
 	flag.StringVar(&signingPolicy, "signing-policy", "auto", "required, report-only, skip, or auto")
@@ -164,6 +207,7 @@ func main() {
 		httpClient: &http.Client{
 			Timeout: 20 * time.Second,
 		},
+		inspectImage: inspectOCIImage,
 	}
 	ledger, err := readLedger(ledgerPath)
 	if err != nil {
@@ -299,14 +343,33 @@ func writeJSON(value interface{}, outputPath string) {
 }
 
 func buildPlan(ctx context.Context, client githubClient, targetVersion, previousVersion, webhookImage, signingPolicyInput, runID, stateKeyRoot, awsBasePrefix string) (plan, error) {
-	target, err := parsePrereleaseVersion(targetVersion)
+	target, err := parseTargetVersion(targetVersion)
 	if err != nil {
 		return plan{}, err
 	}
-	targetVersion = normalizeTag(targetVersion)
+	requestedTargetVersion := target.Raw
+	targetVersion = target.Raw
+	resolvedTarget := target
+	targetInstallReference := targetVersion
+	targetBuildReference := targetVersion
+	rancherDistro := "auto"
+	var targetImages rancherImagePair
+	if target.Kind == "head" {
+		resolved, resolvedImages, buildReference, err := client.resolveHeadTarget(ctx, target)
+		if err != nil {
+			return plan{}, err
+		}
+		resolvedTarget = resolved
+		targetImages = resolvedImages
+		targetInstallReference = targetImages.Server.Reference
+		targetBuildReference = buildReference
+		if resolvedTarget.PatchSpecified || isRancherPrimeSource(targetImages.Server.Source) {
+			rancherDistro = "prime"
+		}
+	}
 
 	if previousVersion == "" {
-		resolved, err := client.resolvePreviousRelease(ctx, target)
+		resolved, err := client.resolvePreviousRelease(ctx, resolvedTarget)
 		if err != nil {
 			return plan{}, err
 		}
@@ -317,7 +380,7 @@ func buildPlan(ctx context.Context, client githubClient, targetVersion, previous
 		return plan{}, fmt.Errorf("previous Rancher version must be a release tag like v2.14.0: %w", err)
 	}
 
-	targetBuild, err := client.webhookBuild(ctx, targetVersion)
+	targetBuild, err := client.webhookBuild(ctx, targetBuildReference)
 	if err != nil {
 		return plan{}, fmt.Errorf("target %s: %w", targetVersion, err)
 	}
@@ -358,20 +421,20 @@ func buildPlan(ctx context.Context, client githubClient, targetVersion, previous
 	lanes := []lane{
 		{
 			Name:                laneFrameworkRegression,
-			InstallRancher:      targetVersion,
+			InstallRancher:      targetInstallReference,
 			ProvisionDownstream: false,
 			Description:         fmt.Sprintf("Fresh install %s, run framework regression suites against the local cluster.", targetVersion),
 		},
 		{
 			Name:                laneWebhookFreshInstall,
-			InstallRancher:      targetVersion,
+			InstallRancher:      targetInstallReference,
 			ProvisionDownstream: true,
 			Description:         fmt.Sprintf("Fresh install %s, provision downstream Linode, run webhook suite.", targetVersion),
 		},
 		{
 			Name:                laneWebhookUpgrade,
 			InstallRancher:      previousVersion,
-			UpgradeToRancher:    targetVersion,
+			UpgradeToRancher:    targetInstallReference,
 			ProvisionDownstream: true,
 			Description:         fmt.Sprintf("Install %s, provision downstream Linode, upgrade to %s, run webhook suite.", previousVersion, targetVersion),
 		},
@@ -389,29 +452,39 @@ func buildPlan(ctx context.Context, client githubClient, targetVersion, previous
 	} else {
 		skipped = append(skipped, skippedLane{
 			Name:   laneWebhookCandidateOnPrevious,
-			Reason: fmt.Sprintf("Target prerelease reuses previous Rancher webhook tag %s; overriding the old Rancher to the same webhook adds no coverage.", targetWebhookTag),
+			Reason: fmt.Sprintf("Target Rancher build reuses previous Rancher webhook tag %s; overriding the old Rancher to the same webhook adds no coverage.", targetWebhookTag),
 		})
 	}
-	applyLaneRuntimeFields(lanes, targetVersion, fmt.Sprintf("v%d.%d", target.Major, target.Minor), runID, stateKeyRoot, awsBasePrefix)
+	applyLaneRuntimeFields(lanes, targetVersion, fmt.Sprintf("v%d.%d", resolvedTarget.Major, resolvedTarget.Minor), runID, stateKeyRoot, awsBasePrefix)
 
 	return plan{
-		TargetVersion:        targetVersion,
-		ReleaseLine:          fmt.Sprintf("v%d.%d", target.Major, target.Minor),
-		PreviousVersion:      previousVersion,
-		TargetWebhookBuild:   targetBuild,
-		TargetWebhookTag:     targetWebhookTag,
-		PreviousWebhookBuild: previousBuild,
-		PreviousWebhookTag:   previousWebhookTag,
-		WebhookChanged:       webhookChanged,
-		WebhookImage:         webhookImage,
-		SigningPolicyInput:   normalizePolicyInput(signingPolicyInput),
-		SigningPolicy:        resolvedPolicy,
-		SigningRegistry:      registry,
-		RunID:                strings.TrimSpace(runID),
-		StateKeyRoot:         strings.Trim(strings.TrimSpace(stateKeyRoot), "/"),
-		Lanes:                lanes,
-		SkippedLanes:         skipped,
-		GeneratedAt:          time.Now().UTC().Format(time.RFC3339),
+		ResolvedTargetVersion: resolvedVersionIfDifferent(requestedTargetVersion, resolvedTarget.Raw),
+		TargetVersion:         targetVersion,
+		ReleaseLine:           fmt.Sprintf("v%d.%d", resolvedTarget.Major, resolvedTarget.Minor),
+		PreviousVersion:       previousVersion,
+		RancherDistro:         rancherDistro,
+		RancherImageRegistry:  targetImages.Registry,
+		RancherImage:          targetImages.Server.Reference,
+		RancherAgentImage:     targetImages.Agent.Reference,
+		RancherImageDigest:    targetImages.Server.Digest,
+		RancherAgentDigest:    targetImages.Agent.Digest,
+		RancherImageSource:    targetImages.Server.Source,
+		RancherImageRevision:  targetImages.Server.Revision,
+		RancherOSSRevision:    targetImages.Server.OSSRevision,
+		TargetWebhookBuild:    targetBuild,
+		TargetWebhookTag:      targetWebhookTag,
+		PreviousWebhookBuild:  previousBuild,
+		PreviousWebhookTag:    previousWebhookTag,
+		WebhookChanged:        webhookChanged,
+		WebhookImage:          webhookImage,
+		SigningPolicyInput:    normalizePolicyInput(signingPolicyInput),
+		SigningPolicy:         resolvedPolicy,
+		SigningRegistry:       registry,
+		RunID:                 strings.TrimSpace(runID),
+		StateKeyRoot:          strings.Trim(strings.TrimSpace(stateKeyRoot), "/"),
+		Lanes:                 lanes,
+		SkippedLanes:          skipped,
+		GeneratedAt:           time.Now().UTC().Format(time.RFC3339),
 	}, nil
 }
 
@@ -677,7 +750,7 @@ func latestAlphasPerLineFromReleases(releases []release, cutoff time.Time) []str
 }
 
 func (c githubClient) resolvePreviousRelease(ctx context.Context, target semver) (string, error) {
-	if target.Patch > 0 {
+	if target.PatchSpecified && target.Patch > 0 {
 		candidate := fmt.Sprintf("v%d.%d.%d", target.Major, target.Minor, target.Patch-1)
 		if ok, err := c.releaseExists(ctx, candidate); err != nil {
 			return "", err
@@ -700,7 +773,10 @@ func (c githubClient) resolvePreviousRelease(ctx context.Context, target semver)
 		if parsed.Major != target.Major {
 			continue
 		}
-		if parsed.Minor > target.Minor || (parsed.Minor == target.Minor && parsed.Patch >= target.Patch) {
+		if parsed.Minor > target.Minor {
+			continue
+		}
+		if parsed.Minor == target.Minor && target.PatchSpecified && parsed.Patch >= target.Patch {
 			continue
 		}
 		candidates = append(candidates, parsed)
@@ -779,6 +855,262 @@ func (c githubClient) releases(ctx context.Context) ([]release, error) {
 		return nil, err
 	}
 	return releases, nil
+}
+
+func (c githubClient) resolveHeadTarget(ctx context.Context, requested semver) (semver, rancherImagePair, string, error) {
+	registries := []string{"stgregistry.suse.com", "docker.io"}
+	if requested.Raw == "head" {
+		registries = []string{"docker.io"}
+	}
+
+	pair, err := c.resolveHeadImagePair(ctx, requested.Raw, registries)
+	if err != nil {
+		return semver{}, rancherImagePair{}, "", err
+	}
+
+	resolved := requested
+	if requested.Commit == "" {
+		resolved, err = canonicalHeadTarget(requested, pair.Server)
+		if err != nil {
+			return semver{}, rancherImagePair{}, "", err
+		}
+		if resolved.Raw != requested.Raw {
+			exactPair, found, err := c.inspectHeadImagePair(ctx, pair.Registry, resolved.Raw)
+			if err != nil {
+				return semver{}, rancherImagePair{}, "", fmt.Errorf("inspect canonical Rancher head image pair %s in %s: %w", resolved.Raw, pair.Registry, err)
+			}
+			if !found {
+				return semver{}, rancherImagePair{}, "", fmt.Errorf("Rancher head alias %s resolved to %s, but the matching server and agent image pair was not found in %s", requested.Raw, resolved.Raw, pair.Registry)
+			}
+			if pair.Server.Digest != "" && exactPair.Server.Digest != "" && pair.Server.Digest != exactPair.Server.Digest {
+				return semver{}, rancherImagePair{}, "", fmt.Errorf("Rancher head alias %s moved while resolving its immutable tag: alias digest %s, exact tag digest %s", requested.Raw, pair.Server.Digest, exactPair.Server.Digest)
+			}
+			if pair.Agent.Digest != "" && exactPair.Agent.Digest != "" && pair.Agent.Digest != exactPair.Agent.Digest {
+				return semver{}, rancherImagePair{}, "", fmt.Errorf("Rancher agent head alias %s moved while resolving its immutable tag: alias digest %s, exact tag digest %s", requested.Raw, pair.Agent.Digest, exactPair.Agent.Digest)
+			}
+			pair = exactPair
+		}
+	}
+
+	buildReference, err := publicRancherRevision(pair.Server)
+	if err != nil {
+		return semver{}, rancherImagePair{}, "", err
+	}
+	if resolved.Commit != "" && !revisionsMatch(resolved.Commit, buildReference) {
+		return semver{}, rancherImagePair{}, "", fmt.Errorf("canonical Rancher head tag %s identifies commit %s, but image provenance identifies public revision %s", resolved.Raw, resolved.Commit, buildReference)
+	}
+	if !gitRevisionRE.MatchString(buildReference) {
+		return semver{}, rancherImagePair{}, "", fmt.Errorf("could not determine a valid public Rancher source revision for %s", requested.Raw)
+	}
+
+	return resolved, pair, strings.ToLower(buildReference), nil
+}
+
+func (c githubClient) resolveHeadImagePair(ctx context.Context, tag string, registries []string) (rancherImagePair, error) {
+	var misses []string
+	for _, registry := range registries {
+		pair, found, err := c.inspectHeadImagePair(ctx, registry, tag)
+		if err != nil {
+			return rancherImagePair{}, fmt.Errorf("inspect Rancher head image pair %s in %s: %w", tag, registry, err)
+		}
+		if found {
+			return pair, nil
+		}
+		misses = append(misses, registry)
+	}
+	return rancherImagePair{}, fmt.Errorf("Rancher head tag %s was not found as a matching server and agent image pair in checked registries: %s", tag, strings.Join(misses, ", "))
+}
+
+func (c githubClient) inspectHeadImagePair(ctx context.Context, registry, tag string) (rancherImagePair, bool, error) {
+	inspector := c.inspectImage
+	if inspector == nil {
+		inspector = inspectOCIImage
+	}
+	serverReference := registry + "/rancher/rancher:" + tag
+	agentReference := registry + "/rancher/rancher-agent:" + tag
+
+	server, found, err := inspector(ctx, serverReference)
+	if err != nil {
+		return rancherImagePair{}, false, err
+	}
+	if !found {
+		return rancherImagePair{}, false, nil
+	}
+	if server.Reference == "" {
+		server.Reference = serverReference
+	}
+
+	agent, found, err := inspector(ctx, agentReference)
+	if err != nil {
+		return rancherImagePair{}, false, err
+	}
+	if !found {
+		return rancherImagePair{}, false, nil
+	}
+	if agent.Reference == "" {
+		agent.Reference = agentReference
+	}
+
+	pair := rancherImagePair{Registry: registry, Server: server, Agent: agent}
+	if err := validateHeadImagePair(tag, pair); err != nil {
+		return rancherImagePair{}, false, err
+	}
+	return pair, true, nil
+}
+
+func validateHeadImagePair(requestedTag string, pair rancherImagePair) error {
+	serverCanonicalTag := imageReferenceTag(pair.Server.CanonicalReference)
+	agentCanonicalTag := imageReferenceTag(pair.Agent.CanonicalReference)
+	if serverCanonicalTag == "" || agentCanonicalTag == "" {
+		return fmt.Errorf("Rancher head image pair %s did not declare canonical server and agent org.opensuse.reference labels", requestedTag)
+	}
+	if !strings.EqualFold(serverCanonicalTag, agentCanonicalTag) {
+		return fmt.Errorf("Rancher head image pair %s has mismatched canonical tags: server %s, agent %s", requestedTag, serverCanonicalTag, agentCanonicalTag)
+	}
+
+	requested, err := parseTargetVersion(requestedTag)
+	if err != nil {
+		return err
+	}
+	canonical, err := parseTargetVersion(serverCanonicalTag)
+	if err != nil || canonical.Kind != "head" || canonical.Commit == "" {
+		return fmt.Errorf("Rancher head image pair %s declared invalid canonical tag %s", requestedTag, serverCanonicalTag)
+	}
+	if requested.Commit != "" && !strings.EqualFold(requested.Raw, canonical.Raw) {
+		return fmt.Errorf("Rancher head image pair %s resolves to unexpected canonical tag %s", requestedTag, canonical.Raw)
+	}
+	return nil
+}
+
+func inspectOCIImage(ctx context.Context, reference string) (rancherImageMetadata, bool, error) {
+	parsed, err := name.ParseReference(reference, name.WeakValidation)
+	if err != nil {
+		return rancherImageMetadata{}, false, err
+	}
+	image, err := remote.Image(
+		parsed,
+		remote.WithContext(ctx),
+		remote.WithAuth(authn.Anonymous),
+		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}),
+	)
+	if err != nil {
+		var registryError *transport.Error
+		if errors.As(err, &registryError) && registryError.StatusCode == http.StatusNotFound {
+			return rancherImageMetadata{Reference: reference}, false, nil
+		}
+		return rancherImageMetadata{}, false, err
+	}
+	digest, err := image.Digest()
+	if err != nil {
+		return rancherImageMetadata{}, false, fmt.Errorf("read image digest: %w", err)
+	}
+	config, err := image.ConfigFile()
+	if err != nil {
+		return rancherImageMetadata{}, false, fmt.Errorf("read image config: %w", err)
+	}
+	labels := config.Config.Labels
+	return rancherImageMetadata{
+		Reference:          reference,
+		Digest:             digest.String(),
+		Source:             strings.TrimSpace(labels["org.opencontainers.image.source"]),
+		Revision:           strings.ToLower(strings.TrimSpace(labels["org.opencontainers.image.revision"])),
+		OSSRevision:        strings.ToLower(strings.TrimSpace(labels["org.opencontainers.image.oss.revision"])),
+		Version:            strings.TrimSpace(labels["org.opencontainers.image.version"]),
+		CanonicalReference: strings.TrimSpace(labels["org.opensuse.reference"]),
+	}, true, nil
+}
+
+func canonicalHeadTarget(requested semver, metadata rancherImageMetadata) (semver, error) {
+	if tag := imageReferenceTag(metadata.CanonicalReference); tag != "" {
+		resolved, err := parseTargetVersion(tag)
+		if err == nil && resolved.Kind == "head" && resolved.Commit != "" {
+			if requested.Major != 0 && (resolved.Major != requested.Major || resolved.Minor != requested.Minor) {
+				return semver{}, fmt.Errorf("Rancher head alias %s resolved to a different release line in OCI metadata: %s", requested.Raw, tag)
+			}
+			return resolved, nil
+		}
+	}
+
+	revision, err := publicRancherRevision(metadata)
+	if err != nil {
+		return semver{}, err
+	}
+	if isRancherPrimeSource(metadata.Source) {
+		return semver{}, fmt.Errorf("Prime Rancher head alias %s did not declare an exact patch-qualified org.opensuse.reference", requested.Raw)
+	}
+
+	major, minor := requested.Major, requested.Minor
+	if major == 0 {
+		match := imageVersionLineRE.FindStringSubmatch(metadata.Version)
+		if len(match) != 3 {
+			return semver{}, fmt.Errorf("plain Rancher head image did not declare an exact head tag or recognizable release line")
+		}
+		major, err = strconv.Atoi(match[1])
+		if err != nil {
+			return semver{}, err
+		}
+		minor, err = strconv.Atoi(match[2])
+		if err != nil {
+			return semver{}, err
+		}
+	}
+	return parseTargetVersion(fmt.Sprintf("v%d.%d-%s-head", major, minor, revision))
+}
+
+func publicRancherRevision(metadata rancherImageMetadata) (string, error) {
+	revision := metadata.Revision
+	label := "org.opencontainers.image.revision"
+	switch {
+	case isRancherPrimeSource(metadata.Source):
+		revision = metadata.OSSRevision
+		label = "org.opencontainers.image.oss.revision"
+	case isRancherCommunitySource(metadata.Source):
+	default:
+		return "", fmt.Errorf("Rancher image %s declared unsupported org.opencontainers.image.source %q", metadata.Reference, metadata.Source)
+	}
+	revision = strings.ToLower(strings.TrimSpace(revision))
+	if !fullGitRevisionRE.MatchString(revision) {
+		return "", fmt.Errorf("Rancher image %s did not declare a valid %s", metadata.Reference, label)
+	}
+	return revision, nil
+}
+
+func isRancherPrimeSource(source string) bool {
+	return strings.EqualFold(normalizeRancherSource(source), "https://github.com/rancher/rancher-prime")
+}
+
+func isRancherCommunitySource(source string) bool {
+	return strings.EqualFold(normalizeRancherSource(source), "https://github.com/rancher/rancher")
+}
+
+func normalizeRancherSource(source string) string {
+	source = strings.TrimSpace(source)
+	source = strings.TrimSuffix(source, "/")
+	source = strings.TrimSuffix(source, ".git")
+	return source
+}
+
+func imageReferenceTag(reference string) string {
+	reference = strings.TrimSpace(reference)
+	colon := strings.LastIndexByte(reference, ':')
+	slash := strings.LastIndexByte(reference, '/')
+	if colon <= slash || colon == len(reference)-1 {
+		return ""
+	}
+	return reference[colon+1:]
+}
+
+func revisionsMatch(a, b string) bool {
+	a = strings.ToLower(strings.TrimSpace(a))
+	b = strings.ToLower(strings.TrimSpace(b))
+	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+func resolvedVersionIfDifferent(requested, resolved string) string {
+	if requested == resolved {
+		return ""
+	}
+	return resolved
 }
 
 func (c githubClient) webhookBuild(ctx context.Context, tag string) (string, error) {
@@ -1066,18 +1398,91 @@ func parseAlphaVersion(value string) (semver, error) {
 	if len(match) != 5 {
 		return semver{}, fmt.Errorf("target Rancher version must be an alpha tag like v2.14.1-alpha6")
 	}
-	return parseVersionParts(value, match)
+	parsed, err := parseVersionParts(value, match)
+	parsed.Kind = "alpha"
+	return parsed, err
 }
 
 func parsePrereleaseVersion(value string) (semver, error) {
-	match := prereleaseVersionRE.FindStringSubmatch(strings.TrimSpace(value))
+	trimmed := strings.TrimSpace(value)
+	match := prereleaseVersionRE.FindStringSubmatch(trimmed)
 	if len(match) != 5 {
-		match = rcsVersionRE.FindStringSubmatch(strings.TrimSpace(value))
+		match = rcsVersionRE.FindStringSubmatch(trimmed)
 	}
 	if len(match) != 5 {
 		return semver{}, fmt.Errorf("target Rancher version must be an alpha, RC, or RCS tag like v2.14.1-alpha6, v2.15.0-rc2, v2.16.0-rcs-0844.1, or v2.15.1-rcs-c936")
 	}
-	return parseVersionParts(value, match)
+	parsed, err := parseVersionParts(value, match)
+	if err != nil {
+		return semver{}, err
+	}
+	switch {
+	case strings.Contains(trimmed, "-alpha"):
+		parsed.Kind = "alpha"
+	case strings.Contains(trimmed, "-rcs-"):
+		parsed.Kind = "rcs"
+	default:
+		parsed.Kind = "rc"
+	}
+	return parsed, nil
+}
+
+func parseTargetVersion(value string) (semver, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "head" {
+		return semver{Raw: "head", Kind: "head"}, nil
+	}
+
+	if match := headCommitVersionRE.FindStringSubmatch(trimmed); len(match) == 5 {
+		major, err := strconv.Atoi(match[1])
+		if err != nil {
+			return semver{}, err
+		}
+		minor, err := strconv.Atoi(match[2])
+		if err != nil {
+			return semver{}, err
+		}
+		patch := 0
+		patchSpecified := match[3] != ""
+		if patchSpecified {
+			patch, err = strconv.Atoi(match[3])
+			if err != nil {
+				return semver{}, err
+			}
+		}
+		return semver{
+			Major:          major,
+			Minor:          minor,
+			Patch:          patch,
+			Raw:            normalizeTag(trimmed),
+			Kind:           "head",
+			PatchSpecified: patchSpecified,
+			Commit:         strings.ToLower(match[4]),
+		}, nil
+	}
+
+	if match := headVersionRE.FindStringSubmatch(trimmed); len(match) == 3 {
+		major, err := strconv.Atoi(match[1])
+		if err != nil {
+			return semver{}, err
+		}
+		minor, err := strconv.Atoi(match[2])
+		if err != nil {
+			return semver{}, err
+		}
+		return semver{
+			Major: major,
+			Minor: minor,
+			Raw:   normalizeTag(trimmed),
+			Kind:  "head",
+		}, nil
+	}
+
+	parsed, err := parsePrereleaseVersion(trimmed)
+	if err == nil {
+		return parsed, nil
+	}
+	return semver{}, fmt.Errorf("target Rancher version must be head, a versioned head, a commit-specific head, an alpha, an RC, or an RCS tag; got %q", value)
 }
 
 func parseReleaseVersion(value string) (semver, error) {
@@ -1085,7 +1490,9 @@ func parseReleaseVersion(value string) (semver, error) {
 	if len(match) != 4 {
 		return semver{}, fmt.Errorf("not a release version: %s", value)
 	}
-	return parseVersionParts(value, match)
+	parsed, err := parseVersionParts(value, match)
+	parsed.Kind = "release"
+	return parsed, err
 }
 
 func parseVersionParts(raw string, match []string) (semver, error) {
@@ -1108,7 +1515,7 @@ func parseVersionParts(raw string, match []string) (semver, error) {
 			return semver{}, err
 		}
 	}
-	return semver{Major: major, Minor: minor, Patch: patch, Alpha: alpha, Raw: normalizeTag(raw)}, nil
+	return semver{Major: major, Minor: minor, Patch: patch, Alpha: alpha, Raw: normalizeTag(raw), PatchSpecified: true}, nil
 }
 
 func parseImage(image string) (registry, repository, tag string, err error) {
@@ -1159,6 +1566,9 @@ func normalizeTag(version string) string {
 	version = strings.TrimSpace(version)
 	if version == "" {
 		return ""
+	}
+	if version == "head" {
+		return "head"
 	}
 	return "v" + strings.TrimPrefix(version, "v")
 }

@@ -263,7 +263,8 @@ you are most likely to care about:
 - `rancher.version` or `rancher.versions` selects the Rancher build or builds.
   Auto mode accepts releases, alpha/RC/RCS versions such as
   `2.15.1-rcs-c936` and `2.16.0-rcs-0844.1`, `head`, minor-line head builds
-  such as `2.13-head`, commit-specific head image tags, and exact custom server
+  such as `2.13-head`, community commit heads such as `2.15-<SHA>-head`,
+  patch-qualified Prime heads such as `2.14.5-<SHA>-head`, and exact custom server
   images such as `bigkevmcd/rancher:v2.16-da0ab2f1dc-head`,
   `docker.io/example/rancher:my-fix`, or their matching `rancher-agent` images.
   Docker Hub namespace shorthand is accepted. Runway derives the sibling image
