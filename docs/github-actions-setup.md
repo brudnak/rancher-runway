@@ -23,27 +23,24 @@ Create these GitHub environments under repository settings.
 
 ## Bootstrap Environment
 
-`automation-bootstrap` needs one secret:
+`automation-bootstrap` needs these environment secrets:
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
 | `AWS_BOOTSTRAP_ROLE_ARN` | yes | AWS OIDC role that can create/update the S3 state bucket and DynamoDB lock table. |
+| `AWS_REGION` | yes | AWS region for the state bucket and lock table. |
+| `TF_STATE_BUCKET` | yes | Globally unique S3 bucket name for Terraform state. |
+| `TF_STATE_LOCK_TABLE` | yes | DynamoDB table name for Terraform state locks. |
+
+Store the same `AWS_REGION`, `TF_STATE_BUCKET`, and `TF_STATE_LOCK_TABLE`
+values in the `rancher-signoff` environment before running a lane, and also set
+`TF_STATE_REGION` there to the backend region. Save their original values in an
+approved secret manager because GitHub will not display environment secret
+values after they are configured.
 
 Run `.github/workflows/bootstrap-terraform-state.yml` first with `apply=false`.
-After reviewing the plan, run it again with `apply=true`.
-
-The apply run writes a non-secret `terraform-backend-env` artifact and step
-summary:
-
-```bash
-TF_STATE_BUCKET=...
-TF_STATE_LOCK_TABLE=...
-TF_STATE_REGION=...
-```
-
-Copy those values into `rancher-signoff` environment variables. Bucket and
-table names are not credentials, but they are visible to anyone who can view
-workflow logs/artifacts for this repository.
+After reviewing the redacted plan, run it again with `apply=true`. The workflow
+does not print or upload the backend names.
 
 ## Sign-Off Environment Secrets
 
@@ -52,21 +49,8 @@ workflow logs/artifacts for this repository.
 | Secret | Required | Purpose |
 | --- | --- | --- |
 | `AWS_AUTOMATION_ROLE_ARN` | yes | AWS OIDC role used by live sign-off lanes. |
-| `RANCHER_BOOTSTRAP_PASSWORD` | yes | Initial Rancher admin password rendered into generated `tool-config.yml`. |
-| `LINODE_TOKEN` | yes for downstream lanes | Linode token used by Rancher to create the disposable downstream K3s node. |
-| `DOCKERHUB_USERNAME` | optional | Docker Hub auth for RKE2 pulls when needed. Rejected credentials fall back to anonymous pulls rather than being installed on the nodes. |
-| `DOCKERHUB_PASSWORD` | optional | Docker Hub auth for RKE2 pulls when needed. Rejected credentials fall back to anonymous pulls rather than being installed on the nodes. |
-The workflow masks repository secrets, generated Rancher admin tokens, and the
-generated Linode root password before noisy provisioning steps.
-
-## Sign-Off Environment Variables
-
-`rancher-signoff` variables:
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `TF_STATE_BUCKET` | yes | S3 bucket from bootstrap output. |
-| `TF_STATE_LOCK_TABLE` | yes | DynamoDB lock table from bootstrap output. |
+| `TF_STATE_BUCKET` | yes | S3 bucket from the bootstrap configuration. |
+| `TF_STATE_LOCK_TABLE` | yes | DynamoDB lock table from the bootstrap configuration. |
 | `TF_STATE_REGION` | yes | AWS region for the Terraform backend. |
 | `AWS_REGION` | yes | AWS region for Rancher infrastructure. |
 | `AWS_VPC` | yes | Existing VPC ID. |
@@ -78,9 +62,40 @@ generated Linode root password before noisy provisioning steps.
 | `AWS_SECURITY_GROUP_ID` | yes | Security group ID used by EC2 instances. |
 | `AWS_PEM_KEY_NAME` | yes | Existing EC2 key pair name expected by the Terraform module. |
 | `AWS_ROUTE53_FQDN` | yes | Route53 zone/domain suffix used for Rancher DNS records. |
-| `AWS_PREFIX` | recommended | Owner/base prefix included in generated sign-off resource names, for example `atb` produces `gha-atb-23456789-wu`. |
+| `AWS_PREFIX` | optional | Owner/base prefix included in generated sign-off resource names. |
 | `OWNER_FIRST_NAME` | yes | First name used in AWS `Owner` tags. |
 | `OWNER_LAST_NAME` | yes | Last name used in AWS `Owner` tags. |
+| `RANCHER_BOOTSTRAP_PASSWORD` | yes | Initial Rancher admin password rendered into generated `tool-config.yml`. |
+| `LINODE_TOKEN` | yes for downstream lanes | Linode token used by Rancher to create the disposable downstream K3s node. |
+| `DOCKERHUB_USERNAME` | optional | Docker Hub auth for RKE2 pulls when needed. Rejected credentials fall back to anonymous pulls rather than being installed on the nodes. |
+| `DOCKERHUB_PASSWORD` | optional | Docker Hub auth for RKE2 pulls when needed. Rejected credentials fall back to anonymous pulls rather than being installed on the nodes. |
+
+Infrastructure identifiers and owner fields are stored as individual secrets
+for log redaction even though they are not authentication credentials. Do not
+combine them into one JSON secret: GitHub cannot reliably redact substrings of
+a structured secret. The workflows deliberately have no `vars.*` fallback for
+these fields, so a missing protected value fails closed instead of appearing in
+the runner-generated environment header. The values are scoped to the trusted
+steps that need them rather than being inherited by the whole job.
+
+When migrating an existing environment, copy the protected configuration
+variables to secrets before deploying these workflows. After the updated
+workflows have completed one validation run, delete the legacy variables; they
+are intentionally ignored by the workflow and retaining them can cause future
+configuration drift.
+
+The workflow also masks generated state keys, AWS prefixes, Rancher admin
+tokens, endpoints, and the generated Linode root password before noisy steps.
+Before running the external `rancher/tests` checkout, it drops cloud
+credentials and removes trusted planning/configuration files from the test
+workspace. Cleanup reacquires short-lived AWS credentials afterward.
+
+## Sign-Off Environment Variables
+
+Only non-sensitive runner tuning remains in `rancher-signoff` variables:
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
 | `RANCHER_TESTS_REF` | optional | Ref to clone from `https://github.com/rancher/tests.git`; defaults to `main`. |
 | `RANCHER_TEST_SUITE_SETTLE_SECONDS` | optional | Pause between direct `rancher/tests` suites; defaults to `30`. |
 
@@ -185,9 +200,9 @@ Linode resources running.
 
 ## Safe Artifacts
 
-The sign-off workflow uploads one compact JSON receipt per lane. The receipt
-keeps operational recovery fields such as `terraform_state_key` and `aws_prefix`
-and a field-allowlisted install/upgrade image resolution. That resolution records
+The sign-off workflow uploads one compact, redacted JSON receipt per lane. The
+receipt omits Terraform state keys and AWS prefixes and keeps a field-allowlisted
+install/upgrade image resolution. That resolution records
 the requested alias, exact Rancher server and agent references, registry,
 digests, source revisions, phase-specific distro, and chart source needed to
 audit a mutable-head run. Upgrade lanes resolve the previous stable install in

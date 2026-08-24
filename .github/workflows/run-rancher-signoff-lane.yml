@@ -78,40 +78,73 @@ jobs:
     runs-on: ubuntu-latest
     environment: rancher-signoff
     env:
-      GH_TOKEN: ${{ github.token }}
       REQUESTED_RANCHER_VERSION: ${{ inputs.rancher_version }}
       TARGET_RANCHER_VERSION: ${{ inputs.resolved_rancher_version || inputs.rancher_version }}
       TF_IN_AUTOMATION: "true"
       TF_INPUT: "false"
-      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
-      TF_STATE_LOCK_TABLE: ${{ vars.TF_STATE_LOCK_TABLE }}
-      TF_STATE_REGION: ${{ vars.TF_STATE_REGION }}
-      AWS_REGION: ${{ vars.AWS_REGION }}
-      AWS_VPC: ${{ vars.AWS_VPC }}
-      AWS_SUBNET_A: ${{ vars.AWS_SUBNET_A }}
-      AWS_SUBNET_B: ${{ vars.AWS_SUBNET_B }}
-      AWS_SUBNET_C: ${{ vars.AWS_SUBNET_C }}
-      AWS_AMI: ${{ vars.AWS_AMI }}
-      AWS_PREFIX: ${{ vars.AWS_PREFIX }}
-      AWS_SUBNET_ID: ${{ vars.AWS_SUBNET_ID }}
-      AWS_SECURITY_GROUP_ID: ${{ vars.AWS_SECURITY_GROUP_ID }}
-      AWS_PEM_KEY_NAME: ${{ vars.AWS_PEM_KEY_NAME }}
-      AWS_ROUTE53_FQDN: ${{ vars.AWS_ROUTE53_FQDN }}
-      RANCHER_BOOTSTRAP_PASSWORD: ${{ secrets.RANCHER_BOOTSTRAP_PASSWORD }}
-      LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
       RANCHER_TESTS_REF: ${{ vars.RANCHER_TESTS_REF }}
       RANCHER_TEST_SUITE_SETTLE_SECONDS: ${{ vars.RANCHER_TEST_SUITE_SETTLE_SECONDS }}
       RKE2_SERVER_COUNT: ${{ inputs.rke2_server_count }}
-      OWNER_FIRST_NAME: ${{ vars.OWNER_FIRST_NAME }}
-      OWNER_LAST_NAME: ${{ vars.OWNER_LAST_NAME }}
       SIGNOFF_LANE: ${{ inputs.lane }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ github.ref_name }}
+          persist-credentials: false
+
+      - name: Validate protected configuration
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_VPC: ${{ secrets.AWS_VPC }}
+          AWS_SUBNET_A: ${{ secrets.AWS_SUBNET_A }}
+          AWS_SUBNET_B: ${{ secrets.AWS_SUBNET_B }}
+          AWS_SUBNET_C: ${{ secrets.AWS_SUBNET_C }}
+          AWS_AMI: ${{ secrets.AWS_AMI }}
+          AWS_SUBNET_ID: ${{ secrets.AWS_SUBNET_ID }}
+          AWS_SECURITY_GROUP_ID: ${{ secrets.AWS_SECURITY_GROUP_ID }}
+          AWS_PEM_KEY_NAME: ${{ secrets.AWS_PEM_KEY_NAME }}
+          AWS_ROUTE53_FQDN: ${{ secrets.AWS_ROUTE53_FQDN }}
+          OWNER_FIRST_NAME: ${{ secrets.OWNER_FIRST_NAME }}
+          OWNER_LAST_NAME: ${{ secrets.OWNER_LAST_NAME }}
+          RANCHER_BOOTSTRAP_PASSWORD: ${{ secrets.RANCHER_BOOTSTRAP_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          required=(
+            TF_STATE_BUCKET
+            TF_STATE_LOCK_TABLE
+            TF_STATE_REGION
+            AWS_REGION
+            AWS_VPC
+            AWS_SUBNET_A
+            AWS_SUBNET_B
+            AWS_SUBNET_C
+            AWS_AMI
+            AWS_SUBNET_ID
+            AWS_SECURITY_GROUP_ID
+            AWS_PEM_KEY_NAME
+            AWS_ROUTE53_FQDN
+            OWNER_FIRST_NAME
+            OWNER_LAST_NAME
+            RANCHER_BOOTSTRAP_PASSWORD
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            value="${!name-}"
+            if [ -z "${value//[[:space:]]/}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Missing required protected configuration:' >&2
+            printf ' %s' "${missing[@]}" >&2
+            printf '\n' >&2
+            exit 1
+          fi
 
       - name: Validate resolved Rancher target
         env:
@@ -120,24 +153,6 @@ jobs:
           bash automation/validate-resolved-rancher-version.sh \
             "$REQUESTED_RANCHER_VERSION" \
             "$RESOLVED_RANCHER_VERSION"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
-        with:
-          role-to-assume: ${{ secrets.AWS_AUTOMATION_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Mask runtime secrets
-        run: |
-          set -euo pipefail
-          for value in \
-            "$RANCHER_BOOTSTRAP_PASSWORD" \
-            "$LINODE_TOKEN" \
-            "$DOCKERHUB_PASSWORD"; do
-            if [ -n "$value" ]; then
-              echo "::add-mask::$value"
-            fi
-          done
 
       - name: Set up Go
         uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
@@ -186,6 +201,8 @@ jobs:
 
       - name: Generate sign-off plan
         env:
+          GH_TOKEN: ${{ github.token }}
+          AWS_PREFIX: ${{ secrets.AWS_PREFIX }}
           INPUT_PREVIOUS_RANCHER_VERSION: ${{ github.event.inputs.previous_rancher_version || '' }}
           INPUT_WEBHOOK_IMAGE: ${{ github.event.inputs.webhook_image || '' }}
         run: |
@@ -208,7 +225,7 @@ jobs:
             args+=("-webhook-image" "$INPUT_WEBHOOK_IMAGE")
           fi
 
-          "$RUNNER_TEMP/signoff-plan" "${args[@]}"
+          "$RUNNER_TEMP/signoff-plan" "${args[@]}" > /dev/null
           release_line="$(jq -r '.release_line // empty' signoff-plan.json)"
           if [[ "$release_line" =~ ^v?([0-9]+)\.([0-9]+)$ ]]; then
             release_major="${BASH_REMATCH[1]}"
@@ -223,6 +240,7 @@ jobs:
             echo "RANCHER_RELEASE_MINOR=$release_minor"
             echo "RANCHER_WEBHOOK_CHART_VERSION=$(jq -r '.target_webhook_build' signoff-plan.json)"
           } >> "$GITHUB_ENV"
+          chmod 600 signoff-plan.json
 
       - name: Install slsactl
         run: |
@@ -277,19 +295,58 @@ jobs:
 
       - name: Render lane config
         id: render_config
+        env:
+          RANCHER_BOOTSTRAP_PASSWORD: ${{ secrets.RANCHER_BOOTSTRAP_PASSWORD }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_PREFIX: ${{ secrets.AWS_PREFIX }}
+          AWS_VPC: ${{ secrets.AWS_VPC }}
+          AWS_SUBNET_A: ${{ secrets.AWS_SUBNET_A }}
+          AWS_SUBNET_B: ${{ secrets.AWS_SUBNET_B }}
+          AWS_SUBNET_C: ${{ secrets.AWS_SUBNET_C }}
+          AWS_AMI: ${{ secrets.AWS_AMI }}
+          AWS_SUBNET_ID: ${{ secrets.AWS_SUBNET_ID }}
+          AWS_SECURITY_GROUP_ID: ${{ secrets.AWS_SECURITY_GROUP_ID }}
+          AWS_PEM_KEY_NAME: ${{ secrets.AWS_PEM_KEY_NAME }}
+          AWS_ROUTE53_FQDN: ${{ secrets.AWS_ROUTE53_FQDN }}
+          OWNER_FIRST_NAME: ${{ secrets.OWNER_FIRST_NAME }}
+          OWNER_LAST_NAME: ${{ secrets.OWNER_LAST_NAME }}
         run: |
           "$RUNNER_TEMP/render-tool-config" \
             -plan signoff-plan.json \
             -lane "${{ inputs.lane }}" \
             -output tool-config.yml \
             -env-output lane.env
+          while IFS='=' read -r name value; do
+            case "$name" in
+              TF_STATE_KEY|SIGNOFF_AWS_PREFIX)
+                if [ -n "$value" ]; then
+                  echo "::add-mask::$value"
+                fi
+                ;;
+            esac
+          done < lane.env
+
+          trusted_config_dir="$RUNNER_TEMP/trusted-lane-config"
+          if [ -e "$trusted_config_dir" ]; then
+            echo "Refusing to replace an existing trusted configuration stash" >&2
+            exit 1
+          fi
+          install -d -m 0700 "$trusted_config_dir"
+          install -m 0600 signoff-plan.json "$trusted_config_dir/signoff-plan.json"
+          install -m 0600 tool-config.yml "$trusted_config_dir/tool-config.yml"
+          install -m 0600 lane.env "$trusted_config_dir/lane.env"
+          {
+            printf 'signoff_plan_sha256=%s\n' "$(sha256sum signoff-plan.json | awk '{print $1}')"
+            printf 'tool_config_sha256=%s\n' "$(sha256sum tool-config.yml | awk '{print $1}')"
+            printf 'lane_env_sha256=%s\n' "$(sha256sum lane.env | awk '{print $1}')"
+          } >> "$GITHUB_OUTPUT"
           cat lane.env >> "$GITHUB_ENV"
+          rm -f -- lane.env
 
       - name: Validate generated config
         run: |
           test -s tool-config.yml
           test -n "${TF_STATE_KEY:-}"
-          echo "TF state key: ${TF_STATE_KEY}"
           echo "Rancher upgrade version: ${RANCHER_UPGRADE_VERSION:-none}"
 
       - name: Prepare isolated run workspace
@@ -320,55 +377,200 @@ jobs:
             echo "HA_RANCHER_TF_DATA_DIR=$run_root/terraform/.terraform"
           } >> "$GITHUB_ENV"
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
+        with:
+          role-to-assume: ${{ secrets.AWS_AUTOMATION_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+
       - name: Run lane setup
         id: setup
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHaSetup$' -timeout 90m ./terratest
 
       - name: Wait for lane readiness
         id: ready
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAWaitReady$' -timeout 35m ./terratest
 
       - name: Export local suite env
         id: local_suite_env
         if: ${{ inputs.lane == 'framework-regression' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
         run: go test -v -run '^TestHAWriteLocalSuiteEnv$' -timeout 5m ./terratest
 
       - name: Validate Linode token
         if: ${{ inputs.lane != 'framework-regression' }}
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
         run: test -n "${LINODE_TOKEN:-}"
 
       - name: Provision downstream Linode K3s
         id: downstream
         if: ${{ inputs.lane != 'framework-regression' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
+          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAProvisionLinodeDownstream$' -timeout 20m ./terratest
 
       - name: Override local webhook image
         id: local_webhook
         if: ${{ inputs.lane == 'webhook-candidate-on-previous' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAOverrideLocalWebhook$' -timeout 30m ./terratest
 
       - name: Override downstream webhook image
         id: downstream_webhook
         if: ${{ inputs.lane == 'webhook-candidate-on-previous' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAOverrideDownstreamWebhook$' -timeout 20m ./terratest
 
       - name: Run Rancher upgrade
         id: upgrade
         if: ${{ inputs.lane == 'webhook-upgrade' }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAUpgradeRancher$' -timeout 90m ./terratest
 
       - name: Wait for webhook chart rollout
         id: webhook_chart
         if: ${{ inputs.lane == 'webhook-upgrade' && inputs.run_rancher_tests == true }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
         run: .github/scripts/run-with-cancel-cleanup.sh go test -v -run '^TestHAWaitWebhookChartVersion$' -timeout 20m ./terratest
+
+      - name: Prepare external Rancher tests
+        id: external_test_boundary
+        if: ${{ inputs.run_rancher_tests == true }}
+        run: |
+          set -euo pipefail
+
+          case "${HA_RANCHER_TF_MODULE_DIR:-}" in
+            "$GITHUB_WORKSPACE"/automation-output/runs/*/terraform/module) ;;
+            *)
+              echo "Refusing to scrub unexpected Terraform module path" >&2
+              exit 1
+              ;;
+          esac
+          case "${HA_RANCHER_TF_DATA_DIR:-}" in
+            "$GITHUB_WORKSPACE"/automation-output/runs/*/terraform/.terraform) ;;
+            *)
+              echo "Refusing to scrub unexpected Terraform data path" >&2
+              exit 1
+              ;;
+          esac
+
+          sensitive_files=(
+            "$GITHUB_WORKSPACE/tool-config.yml"
+            "$GITHUB_WORKSPACE/signoff-plan.json"
+            "$GITHUB_WORKSPACE/lane.env"
+            "$HA_RANCHER_TF_MODULE_DIR/backend.tf"
+            "$HA_RANCHER_TF_MODULE_DIR/terraform.tfvars"
+            "$HA_RANCHER_TF_MODULE_DIR/terraform.tfstate"
+            "$HA_RANCHER_TF_MODULE_DIR/terraform.tfstate.backup"
+            "$HA_RANCHER_TF_DATA_DIR/terraform.tfstate"
+            "$HA_RANCHER_TF_DATA_DIR/terraform.tfstate.backup"
+          )
+          rm -f -- "${sensitive_files[@]}"
+          for path in "${sensitive_files[@]}"; do
+            if [ -e "$path" ]; then
+              echo "Failed to remove protected configuration before external tests" >&2
+              exit 1
+            fi
+          done
+
+          aws_credential_env=(
+            AWS_ACCESS_KEY_ID
+            AWS_SECRET_ACCESS_KEY
+            AWS_SESSION_TOKEN
+            AWS_SECURITY_TOKEN
+            AWS_DEFAULT_REGION
+            AWS_REGION
+            AWS_PROFILE
+            AWS_CONFIG_FILE
+            AWS_SHARED_CREDENTIALS_FILE
+            AWS_ROLE_ARN
+            AWS_WEB_IDENTITY_TOKEN_FILE
+          )
+          for name in "${aws_credential_env[@]}"; do
+            printf '%s=\n' "$name"
+          done >> "$GITHUB_ENV"
 
       - name: Run Rancher tests
         id: rancher_tests
-        if: ${{ inputs.run_rancher_tests == true }}
+        if: ${{ inputs.run_rancher_tests == true && steps.external_test_boundary.outcome == 'success' }}
         env:
           INPUT_RANCHER_TESTS_REF: ${{ github.event.inputs.rancher_tests_ref || '' }}
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ""
+          ACTIONS_ID_TOKEN_REQUEST_URL: ""
+          AWS_ACCESS_KEY_ID: ""
+          AWS_SECRET_ACCESS_KEY: ""
+          AWS_SESSION_TOKEN: ""
+          AWS_SECURITY_TOKEN: ""
+          AWS_DEFAULT_REGION: ""
+          AWS_REGION: ""
+          AWS_PROFILE: ""
+          AWS_CONFIG_FILE: ""
+          AWS_SHARED_CREDENTIALS_FILE: ""
+          AWS_ROLE_ARN: ""
+          AWS_WEB_IDENTITY_TOKEN_FILE: ""
+          AWS_PREFIX: ""
+          AWS_VPC: ""
+          AWS_SUBNET_A: ""
+          AWS_SUBNET_B: ""
+          AWS_SUBNET_C: ""
+          AWS_AMI: ""
+          AWS_SUBNET_ID: ""
+          AWS_SECURITY_GROUP_ID: ""
+          AWS_PEM_KEY_NAME: ""
+          AWS_ROUTE53_FQDN: ""
+          TF_STATE_BUCKET: ""
+          TF_STATE_LOCK_TABLE: ""
+          TF_STATE_REGION: ""
+          TF_STATE_KEY: ""
+          SIGNOFF_AWS_PREFIX: ""
+          GH_TOKEN: ""
+          LINODE_TOKEN: ""
+          DOCKERHUB_USERNAME: ""
+          DOCKERHUB_PASSWORD: ""
+          RANCHER_BOOTSTRAP_PASSWORD: ""
+          OWNER_FIRST_NAME: ""
+          OWNER_LAST_NAME: ""
         run: |
-          .github/scripts/run-with-cancel-cleanup.sh bash -euo pipefail <<'SCRIPT'
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
+          if env | grep -Eq '^ACTIONS_ID_TOKEN_REQUEST_(TOKEN|URL)='; then
+            echo "OIDC request environment must not reach external Rancher tests" >&2
+            exit 1
+          fi
+          bash -euo pipefail <<'SCRIPT'
+
+          unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
 
           env_file="automation-output/downstream-ha-1.env"
           suites=("TestWebhookTestSuite")
@@ -418,7 +620,8 @@ jobs:
             -X PUT "https://${RANCHER_HOST}/v3/settings/server-url" \
             -H "Authorization: Bearer ${RANCHER_ADMIN_TOKEN}" \
             -H "Content-Type: application/json" \
-            --data-binary "{\"name\":\"server-url\",\"value\":\"https://${RANCHER_HOST}\"}"
+            --data-binary "{\"name\":\"server-url\",\"value\":\"https://${RANCHER_HOST}\"}" \
+            --output /dev/null
 
           curl --fail --silent --show-error --insecure \
             -H "Authorization: Bearer ${RANCHER_ADMIN_TOKEN}" \
@@ -454,7 +657,8 @@ jobs:
                     -X PUT "https://${RANCHER_HOST}/v3/settings/shell-image" \
                     -H "Authorization: Bearer ${RANCHER_ADMIN_TOKEN}" \
                     -H "Content-Type: application/json" \
-                    --data-binary "{\"name\":\"shell-image\",\"value\":\"${candidate}\"}"
+                    --data-binary "{\"name\":\"shell-image\",\"value\":\"${candidate}\"}" \
+                    --output /dev/null
                   shell_image="$candidate"
                   probe_image="$candidate"
                   break
@@ -551,14 +755,21 @@ jobs:
 
           go install gotest.tools/gotestsum@latest
           go_bin="$(go env GOPATH)/bin"
-          export PATH="$go_bin:$PATH"
-          echo "$go_bin" >> "$GITHUB_PATH"
 
           tests_ref="${INPUT_RANCHER_TESTS_REF:-${RANCHER_TESTS_REF:-main}}"
           tests_dir="$RUNNER_TEMP/rancher-tests"
           git clone --depth 1 --branch "$tests_ref" https://github.com/rancher/tests.git "$tests_dir"
 
-          config_path="$RUNNER_TEMP/cattle-config.yaml"
+          external_home="$RUNNER_TEMP/rancher-tests-home"
+          external_tmp="$RUNNER_TEMP/rancher-tests-tmp"
+          external_gopath="$RUNNER_TEMP/rancher-tests-gopath"
+          mkdir -p \
+            "$external_home/.cache/go-build" \
+            "$external_tmp" \
+            "$external_gopath/pkg/mod"
+          chmod 700 "$external_home" "$external_tmp" "$external_gopath"
+
+          config_path="$external_tmp/cattle-config.yaml"
           cat > "$config_path" <<EOF
           rancher:
             host: "$RANCHER_HOST"
@@ -568,6 +779,25 @@ jobs:
             clusterName: "$CLUSTER_NAME"
           EOF
           chmod 600 "$config_path"
+          trap 'rm -f -- "$config_path"' EXIT
+
+          external_env=(
+            "HOME=$external_home"
+            "TMPDIR=$external_tmp"
+            "XDG_CACHE_HOME=$external_home/.cache"
+            "GOPATH=$external_gopath"
+            "GOMODCACHE=$external_gopath/pkg/mod"
+            "GOCACHE=$external_home/.cache/go-build"
+            "PATH=$PATH"
+            "CI=true"
+            "GOTOOLCHAIN=local"
+            "CATTLE_TEST_CONFIG=$config_path"
+          )
+          if env -i "${external_env[@]}" /usr/bin/env | grep -Eq \
+            '^(ACTIONS_|AWS_|GH_TOKEN=|LINODE_TOKEN=|DOCKERHUB_|RANCHER_BOOTSTRAP_PASSWORD=|TF_STATE_|SIGNOFF_AWS_PREFIX=|OWNER_(FIRST|LAST)_NAME=)'; then
+            echo "Protected environment reached the external Rancher test boundary" >&2
+            exit 1
+          fi
 
           results_json="automation-output/rancher-test-results.json"
           results_tmp="$(mktemp)"
@@ -668,7 +898,7 @@ jobs:
             run_suite() {
               (
                 cd "$tests_dir"
-                CATTLE_TEST_CONFIG="$config_path" gotestsum \
+                env -i "${external_env[@]}" "$go_bin/gotestsum" \
                   --format standard-verbose \
                   --junitfile "$junit" \
                   -- \
@@ -719,22 +949,141 @@ jobs:
           fi
           SCRIPT
 
+      - name: Restore trusted lane configuration
+        id: restore_trusted_config
+        if: ${{ always() && inputs.run_rancher_tests == true && steps.render_config.outcome == 'success' }}
+        env:
+          TRUSTED_SIGNOFF_PLAN_SHA256: ${{ steps.render_config.outputs.signoff_plan_sha256 }}
+          TRUSTED_TOOL_CONFIG_SHA256: ${{ steps.render_config.outputs.tool_config_sha256 }}
+          TRUSTED_LANE_ENV_SHA256: ${{ steps.render_config.outputs.lane_env_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          restore_file() {
+            local source="$1"
+            local expected_sha256="$2"
+            local destination="$3"
+            local actual_sha256
+
+            if [ ! -f "$source" ] || ! [[ "$expected_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Trusted configuration stash is missing or invalid" >&2
+              exit 1
+            fi
+            actual_sha256="$(sha256sum "$source" | awk '{print $1}')"
+            if [ "$actual_sha256" != "$expected_sha256" ]; then
+              echo "Trusted configuration stash checksum mismatch" >&2
+              exit 1
+            fi
+            rm -f -- "$destination"
+            install -m 0600 "$source" "$destination"
+          }
+
+          trusted_config_dir="$RUNNER_TEMP/trusted-lane-config"
+          restored_lane_env="$RUNNER_TEMP/restored-lane.env"
+          restore_file \
+            "$trusted_config_dir/signoff-plan.json" \
+            "$TRUSTED_SIGNOFF_PLAN_SHA256" \
+            "$GITHUB_WORKSPACE/signoff-plan.json"
+          restore_file \
+            "$trusted_config_dir/tool-config.yml" \
+            "$TRUSTED_TOOL_CONFIG_SHA256" \
+            "$GITHUB_WORKSPACE/tool-config.yml"
+          restore_file \
+            "$trusted_config_dir/lane.env" \
+            "$TRUSTED_LANE_ENV_SHA256" \
+            "$restored_lane_env"
+
+          test -s "$GITHUB_WORKSPACE/signoff-plan.json"
+          test -s "$GITHUB_WORKSPACE/tool-config.yml"
+          jq -e --arg lane "${{ inputs.lane }}" \
+            '.lanes | any(.name == $lane and (.terraform_state_key // "") != "")' \
+            "$GITHUB_WORKSPACE/signoff-plan.json" >/dev/null
+
+          restored_state_key=""
+          while IFS='=' read -r name value; do
+            case "$name" in
+              TF_STATE_KEY|SIGNOFF_AWS_PREFIX|RANCHER_UPGRADE_VERSION|RANCHER_UPGRADE_DISTRO|RANCHER_WEBHOOK_IMAGE)
+                if [ "$name" = "TF_STATE_KEY" ]; then
+                  restored_state_key="$value"
+                fi
+                case "$name" in
+                  TF_STATE_KEY|SIGNOFF_AWS_PREFIX)
+                    if [ -n "$value" ]; then
+                      echo "::add-mask::$value"
+                    fi
+                    ;;
+                esac
+                printf '%s=%s\n' "$name" "$value" >> "$GITHUB_ENV"
+                ;;
+              *)
+                echo "Unexpected trusted lane environment entry" >&2
+                exit 1
+                ;;
+            esac
+          done < "$restored_lane_env"
+          rm -f -- "$restored_lane_env"
+          if [ -z "$restored_state_key" ]; then
+            echo "Trusted lane configuration did not restore TF_STATE_KEY" >&2
+            exit 1
+          fi
+          rm -f -- \
+            "$trusted_config_dir/signoff-plan.json" \
+            "$trusted_config_dir/tool-config.yml" \
+            "$trusted_config_dir/lane.env"
+          rmdir -- "$trusted_config_dir"
+
+          # Reassert the credential quarantine before the trusted OIDC refresh.
+          aws_credential_env=(
+            AWS_ACCESS_KEY_ID
+            AWS_SECRET_ACCESS_KEY
+            AWS_SESSION_TOKEN
+            AWS_SECURITY_TOKEN
+            AWS_DEFAULT_REGION
+            AWS_REGION
+            AWS_PROFILE
+            AWS_CONFIG_FILE
+            AWS_SHARED_CREDENTIALS_FILE
+            AWS_ROLE_ARN
+            AWS_WEB_IDENTITY_TOKEN_FILE
+          )
+          for name in "${aws_credential_env[@]}"; do
+            printf '%s=\n' "$name"
+          done >> "$GITHUB_ENV"
+
       - name: Refresh AWS credentials before cleanup
-        if: ${{ always() }}
+        if: ${{ always() && steps.render_config.outcome == 'success' && (inputs.run_rancher_tests == false || steps.restore_trusted_config.outcome == 'success') }}
         uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
         with:
           role-to-assume: ${{ secrets.AWS_AUTOMATION_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
 
       - name: Delete downstream Linode K3s
         id: delete_downstream
-        if: ${{ always() && steps.render_config.outcome == 'success' && inputs.lane != 'framework-regression' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && steps.downstream.outcome == 'success' && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}
+        if: ${{ always() && steps.render_config.outcome == 'success' && (inputs.run_rancher_tests == false || steps.restore_trusted_config.outcome == 'success') && inputs.lane != 'framework-regression' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && steps.downstream.outcome == 'success' && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}
         run: go test -v -run '^TestHADeleteLinodeDownstream$' -timeout 25m ./terratest
 
       - name: Run lane cleanup
         id: cleanup
-        if: ${{ always() && steps.render_config.outcome == 'success' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && (inputs.lane == 'framework-regression' || steps.downstream.outcome == 'success') && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}
+        if: ${{ always() && steps.render_config.outcome == 'success' && (inputs.run_rancher_tests == false || steps.restore_trusted_config.outcome == 'success') && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && (inputs.lane == 'framework-regression' || steps.downstream.outcome == 'success') && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}
+        env:
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+          TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
         run: go test -v -run '^TestHACleanup$' -timeout 30m ./terratest
+
+      - name: Clear AWS credentials after cleanup
+        if: always()
+        run: |
+          {
+            echo "AWS_ACCESS_KEY_ID="
+            echo "AWS_SECRET_ACCESS_KEY="
+            echo "AWS_SESSION_TOKEN="
+            echo "AWS_SECURITY_TOKEN="
+            echo "AWS_REGION="
+            echo "AWS_DEFAULT_REGION="
+          } >> "$GITHUB_ENV"
 
       - name: Render sign-off report
         if: always()
@@ -873,8 +1222,6 @@ jobs:
               completed_at: $completed_at,
               rke2_server_count: ($rke2_server_count | tonumber),
               webhook_image: ($plan.webhook_image // null),
-              terraform_state_key: ($lane_plan.terraform_state_key // ""),
-              aws_prefix: ($lane_plan.aws_prefix // ""),
               install_rancher_distro: ($lane_plan.install_rancher_distro // null),
               upgrade_to_rancher_distro: ($lane_plan.upgrade_to_rancher_distro // null),
               rancher_resolution: {
@@ -915,7 +1262,6 @@ jobs:
             echo "- Resolved Rancher version: \`$TARGET_RANCHER_VERSION\`"
             echo "- Upgrade version: \`${RANCHER_UPGRADE_VERSION:-none}\`"
             echo "- RKE2 server count: \`${{ inputs.rke2_server_count }}\`"
-            echo "- Terraform state key: \`${TF_STATE_KEY:-unset}\`"
             echo "- Setup outcome: \`${{ steps.setup.outcome }}\`"
             echo "- Readiness outcome: \`${{ steps.ready.outcome }}\`"
             echo "- Local suite env outcome: \`${{ steps.local_suite_env.outcome }}\`"

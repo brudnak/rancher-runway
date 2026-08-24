@@ -67,9 +67,6 @@ jobs:
   plan:
     runs-on: ubuntu-latest
     environment: rancher-signoff
-    env:
-      GH_TOKEN: ${{ github.token }}
-      AWS_PREFIX: ${{ vars.AWS_PREFIX }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -87,6 +84,8 @@ jobs:
 
       - name: Generate sign-off plan
         env:
+          GH_TOKEN: ${{ github.token }}
+          AWS_PREFIX: ${{ secrets.AWS_PREFIX }}
           INPUT_RANCHER_VERSION: ${{ github.event.inputs.rancher_version || '' }}
           INPUT_PREVIOUS_RANCHER_VERSION: ${{ github.event.inputs.previous_rancher_version || '' }}
           INPUT_WEBHOOK_IMAGE: ${{ github.event.inputs.webhook_image || '' }}
@@ -114,7 +113,7 @@ jobs:
             args+=("-aws-base-prefix" "$AWS_PREFIX")
           fi
 
-          "$RUNNER_TEMP/signoff-plan" "${args[@]}"
+          "$RUNNER_TEMP/signoff-plan" "${args[@]}" > /dev/null
 
       - name: Build dispatch queue
         id: dispatch-queue
@@ -384,7 +383,7 @@ jobs:
             echo "## Rancher sign-off plan"
             echo ""
             echo '```json'
-            cat signoff-plan.json
+            jq -f .github/scripts/redact-signoff-plan.jq signoff-plan.json
             echo '```'
             echo ""
             echo "Dispatch requested: \`${{ steps.dispatch-queue.outputs.requested }}\`."
@@ -399,7 +398,7 @@ jobs:
             echo "Pending dispatch queue: \`${{ steps.dispatch-queue.outputs.queue_count }}\` lane(s); selected: \`${{ steps.dispatch-queue.outputs.selected_count }}\`."
             echo ""
             echo '```json'
-            cat automation-output/signoff-dispatch-summary.json
+            jq -f .github/scripts/redact-signoff-plan.jq automation-output/signoff-dispatch-summary.json
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -423,7 +422,9 @@ jobs:
               completed_at: $completed_at,
               plan: $plan[0],
               dispatch: $dispatch
-            }' > public-plan-artifacts/signoff-plan-receipt.json
+            }' \
+            | jq -f .github/scripts/redact-signoff-plan.jq \
+            > public-plan-artifacts/signoff-plan-receipt.json
 
       - name: Upload plan artifact
         if: ${{ always() && steps.public_artifacts.outcome == 'success' }}

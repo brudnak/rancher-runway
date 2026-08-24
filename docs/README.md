@@ -60,7 +60,12 @@ Current workflow layers:
 
 Run `bootstrap-terraform-state.yml` from GitHub Actions when you want the repo-owned automation to create the S3 state bucket and DynamoDB lock table. Keep it behind the protected `automation-bootstrap` environment with an OIDC role in `AWS_BOOTSTRAP_ROLE_ARN`.
 
-The bootstrap output contains bucket/table names and region only. Those values are not credentials, but Actions logs, summaries, and artifacts are visible to people who can read workflow runs for the repository. Put the resulting `TF_STATE_BUCKET`, `TF_STATE_LOCK_TABLE`, and `TF_STATE_REGION` values into the protected `rancher-signoff` environment variables; do not print or upload AWS credentials.
+Configure the backend region, bucket, and lock-table names as individual
+environment secrets before running the bootstrap. Put the same protected values
+in the `rancher-signoff` environment. The workflows do not print or upload
+these identifiers, state keys, owner metadata, or AWS resource prefixes. The
+protected values are exposed only to the trusted steps that consume them, not
+to every command in the job.
 
 ## Design Principle
 

@@ -3,20 +3,6 @@ name: Bootstrap Terraform State
 on:
   workflow_dispatch:
     inputs:
-      aws_region:
-        description: AWS region for the state bucket and lock table.
-        required: true
-        default: us-east-2
-        type: string
-      state_bucket_name:
-        description: Globally unique S3 bucket name for Terraform state.
-        required: true
-        type: string
-      lock_table_name:
-        description: DynamoDB table name for Terraform state locks.
-        required: true
-        default: rancher-runway-terraform-locks
-        type: string
       noncurrent_state_version_expiration_days:
         description: Days to retain old noncurrent state versions.
         required: true
@@ -48,11 +34,34 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
-        with:
-          role-to-assume: ${{ secrets.AWS_BOOTSTRAP_ROLE_ARN }}
-          aws-region: ${{ inputs.aws_region }}
+      - name: Validate protected configuration
+        env:
+          AWS_BOOTSTRAP_ROLE_ARN: ${{ secrets.AWS_BOOTSTRAP_ROLE_ARN }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
+        run: |
+          set -euo pipefail
+
+          required=(
+            AWS_BOOTSTRAP_ROLE_ARN
+            AWS_REGION
+            TF_STATE_BUCKET
+            TF_STATE_LOCK_TABLE
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            value="${!name-}"
+            if [ -z "${value//[[:space:]]/}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Missing required protected configuration:' >&2
+            printf ' %s' "${missing[@]}" >&2
+            printf '\n' >&2
+            exit 1
+          fi
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
@@ -68,33 +77,40 @@ jobs:
       - name: Terraform validate
         run: terraform validate -no-color
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
+        with:
+          role-to-assume: ${{ secrets.AWS_BOOTSTRAP_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          mask-aws-account-id: true
+
       - name: Terraform plan
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+          TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
         run: |
           terraform plan -no-color -out=tfplan \
-            -var "aws_region=${{ inputs.aws_region }}" \
-            -var "state_bucket_name=${{ inputs.state_bucket_name }}" \
-            -var "lock_table_name=${{ inputs.lock_table_name }}" \
+            -var "aws_region=$AWS_REGION" \
+            -var "state_bucket_name=$TF_STATE_BUCKET" \
+            -var "lock_table_name=$TF_STATE_LOCK_TABLE" \
             -var "noncurrent_state_version_expiration_days=${{ inputs.noncurrent_state_version_expiration_days }}"
 
       - name: Terraform apply
         if: ${{ inputs.apply }}
         run: terraform apply -no-color -auto-approve tfplan
 
-      - name: Write backend env artifact
-        if: ${{ inputs.apply }}
+      - name: Clear AWS credentials
+        if: always()
         run: |
           {
-            echo "TF_STATE_BUCKET=$(terraform output -raw state_bucket_name)"
-            echo "TF_STATE_LOCK_TABLE=$(terraform output -raw lock_table_name)"
-            echo "TF_STATE_REGION=${{ inputs.aws_region }}"
-          } > backend.env
-
-      - name: Upload backend env artifact
-        if: ${{ inputs.apply }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: terraform-backend-env
-          path: bootstrap/terraform-state/backend.env
+            echo "AWS_ACCESS_KEY_ID="
+            echo "AWS_SECRET_ACCESS_KEY="
+            echo "AWS_SESSION_TOKEN="
+            echo "AWS_SECURITY_TOKEN="
+            echo "AWS_REGION="
+            echo "AWS_DEFAULT_REGION="
+          } >> "$GITHUB_ENV"
 
       - name: Write step summary
         if: always()
@@ -102,18 +118,6 @@ jobs:
           {
             echo "## Terraform state bootstrap"
             echo ""
-            echo "- Region: \`${{ inputs.aws_region }}\`"
-            echo "- Bucket: \`${{ inputs.state_bucket_name }}\`"
-            echo "- Lock table: \`${{ inputs.lock_table_name }}\`"
+            echo "- Backend configuration: protected"
             echo "- Apply requested: \`${{ inputs.apply }}\`"
-            if [ "${{ inputs.apply }}" = "true" ] && [ -s backend.env ]; then
-              echo ""
-              echo "### Non-secret automation values"
-              echo ""
-              echo "Put these in the \`rancher-signoff\` environment variables:"
-              echo ""
-              echo '```bash'
-              cat backend.env
-              echo '```'
-            fi
           } >> "$GITHUB_STEP_SUMMARY"
