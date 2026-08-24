@@ -88,7 +88,7 @@ generated Linode root password before noisy provisioning steps.
 
 | Workflow | Creates cloud resources | Notes |
 | --- | --- | --- |
-| `signoff-plan.yml` | no, but it can dispatch the runner | Manual plan generation from `signoff-targets.json` or a single head/prerelease input. Dispatch suppresses an identical active lane. It also skips a previously successful immutable target unless `rerun_successful_lanes=true`; mutable `head` and `vX.Y-head` aliases are always reconsidered after the active run finishes. |
+| `signoff-plan.yml` | no, but it can dispatch the runner | Manual plan generation from `signoff-targets.json` or a single head/prerelease input. Dispatch suppresses an identical active lane. It also skips a previously successful immutable target unless `rerun_successful_lanes=true`; mutable `head`, `vX.Y-head`, and `vX.Y.Z-head` aliases are always reconsidered after the active run finishes. |
 | `bootstrap-terraform-state.yml` | yes, only when `apply=true` | Creates or updates the persistent S3/DynamoDB backend. |
 | `run-rancher-signoff-lane.yml` | yes | Runs one Rancher sign-off lane, optionally with Linode downstreams and direct `rancher/tests` suite runs, then cleans up. |
 
@@ -137,6 +137,7 @@ Supported target forms are:
 | --- | --- | --- |
 | Current community head | `head` | Mutable alias. |
 | Minor-line head | `v2.15-head` | Mutable alias. |
+| Patch-line head | `v2.15.1-head` | Mutable alias for the newest matching immutable staging build. |
 | Community commit head | `v2.15-0123456789abcdef-head` | Immutable commit build. |
 | Prime patch commit head | `v2.14.5-0123456789abcdef-head` | Immutable commit build; the numeric patch replaces the `Z` in the general `vX.Y.Z-SHA-head` form. |
 | Alpha | `v2.14.1-alpha7` | Immutable prerelease. |
@@ -145,11 +146,11 @@ Supported target forms are:
 
 Prefer a commit-specific head tag for sign-off. It identifies one build, makes
 receipts reproducible, and lets the planner safely deduplicate a lane that has
-already succeeded. The mutable `head` and `vX.Y-head` aliases are useful for
-continuous smoke testing, but their contents can change without their workflow
-run title changing. The planner therefore does not suppress them because an
-older run with that title succeeded. It still suppresses an identical active
-run, so concurrent planners do not launch duplicate lanes.
+already succeeded. The mutable `head`, `vX.Y-head`, and `vX.Y.Z-head` aliases
+are useful for continuous smoke testing, but their contents can change without
+their workflow run title changing. The planner therefore does not suppress
+them because an older run with that title succeeded. It still suppresses an
+identical active run, so concurrent planners do not launch duplicate lanes.
 
 Head image publication changes as a release line moves through its lifecycle.
 Current community lines can publish on Docker Hub, while Prime-only lines
@@ -163,11 +164,19 @@ generated plan and receipt identify what that run actually tested.
 Parent-planned lanes receive that immutable resolved tag, so the alias cannot
 move between planning and execution.
 
+Patch-qualified heads are staging-only, including both `v2.15.1-head` and an
+exact `v2.15.1-SHA-head` tag. Because staging does not publish a literal patch
+alias image, the planner lists immutable `v2.15.1-SHA-head` tags, verifies their
+canonical OCI metadata and matching server/agent pair, and pins the newest pair
+by the later of the server and agent OCI creation times. Both timestamps are
+required. Tags from a different patch and Docker Hub images are not candidates.
+
 Prime head images and Prime chart availability do not always begin on the same
-day. Prime-head chart resolution therefore prefers the Prime repository, then
-an exact Optimus staging chart, and finally a same-line community chart
-baseline while retaining the exact staging Prime server/agent images. Released
-Prime targets remain strict and do not fall back to community charts.
+day. Prime-head chart resolution uses an exact eligible head chart (normally
+Optimus) when available; if chart publication lags, it may use a compatible
+Prime or same-line community baseline while retaining the exact staging Prime
+server/agent images. Released, non-head Prime targets remain strict and do not
+fall back to community charts.
 
 To keep a target in the file without planning it, set `enabled` to `false`.
 

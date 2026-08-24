@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -30,6 +31,7 @@ const (
 	laneWebhookUpgrade             = "webhook-upgrade"
 	laneWebhookCandidateOnPrevious = "webhook-candidate-on-previous"
 	laneFrameworkRegression        = "framework-regression"
+	patchHeadInspectionConcurrency = 6
 )
 
 var (
@@ -37,7 +39,7 @@ var (
 	prereleaseVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-(?:alpha|rc)(\d+)$`)
 	rcsVersionRE        = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)-rcs-[0-9A-Za-z]+(?:\.(\d+))?$`)
 	releaseVersionRE    = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)$`)
-	headVersionRE       = regexp.MustCompile(`^v?(\d+)\.(\d+)-head$`)
+	headVersionRE       = regexp.MustCompile(`^v?(\d+)\.(\d+)(?:\.(\d+))?-head$`)
 	headCommitVersionRE = regexp.MustCompile(`^v?(\d+)\.(\d+)(?:\.(\d+))?-([0-9a-fA-F]{7,40})-head$`)
 	imageVersionLineRE  = regexp.MustCompile(`(?i)(?:^|-)v?(\d+)\.(\d+)(?:$|[.-])`)
 	gitRevisionRE       = regexp.MustCompile(`^[0-9a-fA-F]{7,40}$`)
@@ -149,6 +151,7 @@ type githubClient struct {
 	rawBaseURL       string
 	registryBaseURLs map[string]string
 	inspectImage     rancherImageInspector
+	listImageTags    rancherImageTagLister
 }
 
 type rancherImageMetadata struct {
@@ -159,9 +162,11 @@ type rancherImageMetadata struct {
 	OSSRevision        string
 	Version            string
 	CanonicalReference string
+	Created            time.Time
 }
 
 type rancherImageInspector func(context.Context, string) (rancherImageMetadata, bool, error)
+type rancherImageTagLister func(context.Context, string, string) ([]string, error)
 
 type rancherImagePair struct {
 	Registry string
@@ -185,7 +190,7 @@ func main() {
 	var ignoreLedger bool
 	var maxAgeDays int
 
-	flag.StringVar(&targetVersion, "rancher-version", "", "target Rancher head, commit head, alpha, RC, or RCS tag, for example v2.14-head, v2.14.5-{SHA}-head, or v2.15.1-rcs-c936")
+	flag.StringVar(&targetVersion, "rancher-version", "", "target Rancher head, patch head, commit head, alpha, RC, or RCS tag, for example v2.14-head, v2.15.1-head, v2.14.5-{SHA}-head, or v2.15.1-rcs-c936")
 	flag.StringVar(&previousVersion, "previous-rancher-version", "", "previous Rancher release tag; resolved automatically when omitted")
 	flag.StringVar(&webhookImage, "webhook-image", "", "candidate webhook image; when omitted, probes staging SUSE, Prime, public SUSE, then Docker Hub for the target webhook tag")
 	flag.StringVar(&signingPolicy, "signing-policy", "auto", "required, report-only, skip, or auto")
@@ -865,12 +870,20 @@ func (c githubClient) releases(ctx context.Context) ([]release, error) {
 }
 
 func (c githubClient) resolveHeadTarget(ctx context.Context, requested semver) (semver, rancherImagePair, string, error) {
-	registries := []string{"stgregistry.suse.com", "docker.io"}
-	if requested.Raw == "head" {
-		registries = []string{"docker.io"}
+	var pair rancherImagePair
+	var err error
+	if requested.Commit == "" && requested.PatchSpecified {
+		pair, err = c.resolvePatchHeadImagePair(ctx, requested)
+	} else {
+		registries := []string{"stgregistry.suse.com", "docker.io"}
+		switch {
+		case requested.Raw == "head":
+			registries = []string{"docker.io"}
+		case requested.PatchSpecified:
+			registries = []string{"stgregistry.suse.com"}
+		}
+		pair, err = c.resolveHeadImagePair(ctx, requested.Raw, registries)
 	}
-
-	pair, err := c.resolveHeadImagePair(ctx, requested.Raw, registries)
 	if err != nil {
 		return semver{}, rancherImagePair{}, "", err
 	}
@@ -881,7 +894,7 @@ func (c githubClient) resolveHeadTarget(ctx context.Context, requested semver) (
 		if err != nil {
 			return semver{}, rancherImagePair{}, "", err
 		}
-		if resolved.Raw != requested.Raw {
+		if resolved.Raw != requested.Raw && !strings.EqualFold(imageReferenceTag(pair.Server.Reference), resolved.Raw) {
 			exactPair, found, err := c.inspectHeadImagePair(ctx, pair.Registry, resolved.Raw)
 			if err != nil {
 				return semver{}, rancherImagePair{}, "", fmt.Errorf("inspect canonical Rancher head image pair %s in %s: %w", resolved.Raw, pair.Registry, err)
@@ -899,6 +912,9 @@ func (c githubClient) resolveHeadTarget(ctx context.Context, requested semver) (
 		}
 	}
 
+	if requested.PatchSpecified && !isRancherPrimeSource(pair.Server.Source) {
+		return semver{}, rancherImagePair{}, "", fmt.Errorf("patch-qualified Rancher head %s did not declare the canonical Rancher Prime source", requested.Raw)
+	}
 	buildReference, err := publicRancherRevision(pair.Server)
 	if err != nil {
 		return semver{}, rancherImagePair{}, "", err
@@ -911,6 +927,172 @@ func (c githubClient) resolveHeadTarget(ctx context.Context, requested semver) (
 	}
 
 	return resolved, pair, strings.ToLower(buildReference), nil
+}
+
+type discoveredHeadInspection struct {
+	tag        string
+	pair       rancherImagePair
+	completeAt time.Time
+	found      bool
+	err        error
+	lookupErr  bool
+}
+
+func (c githubClient) resolvePatchHeadImagePair(ctx context.Context, requested semver) (rancherImagePair, error) {
+	const registry = "stgregistry.suse.com"
+
+	lister := c.listImageTags
+	if lister == nil {
+		lister = listOCIImageTags
+	}
+	tags, err := lister(ctx, registry, rancherRepo)
+	if err != nil {
+		return rancherImagePair{}, fmt.Errorf("list Rancher head tags in %s: %w", registry, err)
+	}
+	sort.Strings(tags)
+
+	inspector := c.inspectImage
+	if inspector == nil {
+		inspector = inspectOCIImage
+	}
+	var matchingTags []string
+	for _, tag := range tags {
+		parsed, err := parseTargetVersion(tag)
+		if err != nil || parsed.Kind != "head" || parsed.Commit == "" || !parsed.PatchSpecified || parsed.Major != requested.Major || parsed.Minor != requested.Minor || parsed.Patch != requested.Patch {
+			continue
+		}
+		matchingTags = append(matchingTags, tag)
+	}
+
+	jobs := make(chan string, len(matchingTags))
+	results := make(chan discoveredHeadInspection, len(matchingTags))
+	workerCount := patchHeadInspectionConcurrency
+	if len(matchingTags) < workerCount {
+		workerCount = len(matchingTags)
+	}
+	var workers sync.WaitGroup
+	for range workerCount {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for tag := range jobs {
+				serverReference := registry + "/rancher/rancher:" + tag
+				server, found, err := inspector(ctx, serverReference)
+				if server.Reference == "" {
+					server.Reference = serverReference
+				}
+				if err != nil {
+					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("inspect server image %s: %w", serverReference, err), lookupErr: true}
+					continue
+				}
+				if !found {
+					results <- discoveredHeadInspection{tag: tag}
+					continue
+				}
+				if server.Created.IsZero() {
+					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("server image %s did not declare an OCI creation time", serverReference)}
+					continue
+				}
+				canonical, err := canonicalHeadTarget(requested, server)
+				if err != nil {
+					results <- discoveredHeadInspection{tag: tag, err: err}
+					continue
+				}
+				if !strings.EqualFold(canonical.Raw, normalizeTag(tag)) {
+					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("discovered Rancher head tag %s declared unexpected canonical tag %s", tag, canonical.Raw)}
+					continue
+				}
+				if !isRancherPrimeSource(server.Source) {
+					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("patch-qualified Rancher head %s did not declare the canonical Rancher Prime source", tag)}
+					continue
+				}
+				buildReference, err := publicRancherRevision(server)
+				if err != nil || !revisionsMatch(canonical.Commit, buildReference) {
+					if err != nil {
+						results <- discoveredHeadInspection{tag: tag, err: err}
+					} else {
+						results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("canonical Rancher head tag %s identifies commit %s, but image provenance identifies public revision %s", canonical.Raw, canonical.Commit, buildReference)}
+					}
+					continue
+				}
+
+				agentReference := registry + "/rancher/rancher-agent:" + tag
+				agent, agentFound, err := inspector(ctx, agentReference)
+				if agent.Reference == "" {
+					agent.Reference = agentReference
+				}
+				if err != nil {
+					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("inspect agent image %s: %w", agentReference, err), lookupErr: true}
+					continue
+				}
+				if !agentFound {
+					results <- discoveredHeadInspection{tag: tag}
+					continue
+				}
+				if agent.Created.IsZero() {
+					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("agent image %s did not declare an OCI creation time", agentReference)}
+					continue
+				}
+				pair := rancherImagePair{Registry: registry, Server: server, Agent: agent}
+				if err := validateHeadImagePair(tag, pair); err != nil {
+					results <- discoveredHeadInspection{tag: tag, err: err}
+					continue
+				}
+				completeAt := server.Created
+				if agent.Created.After(completeAt) {
+					completeAt = agent.Created
+				}
+				results <- discoveredHeadInspection{tag: tag, pair: pair, completeAt: completeAt, found: true}
+			}
+		}()
+	}
+	for _, tag := range matchingTags {
+		jobs <- tag
+	}
+	close(jobs)
+	workers.Wait()
+	close(results)
+
+	inspections := make([]discoveredHeadInspection, 0, len(matchingTags))
+	for inspection := range results {
+		inspections = append(inspections, inspection)
+	}
+	sort.Slice(inspections, func(i, j int) bool { return inspections[i].tag < inspections[j].tag })
+
+	var candidates []discoveredHeadInspection
+	var invalid []string
+	for _, inspection := range inspections {
+		if inspection.err != nil {
+			if inspection.lookupErr {
+				return rancherImagePair{}, fmt.Errorf("could not safely resolve %s from %s because image inspection failed: %w", requested.Raw, registry, inspection.err)
+			}
+			invalid = append(invalid, inspection.tag+": "+inspection.err.Error())
+			continue
+		}
+		if !inspection.found {
+			continue
+		}
+		candidates = append(candidates, inspection)
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].completeAt.Equal(candidates[j].completeAt) {
+			return candidates[i].tag > candidates[j].tag
+		}
+		return candidates[i].completeAt.After(candidates[j].completeAt)
+	})
+	if len(candidates) > 0 {
+		return candidates[0].pair, nil
+	}
+
+	detail := ""
+	if len(invalid) > 0 {
+		if len(invalid) > 5 {
+			invalid = append(invalid[:5], fmt.Sprintf("and %d more", len(invalid)-5))
+		}
+		detail = ": " + strings.Join(invalid, "; ")
+	}
+	return rancherImagePair{}, fmt.Errorf("no complete immutable Rancher head image pair for %s was found in %s%s", requested.Raw, registry, detail)
 }
 
 func (c githubClient) resolveHeadImagePair(ctx context.Context, tag string, registries []string) (rancherImagePair, error) {
@@ -934,7 +1116,6 @@ func (c githubClient) inspectHeadImagePair(ctx context.Context, registry, tag st
 		inspector = inspectOCIImage
 	}
 	serverReference := registry + "/rancher/rancher:" + tag
-	agentReference := registry + "/rancher/rancher-agent:" + tag
 
 	server, found, err := inspector(ctx, serverReference)
 	if err != nil {
@@ -946,7 +1127,15 @@ func (c githubClient) inspectHeadImagePair(ctx context.Context, registry, tag st
 	if server.Reference == "" {
 		server.Reference = serverReference
 	}
+	return c.inspectHeadImagePairWithServer(ctx, registry, tag, server)
+}
 
+func (c githubClient) inspectHeadImagePairWithServer(ctx context.Context, registry, tag string, server rancherImageMetadata) (rancherImagePair, bool, error) {
+	inspector := c.inspectImage
+	if inspector == nil {
+		inspector = inspectOCIImage
+	}
+	agentReference := registry + "/rancher/rancher-agent:" + tag
 	agent, found, err := inspector(ctx, agentReference)
 	if err != nil {
 		return rancherImagePair{}, false, err
@@ -965,6 +1154,14 @@ func (c githubClient) inspectHeadImagePair(ctx context.Context, registry, tag st
 	return pair, true, nil
 }
 
+func listOCIImageTags(ctx context.Context, registry, repository string) ([]string, error) {
+	repo, err := name.NewRepository(registry+"/"+repository, name.WeakValidation)
+	if err != nil {
+		return nil, err
+	}
+	return remote.List(repo, remote.WithContext(ctx), remote.WithAuth(authn.Anonymous))
+}
+
 func validateHeadImagePair(requestedTag string, pair rancherImagePair) error {
 	serverCanonicalTag := imageReferenceTag(pair.Server.CanonicalReference)
 	agentCanonicalTag := imageReferenceTag(pair.Agent.CanonicalReference)
@@ -973,6 +1170,11 @@ func validateHeadImagePair(requestedTag string, pair rancherImagePair) error {
 	}
 	if !strings.EqualFold(serverCanonicalTag, agentCanonicalTag) {
 		return fmt.Errorf("Rancher head image pair %s has mismatched canonical tags: server %s, agent %s", requestedTag, serverCanonicalTag, agentCanonicalTag)
+	}
+	serverCanonicalRepository := imageReferenceRepository(pair.Server.CanonicalReference)
+	agentCanonicalRepository := imageReferenceRepository(pair.Agent.CanonicalReference)
+	if serverCanonicalRepository != "rancher/rancher" || agentCanonicalRepository != "rancher/rancher-agent" {
+		return fmt.Errorf("Rancher head image pair %s has unexpected canonical repositories: server %s, agent %s", requestedTag, serverCanonicalRepository, agentCanonicalRepository)
 	}
 
 	requested, err := parseTargetVersion(requestedTag)
@@ -1024,6 +1226,7 @@ func inspectOCIImage(ctx context.Context, reference string) (rancherImageMetadat
 		OSSRevision:        strings.ToLower(strings.TrimSpace(labels["org.opencontainers.image.oss.revision"])),
 		Version:            strings.TrimSpace(labels["org.opencontainers.image.version"]),
 		CanonicalReference: strings.TrimSpace(labels["org.opensuse.reference"]),
+		Created:            config.Created.Time,
 	}, true, nil
 }
 
@@ -1033,6 +1236,9 @@ func canonicalHeadTarget(requested semver, metadata rancherImageMetadata) (semve
 		if err == nil && resolved.Kind == "head" && resolved.Commit != "" {
 			if requested.Major != 0 && (resolved.Major != requested.Major || resolved.Minor != requested.Minor) {
 				return semver{}, fmt.Errorf("Rancher head alias %s resolved to a different release line in OCI metadata: %s", requested.Raw, tag)
+			}
+			if requested.PatchSpecified && (!resolved.PatchSpecified || resolved.Patch != requested.Patch) {
+				return semver{}, fmt.Errorf("Rancher head alias %s resolved to a different patch in OCI metadata: %s", requested.Raw, tag)
 			}
 			return resolved, nil
 		}
@@ -1105,6 +1311,14 @@ func imageReferenceTag(reference string) string {
 		return ""
 	}
 	return reference[colon+1:]
+}
+
+func imageReferenceRepository(reference string) string {
+	parsed, err := name.ParseReference(strings.TrimSpace(reference), name.WeakValidation)
+	if err != nil {
+		return ""
+	}
+	return parsed.Context().RepositoryStr()
 }
 
 func revisionsMatch(a, b string) bool {
@@ -1468,7 +1682,7 @@ func parseTargetVersion(value string) (semver, error) {
 		}, nil
 	}
 
-	if match := headVersionRE.FindStringSubmatch(trimmed); len(match) == 3 {
+	if match := headVersionRE.FindStringSubmatch(trimmed); len(match) == 4 {
 		major, err := strconv.Atoi(match[1])
 		if err != nil {
 			return semver{}, err
@@ -1477,11 +1691,21 @@ func parseTargetVersion(value string) (semver, error) {
 		if err != nil {
 			return semver{}, err
 		}
+		patch := 0
+		patchSpecified := match[3] != ""
+		if patchSpecified {
+			patch, err = strconv.Atoi(match[3])
+			if err != nil {
+				return semver{}, err
+			}
+		}
 		return semver{
-			Major: major,
-			Minor: minor,
-			Raw:   normalizeTag(trimmed),
-			Kind:  "head",
+			Major:          major,
+			Minor:          minor,
+			Patch:          patch,
+			Raw:            normalizeTag(trimmed),
+			Kind:           "head",
+			PatchSpecified: patchSpecified,
 		}, nil
 	}
 

@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       rancher_version:
-        description: Optional target (head, vX.Y-head, vX.Y-SHA-head, vX.Y.Z-SHA-head, alpha, RC, or RCS). Blank uses signoff-targets.json.
+        description: Optional target (head, vX.Y-head, vX.Y.Z-head, vX.Y-SHA-head, vX.Y.Z-SHA-head, alpha, RC, or RCS). Blank uses signoff-targets.json.
         required: false
         type: string
       previous_rancher_version:
@@ -172,7 +172,7 @@ jobs:
               def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
               def mutable_head($lane):
                 ($lane.rancher_version == "head") or
-                ($lane.rancher_version | test("^v?[0-9]+\\.[0-9]+-head$"));
+                ($lane.rancher_version | test("^v?[0-9]+\\.[0-9]+(?:\\.[0-9]+)?-head$"));
               ($active[0] | map(.displayTitle) | unique) as $active_titles
               | ($successful[0] | map(.displayTitle) | unique) as $successful_titles
               | [$queue[0][]
@@ -195,7 +195,7 @@ jobs:
               def title($lane): "Run \($lane.rancher_version) / \($lane.lane)";
               def mutable_head($lane):
                 ($lane.rancher_version == "head") or
-                ($lane.rancher_version | test("^v?[0-9]+\\.[0-9]+-head$"));
+                ($lane.rancher_version | test("^v?[0-9]+\\.[0-9]+(?:\\.[0-9]+)?-head$"));
               ($successful[0] | map(.displayTitle) | unique) as $successful_titles
               | [$queue[0][]
                   | title(.) as $display_title

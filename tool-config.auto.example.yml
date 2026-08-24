@@ -3,6 +3,8 @@ rancher:
   versions:
     - "2.13-head"
     - "2.13.4"
+    # Mutable patch selector: resolves the newest complete staging server/agent pair.
+    # - "2.15.1-head"
     # Exact Docker Hub images are also accepted, for example:
     # - "bigkevmcd/rancher:v2.16-da0ab2f1dc-head"
   # Optional agent_images entries must align with custom-image or RCS rows.

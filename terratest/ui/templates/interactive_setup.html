@@ -184,7 +184,7 @@
               </div>
               <div class="grid gap-2" id="rows"></div>
               <div id="autoVersionsHelp" class="mx-2 mt-3 text-sm font-normal text-zinc-500 dark:text-zinc-400">
-                Examples: 2.14-head, head, or bigkevmcd/rancher:v2.16-da0ab2f1dc-head. Docker Hub shorthand is accepted. For a custom image, its matching server or agent image is derived automatically, and a version-like tag selects the Rancher line used for Kubernetes compatibility lookup. A leading v on a version selector is stripped when saved; exact image tags are preserved.
+                Examples: 2.15.1-head, 2.14-head, head, or bigkevmcd/rancher:v2.16-da0ab2f1dc-head. A patch head such as 2.15.1-head selects and pins the newest complete server/agent image pair from SUSE staging, then prefers an exact eligible chart (typically Optimus) when available. Docker Hub shorthand is accepted for custom images. For a custom image, its matching server or agent image is derived automatically, and a version-like tag selects the Rancher line used for Kubernetes compatibility lookup. A leading v on a version selector is stripped when saved; exact image tags are preserved.
               </div>
               </div>
 

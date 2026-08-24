@@ -340,6 +340,7 @@ func TestClassifyRancherVersionAllowsCommitHeads(t *testing.T) {
 	}{
 		{version: "2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head", minorLine: "2.13"},
 		{version: "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head", minorLine: "2.14"},
+		{version: "2.15.1-1f680e71accf728c75478ff6b728d59c9f9a7b8b-head", minorLine: "2.15"},
 	} {
 		t.Run(test.version, func(t *testing.T) {
 			buildType, minorLine, err := classifyRancherVersion(test.version)
@@ -353,7 +354,20 @@ func TestClassifyRancherVersionAllowsCommitHeads(t *testing.T) {
 	}
 }
 
+func TestClassifyRancherVersionAllowsPatchHeadAlias(t *testing.T) {
+	buildType, minorLine, err := classifyRancherVersion("2.15.1-head")
+	if err != nil {
+		t.Fatalf("expected patch-qualified head selector to be valid, got error: %v", err)
+	}
+	if buildType != "head" || minorLine != "2.15" {
+		t.Fatalf("expected patch-qualified head classification, got buildType=%q minorLine=%q", buildType, minorLine)
+	}
+}
+
 func TestPrimeDistroAllowsPatchHeadAndExactCustomHead(t *testing.T) {
+	if err := validateRequestedRancherDistro("prime", "head", "2.15.1-head", false); err != nil {
+		t.Fatalf("expected mutable patch-qualified Prime head to be accepted: %v", err)
+	}
 	if err := validateRequestedRancherDistro("prime", "head", "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head", false); err != nil {
 		t.Fatalf("expected patch-qualified Prime head to be accepted: %v", err)
 	}
@@ -363,12 +377,18 @@ func TestPrimeDistroAllowsPatchHeadAndExactCustomHead(t *testing.T) {
 	if err := validateRequestedRancherDistro("prime", "head", "2.14-head", false); err == nil {
 		t.Fatal("expected an unqualified bare head tag to remain ambiguous for Prime")
 	}
+	if err := validateRequestedRancherDistro("community", "head", "2.15.1-head", false); err == nil || !strings.Contains(err.Error(), "Prime staging build") {
+		t.Fatalf("expected a patch-qualified Prime head to reject community distro, got %v", err)
+	}
 }
 
 func TestAutoDistroInfersPrimeForPatchQualifiedHead(t *testing.T) {
 	primeHead := "2.14.5-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
 	if got, inferred := effectiveRequestedRancherDistro("auto", primeHead); got != "prime" || !inferred {
 		t.Fatalf("expected %s to infer Prime, got distro=%q inferred=%t", primeHead, got, inferred)
+	}
+	if got, inferred := effectiveRequestedRancherDistro("auto", "2.15.1-head"); got != "prime" || !inferred {
+		t.Fatalf("expected mutable patch-qualified head to infer Prime, got distro=%q inferred=%t", got, inferred)
 	}
 	communityHead := "2.15-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head"
 	if got, inferred := effectiveRequestedRancherDistro("auto", communityHead); got != "auto" || inferred {
@@ -1135,12 +1155,50 @@ func TestResolveCommitHeadImageSettingsFindsStagingPair(t *testing.T) {
 	}
 }
 
+func TestResolvePatchCommitHeadImageSettingsDoesNotFallBackFromStaging(t *testing.T) {
+	tag := "v2.15.1-1f680e71accf728c75478ff6b728d59c9f9a7b8b-head"
+	var stagingCalls int
+	staging := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		stagingCalls++
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer staging.Close()
+	var fallbackCalls int
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackCalls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer fallback.Close()
+
+	previousBases := rancherRegistryBaseURLs
+	rancherRegistryBaseURLs = map[string]string{
+		"stgregistry.suse.com": staging.URL,
+		"docker.io":            fallback.URL,
+		"registry.rancher.com": fallback.URL,
+	}
+	t.Cleanup(func() { rancherRegistryBaseURLs = previousBases })
+
+	_, _, _, _, err := resolveCommitHeadImageSettings(strings.TrimPrefix(tag, "v"))
+	if err == nil || !strings.Contains(err.Error(), "staging registry") {
+		t.Fatalf("expected staging miss to fail, got %v", err)
+	}
+	if stagingCalls != 2 {
+		t.Fatalf("expected staging server and agent checks, got %d", stagingCalls)
+	}
+	if fallbackCalls != 0 {
+		t.Fatalf("patch-qualified head unexpectedly checked a non-staging registry %d times", fallbackCalls)
+	}
+}
+
 func TestRancherLatestTagOnlyDoesNotClearCommitHeadImages(t *testing.T) {
 	if shouldUseRancherLatestTagOnly("head", "rancher-latest", "2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head") {
 		t.Fatal("commit-specific head builds must keep discovered explicit image registry settings")
 	}
 	if !shouldUseRancherLatestTagOnly("head", "rancher-latest", "2.13-head") {
 		t.Fatal("minor-line head builds should keep the rancher-latest tag-only behavior")
+	}
+	if shouldUseRancherLatestTagOnly("head", "rancher-latest", "2.15.1-head") {
+		t.Fatal("patch-qualified head selectors must keep their pinned staging image pair")
 	}
 }
 

@@ -264,7 +264,8 @@ you are most likely to care about:
   Auto mode accepts releases, alpha/RC/RCS versions such as
   `2.15.1-rcs-c936` and `2.16.0-rcs-0844.1`, `head`, minor-line head builds
   such as `2.13-head`, community commit heads such as `2.15-<SHA>-head`,
-  patch-qualified Prime heads such as `2.14.5-<SHA>-head`, and exact custom server
+  mutable patch-qualified Prime selectors such as `2.15.1-head`, immutable
+  patch-qualified Prime heads such as `2.15.1-<SHA>-head`, and exact custom server
   images such as `bigkevmcd/rancher:v2.16-da0ab2f1dc-head`,
   `docker.io/example/rancher:my-fix`, or their matching `rancher-agent` images.
   Docker Hub namespace shorthand is accepted. Runway derives the sibling image
@@ -276,6 +277,16 @@ you are most likely to care about:
   are stored in `rancher.agent_images`. Linode Docker keeps image tags in the
   version rows and selects an exact repository separately through its custom
   image source (or `linode.dockerhub`).
+  For HA RKE2 and hosted-tenant auto plans, a patch selector such as
+  `2.15.1-head` is not treated as a literal image tag: Runway finds the newest
+  complete matching Rancher server/agent pair in `stgregistry.suse.com`, then
+  pins the resulting `v2.15.1-<SHA>-head` tag and OCI digests in the resolved
+  plan. Chart resolution prefers an exact eligible chart (typically Optimus)
+  and retains the normal compatible-chart fallback when chart publication lags
+  the images.
+  Patch-qualified head selectors and their explicit SHA forms do not fall back
+  to another image registry. Use `rancher.distro=auto` (which infers Prime) or
+  `prime` for these builds; an explicit `community` distro is rejected.
 - `rancher.webhook_image` optionally pins a complete webhook image such as
   `stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1`. The app
   validates its anonymously readable manifest and passes the override only to

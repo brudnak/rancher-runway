@@ -15,8 +15,9 @@ type actionsWorkflow struct {
 	Jobs map[string]struct {
 		Env   map[string]string `yaml:"env"`
 		Steps []struct {
-			Name string `yaml:"name"`
-			Run  string `yaml:"run"`
+			Name string            `yaml:"name"`
+			Env  map[string]string `yaml:"env"`
+			Run  string            `yaml:"run"`
 		} `yaml:"steps"`
 	} `yaml:"jobs"`
 }
@@ -27,7 +28,7 @@ func TestSignoffWorkflowDispatchesResolvedHeadAndKeepsAliasDedupe(t *testing.T) 
 	}
 	workflow := readActionsWorkflow(t, "signoff-plan.yml")
 	queueScript := workflowStepScript(t, workflow, "plan", "Build dispatch queue")
-	sha := "abcdef0123456789abcdef0123456789abcdef01"
+	sha := "1f680e71accf728c75478ff6b728d59c9f9a7b8b"
 
 	tests := []struct {
 		name       string
@@ -51,11 +52,27 @@ func TestSignoffWorkflowDispatchesResolvedHeadAndKeepsAliasDedupe(t *testing.T) 
 			wantQueued: true,
 		},
 		{
+			name:       "patch head moves after an older success",
+			requested:  "v2.15.1-head",
+			resolved:   "v2.15.1-" + sha + "-head",
+			runs:       []map[string]interface{}{successfulWorkflowRun("Run v2.15.1-head / framework-regression")},
+			wantQueued: true,
+		},
+		{
 			name:      "active mutable head remains suppressed",
 			requested: "v2.14-head",
 			resolved:  "v2.14-" + sha + "-head",
 			runs: []map[string]interface{}{
 				{"databaseId": 22, "status": "in_progress", "conclusion": "", "displayTitle": "Run v2.14-head / framework-regression", "event": "workflow_dispatch", "headBranch": "main"},
+			},
+			wantQueued: false,
+		},
+		{
+			name:      "active mutable patch head remains suppressed",
+			requested: "v2.15.1-head",
+			resolved:  "v2.15.1-" + sha + "-head",
+			runs: []map[string]interface{}{
+				{"databaseId": 23, "status": "in_progress", "conclusion": "", "displayTitle": "Run v2.15.1-head / framework-regression", "event": "workflow_dispatch", "headBranch": "main"},
 			},
 			wantQueued: false,
 		},

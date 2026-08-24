@@ -1008,7 +1008,7 @@ const renderDeploymentType = () => {
   if (autoVersionsHelpEl) {
     autoVersionsHelpEl.textContent = linode
       ? 'Enter a Rancher version or image tag in each row. To use an exact Docker Hub namespace or custom registry, select Custom image source in the Linode settings below; do not paste a full image reference here.'
-      : 'Examples: 2.14-head, head, or bigkevmcd/rancher:v2.16-da0ab2f1dc-head. Docker Hub shorthand is accepted. For a custom image, its matching server or agent image is derived automatically, and a version-like tag selects the Rancher line used for Kubernetes compatibility lookup. A leading v on a version selector is stripped when saved; exact image tags are preserved.'
+      : 'Examples: 2.15.1-head, 2.14-head, head, or bigkevmcd/rancher:v2.16-da0ab2f1dc-head. A patch head such as 2.15.1-head selects and pins the newest complete server/agent image pair from SUSE staging, then prefers an exact eligible chart (typically Optimus) when available. Docker Hub shorthand is accepted for custom images. For a custom image, its matching server or agent image is derived automatically, and a version-like tag selects the Rancher line used for Kubernetes compatibility lookup. A leading v on a version selector is stripped when saved; exact image tags are preserved.'
   }
   hostedTenantPanelEl?.classList.toggle('hidden', !hosted)
   linodeDockerPanelEl?.classList.toggle('hidden', !linode)

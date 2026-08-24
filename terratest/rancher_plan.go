@@ -34,6 +34,7 @@ var rancherRegistryHTTPClient = &http.Client{Timeout: rancherResolverHTTPTimeout
 var rancherRegistryBaseURLs = map[string]string{}
 var commitHeadVersionPattern = regexp.MustCompile(`^(\d+\.\d+)(?:\.\d+)?-[0-9a-fA-F]{7,40}-head$`)
 var primeCommitHeadVersionPattern = regexp.MustCompile(`^\d+\.\d+\.\d+-[0-9a-fA-F]{7,40}-head$`)
+var patchHeadAliasVersionPattern = regexp.MustCompile(`^(\d+\.\d+)\.\d+-head$`)
 var customImageMinorLinePattern = regexp.MustCompile(`(?i)^v?(\d+\.\d+)(?:[._-]|$)`)
 
 // RCS build IDs are alphanumeric and may use compact or dotted forms, for example
@@ -181,7 +182,16 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		if len(preferredRegistries) > 0 && agentImageOverrides[planIndex] != "" && !isCustomImage {
 			return nil, fmt.Errorf("rancher.preferred_image_registries cannot be combined with rancher.agent_images[%d]; the preferred registry must supply the matching server and agent image pair", planIndex)
 		}
-		if len(preferredRegistries) > 0 && !isCustomImage {
+		if isPrimeHeadRancherVersion(requestedVersion) && len(preferredRegistries) > 0 && !slices.Contains(preferredRegistries, "stgregistry.suse.com") {
+			return nil, fmt.Errorf("patch-qualified Rancher head %s is staging-only; include stgregistry.suse.com in rancher.preferred_image_registries or clear the preference", requestedVersion)
+		}
+		switch {
+		case !isCustomImage && isPrimeCommitHeadRancherVersion(requestedVersion):
+			preferredImageResolutions[planIndex], err = resolvePreferredRancherImageSettings(requestedVersion, []string{"stgregistry.suse.com"})
+			if err != nil {
+				return nil, fmt.Errorf("verify staging Rancher images for %s: %w", requestedVersion, err)
+			}
+		case len(preferredRegistries) > 0 && !isCustomImage && !isPatchHeadAliasRancherVersion(requestedVersion):
 			preferredImageResolutions[planIndex], err = resolvePreferredRancherImageSettings(requestedVersion, preferredRegistries)
 			if err != nil {
 				return nil, fmt.Errorf("verify preferred Rancher images for %s: %w", requestedVersion, err)
@@ -202,6 +212,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 	}
 
 	plans := make([]*RancherResolvedPlan, 0, len(requestedVersions))
+	patchHeadResolutionCache := map[string]patchHeadStagingResolution{}
 	for planIndex, requestedVersion := range requestedVersions {
 		customImage, isCustomImage, err := parseCustomRancherImageRequest(requestedVersion)
 		if err != nil {
@@ -215,6 +226,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 
 		versionDistro, inferredPrimeHead := effectiveRequestedRancherDistro(requestedDistro, requestedVersion)
 		repoCandidates, resolvedDistro, explanation := chooseRancherSourceCandidates(versionDistro, buildType)
+		appliedImageRegistries := preferredRegistries
 		if inferredPrimeHead {
 			explanation = []string{"Patch-qualified Prime head selected Prime chart sources automatically"}
 		}
@@ -222,6 +234,21 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			explanation = append(explanation, "Preferred registry checkboxes were ignored because the exact custom image reference controls its registry")
 		}
 		chartRequest := requestedVersion
+		resolvedPatchHeadVersion := ""
+		if isPatchHeadAliasRancherVersion(requestedVersion) {
+			resolvedPatchHeadVersion, preferredImageResolution, err = resolveCachedPatchHeadStagingBundle(patchHeadResolutionCache, requestedVersion, resolvePatchHeadStagingBundle)
+			if err != nil {
+				return nil, fmt.Errorf("resolve patch-qualified Rancher head %s: %w", requestedVersion, err)
+			}
+			chartRequest = resolvedPatchHeadVersion
+			appliedImageRegistries = []string{"stgregistry.suse.com"}
+			explanation = append(explanation,
+				fmt.Sprintf("Resolved mutable %s to the newest complete staging server/agent pair %s", requestedVersion, resolvedPatchHeadVersion),
+				"Restricted patch-qualified head image resolution to SUSE staging",
+			)
+		} else if isPrimeCommitHeadRancherVersion(requestedVersion) {
+			appliedImageRegistries = []string{"stgregistry.suse.com"}
+		}
 		if isCustomImage {
 			chartRequest = rancherVersionHintFromImageTag(customImage.tag)
 			if chartRequest == "" {
@@ -335,7 +362,20 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			imageSourceRevision = preferredImageResolution.RancherProvenance.Revision
 			imageSourceOSSRevision = preferredImageResolution.RancherProvenance.OSSRevision
 			imageSourceCommitURL = rancherImageSourceCommitURL(imageSourceURL, imageSourceRevision)
-			imageExplanation = preferredImageResolutionExplanation(preferredImageResolution, preferredRegistries)
+			if isPatchHeadAliasRancherVersion(requestedVersion) {
+				imageExplanation = []string{
+					fmt.Sprintf("Pinned %s to staging Rancher server and agent images tagged v%s", requestedVersion, resolvedPatchHeadVersion),
+					"Recorded resolution-time OCI digests and provenance for the immutable staging pair",
+				}
+			} else if isPrimeCommitHeadRancherVersion(requestedVersion) {
+				imageExplanation = []string{
+					"Verified the patch-qualified Rancher server and agent image pair in SUSE staging before provisioning",
+					"Restricted patch-qualified head image resolution to SUSE staging",
+					"Recorded resolution-time OCI digests and provenance for the immutable staging pair",
+				}
+			} else {
+				imageExplanation = preferredImageResolutionExplanation(preferredImageResolution, preferredRegistries)
+			}
 		} else if isCustomImage {
 			exactImageResolution, inspectErr := inspectExplicitRancherImagePair(rancherImage, rancherImageTag, agentImage)
 			if inspectErr != nil {
@@ -402,7 +442,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 
 		var appliedPreferredRegistries []string
 		if preferredImageResolution != nil {
-			appliedPreferredRegistries = append([]string(nil), preferredRegistries...)
+			appliedPreferredRegistries = append([]string(nil), appliedImageRegistries...)
 		}
 		plans = append(plans, &RancherResolvedPlan{
 			Mode:                     "auto",
@@ -602,6 +642,9 @@ func classifyRancherVersion(version string) (buildType string, minorLine string,
 	case headPattern.MatchString(version):
 		parts := strings.Split(version, "-")
 		return "head", parts[0], nil
+	case patchHeadAliasVersionPattern.MatchString(version):
+		matches := patchHeadAliasVersionPattern.FindStringSubmatch(version)
+		return "head", matches[1], nil
 	case commitHeadVersionPattern.MatchString(version):
 		matches := commitHeadVersionPattern.FindStringSubmatch(version)
 		return "head", matches[1], nil
@@ -696,19 +739,30 @@ func isPrimeCommitHeadRancherVersion(version string) bool {
 	return primeCommitHeadVersionPattern.MatchString(normalizeVersionInput(version))
 }
 
+func isPatchHeadAliasRancherVersion(version string) bool {
+	return patchHeadAliasVersionPattern.MatchString(normalizeVersionInput(version))
+}
+
+func isPrimeHeadRancherVersion(version string) bool {
+	return isPrimeCommitHeadRancherVersion(version) || isPatchHeadAliasRancherVersion(version)
+}
+
 func validateRequestedRancherDistro(requestedDistro, buildType, requestedVersion string, isCustomImage bool) error {
+	if requestedDistro == "community" && !isCustomImage && isPrimeHeadRancherVersion(requestedVersion) {
+		return fmt.Errorf("patch-qualified Rancher head %s is a Prime staging build; use rancher.distro=auto or rancher.distro=prime", requestedVersion)
+	}
 	if requestedDistro != "prime" || buildType == "release" {
 		return nil
 	}
-	if buildType == "head" && (isCustomImage || isPrimeCommitHeadRancherVersion(requestedVersion)) {
+	if buildType == "head" && (isCustomImage || isPrimeHeadRancherVersion(requestedVersion)) {
 		return nil
 	}
-	return fmt.Errorf("prime distro requires a released Rancher version, an exact custom image, or a patch-qualified Prime head like 2.14.5-{SHA}-head")
+	return fmt.Errorf("prime distro requires a released Rancher version, an exact custom image, or a patch-qualified Prime head like 2.14.5-head or 2.14.5-{SHA}-head")
 }
 
 func effectiveRequestedRancherDistro(requestedDistro, requestedVersion string) (string, bool) {
 	requestedDistro = strings.ToLower(strings.TrimSpace(requestedDistro))
-	if requestedDistro == "auto" && isPrimeCommitHeadRancherVersion(requestedVersion) {
+	if requestedDistro == "auto" && isPrimeHeadRancherVersion(requestedVersion) {
 		return "prime", true
 	}
 	return requestedDistro, false
@@ -722,6 +776,7 @@ func shouldUseRancherLatestTagOnly(buildType, chartRepoAlias, requestedVersion s
 	return buildType != "release" &&
 		chartRepoAlias == "rancher-latest" &&
 		!isCommitHeadRancherVersion(requestedVersion) &&
+		!isPatchHeadAliasRancherVersion(requestedVersion) &&
 		!isRCSServerBuild(requestedVersion)
 }
 
@@ -1170,18 +1225,19 @@ func resolveCommitHeadImageSettings(requestedVersion string) (string, string, st
 			rancherImage: "stgregistry.suse.com/rancher/rancher",
 			agentImage:   "stgregistry.suse.com/rancher/rancher-agent:" + imageTag,
 		},
-		{
+	}
+	if !isPrimeCommitHeadRancherVersion(requestedVersion) {
+		candidates = append(candidates, commitHeadImageCandidate{
 			label:        "Docker Hub",
 			registry:     "docker.io",
 			rancherImage: "docker.io/rancher/rancher",
 			agentImage:   "docker.io/rancher/rancher-agent:" + imageTag,
-		},
-		{
+		}, commitHeadImageCandidate{
 			label:        "Rancher registry",
 			registry:     "registry.rancher.com",
 			rancherImage: "registry.rancher.com/rancher/rancher",
 			agentImage:   "registry.rancher.com/rancher/rancher-agent:" + imageTag,
-		},
+		})
 	}
 
 	var misses []string

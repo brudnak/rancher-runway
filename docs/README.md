@@ -46,9 +46,9 @@ Current workflow layers:
 - `signoff-plan.yml`: manual planner from `signoff-targets.json` or one supported
   head/prerelease Rancher version. Dispatch suppresses identical active lanes
   and successful immutable targets unless `rerun_successful_lanes=true`.
-  Mutable `head` and `vX.Y-head` aliases are reconsidered after active runs
-  finish so a successful run against an older image does not make the alias
-  permanently stale.
+  Mutable `head`, `vX.Y-head`, and staging-only `vX.Y.Z-head` aliases are
+  reconsidered after active runs finish so a successful run against an older
+  image does not make the alias permanently stale.
 - `bootstrap-terraform-state.yml`: manual S3/DynamoDB backend bootstrap, plan-only unless `apply=true`.
 - `run-rancher-signoff-lane.yml`: manual sign-off lane runner for
   `framework-regression`, `webhook-fresh-install`, `webhook-upgrade`, or
