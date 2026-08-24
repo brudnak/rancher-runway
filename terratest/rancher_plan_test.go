@@ -628,6 +628,173 @@ esac
 	}
 }
 
+func TestHelmChartSearchSessionReusesOneGlobalSearchAcrossPlansAndBaselines(t *testing.T) {
+	const target15 = "2.15.1-dd124b489440ca731df3c45205e782e6750912af-head"
+	const target13 = "2.13.9-cbe53e9ce507e4b10d42076e51f1a1b937087224-head"
+	callLog := filepath.Join(t.TempDir(), "helm-calls")
+	t.Setenv("HELM_CALL_LOG", callLog)
+	installFakeHelm(t, `#!/bin/sh
+printf '%s\n' call >> "$HELM_CALL_LOG"
+printf '%s\n' '[{"name":"rancher-latest/rancher","version":"2.15.0","app_version":"v2.15.0"},{"name":"rancher-latest/rancher","version":"2.13.8","app_version":"v2.13.8"},{"name":"rancher-prime/rancher","version":"2.15.0","app_version":"v2.15.0"},{"name":"optimus-rancher-latest/rancher","version":"`+target15+`","app_version":"v`+target15+`"},{"name":"optimus-rancher-latest/rancher","version":"`+target13+`","app_version":"v`+target13+`"}]'
+`)
+
+	session := newHelmChartSearchSession()
+	candidates := []string{"rancher-prime", "rancher-latest", "optimus-rancher-latest"}
+	for _, testCase := range []struct {
+		version      string
+		minorLine    string
+		wantBaseline string
+	}{
+		{version: target15, minorLine: "2.15", wantBaseline: "2.15.0"},
+		{version: target13, minorLine: "2.13", wantBaseline: "2.13.8"},
+	} {
+		repo, chart, baseline, err := resolveChartAndBaselineWithSearchSession(session, candidates, testCase.version, testCase.minorLine, "head")
+		if err != nil {
+			t.Fatalf("resolve %s: %v", testCase.version, err)
+		}
+		if repo != "optimus-rancher-latest" || chart != testCase.version || baseline != testCase.wantBaseline {
+			t.Fatalf("unexpected resolution for %s: repo=%q chart=%q baseline=%q", testCase.version, repo, chart, baseline)
+		}
+	}
+
+	calls, err := os.ReadFile(callLog)
+	if err != nil {
+		t.Fatalf("read Helm call log: %v", err)
+	}
+	if got := len(strings.Fields(string(calls))); got != 1 {
+		t.Fatalf("expected one global Helm search reused across both plans and their baselines, got %d calls", got)
+	}
+}
+
+func TestChartImageFieldSupportCacheRunsHelmShowOnce(t *testing.T) {
+	callLog := filepath.Join(t.TempDir(), "helm-calls")
+	t.Setenv("HELM_CALL_LOG", callLog)
+	installFakeHelm(t, `#!/bin/sh
+printf '%s\n' call >> "$HELM_CALL_LOG"
+printf '%s\n' 'image:' '  repository: rancher/rancher' '  tag: test'
+`)
+
+	cache := map[string]bool{}
+	for attempt := 0; attempt < 2; attempt++ {
+		supported, err := resolveChartImageFieldSupportWithCache(cache, "optimus-rancher-latest", "2.15.1-deadbeef-head")
+		if err != nil {
+			t.Fatalf("inspect chart values: %v", err)
+		}
+		if !supported {
+			t.Fatal("expected current image fields to be detected")
+		}
+	}
+
+	calls, err := os.ReadFile(callLog)
+	if err != nil {
+		t.Fatalf("read Helm call log: %v", err)
+	}
+	if got := len(strings.Fields(string(calls))); got != 1 {
+		t.Fatalf("expected one helm show invocation, got %d", got)
+	}
+}
+
+func TestSupportMatrixRequestCacheFetchesOnce(t *testing.T) {
+	t.Setenv(releaseLookupCachePathEnv, filepath.Join(t.TempDir(), "release-cache.json"))
+	hits := 0
+	previousClient := rancherLookupHTTPClient
+	rancherLookupHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hits++
+		body := `<html><body><div>RKE2 v1.33 v1.35</div></body></html>`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+	t.Cleanup(func() { rancherLookupHTTPClient = previousClient })
+
+	cache := map[string]supportedRKE2Resolution{}
+	supportMatrixURL := buildSupportMatrixURL("2.15.0")
+	for attempt := 0; attempt < 2; attempt++ {
+		resolved, err := resolveSupportMatrixWithCache(cache, supportMatrixURL)
+		if err != nil {
+			t.Fatalf("resolve support matrix: %v", err)
+		}
+		if resolved.HighestMinor != 35 || resolved.ResolvedURL != supportMatrixURL {
+			t.Fatalf("unexpected support resolution: %#v", resolved)
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("expected one support matrix HTTP request, got %d", hits)
+	}
+}
+
+func TestRKE2PatchRequestCacheFetchesOnce(t *testing.T) {
+	t.Setenv(releaseLookupCachePathEnv, filepath.Join(t.TempDir(), "release-cache.json"))
+	hits := 0
+	previousClient := rancherLookupHTTPClient
+	rancherLookupHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hits++
+		body := `v1.35.7+rke2r1 v1.35.6+rke2r1`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Request:    req,
+		}, nil
+	})}
+	t.Cleanup(func() { rancherLookupHTTPClient = previousClient })
+
+	cache := map[int]string{}
+	for attempt := 0; attempt < 2; attempt++ {
+		resolved, err := resolveRKE2PatchWithCache(cache, 35)
+		if err != nil {
+			t.Fatalf("resolve RKE2 patch: %v", err)
+		}
+		if resolved != "v1.35.7+rke2r1" {
+			t.Fatalf("unexpected RKE2 patch: %q", resolved)
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("expected one RKE2 release-notes HTTP request, got %d", hits)
+	}
+}
+
+func TestInstallerSHA256RequestCacheFetchesOnce(t *testing.T) {
+	hits := 0
+	previousClient := rancherLookupHTTPClient
+	rancherLookupHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hits++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("#!/bin/sh\necho installer\n")),
+			Request:    req,
+		}, nil
+	})}
+	t.Cleanup(func() { rancherLookupHTTPClient = previousClient })
+
+	cache := map[string]string{}
+	var first string
+	for attempt := 0; attempt < 2; attempt++ {
+		resolved, err := resolveInstallerSHA256WithCache(cache, "v1.35.7+rke2r1")
+		if err != nil {
+			t.Fatalf("resolve installer SHA256: %v", err)
+		}
+		if resolved == "" {
+			t.Fatal("expected a non-empty installer SHA256")
+		}
+		if attempt == 0 {
+			first = resolved
+		} else if resolved != first {
+			t.Fatalf("cached SHA256 changed: first=%q second=%q", first, resolved)
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("expected one installer HTTP request, got %d", hits)
+	}
+}
+
 func TestRancherModeInfersAutoFromVersionsWithoutHelmCommands(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)

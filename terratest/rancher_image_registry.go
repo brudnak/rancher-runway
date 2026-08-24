@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -44,6 +45,8 @@ type preferredRancherImageResolution struct {
 
 type rancherImageInspectFunc func(context.Context, string) (rancherImageProvenance, bool, error)
 type rancherImageTagListFunc func(context.Context, string, string) ([]string, error)
+
+type preferredRancherImageLookupServiceContextKey struct{}
 
 var inspectPreferredRancherImage rancherImageInspectFunc = inspectRancherImageReference
 var listPatchHeadStagingImageTags rancherImageTagListFunc = listRancherImageTags
@@ -159,9 +162,18 @@ func inspectExplicitRancherImagePair(serverRepository, tag, agentReference strin
 }
 
 func inspectRancherImageReference(ctx context.Context, reference string) (rancherImageProvenance, bool, error) {
+	service, _ := ctx.Value(preferredRancherImageLookupServiceContextKey{}).(*imageLookupService)
+	if service == nil {
+		service = newPreferredRancherImageLookupService()
+		defer service.closeIdleConnections()
+	}
+	return inspectRancherImageReferenceWithService(ctx, service, reference)
+}
+
+func newPreferredRancherImageLookupService() *imageLookupService {
 	service := newImageLookupService()
 	service.keychain = preferredRancherImageKeychain{}
-	return inspectRancherImageReferenceWithService(ctx, service, reference)
+	return service
 }
 
 func inspectRancherImageReferenceWithService(ctx context.Context, service *imageLookupService, reference string) (rancherImageProvenance, bool, error) {
@@ -227,6 +239,7 @@ func resolveCachedPatchHeadStagingBundle(cache map[string]patchHeadStagingResolu
 // chart and retains the existing compatible-chart fallback when chart
 // publication lags the images.
 func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredRancherImageResolution, error) {
+	startedAt := time.Now()
 	requestedVersion = normalizeVersionInput(requestedVersion)
 	if !isPatchHeadAliasRancherVersion(requestedVersion) {
 		return "", nil, fmt.Errorf("%s is not a patch-qualified Rancher head selector", requestedVersion)
@@ -234,6 +247,7 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*rancherResolverHTTPTimeout)
 	defer cancel()
+	log.Printf("[resolver] Resolving Rancher %s from SUSE staging image tags", requestedVersion)
 	tags, err := listPatchHeadStagingImageTags(ctx, "stgregistry.suse.com", "rancher/rancher")
 	if err != nil {
 		return "", nil, fmt.Errorf("list immutable Rancher head images in SUSE staging: %w", err)
@@ -253,6 +267,11 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 	if len(versions) == 0 {
 		return "", nil, fmt.Errorf("no immutable %s-SHA-head server images were found in SUSE staging", patchVersion)
 	}
+	log.Printf("[resolver] SUSE staging tag scan matched %d immutable %s-SHA-head candidate(s) out of %d tags", len(versions), patchVersion, len(tags))
+
+	imageLookup := newPreferredRancherImageLookupService()
+	defer imageLookup.closeIdleConnections()
+	ctx = context.WithValue(ctx, preferredRancherImageLookupServiceContextKey{}, imageLookup)
 
 	jobs := make(chan string)
 	results := make(chan patchHeadStagingCandidate, len(versions))
@@ -260,6 +279,7 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 	if len(versions) < workerCount {
 		workerCount = len(versions)
 	}
+	log.Printf("[resolver] Inspecting %d SUSE staging Rancher server/agent image pair(s) with %d workers", len(versions), workerCount)
 
 	var workers sync.WaitGroup
 	for worker := 0; worker < workerCount; worker++ {
@@ -323,6 +343,7 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 		}
 		return complete[i].completeAt.After(complete[j].completeAt)
 	})
+	log.Printf("[resolver] Selected immutable Rancher head %s for %s after %s", complete[0].version, requestedVersion, time.Since(startedAt).Round(time.Millisecond))
 	return complete[0].version, complete[0].resolution, nil
 }
 

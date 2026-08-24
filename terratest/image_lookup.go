@@ -1269,6 +1269,21 @@ func (t *imageLookupSafeRoundTripper) RoundTrip(request *http.Request) (*http.Re
 	return t.inner.RoundTrip(request)
 }
 
+func (t *imageLookupSafeRoundTripper) CloseIdleConnections() {
+	if closer, ok := t.inner.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
+func (s *imageLookupService) closeIdleConnections() {
+	if s == nil {
+		return
+	}
+	if closer, ok := s.transport.(interface{ CloseIdleConnections() }); ok {
+		closer.CloseIdleConnections()
+	}
+}
+
 func newImageLookupSafeTransport() http.RoundTripper {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	base := &http.Transport{

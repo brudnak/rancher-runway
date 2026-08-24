@@ -213,6 +213,11 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 
 	plans := make([]*RancherResolvedPlan, 0, len(requestedVersions))
 	patchHeadResolutionCache := map[string]patchHeadStagingResolution{}
+	helmSearchSession := newHelmChartSearchSession()
+	chartImageFieldSupportCache := map[string]bool{}
+	supportMatrixResolutionCache := map[string]supportedRKE2Resolution{}
+	rke2PatchResolutionCache := map[int]string{}
+	installerSHA256Cache := map[string]string{}
 	for planIndex, requestedVersion := range requestedVersions {
 		customImage, isCustomImage, err := parseCustomRancherImageRequest(requestedVersion)
 		if err != nil {
@@ -255,7 +260,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 				chartRequest = "head"
 			}
 		}
-		chartRepoAlias, chartVersion, compatibilityBaseline, err := resolveChartAndBaseline(repoCandidates, chartRequest, minorLine, buildType)
+		chartRepoAlias, chartVersion, compatibilityBaseline, err := resolveChartAndBaselineWithSearchSession(helmSearchSession, repoCandidates, chartRequest, minorLine, buildType)
 		if err != nil {
 			return nil, err
 		}
@@ -402,7 +407,7 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		if isCustomImage || compatibilityBaseline != requestedVersion {
 			explanation = append(explanation, fmt.Sprintf("Using %s as the latest released compatibility baseline for the %s release line", compatibilityBaseline, minorLine))
 		}
-		useRancherImageFields, err := requireResolvedRancherChartImageFieldSupport(chartRepoAlias, chartVersion)
+		useRancherImageFields, err := resolveChartImageFieldSupportWithCache(chartImageFieldSupportCache, chartRepoAlias, chartVersion)
 		if err != nil {
 			return nil, err
 		} else if useRancherImageFields {
@@ -415,20 +420,21 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 		recommendedRKE2Version := ""
 		installerSHA256 := ""
 		if !isHostedTenantK3SDeployment() {
-			highestRKE2Minor, supportExplanation, resolvedSupportMatrixURL, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
+			supportResolution, err := resolveSupportMatrixWithCache(supportMatrixResolutionCache, supportMatrixURL)
 			if err != nil {
 				return nil, err
 			}
-			supportMatrixURL = resolvedSupportMatrixURL
-			explanation = append(explanation, supportExplanation)
+			highestRKE2Minor := supportResolution.HighestMinor
+			supportMatrixURL = supportResolution.ResolvedURL
+			explanation = append(explanation, supportResolution.Explanation)
 
-			recommendedRKE2Version, err = resolveLatestRKE2Patch(highestRKE2Minor)
+			recommendedRKE2Version, err = resolveRKE2PatchWithCache(rke2PatchResolutionCache, highestRKE2Minor)
 			if err != nil {
 				return nil, err
 			}
 			explanation = append(explanation, fmt.Sprintf("Selected %s as the latest available RKE2 patch in the supported v1.%d line", recommendedRKE2Version, highestRKE2Minor))
 
-			installerSHA256, err = resolveInstallerSHA256(recommendedRKE2Version)
+			installerSHA256, err = resolveInstallerSHA256WithCache(installerSHA256Cache, recommendedRKE2Version)
 			if err != nil {
 				return nil, err
 			}
@@ -831,13 +837,66 @@ func chooseRancherSourceCandidates(requestedDistro, buildType string) ([]string,
 	}
 }
 
+type helmSearchCacheEntry struct {
+	results []helmSearchResult
+	err     error
+}
+
+type helmChartSearchSession struct {
+	globalLoaded  bool
+	globalResults []helmSearchResult
+	globalErr     error
+	repoResults   map[string]helmSearchCacheEntry
+}
+
+func newHelmChartSearchSession() *helmChartSearchSession {
+	return &helmChartSearchSession{repoResults: map[string]helmSearchCacheEntry{}}
+}
+
+func (session *helmChartSearchSession) searchAllVersions() ([]helmSearchResult, error) {
+	if session.globalLoaded {
+		log.Printf("[resolver] Reusing Helm chart index search results (%d entries)", len(session.globalResults))
+		return session.globalResults, session.globalErr
+	}
+
+	session.globalLoaded = true
+	session.globalResults, session.globalErr = searchAllHelmRepoVersions()
+	return session.globalResults, session.globalErr
+}
+
+func (session *helmChartSearchSession) searchRepoVersions(repoAlias string) ([]helmSearchResult, error) {
+	if cached, ok := session.repoResults[repoAlias]; ok {
+		log.Printf("[resolver] Reusing Helm chart versions for %s (%d entries)", repoAlias, len(cached.results))
+		return cached.results, cached.err
+	}
+
+	if session.globalLoaded && session.globalErr == nil {
+		filtered := filterHelmSearchResultsByRepoAlias(session.globalResults, repoAlias)
+		if len(filtered) > 0 {
+			session.repoResults[repoAlias] = helmSearchCacheEntry{results: filtered}
+			log.Printf("[resolver] Reusing global Helm chart index for %s (%d entries)", repoAlias, len(filtered))
+			return filtered, nil
+		}
+	}
+
+	results, err := searchHelmRepoVersions(repoAlias)
+	session.repoResults[repoAlias] = helmSearchCacheEntry{results: results, err: err}
+	return results, err
+}
+
 func resolveChartAndBaseline(repoCandidates []string, requestedVersion, minorLine, buildType string) (string, string, string, error) {
+	return resolveChartAndBaselineWithSearchSession(newHelmChartSearchSession(), repoCandidates, requestedVersion, minorLine, buildType)
+}
+
+func resolveChartAndBaselineWithSearchSession(session *helmChartSearchSession, repoCandidates []string, requestedVersion, minorLine, buildType string) (string, string, string, error) {
+	startedAt := time.Now()
+	log.Printf("[resolver] Resolving Rancher chart for %s across repos %s...", requestedVersion, strings.Join(repoCandidates, ", "))
 	if buildType == "head" && requestedVersion == "head" {
 		for _, repoAlias := range repoCandidates {
 			if repoAlias != "rancher-latest" {
 				continue
 			}
-			results, err := searchHelmRepoVersions(repoAlias)
+			results, err := session.searchRepoVersions(repoAlias)
 			if err != nil {
 				log.Printf("[resolver] Repo candidate %s query failed for Rancher head: %v", repoAlias, err)
 				continue
@@ -847,28 +906,28 @@ func resolveChartAndBaseline(repoCandidates []string, requestedVersion, minorLin
 				log.Printf("[resolver] Repo candidate %s inspection for head: latestRelease=<none>", repoAlias)
 				continue
 			}
-			log.Printf("[resolver] Repo candidate %s inspection for head: latestRelease=%s", repoAlias, latestRelease)
+			log.Printf("[resolver] Repo candidate %s inspection for head: latestRelease=%s (resolved in %s)", repoAlias, latestRelease, time.Since(startedAt).Round(time.Millisecond))
 			return repoAlias, latestRelease, latestRelease, nil
 		}
 		return "", "", "", fmt.Errorf("could not resolve the latest rancher-latest chart for head")
 	}
 
-	if globalExactMatch, err := findExactRequestedChartAcrossRepos(repoCandidates, requestedVersion); err == nil {
+	if globalExactMatch, err := findExactRequestedChartAcrossReposWithSearchSession(session, repoCandidates, requestedVersion); err == nil {
 		compatibilityBaseline := requestedVersion
 		if buildType != "release" {
-			compatibilityBaseline, err = resolveCompatibilityBaseline(minorLine)
+			compatibilityBaseline, err = resolveCompatibilityBaselineWithSearchSession(session, minorLine)
 			if err != nil {
 				compatibilityBaseline = requestedVersion
 			}
 		}
-		log.Printf("[resolver] Global exact Rancher chart match selected for %s: %s/rancher@%s", requestedVersion, globalExactMatch.repoAlias, globalExactMatch.chartVersion)
+		log.Printf("[resolver] Global exact Rancher chart match selected for %s: %s/rancher@%s (resolved in %s)", requestedVersion, globalExactMatch.repoAlias, globalExactMatch.chartVersion, time.Since(startedAt).Round(time.Millisecond))
 		return globalExactMatch.repoAlias, globalExactMatch.chartVersion, compatibilityBaseline, nil
 	}
 
 	var lastErr error
 	var bestMatch *resolvedChartMatch
 	for _, repoAlias := range repoCandidates {
-		results, err := searchHelmRepoVersions(repoAlias)
+		results, err := session.searchRepoVersions(repoAlias)
 		if err != nil {
 			log.Printf("[resolver] Repo candidate %s query failed for Rancher %s: %v", repoAlias, requestedVersion, err)
 			lastErr = err
@@ -888,7 +947,7 @@ func resolveChartAndBaseline(repoCandidates []string, requestedVersion, minorLin
 			}
 		default:
 			sameMinorRelease, sameMinorReleaseErr := findLatestMinorRelease(results, minorLine)
-			compatibilityBaseline, baselineErr := resolveCompatibilityBaseline(minorLine)
+			compatibilityBaseline, baselineErr := resolveCompatibilityBaselineWithSearchSession(session, minorLine)
 			hasExactRequested := hasChartVersion(results, requestedVersion)
 			hasCompatibilityBaseline := baselineErr == nil && hasChartVersion(results, compatibilityBaseline)
 			if sameMinorReleaseErr != nil {
@@ -919,6 +978,7 @@ func resolveChartAndBaseline(repoCandidates []string, requestedVersion, minorLin
 	}
 
 	if bestMatch != nil {
+		log.Printf("[resolver] Rancher chart selected for %s: %s/rancher@%s (resolved in %s)", requestedVersion, bestMatch.repoAlias, bestMatch.chartVersion, time.Since(startedAt).Round(time.Millisecond))
 		return bestMatch.repoAlias, bestMatch.chartVersion, bestMatch.compatibilityBaseline, nil
 	}
 
@@ -940,7 +1000,11 @@ func recordResolvedChartMatch(bestMatch **resolvedChartMatch, repoAlias, chartVe
 }
 
 func findExactRequestedChartAcrossRepos(repoCandidates []string, requestedVersion string) (*resolvedChartMatch, error) {
-	globalResults, err := searchAllHelmRepoVersions()
+	return findExactRequestedChartAcrossReposWithSearchSession(newHelmChartSearchSession(), repoCandidates, requestedVersion)
+}
+
+func findExactRequestedChartAcrossReposWithSearchSession(session *helmChartSearchSession, repoCandidates []string, requestedVersion string) (*resolvedChartMatch, error) {
+	globalResults, err := session.searchAllVersions()
 	if err != nil {
 		return nil, err
 	}
@@ -971,7 +1035,11 @@ func summarizeBaselineLogValue(compatibilityBaseline string, err error) string {
 }
 
 func resolveCompatibilityBaseline(minorLine string) (string, error) {
-	baseline, err := resolveReleasedCompatibilityBaseline(minorLine)
+	return resolveCompatibilityBaselineWithSearchSession(newHelmChartSearchSession(), minorLine)
+}
+
+func resolveCompatibilityBaselineWithSearchSession(session *helmChartSearchSession, minorLine string) (string, error) {
+	baseline, err := resolveReleasedCompatibilityBaselineWithSearchSession(session, minorLine)
 	if err == nil {
 		return baseline, nil
 	}
@@ -981,15 +1049,19 @@ func resolveCompatibilityBaseline(minorLine string) (string, error) {
 		return "", err
 	}
 
-	return resolveReleasedCompatibilityBaseline(previousMinorLine)
+	return resolveReleasedCompatibilityBaselineWithSearchSession(session, previousMinorLine)
 }
 
 func resolveReleasedCompatibilityBaseline(minorLine string) (string, error) {
+	return resolveReleasedCompatibilityBaselineWithSearchSession(newHelmChartSearchSession(), minorLine)
+}
+
+func resolveReleasedCompatibilityBaselineWithSearchSession(session *helmChartSearchSession, minorLine string) (string, error) {
 	releaseRepos := []string{"rancher-latest", "rancher-prime"}
 	var bestVersion *goversion.Version
 
 	for _, repoAlias := range releaseRepos {
-		results, err := searchHelmRepoVersions(repoAlias)
+		results, err := session.searchRepoVersions(repoAlias)
 		if err != nil {
 			continue
 		}
@@ -1077,6 +1149,8 @@ func searchAllHelmRepoVersions() ([]helmSearchResult, error) {
 	// Helm's regexp search can omit prerelease rows even when it returns stable
 	// versions for the same chart. Use the plain keyword search so exact head
 	// versions remain visible; callers filter the fuzzy results by repo/chart.
+	startedAt := time.Now()
+	log.Printf("[resolver] Searching Helm chart indexes for exact Rancher versions...")
 	output, err := exec.Command("helm", "search", "repo", "rancher", "--devel", "--versions", "-o", "json").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to query helm repo globally for rancher charts: %w", err)
@@ -1086,6 +1160,7 @@ func searchAllHelmRepoVersions() ([]helmSearchResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse global helm search results: %w", err)
 	}
+	log.Printf("[resolver] Helm chart index search completed in %s (%d entries)", time.Since(startedAt).Round(time.Millisecond), len(results))
 	return results, nil
 }
 
@@ -1643,6 +1718,35 @@ func cacheResolvedSupportMatrixRange(product string, page resolvedSupportMatrixP
 	}
 }
 
+type supportedRKE2Resolution struct {
+	HighestMinor int
+	Explanation  string
+	ResolvedURL  string
+}
+
+func resolveSupportMatrixWithCache(cache map[string]supportedRKE2Resolution, supportMatrixURL string) (supportedRKE2Resolution, error) {
+	if cached, ok := cache[supportMatrixURL]; ok {
+		log.Printf("[resolver] Reusing support matrix result for %s (RKE2 v1.%d)", supportMatrixURL, cached.HighestMinor)
+		return cached, nil
+	}
+
+	startedAt := time.Now()
+	log.Printf("[resolver] Resolving SUSE support matrix for %s...", supportMatrixURL)
+	highestMinor, explanation, resolvedURL, err := resolveHighestSupportedRKE2Minor(supportMatrixURL)
+	if err != nil {
+		log.Printf("[resolver] Support matrix resolution failed after %s: %v", time.Since(startedAt).Round(time.Millisecond), err)
+		return supportedRKE2Resolution{}, err
+	}
+	resolved := supportedRKE2Resolution{
+		HighestMinor: highestMinor,
+		Explanation:  explanation,
+		ResolvedURL:  resolvedURL,
+	}
+	cache[supportMatrixURL] = resolved
+	log.Printf("[resolver] Support matrix resolved in %s: RKE2 through v1.%d", time.Since(startedAt).Round(time.Millisecond), highestMinor)
+	return resolved, nil
+}
+
 func resolveHighestSupportedRKE2Minor(supportMatrixURL string) (int, string, string, error) {
 	page, err := resolveSupportMatrixPage(supportMatrixURL)
 	if err != nil {
@@ -1697,6 +1801,24 @@ func resolveLatestRKE2Patch(highestMinor int) (string, error) {
 		},
 	}
 	return resolveLatestCachedReleasePatch(config, highestMinor, releaseNotesURL, firstReleaseVersion)
+}
+
+func resolveRKE2PatchWithCache(cache map[int]string, highestMinor int) (string, error) {
+	if cached := cache[highestMinor]; cached != "" {
+		log.Printf("[resolver] Reusing latest RKE2 patch for v1.%d: %s", highestMinor, cached)
+		return cached, nil
+	}
+
+	startedAt := time.Now()
+	log.Printf("[resolver] Resolving latest RKE2 patch for v1.%d...", highestMinor)
+	resolved, err := resolveLatestRKE2Patch(highestMinor)
+	if err != nil {
+		log.Printf("[resolver] RKE2 v1.%d patch resolution failed after %s: %v", highestMinor, time.Since(startedAt).Round(time.Millisecond), err)
+		return "", err
+	}
+	cache[highestMinor] = resolved
+	log.Printf("[resolver] Latest RKE2 v1.%d patch resolved in %s: %s", highestMinor, time.Since(startedAt).Round(time.Millisecond), resolved)
+	return resolved, nil
 }
 
 type manualRKE2RecommendationResult struct {
@@ -1809,6 +1931,24 @@ func resolveInstallerSHA256(rke2Version string) (string, error) {
 	}
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func resolveInstallerSHA256WithCache(cache map[string]string, rke2Version string) (string, error) {
+	if cached := cache[rke2Version]; cached != "" {
+		log.Printf("[resolver] Reusing installer SHA256 for %s", rke2Version)
+		return cached, nil
+	}
+
+	startedAt := time.Now()
+	log.Printf("[resolver] Fetching the %s installer to pin its SHA256...", rke2Version)
+	resolved, err := resolveInstallerSHA256(rke2Version)
+	if err != nil {
+		log.Printf("[resolver] Installer SHA256 resolution for %s failed after %s: %v", rke2Version, time.Since(startedAt).Round(time.Millisecond), err)
+		return "", err
+	}
+	cache[rke2Version] = resolved
+	log.Printf("[resolver] Installer SHA256 for %s resolved in %s", rke2Version, time.Since(startedAt).Round(time.Millisecond))
+	return resolved, nil
 }
 
 func buildAutoHelmCommands(totalHAs int, operation, chartRepoAlias, chartVersion, bootstrapPassword, rancherImage, rancherImageTag, agentImage string, useRancherImageFields bool) []string {
@@ -2054,6 +2194,25 @@ func requireResolvedRancherChartImageFieldSupport(chartRepoAlias, chartVersion s
 	if err != nil {
 		return false, fmt.Errorf("inspect resolved Rancher chart %s/rancher@%s before use: %w", chartRepoAlias, chartVersion, err)
 	}
+	return supported, nil
+}
+
+func resolveChartImageFieldSupportWithCache(cache map[string]bool, chartRepoAlias, chartVersion string) (bool, error) {
+	cacheKey := chartRepoAlias + "/rancher@" + chartVersion
+	if cached, ok := cache[cacheKey]; ok {
+		log.Printf("[resolver] Reusing Rancher chart values inspection for %s", cacheKey)
+		return cached, nil
+	}
+
+	startedAt := time.Now()
+	log.Printf("[resolver] Inspecting Rancher chart values for %s...", cacheKey)
+	supported, err := requireResolvedRancherChartImageFieldSupport(chartRepoAlias, chartVersion)
+	if err != nil {
+		log.Printf("[resolver] Rancher chart values inspection for %s failed after %s: %v", cacheKey, time.Since(startedAt).Round(time.Millisecond), err)
+		return false, err
+	}
+	cache[cacheKey] = supported
+	log.Printf("[resolver] Rancher chart values inspection for %s completed in %s", cacheKey, time.Since(startedAt).Round(time.Millisecond))
 	return supported, nil
 }
 

@@ -530,3 +530,19 @@ func TestInspectRancherImageReferenceWithServiceExtractsProvenanceAndMapsNotFoun
 		t.Fatalf("missing tag mapping: found=%v provenance=%#v err=%v", found, missing, err)
 	}
 }
+
+func TestInspectRancherImageReferenceReusesRequestScopedService(t *testing.T) {
+	registryServer := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
+	defer registryServer.Close()
+	service := newImageLookupTestService(t, registryServer)
+	reference, digest := pushImageLookupSourceFixture(t, registryServer, "v2.15.1-head", nil)
+	ctx := context.WithValue(context.Background(), preferredRancherImageLookupServiceContextKey{}, service)
+
+	provenance, found, err := inspectRancherImageReference(ctx, reference)
+	if err != nil {
+		t.Fatalf("inspect through request-scoped service: %v", err)
+	}
+	if !found || provenance.Reference != reference || provenance.Digest != digest {
+		t.Fatalf("unexpected provenance: found=%v provenance=%#v", found, provenance)
+	}
+}

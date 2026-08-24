@@ -1120,6 +1120,19 @@ func TestImageLookupSafeTransportRejectsPrivateAddresses(t *testing.T) {
 	}
 }
 
+func TestImageLookupServiceClosesWrappedIdleConnections(t *testing.T) {
+	inner := &imageLookupCloseTrackingRoundTripper{}
+	service := &imageLookupService{
+		transport: &imageLookupSafeRoundTripper{inner: inner},
+	}
+
+	service.closeIdleConnections()
+
+	if got := inner.closes.Load(); got != 1 {
+		t.Fatalf("idle connection close calls = %d, want 1", got)
+	}
+}
+
 func TestImageLookupHandlersEnforceAuthMethodAndStrictJSON(t *testing.T) {
 	panel := &localControlPanel{
 		token: "test-token",
@@ -1279,6 +1292,18 @@ type imageLookupTestRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn imageLookupTestRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return fn(request)
+}
+
+type imageLookupCloseTrackingRoundTripper struct {
+	closes atomic.Int32
+}
+
+func (*imageLookupCloseTrackingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("unexpected RoundTrip call")
+}
+
+func (t *imageLookupCloseTrackingRoundTripper) CloseIdleConnections() {
+	t.closes.Add(1)
 }
 
 func imageLookupTestServerHost(t *testing.T, server *httptest.Server) string {
