@@ -51,10 +51,10 @@ const (
 )
 
 var imageLookupKnownRegistries = []string{
-	"docker.io",
 	"stgregistry.suse.com",
 	"registry.rancher.com",
 	"registry.suse.com",
+	"docker.io",
 }
 
 var imageLookupKnownRepositories = []string{
@@ -64,6 +64,12 @@ var imageLookupKnownRepositories = []string{
 }
 
 var imageLookupFullVersionTagPattern = regexp.MustCompile(`(?i)^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-._][a-z0-9][a-z0-9._-]*)?$`)
+
+var imageLookupVersionLinePattern = regexp.MustCompile(`(?i)^v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?$`)
+
+var imageLookupMinorHeadPattern = regexp.MustCompile(`(?i)^v?([0-9]+)\.([0-9]+)-head$`)
+
+var imageLookupTagVersionPattern = regexp.MustCompile(`(?i)^v?([0-9]+\.[0-9]+\.[0-9]+)(?:$|[-._])`)
 
 var imageLookupGitRevisionPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
@@ -81,36 +87,83 @@ type imageLookupSearchRequest struct {
 	Query            string `json:"query"`
 	Limit            int    `json:"limit"`
 	IncludeArtifacts bool   `json:"includeArtifacts"`
+	Channel          string `json:"channel"`
+	Architecture     string `json:"architecture"`
+	PrimeHead        string `json:"primeHead"`
+	HeadKind         string `json:"headKind"`
+	VersionLine      string `json:"versionLine"`
+	Commit           string `json:"commit"`
+	PairStatus       string `json:"pairStatus"`
+	SortBy           string `json:"sortBy"`
+	SortOrder        string `json:"sortOrder"`
 }
 
 type imageLookupSearchResponse struct {
-	Query      string                   `json:"query"`
-	SearchedAt time.Time                `json:"searchedAt"`
-	Groups     []imageLookupSearchGroup `json:"groups"`
+	Query        string                   `json:"query"`
+	Channel      string                   `json:"channel"`
+	Architecture string                   `json:"architecture"`
+	PrimeHead    string                   `json:"primeHead"`
+	HeadKind     string                   `json:"headKind"`
+	VersionLine  string                   `json:"versionLine"`
+	Commit       string                   `json:"commit"`
+	PairStatus   string                   `json:"pairStatus"`
+	SortBy       string                   `json:"sortBy"`
+	SortOrder    string                   `json:"sortOrder"`
+	SearchedAt   time.Time                `json:"searchedAt"`
+	Groups       []imageLookupSearchGroup `json:"groups"`
 }
 
 type imageLookupSearchGroup struct {
-	Key        string           `json:"key"`
-	Label      string           `json:"label"`
-	Registry   string           `json:"registry"`
-	Repository string           `json:"repository"`
-	Reference  string           `json:"reference"`
-	Tags       []imageLookupTag `json:"tags"`
-	Matched    int              `json:"matched"`
-	Scanned    int              `json:"scanned"`
-	Truncated  bool             `json:"truncated"`
-	Error      string           `json:"error,omitempty"`
+	Key                     string           `json:"key"`
+	Label                   string           `json:"label"`
+	Registry                string           `json:"registry"`
+	Repository              string           `json:"repository"`
+	Reference               string           `json:"reference"`
+	ImageRole               string           `json:"imageRole"`
+	CompanionRepository     string           `json:"companionRepository,omitempty"`
+	Tags                    []imageLookupTag `json:"tags"`
+	Matched                 int              `json:"matched"`
+	Scanned                 int              `json:"scanned"`
+	PrimeHeadCount          int              `json:"primeHeadCount"`
+	MovingPrimeHeadCount    int              `json:"movingPrimeHeadCount"`
+	ImmutablePrimeHeadCount int              `json:"immutablePrimeHeadCount"`
+	VerifiedPrimeHeadCount  int              `json:"verifiedPrimeHeadCount"`
+	InvalidPrimeHeadCount   int              `json:"invalidPrimeHeadCount"`
+	MissingCompanionCount   int              `json:"missingCompanionCount"`
+	Truncated               bool             `json:"truncated"`
+	Error                   string           `json:"error,omitempty"`
 }
 
 type imageLookupTag struct {
-	Name         string `json:"name"`
-	Reference    string `json:"reference"`
-	Channel      string `json:"channel"`
-	Architecture string `json:"architecture"`
-	BaseTag      string `json:"baseTag"`
-	UploadedAt   string `json:"uploadedAt,omitempty"`
-	Digest       string `json:"digest,omitempty"`
-	Size         int64  `json:"size,omitempty"`
+	Name               string `json:"name"`
+	Reference          string `json:"reference"`
+	Channel            string `json:"channel"`
+	Architecture       string `json:"architecture"`
+	BaseTag            string `json:"baseTag"`
+	IsPrimeHead        bool   `json:"isPrimeHead"`
+	HeadKind           string `json:"headKind,omitempty"`
+	Mutable            bool   `json:"mutable"`
+	Version            string `json:"version,omitempty"`
+	VersionLine        string `json:"versionLine,omitempty"`
+	Commit             string `json:"commit,omitempty"`
+	Selector           string `json:"selector,omitempty"`
+	ImageRole          string `json:"imageRole"`
+	CompanionReference string `json:"companionReference,omitempty"`
+	CompanionVerified  bool   `json:"companionVerified"`
+	PairStatus         string `json:"pairStatus,omitempty"`
+	PairComplete       bool   `json:"pairComplete"`
+	PairCompletedAt    string `json:"pairCompletedAt,omitempty"`
+	PairError          string `json:"pairError,omitempty"`
+	ProvenanceValid    bool   `json:"provenanceValid"`
+	PrimeSource        bool   `json:"primeSource"`
+	Source             string `json:"source,omitempty"`
+	CanonicalReference string `json:"canonicalReference,omitempty"`
+	OSSRevision        string `json:"ossRevision,omitempty"`
+	ResolvedRank       int    `json:"resolvedRank,omitempty"`
+	Artifact           bool   `json:"artifact"`
+	UploadedAt         string `json:"uploadedAt,omitempty"`
+	Digest             string `json:"digest,omitempty"`
+	Size               int64  `json:"size,omitempty"`
 }
 
 type imageLookupInspectRequest struct {
@@ -161,7 +214,36 @@ type imageLookupInspectResponse struct {
 	Config     imageLookupImageConfig `json:"config"`
 	Layers     []imageLookupLayer     `json:"layers"`
 	BuildYAML  imageLookupBuildYAML   `json:"buildYaml"`
+	PrimeHead  imageLookupPrimeHead   `json:"primeHead"`
 	Warnings   []string               `json:"warnings"`
+}
+
+// imageLookupPrimeHead combines tag-derived classification with the OCI
+// provenance labels available only after inspection. CompanionVerified is
+// deliberately false: Image Lookup exposes the expected same-tag pair but
+// does not claim that the companion manifest exists without probing it.
+type imageLookupPrimeHead struct {
+	IsPrimeHead             bool     `json:"isPrimeHead"`
+	HeadKind                string   `json:"headKind,omitempty"`
+	Mutable                 bool     `json:"mutable"`
+	Version                 string   `json:"version,omitempty"`
+	VersionLine             string   `json:"versionLine,omitempty"`
+	Commit                  string   `json:"commit,omitempty"`
+	Selector                string   `json:"selector,omitempty"`
+	ImageRole               string   `json:"imageRole"`
+	CompanionReference      string   `json:"companionReference,omitempty"`
+	CompanionVerified       bool     `json:"companionVerified"`
+	Source                  string   `json:"source,omitempty"`
+	Revision                string   `json:"revision,omitempty"`
+	OSSRevision             string   `json:"ossRevision,omitempty"`
+	CanonicalReference      string   `json:"canonicalReference,omitempty"`
+	CanonicalRepository     string   `json:"canonicalRepository,omitempty"`
+	CanonicalTag            string   `json:"canonicalTag,omitempty"`
+	PrimeSource             bool     `json:"primeSource"`
+	CanonicalMatchesRequest bool     `json:"canonicalMatchesRequest"`
+	CommitMatchesOSS        bool     `json:"commitMatchesOss"`
+	Consistent              bool     `json:"consistent"`
+	Issues                  []string `json:"issues"`
 }
 
 type imageLookupPlatform struct {
@@ -227,6 +309,25 @@ type imageLookupCommandRunner func(context.Context, string, []string, []string, 
 type imageLookupTarget struct {
 	registry   string
 	repository string
+}
+
+type imageLookupSearchOptions struct {
+	query            string
+	limit            int
+	includeArtifacts bool
+	channel          string
+	architecture     string
+	primeHead        string
+	headKind         string
+	versionLine      string
+	commit           string
+	pairStatus       string
+	sortBy           string
+	sortOrder        string
+	fullScan         bool
+	exactLookup      bool
+	verifyPrimePairs bool
+	primeVersion     string
 }
 
 type imageLookupReference struct {
@@ -298,15 +399,24 @@ func (s *imageLookupService) defaults() {
 
 func (s *imageLookupService) Search(ctx context.Context, request imageLookupSearchRequest) (imageLookupSearchResponse, error) {
 	s.defaults()
-	targets, query, limit, err := s.searchTargets(request)
+	targets, options, err := s.searchParameters(request)
 	if err != nil {
 		return imageLookupSearchResponse{}, err
 	}
 
 	response := imageLookupSearchResponse{
-		Query:      query,
-		SearchedAt: s.now().UTC(),
-		Groups:     make([]imageLookupSearchGroup, len(targets)),
+		Query:        options.query,
+		Channel:      options.channel,
+		Architecture: options.architecture,
+		PrimeHead:    options.primeHead,
+		HeadKind:     options.headKind,
+		VersionLine:  options.versionLine,
+		Commit:       options.commit,
+		PairStatus:   options.pairStatus,
+		SortBy:       options.sortBy,
+		SortOrder:    options.sortOrder,
+		SearchedAt:   s.now().UTC(),
+		Groups:       make([]imageLookupSearchGroup, len(targets)),
 	}
 
 	workerLimit := 4
@@ -320,7 +430,7 @@ func (s *imageLookupService) Search(ctx context.Context, request imageLookupSear
 		go func() {
 			defer workers.Done()
 			for index := range jobs {
-				response.Groups[index] = s.searchTarget(ctx, targets[index], query, limit, request.IncludeArtifacts)
+				response.Groups[index] = s.searchTargetWithOptions(ctx, targets[index], options)
 			}
 		}()
 	}
@@ -348,18 +458,41 @@ func (s *imageLookupService) Search(ctx context.Context, request imageLookupSear
 		}
 		return imageLookupSearchResponse{}, fmt.Errorf("all registry searches failed")
 	}
+	if options.verifyPrimePairs {
+		if err := s.verifyPrimeHeadPairs(ctx, &response, options); err != nil {
+			return imageLookupSearchResponse{}, err
+		}
+	}
 	return response, nil
 }
 
 func (s *imageLookupService) searchTarget(ctx context.Context, target imageLookupTarget, query string, limit int, includeArtifacts bool) imageLookupSearchGroup {
+	return s.searchTargetWithOptions(ctx, target, imageLookupSearchOptions{
+		query:            query,
+		limit:            limit,
+		includeArtifacts: includeArtifacts,
+		channel:          "all",
+		architecture:     "all",
+		primeHead:        "all",
+		headKind:         "all",
+		sortBy:           "natural",
+		sortOrder:        "desc",
+		exactLookup:      true,
+	})
+}
+
+func (s *imageLookupService) searchTargetWithOptions(ctx context.Context, target imageLookupTarget, options imageLookupSearchOptions) imageLookupSearchGroup {
 	canonical := target.registry + "/" + target.repository
+	imageRole, companionRepository := imageLookupRepositoryRole(target.repository)
 	group := imageLookupSearchGroup{
-		Key:        canonical,
-		Label:      imageLookupRegistryLabel(target.registry) + " / " + target.repository,
-		Registry:   target.registry,
-		Repository: target.repository,
-		Reference:  canonical,
-		Tags:       []imageLookupTag{},
+		Key:                 canonical,
+		Label:               imageLookupRegistryLabel(target.registry) + " / " + target.repository,
+		Registry:            target.registry,
+		Repository:          target.repository,
+		Reference:           canonical,
+		ImageRole:           imageRole,
+		CompanionRepository: companionRepository,
+		Tags:                []imageLookupTag{},
 	}
 
 	repository, err := s.parseRepository(target.registry, target.repository)
@@ -367,22 +500,48 @@ func (s *imageLookupService) searchTarget(ctx context.Context, target imageLooku
 		group.Error = imageLookupSafeError(err)
 		return group
 	}
-	if exactTag, ok := imageLookupExactTagReference(repository, query, s.allowHTTP); ok && (includeArtifacts || !imageLookupArtifactTag(query)) {
+	if exactDigest, ok := imageLookupExactDigestReference(repository, options.query, s.allowHTTP); ok {
+		descriptor, getErr := remote.Get(exactDigest, s.remoteOptions(ctx, nil, 0)...)
+		group.Scanned = 1
+		if getErr == nil {
+			digest := strings.ToLower(options.query)
+			result := imageLookupClassifyDigest(target.registry, target.repository, digest)
+			result.Digest = descriptor.Digest.String()
+			if imageLookupTagMatchesOptions(result, options) {
+				group.Matched = 1
+				group.Tags = []imageLookupTag{result}
+			}
+			return group
+		}
+		if !imageLookupRegistryNotFound(getErr) {
+			group.Error = imageLookupSafeError(getErr)
+		}
+		return group
+	}
+	if exactTag, ok := imageLookupExactTagReference(repository, options.query, s.allowHTTP); ok &&
+		!imageLookupPatchHeadSelector(options.query) &&
+		(options.exactLookup || !imageLookupBarePatchVersion(options.query)) &&
+		(options.includeArtifacts || !imageLookupArtifactTag(options.query)) {
 		descriptor, getErr := remote.Get(exactTag, s.remoteOptions(ctx, nil, 0)...)
 		if getErr == nil {
-			architecture, baseTag := imageLookupTagArchitecture(query)
 			group.Scanned = 1
-			group.Matched = 1
-			group.Tags = []imageLookupTag{{
-				Name:         query,
-				Reference:    canonical + ":" + query,
-				Channel:      imageLookupTagChannel(query),
-				Architecture: architecture,
-				BaseTag:      baseTag,
-				Digest:       descriptor.Digest.String(),
-			}}
+			tag := imageLookupClassifyTag(target.registry, target.repository, options.query)
+			tag.Digest = descriptor.Digest.String()
+			if imageLookupTagMatchesOptions(tag, options) {
+				group.Matched = 1
+				group.Tags = []imageLookupTag{tag}
+				imageLookupCountPrimeHeads(&group, group.Tags)
+			}
 			if target.registry == "docker.io" {
-				s.enrichDockerHubTags(ctx, target.repository, query, group.Tags)
+				complete, metadataErr := s.enrichDockerHubTags(ctx, target.repository, options.query, group.Tags, options.sortBy == "uploaded")
+				if options.sortBy == "uploaded" {
+					switch {
+					case metadataErr != nil:
+						group.Error = imageLookupSafeError(metadataErr)
+					case !complete:
+						group.Error = "Docker Hub did not expose upload metadata for every matched tag"
+					}
+				}
 			}
 			return group
 		}
@@ -390,7 +549,7 @@ func (s *imageLookupService) searchTarget(ctx context.Context, target imageLooku
 			group.Error = imageLookupSafeError(getErr)
 			return group
 		}
-		if imageLookupFullVersionTag(query) {
+		if imageLookupFullVersionTag(options.query) {
 			group.Scanned = 1
 			return group
 		}
@@ -406,7 +565,7 @@ func (s *imageLookupService) searchTarget(ctx context.Context, target imageLooku
 		return group
 	}
 
-	matches := make([]imageLookupTag, 0, limit)
+	matches := make([]imageLookupTag, 0, options.limit)
 	limitReached := false
 	for lister.HasNext() && group.Scanned < s.maxTagScan {
 		page, pageErr := lister.Next(ctx)
@@ -420,22 +579,15 @@ func (s *imageLookupService) searchTarget(ctx context.Context, target imageLooku
 				break
 			}
 			group.Scanned++
-			if !includeArtifacts && imageLookupArtifactTag(tagName) {
+			if !options.includeArtifacts && imageLookupArtifactTag(tagName) {
 				continue
 			}
-			channel := imageLookupTagChannel(tagName)
-			if !imageLookupTagMatches(tagName, channel, query) {
+			tag := imageLookupClassifyTag(target.registry, target.repository, tagName)
+			if !imageLookupTagMatchesOptions(tag, options) {
 				continue
 			}
-			architecture, baseTag := imageLookupTagArchitecture(tagName)
-			matches = append(matches, imageLookupTag{
-				Name:         tagName,
-				Reference:    canonical + ":" + tagName,
-				Channel:      channel,
-				Architecture: architecture,
-				BaseTag:      baseTag,
-			})
-			if len(matches) == limit {
+			matches = append(matches, tag)
+			if !options.fullScan && len(matches) == options.limit {
 				limitReached = true
 				if pageIndex+1 < len(page.Tags) || lister.HasNext() {
 					group.Truncated = true
@@ -451,15 +603,287 @@ func (s *imageLookupService) searchTarget(ctx context.Context, target imageLooku
 		group.Truncated = true
 	}
 
-	sort.SliceStable(matches, func(i, j int) bool {
-		return imageLookupNaturalCompare(matches[i].Name, matches[j].Name) > 0
-	})
 	group.Matched = len(matches)
 	if target.registry == "docker.io" && len(matches) > 0 {
-		s.enrichDockerHubTags(ctx, target.repository, query, matches)
+		complete, metadataErr := s.enrichDockerHubTags(ctx, target.repository, options.query, matches, options.sortBy == "uploaded")
+		if options.sortBy == "uploaded" {
+			switch {
+			case metadataErr != nil:
+				group.Error = imageLookupSafeError(metadataErr)
+			case !complete:
+				group.Error = "Docker Hub did not expose upload metadata for every matched tag"
+			}
+		}
+	}
+	imageLookupSortTags(matches, options.sortBy, options.sortOrder)
+	imageLookupCountPrimeHeads(&group, matches)
+	if options.fullScan && len(matches) > options.limit {
+		group.Truncated = true
+		matches = matches[:options.limit]
 	}
 	group.Tags = matches
 	return group
+}
+
+type imageLookupPrimePairResult struct {
+	tag         string
+	status      string
+	detail      string
+	completedAt time.Time
+	server      rancherImageProvenance
+	agent       rancherImageProvenance
+	lookupErr   error
+}
+
+func (s *imageLookupService) verifyPrimeHeadPairs(ctx context.Context, response *imageLookupSearchResponse, options imageLookupSearchOptions) error {
+	authorityGroups := make([]int, 0, 2)
+	truncatedReference := ""
+	for groupIndex := range response.Groups {
+		group := &response.Groups[groupIndex]
+		if group.Registry == "stgregistry.suse.com" && group.Error == "" && group.Truncated &&
+			(group.ImageRole == "server" || group.ImageRole == "agent") && truncatedReference == "" {
+			truncatedReference = group.Reference
+		}
+		if group.Registry != "stgregistry.suse.com" || group.Error != "" || group.Truncated ||
+			(group.ImageRole != "server" && group.ImageRole != "agent") {
+			continue
+		}
+		authorityGroups = append(authorityGroups, groupIndex)
+	}
+	if len(authorityGroups) == 0 {
+		if truncatedReference != "" {
+			return fmt.Errorf("Prime head pair verification is incomplete: %s matched more candidates than the bounded search could verify; narrow the patch, commit, or result set", truncatedReference)
+		}
+		return errors.New("Prime head pair verification is incomplete: neither the SUSE staging server nor agent search produced a successful complete candidate list")
+	}
+
+	candidateNames := map[string]struct{}{}
+	for _, groupIndex := range authorityGroups {
+		authority := &response.Groups[groupIndex]
+		for tagIndex := range authority.Tags {
+			tag := &authority.Tags[tagIndex]
+			if tag.IsPrimeHead && tag.HeadKind == "immutable" && (options.primeVersion == "" || tag.Version == options.primeVersion) {
+				candidateNames[tag.Name] = struct{}{}
+			}
+		}
+	}
+	for groupIndex := range response.Groups {
+		group := &response.Groups[groupIndex]
+		if group.Registry != "stgregistry.suse.com" || (group.ImageRole != "server" && group.ImageRole != "agent") {
+			continue
+		}
+		for tagIndex := range group.Tags {
+			tag := &group.Tags[tagIndex]
+			if tag.IsPrimeHead && tag.HeadKind == "moving" {
+				tag.PairStatus = "unverified"
+				tag.PairError = "mutable Prime head selector; pair verification ranks immutable patch-qualified commit tags"
+			}
+		}
+	}
+
+	names := make([]string, 0, len(candidateNames))
+	for tag := range candidateNames {
+		names = append(names, tag)
+	}
+	sort.Slice(names, func(i, j int) bool { return imageLookupNaturalCompare(names[i], names[j]) > 0 })
+
+	results := make(chan imageLookupPrimePairResult, len(names))
+	workerCount := 4
+	if len(names) < workerCount {
+		workerCount = len(names)
+	}
+	if workerCount > 0 {
+		jobs := make(chan string)
+		var workers sync.WaitGroup
+		for worker := 0; worker < workerCount; worker++ {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				for tag := range jobs {
+					results <- s.inspectPrimeHeadPair(ctx, tag)
+				}
+			}()
+		}
+		go func() {
+			defer close(results)
+			for _, tag := range names {
+				select {
+				case jobs <- tag:
+				case <-ctx.Done():
+					close(jobs)
+					workers.Wait()
+					return
+				}
+			}
+			close(jobs)
+			workers.Wait()
+		}()
+	} else {
+		close(results)
+	}
+
+	byTag := make(map[string]imageLookupPrimePairResult, len(names))
+	var lookupErrors []string
+	for result := range results {
+		byTag[result.tag] = result
+		if result.lookupErr != nil {
+			lookupErrors = append(lookupErrors, result.tag+": "+imageLookupSafeError(result.lookupErr))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(lookupErrors) > 0 {
+		sort.Strings(lookupErrors)
+		return fmt.Errorf("could not safely verify Prime head image pairs: %s", strings.Join(lookupErrors, "; "))
+	}
+
+	verified := make([]imageLookupPrimePairResult, 0, len(byTag))
+	for _, result := range byTag {
+		if result.status == "verified" {
+			verified = append(verified, result)
+		}
+	}
+	sort.SliceStable(verified, func(i, j int) bool {
+		if verified[i].completedAt.Equal(verified[j].completedAt) {
+			return imageLookupNaturalCompare(verified[i].tag, verified[j].tag) > 0
+		}
+		return verified[i].completedAt.After(verified[j].completedAt)
+	})
+	ranks := make(map[string]int, len(verified))
+	for index, result := range verified {
+		ranks[result.tag] = index + 1
+	}
+
+	for groupIndex := range response.Groups {
+		group := &response.Groups[groupIndex]
+		group.VerifiedPrimeHeadCount = 0
+		group.InvalidPrimeHeadCount = 0
+		group.MissingCompanionCount = 0
+		for tagIndex := range group.Tags {
+			tag := &group.Tags[tagIndex]
+			result, ok := byTag[tag.Name]
+			if !ok {
+				continue
+			}
+			tag.PairStatus = result.status
+			tag.PairComplete = result.status == "verified"
+			tag.CompanionVerified = tag.PairComplete
+			tag.ProvenanceValid = tag.PairComplete
+			tag.PairError = result.detail
+			tag.ResolvedRank = ranks[tag.Name]
+			if !result.completedAt.IsZero() {
+				tag.PairCompletedAt = imageLookupFormatTime(result.completedAt)
+			}
+			provenance := result.server
+			if group.ImageRole == "agent" {
+				provenance = result.agent
+			}
+			tag.PrimeSource = imageLookupRancherPrimeSource(result.server.SourceURL)
+			tag.Source = result.server.SourceURL
+			tag.CanonicalReference = provenance.CanonicalReference
+			tag.OSSRevision = strings.ToLower(strings.TrimSpace(provenance.OSSRevision))
+			switch result.status {
+			case "verified":
+				group.VerifiedPrimeHeadCount++
+			case "invalid":
+				group.InvalidPrimeHeadCount++
+			case "missing":
+				group.MissingCompanionCount++
+			}
+		}
+		if options.pairStatus != "all" {
+			filtered := group.Tags[:0]
+			for _, tag := range group.Tags {
+				if tag.PairStatus == options.pairStatus {
+					filtered = append(filtered, tag)
+				}
+			}
+			group.Tags = filtered
+			group.Matched = len(filtered)
+		}
+		if options.sortBy == "pair-completed" {
+			imageLookupSortTags(group.Tags, options.sortBy, options.sortOrder)
+		}
+	}
+	return nil
+}
+
+func (s *imageLookupService) inspectPrimeHeadPair(ctx context.Context, tag string) imageLookupPrimePairResult {
+	result := imageLookupPrimePairResult{tag: tag}
+	classification := imageLookupClassifyTag("stgregistry.suse.com", "rancher/rancher", tag)
+	if !classification.IsPrimeHead || classification.HeadKind != "immutable" {
+		result.status = "invalid"
+		result.detail = "candidate is not an immutable patch-qualified Prime head tag"
+		return result
+	}
+	serverReference := "stgregistry.suse.com/rancher/rancher:" + tag
+	agentReference := "stgregistry.suse.com/rancher/rancher-agent:" + tag
+
+	server, serverFound, err := inspectRancherImageReferenceWithService(ctx, s, serverReference)
+	result.server = server
+	if err != nil {
+		result.lookupErr = fmt.Errorf("inspect server image: %w", err)
+		return result
+	}
+	if !serverFound {
+		result.status = "missing"
+		result.detail = "server image was not found"
+		return result
+	}
+	agent, agentFound, err := inspectRancherImageReferenceWithService(ctx, s, agentReference)
+	result.agent = agent
+	if err != nil {
+		result.lookupErr = fmt.Errorf("inspect agent image: %w", err)
+		return result
+	}
+	if !agentFound {
+		result.status = "missing"
+		result.detail = "matching rancher-agent image was not found"
+		return result
+	}
+	if err := imageLookupValidateExactPrimeHeadPair(tag, server, agent); err != nil {
+		result.status = "invalid"
+		result.detail = err.Error()
+		return result
+	}
+	if err := validatePatchHeadServerProvenance(classification.BaseTag, server); err != nil {
+		result.status = "invalid"
+		result.detail = err.Error()
+		return result
+	}
+	if server.CreatedAt.IsZero() {
+		result.status = "invalid"
+		result.detail = "server image did not declare a creation timestamp"
+		return result
+	}
+	if agent.CreatedAt.IsZero() {
+		result.status = "invalid"
+		result.detail = "agent image did not declare a creation timestamp"
+		return result
+	}
+	result.status = "verified"
+	result.completedAt = server.CreatedAt
+	if agent.CreatedAt.After(result.completedAt) {
+		result.completedAt = agent.CreatedAt
+	}
+	return result
+}
+
+func imageLookupValidateExactPrimeHeadPair(tag string, server, agent rancherImageProvenance) error {
+	expectedTag := normalizeDockerRancherTag(normalizeVersionInput(tag))
+	_, serverCanonicalRepository, serverCanonicalTag, serverErr := parseRegistryImage(server.CanonicalReference)
+	_, agentCanonicalRepository, agentCanonicalTag, agentErr := parseRegistryImage(agent.CanonicalReference)
+	if serverErr != nil || agentErr != nil || serverCanonicalTag == "" || agentCanonicalTag == "" {
+		return fmt.Errorf("exact Rancher head image pair %s did not declare canonical server and agent org.opensuse.reference labels", expectedTag)
+	}
+	if serverCanonicalRepository != "rancher/rancher" || agentCanonicalRepository != "rancher/rancher-agent" {
+		return fmt.Errorf("exact Rancher head image pair %s has unexpected canonical repositories: server %s, agent %s", expectedTag, serverCanonicalRepository, agentCanonicalRepository)
+	}
+	if serverCanonicalTag != expectedTag || agentCanonicalTag != expectedTag {
+		return fmt.Errorf("exact Rancher head image pair %s has mismatched canonical tags: server %s, agent %s", expectedTag, serverCanonicalTag, agentCanonicalTag)
+	}
+	return nil
 }
 
 func (s *imageLookupService) Inspect(ctx context.Context, request imageLookupInspectRequest) (imageLookupInspectResponse, error) {
@@ -541,6 +965,7 @@ func (s *imageLookupService) Inspect(ctx context.Context, request imageLookupIns
 		History:      imageLookupBoundedHistory(configFile.History),
 	}
 	response.CreatedAt = response.Config.CreatedAt
+	response.PrimeHead = imageLookupInspectPrimeHead(parsed, configFile.Config.Labels)
 	if configFile.OS != "" && configFile.Architecture != "" {
 		response.Platform = (&v1.Platform{OS: configFile.OS, Architecture: configFile.Architecture, Variant: configFile.Variant}).String()
 	}
@@ -909,32 +1334,53 @@ func (s *imageLookupService) scanBuildYAMLLayer(ctx context.Context, reader io.R
 }
 
 func (s *imageLookupService) searchTargets(request imageLookupSearchRequest) ([]imageLookupTarget, string, int, error) {
+	targets, options, err := s.searchParameters(request)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	return targets, options.query, options.limit, nil
+}
+
+func (s *imageLookupService) searchParameters(request imageLookupSearchRequest) ([]imageLookupTarget, imageLookupSearchOptions, error) {
+	options := imageLookupSearchOptions{
+		includeArtifacts: request.IncludeArtifacts,
+		channel:          "all",
+		architecture:     "all",
+		primeHead:        "all",
+		headKind:         "all",
+		pairStatus:       "all",
+		sortBy:           "natural",
+		sortOrder:        "desc",
+	}
 	registryValue := strings.TrimSpace(request.Registry)
 	if registryValue == "" {
 		registryValue = "all"
 	}
 	query := strings.TrimSpace(request.Query)
 	if len(query) > 256 {
-		return nil, "", 0, &imageLookupInputError{message: "query must be 256 characters or fewer"}
+		return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: "query must be 256 characters or fewer"}
 	}
 	if imageLookupHasUnsafeCharacters(query) {
-		return nil, "", 0, &imageLookupInputError{message: "query contains whitespace or control characters"}
+		return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: "query contains whitespace or control characters"}
 	}
 	limit := request.Limit
 	if limit == 0 {
 		limit = imageLookupDefaultResultLimit
 	}
 	if limit < 1 || limit > imageLookupMaxResultLimit {
-		return nil, "", 0, &imageLookupInputError{message: fmt.Sprintf("limit must be between 1 and %d", imageLookupMaxResultLimit)}
+		return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: fmt.Sprintf("limit must be between 1 and %d", imageLookupMaxResultLimit)}
 	}
+	options.limit = limit
 
 	repositoryValue := strings.TrimSpace(request.Repository)
 	var explicitRegistry string
-	if imageLookupLooksLikeReference(query) {
+	bareDigestQuery := imageLookupDigestPattern.MatchString(strings.ToLower(query))
+	if !bareDigestQuery && imageLookupLooksLikeReference(query) {
 		parsed, err := s.parseReference(query, true)
 		if err != nil {
-			return nil, "", 0, err
+			return nil, imageLookupSearchOptions{}, err
 		}
+		options.exactLookup = true
 		explicitRegistry = parsed.registry
 		repositoryValue = parsed.repository
 		if parsed.tag != "" {
@@ -949,7 +1395,7 @@ func (s *imageLookupService) searchTargets(request imageLookupSearchRequest) ([]
 	} else {
 		parsedRegistry, repository, selector, err := s.parseSearchRepository(repositoryValue)
 		if err != nil {
-			return nil, "", 0, err
+			return nil, imageLookupSearchOptions{}, err
 		}
 		if parsedRegistry != "" {
 			explicitRegistry = parsedRegistry
@@ -957,36 +1403,131 @@ func (s *imageLookupService) searchTargets(request imageLookupSearchRequest) ([]
 		repositoryValue = repository
 		if selector != "" && query == "" {
 			query = selector
+			options.exactLookup = true
 		}
 	}
+
+	var err error
+	if options.channel, err = imageLookupChoice(request.Channel, "all", "all", "head", "devel", "alpha", "rcs", "rc", "stable"); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
+	if options.architecture, err = imageLookupChoice(request.Architecture, "all", "all", "multi", "amd64", "arm64", "s390x", "ppc64le", "386", "arm"); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
+	if options.primeHead, err = imageLookupChoice(request.PrimeHead, "all", "all", "only", "exclude"); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
+	if options.headKind, err = imageLookupChoice(request.HeadKind, "all", "all", "moving", "immutable"); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
+	if options.pairStatus, err = imageLookupChoice(request.PairStatus, "all", "all", "verified", "unverified", "missing", "invalid"); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
+	if options.sortBy, err = imageLookupChoice(request.SortBy, "natural", "natural", "tag", "version", "uploaded", "pair-completed"); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
+	if options.sortOrder, err = imageLookupChoice(request.SortOrder, "desc", "asc", "desc"); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
+	if options.versionLine, err = imageLookupNormalizeVersionLine(request.VersionLine); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
+	options.commit = strings.ToLower(strings.TrimSpace(request.Commit))
+	if options.commit != "" && !imageLookupCommitPrefix(options.commit) {
+		return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: "commit must be a 7 to 40 character hexadecimal Git revision prefix"}
+	}
+	if options.primeHead == "exclude" && options.headKind != "all" {
+		return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: "headKind cannot be combined with primeHead=exclude"}
+	}
+
+	query = strings.TrimSpace(query)
+	primeQueryVersion, primeQueryKind := imageLookupPrimeHeadQuery(query)
+	primeAliasQuery := imageLookupPrimeHeadAliasQuery(query)
+	if primeAliasQuery {
+		options.primeHead = "only"
+		query = "prime-head"
+	}
+	if primeQueryKind != "" {
+		options.primeHead = "only"
+		options.primeVersion = primeQueryVersion
+		options.verifyPrimePairs = true
+		if primeQueryKind == "moving" && strings.TrimSpace(request.SortBy) == "" {
+			options.sortBy = "pair-completed"
+		}
+	}
+	if options.headKind != "all" {
+		options.primeHead = "only"
+	}
+	if options.primeHead == "only" && imageLookupPatchVersion(options.versionLine) {
+		options.primeVersion = options.versionLine
+		options.verifyPrimePairs = true
+	}
+	if options.primeHead == "only" && imageLookupBarePatchVersion(query) {
+		options.primeVersion, err = imageLookupNormalizeVersionLine(query)
+		if err != nil {
+			return nil, imageLookupSearchOptions{}, err
+		}
+		options.verifyPrimePairs = true
+		if strings.TrimSpace(request.SortBy) == "" {
+			options.sortBy = "pair-completed"
+		}
+	}
+	if options.pairStatus != "all" || options.sortBy == "pair-completed" {
+		if !options.verifyPrimePairs {
+			return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: "pairStatus and pair-completed sorting require an exact Prime head tag or patch-qualified Prime selector"}
+		}
+	}
+	options.query = query
+	options.fullScan = imageLookupEnrichedSearchRequested(request) || primeAliasQuery || primeQueryKind == "moving" || imageLookupBarePatchVersion(query)
 
 	registries := []string{}
 	if explicitRegistry != "" {
 		registries = []string{explicitRegistry}
 	} else if strings.EqualFold(registryValue, "all") {
-		registries = append(registries, imageLookupKnownRegistries...)
+		if options.primeHead == "only" || primeQueryKind != "" {
+			registries = []string{"stgregistry.suse.com"}
+		} else {
+			registries = append(registries, imageLookupKnownRegistries...)
+		}
 	} else {
 		registry, err := imageLookupNormalizeRegistry(registryValue)
 		if err != nil {
-			return nil, "", 0, err
+			return nil, imageLookupSearchOptions{}, err
 		}
 		registries = []string{registry}
 	}
 
 	repositories := []string{repositoryValue}
 	if repositoryValue == "all" {
-		repositories = append([]string(nil), imageLookupKnownRepositories...)
+		if options.primeHead == "only" || primeQueryKind != "" {
+			repositories = []string{"rancher/rancher", "rancher/rancher-agent"}
+		} else {
+			repositories = append([]string(nil), imageLookupKnownRepositories...)
+		}
 	}
 	targets := make([]imageLookupTarget, 0, len(registries)*len(repositories))
 	for _, registry := range registries {
 		for _, repository := range repositories {
 			if _, err := s.parseRepository(registry, repository); err != nil {
-				return nil, "", 0, err
+				return nil, imageLookupSearchOptions{}, err
 			}
 			targets = append(targets, imageLookupTarget{registry: registry, repository: repository})
 		}
 	}
-	return targets, query, limit, nil
+	if options.primeHead == "only" || primeQueryKind != "" {
+		for _, target := range targets {
+			if target.registry != "stgregistry.suse.com" {
+				return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: "Prime-head image search is supported only in stgregistry.suse.com"}
+			}
+			if target.repository != "rancher/rancher" && target.repository != "rancher/rancher-agent" {
+				return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: "Prime-head image search requires the canonical rancher/rancher or rancher/rancher-agent repository"}
+			}
+		}
+	}
+	if (options.pairStatus != "all" || options.sortBy == "pair-completed") && !options.verifyPrimePairs {
+		return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: "pair filtering and pair-completed sorting are supported only for SUSE staging Prime head lookups"}
+	}
+	return targets, options, nil
 }
 
 func (s *imageLookupService) parseSearchRepository(input string) (string, string, string, error) {
@@ -1236,6 +1777,19 @@ func imageLookupExactTagReference(repository name.Repository, query string, allo
 	return tag, err == nil
 }
 
+func imageLookupExactDigestReference(repository name.Repository, query string, allowHTTP bool) (name.Digest, bool) {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if !imageLookupDigestPattern.MatchString(query) {
+		return name.Digest{}, false
+	}
+	options := []name.Option{name.StrictValidation}
+	if allowHTTP {
+		options = append(options, name.Insecure)
+	}
+	digest, err := name.NewDigest(repository.Name()+"@"+query, options...)
+	return digest, err == nil
+}
+
 func imageLookupFullVersionTag(query string) bool {
 	return imageLookupFullVersionTagPattern.MatchString(strings.TrimSpace(query))
 }
@@ -1397,61 +1951,92 @@ func (s *imageLookupService) dockerHubTag(ctx context.Context, repository, tag s
 	return result, nil
 }
 
-func (s *imageLookupService) enrichDockerHubTags(ctx context.Context, repository, query string, tags []imageLookupTag) {
+func (s *imageLookupService) enrichDockerHubTags(ctx context.Context, repository, query string, tags []imageLookupTag, requireComplete bool) (bool, error) {
 	parts := strings.Split(repository, "/")
 	if len(parts) != 2 {
-		return
+		return false, errors.New("Docker Hub metadata requires namespace/repository")
 	}
-	pageSize := len(tags) * 3
-	if pageSize < 25 {
-		pageSize = 25
+	if len(tags) == 0 {
+		return true, nil
 	}
-	if pageSize > 100 {
-		pageSize = 100
+	indexes := make(map[string][]int, len(tags))
+	remaining := make(map[string]struct{}, len(tags))
+	for index := range tags {
+		indexes[tags[index].Name] = append(indexes[tags[index].Name], index)
+		remaining[tags[index].Name] = struct{}{}
 	}
 	endpointURL, err := url.Parse("https://hub.docker.com/v2/namespaces/" + url.PathEscape(parts[0]) + "/repositories/" + url.PathEscape(parts[1]) + "/tags")
 	if err != nil {
-		return
+		return false, err
 	}
-	values := endpointURL.Query()
-	values.Set("page_size", strconv.Itoa(pageSize))
-	if query != "" && !imageLookupQuickQuery(query) {
-		values.Set("name", query)
-	}
-	endpointURL.RawQuery = values.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointURL.String(), nil)
-	if err != nil {
-		return
-	}
-	response, err := (&http.Client{Transport: s.transport}).Do(request)
-	if err != nil {
-		return
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return
-	}
-	var page struct {
-		Results []imageLookupDockerHubTag `json:"results"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&page); err != nil {
-		return
-	}
-	byName := make(map[string]imageLookupDockerHubTag, len(page.Results))
-	for _, result := range page.Results {
-		byName[result.Name] = result
-	}
-	for index := range tags {
-		metadata, ok := byName[tags[index].Name]
-		if !ok {
-			continue
-		}
-		tags[index].UploadedAt = imageLookupFormatTime(metadata.TagLastPushed)
-		tags[index].Size = metadata.FullSize
-		if len(metadata.Images) == 1 {
-			tags[index].Digest = metadata.Images[0].Digest
+	maxPages := 1
+	if requireComplete {
+		maxPages = (s.maxTagScan + 99) / 100
+		if maxPages < 1 {
+			maxPages = 1
 		}
 	}
+	client := &http.Client{
+		Transport: s.transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	for pageNumber := 1; pageNumber <= maxPages; pageNumber++ {
+		pageURL := *endpointURL
+		values := pageURL.Query()
+		values.Set("page_size", "100")
+		values.Set("page", strconv.Itoa(pageNumber))
+		if query != "" && !imageLookupQuickQuery(query) {
+			values.Set("name", query)
+		}
+		pageURL.RawQuery = values.Encode()
+		request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, pageURL.String(), nil)
+		if requestErr != nil {
+			return false, requestErr
+		}
+		response, requestErr := client.Do(request)
+		if requestErr != nil {
+			return false, requestErr
+		}
+		var page struct {
+			Next    string                    `json:"next"`
+			Results []imageLookupDockerHubTag `json:"results"`
+		}
+		decodeErr := func() error {
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				return fmt.Errorf("Docker Hub metadata returned %s", response.Status)
+			}
+			return json.NewDecoder(io.LimitReader(response.Body, 4<<20)).Decode(&page)
+		}()
+		if decodeErr != nil {
+			return false, decodeErr
+		}
+		for _, metadata := range page.Results {
+			matchedIndexes, ok := indexes[metadata.Name]
+			if !ok {
+				continue
+			}
+			for _, index := range matchedIndexes {
+				tags[index].UploadedAt = imageLookupFormatTime(metadata.TagLastPushed)
+				tags[index].Size = metadata.FullSize
+				if len(metadata.Images) == 1 {
+					tags[index].Digest = metadata.Images[0].Digest
+				}
+			}
+			if !metadata.TagLastPushed.IsZero() {
+				delete(remaining, metadata.Name)
+			}
+		}
+		if len(remaining) == 0 {
+			return true, nil
+		}
+		if page.Next == "" {
+			return false, nil
+		}
+	}
+	return false, errors.New("Docker Hub tag metadata exceeded the bounded pagination limit")
 }
 
 func imageLookupNormalizeRegistry(input string) (string, error) {
@@ -1558,6 +2143,427 @@ func imageLookupSimpleToken(value string) bool {
 	return value != ""
 }
 
+func imageLookupChoice(input, fallback string, allowed ...string) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(input))
+	if value == "" {
+		value = fallback
+	}
+	for _, candidate := range allowed {
+		if value == candidate {
+			return value, nil
+		}
+	}
+	return "", &imageLookupInputError{message: fmt.Sprintf("unsupported filter value %q; expected one of %s", input, strings.Join(allowed, ", "))}
+}
+
+func imageLookupNormalizeVersionLine(input string) (string, error) {
+	value := strings.TrimSpace(input)
+	if value == "" {
+		return "", nil
+	}
+	match := imageLookupVersionLinePattern.FindStringSubmatch(value)
+	if len(match) != 4 {
+		return "", &imageLookupInputError{message: "versionLine must use X.Y or X.Y.Z format"}
+	}
+	result := match[1] + "." + match[2]
+	if match[3] != "" {
+		result += "." + match[3]
+	}
+	return result, nil
+}
+
+func imageLookupCommitPrefix(value string) bool {
+	if len(value) < 7 || len(value) > 40 {
+		return false
+	}
+	for _, character := range value {
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func imageLookupEnrichedSearchRequested(request imageLookupSearchRequest) bool {
+	return strings.TrimSpace(request.Channel) != "" ||
+		strings.TrimSpace(request.Architecture) != "" ||
+		strings.TrimSpace(request.PrimeHead) != "" ||
+		strings.TrimSpace(request.HeadKind) != "" ||
+		strings.TrimSpace(request.VersionLine) != "" ||
+		strings.TrimSpace(request.Commit) != "" ||
+		strings.TrimSpace(request.PairStatus) != "" ||
+		strings.TrimSpace(request.SortBy) != "" ||
+		strings.TrimSpace(request.SortOrder) != ""
+}
+
+func imageLookupRepositoryRole(repository string) (string, string) {
+	repository = strings.Trim(strings.ToLower(strings.TrimSpace(repository)), "/")
+	switch {
+	case strings.HasSuffix(repository, "/rancher-agent"):
+		return "agent", strings.TrimSuffix(repository, "/rancher-agent") + "/rancher"
+	case strings.HasSuffix(repository, "/rancher-webhook"):
+		return "webhook", ""
+	case strings.HasSuffix(repository, "/rancher"):
+		return "server", strings.TrimSuffix(repository, "/rancher") + "/rancher-agent"
+	default:
+		return "other", ""
+	}
+}
+
+func imageLookupClassifyDigest(registry, repository, digest string) imageLookupTag {
+	imageRole, _ := imageLookupRepositoryRole(repository)
+	digest = strings.ToLower(strings.TrimSpace(digest))
+	return imageLookupTag{
+		Name:         digest,
+		Reference:    registry + "/" + repository + "@" + digest,
+		Channel:      "digest",
+		Architecture: "unknown",
+		ImageRole:    imageRole,
+		Digest:       digest,
+	}
+}
+
+func imageLookupClassifyTag(registry, repository, tagName string) imageLookupTag {
+	architecture, baseTag := imageLookupTagArchitecture(tagName)
+	imageRole, companionRepository := imageLookupRepositoryRole(repository)
+	result := imageLookupTag{
+		Name:         tagName,
+		Reference:    registry + "/" + repository + ":" + tagName,
+		Channel:      imageLookupTagChannel(tagName),
+		Architecture: architecture,
+		BaseTag:      baseTag,
+		ImageRole:    imageRole,
+		Artifact:     imageLookupArtifactTag(tagName),
+	}
+	if companionRepository != "" {
+		result.CompanionReference = registry + "/" + companionRepository + ":" + tagName
+	}
+	if imageRole != "server" && imageRole != "agent" {
+		return result
+	}
+
+	normalized := strings.ToLower(normalizeVersionInput(baseTag))
+	if match := imageLookupTagVersionPattern.FindStringSubmatch(normalized); len(match) == 2 {
+		result.Version = match[1]
+		parts := strings.Split(result.Version, ".")
+		if len(parts) >= 2 {
+			result.VersionLine = parts[0] + "." + parts[1]
+		}
+	}
+	switch {
+	case isPatchHeadAliasRancherVersion(normalized):
+		result.IsPrimeHead = true
+		result.HeadKind = "moving"
+		result.Mutable = true
+		result.Version = strings.TrimSuffix(normalized, "-head")
+	case isPrimeCommitHeadRancherVersion(normalized):
+		result.IsPrimeHead = true
+		result.HeadKind = "immutable"
+		withoutHead := strings.TrimSuffix(normalized, "-head")
+		separator := strings.LastIndex(withoutHead, "-")
+		if separator > 0 {
+			result.Version = withoutHead[:separator]
+			result.Commit = withoutHead[separator+1:]
+		}
+	}
+	if !result.IsPrimeHead {
+		return result
+	}
+	result.Selector = "v" + result.Version + "-head"
+	result.PairStatus = "unverified"
+	return result
+}
+
+func imageLookupPrimeHeadAliasQuery(query string) bool {
+	switch strings.ToLower(strings.TrimSpace(query)) {
+	case "prime-head", "primehead", "prime_head":
+		return true
+	default:
+		return false
+	}
+}
+
+func imageLookupPrimeHeadQuery(query string) (string, string) {
+	_, baseTag := imageLookupTagArchitecture(strings.TrimSpace(query))
+	normalized := strings.ToLower(normalizeVersionInput(baseTag))
+	switch {
+	case isPatchHeadAliasRancherVersion(normalized):
+		return strings.TrimSuffix(normalized, "-head"), "moving"
+	case isPrimeCommitHeadRancherVersion(normalized):
+		withoutHead := strings.TrimSuffix(normalized, "-head")
+		separator := strings.LastIndex(withoutHead, "-")
+		if separator > 0 {
+			return withoutHead[:separator], "immutable"
+		}
+	}
+	return "", ""
+}
+
+func imageLookupPatchHeadSelector(query string) bool {
+	_, kind := imageLookupPrimeHeadQuery(query)
+	return kind == "moving"
+}
+
+func imageLookupBarePatchVersion(query string) bool {
+	match := imageLookupVersionLinePattern.FindStringSubmatch(strings.TrimSpace(query))
+	return len(match) == 4 && match[3] != ""
+}
+
+func imageLookupPatchVersion(version string) bool {
+	match := imageLookupVersionLinePattern.FindStringSubmatch(strings.TrimSpace(version))
+	return len(match) == 4 && match[3] != ""
+}
+
+func imageLookupTagMatchesOptions(tag imageLookupTag, options imageLookupSearchOptions) bool {
+	query := strings.ToLower(strings.TrimSpace(options.query))
+	if imageLookupPrimeHeadAliasQuery(query) {
+		if !tag.IsPrimeHead {
+			return false
+		}
+	} else if version, kind := imageLookupPrimeHeadQuery(query); kind == "moving" {
+		if !tag.IsPrimeHead || tag.Version != version {
+			return false
+		}
+	} else if !imageLookupTagMatches(tag.Name, tag.Channel, query) {
+		return false
+	}
+	if options.channel != "" && options.channel != "all" && !imageLookupTagMatches(tag.Name, tag.Channel, options.channel) {
+		return false
+	}
+	if options.architecture != "" && options.architecture != "all" && tag.Architecture != options.architecture {
+		return false
+	}
+	switch options.primeHead {
+	case "only":
+		if !tag.IsPrimeHead {
+			return false
+		}
+	case "exclude":
+		if tag.IsPrimeHead {
+			return false
+		}
+	}
+	if options.headKind != "" && options.headKind != "all" && tag.HeadKind != options.headKind {
+		return false
+	}
+	if options.versionLine != "" {
+		if imageLookupPatchVersion(options.versionLine) {
+			if tag.Version != options.versionLine {
+				return false
+			}
+		} else if tag.VersionLine != options.versionLine {
+			return false
+		}
+	}
+	if options.commit != "" && !strings.HasPrefix(strings.ToLower(tag.Commit), options.commit) {
+		return false
+	}
+	return true
+}
+
+func imageLookupSortTags(tags []imageLookupTag, sortBy, sortOrder string) {
+	descending := sortOrder != "asc"
+	sort.SliceStable(tags, func(i, j int) bool {
+		comparison := imageLookupCompareTags(tags[i], tags[j], sortBy, descending)
+		return comparison < 0
+	})
+}
+
+func imageLookupCompareTags(left, right imageLookupTag, sortBy string, descending bool) int {
+	compareNatural := func(leftValue, rightValue string) int {
+		comparison := imageLookupNaturalCompare(leftValue, rightValue)
+		if descending {
+			comparison = -comparison
+		}
+		return comparison
+	}
+	compareOptionalTime := func(leftValue, rightValue string) int {
+		leftTime, leftErr := time.Parse(time.RFC3339Nano, leftValue)
+		rightTime, rightErr := time.Parse(time.RFC3339Nano, rightValue)
+		leftKnown, rightKnown := leftErr == nil, rightErr == nil
+		if leftKnown != rightKnown {
+			if leftKnown {
+				return -1
+			}
+			return 1
+		}
+		if leftKnown && !leftTime.Equal(rightTime) {
+			if leftTime.Before(rightTime) != descending {
+				return -1
+			}
+			return 1
+		}
+		return 0
+	}
+
+	var comparison int
+	switch sortBy {
+	case "tag":
+		leftName, rightName := strings.ToLower(left.Name), strings.ToLower(right.Name)
+		if leftName < rightName {
+			comparison = -1
+		} else if leftName > rightName {
+			comparison = 1
+		}
+		if descending {
+			comparison = -comparison
+		}
+	case "version":
+		if left.Version == "" || right.Version == "" {
+			if left.Version != right.Version {
+				if left.Version != "" {
+					return -1
+				}
+				return 1
+			}
+		} else {
+			comparison = compareNatural(left.Version, right.Version)
+		}
+	case "uploaded":
+		comparison = compareOptionalTime(left.UploadedAt, right.UploadedAt)
+	case "pair-completed":
+		comparison = compareOptionalTime(left.PairCompletedAt, right.PairCompletedAt)
+	default:
+		comparison = compareNatural(left.Name, right.Name)
+	}
+	if comparison != 0 {
+		return comparison
+	}
+	return compareNatural(left.Name, right.Name)
+}
+
+func imageLookupCountPrimeHeads(group *imageLookupSearchGroup, tags []imageLookupTag) {
+	group.PrimeHeadCount = 0
+	group.MovingPrimeHeadCount = 0
+	group.ImmutablePrimeHeadCount = 0
+	for _, tag := range tags {
+		if !tag.IsPrimeHead {
+			continue
+		}
+		group.PrimeHeadCount++
+		switch tag.HeadKind {
+		case "moving":
+			group.MovingPrimeHeadCount++
+		case "immutable":
+			group.ImmutablePrimeHeadCount++
+		}
+	}
+}
+
+func imageLookupInspectPrimeHead(parsed imageLookupReference, labels map[string]string) imageLookupPrimeHead {
+	requested := imageLookupClassifyTag(parsed.registry, parsed.repository, parsed.tag)
+	result := imageLookupPrimeHead{
+		IsPrimeHead:        requested.IsPrimeHead,
+		HeadKind:           requested.HeadKind,
+		Mutable:            requested.Mutable,
+		Version:            requested.Version,
+		VersionLine:        requested.VersionLine,
+		Commit:             requested.Commit,
+		Selector:           requested.Selector,
+		ImageRole:          requested.ImageRole,
+		CompanionReference: requested.CompanionReference,
+		Source:             safeOCIProvenanceLabel(labels[imageLookupSourceLabel]),
+		Revision:           strings.ToLower(safeOCIProvenanceLabel(labels[imageLookupRevisionLabel])),
+		OSSRevision:        strings.ToLower(safeOCIProvenanceLabel(labels[imageLookupOSSRevisionLabel])),
+		CanonicalReference: safeOCIProvenanceLabel(labels[imageLookupCanonicalReferenceLabel]),
+		Issues:             []string{},
+	}
+	result.PrimeSource = imageLookupRancherPrimeSource(result.Source)
+	canonicalRepository, canonicalTag, canonicalOK := imageLookupCanonicalTag(result.CanonicalReference)
+	result.CanonicalRepository = canonicalRepository
+	result.CanonicalTag = canonicalTag
+	canonical := imageLookupClassifyTag(parsed.registry, canonicalRepository, canonicalTag)
+
+	minorAlias := imageLookupMinorHeadPattern.MatchString(strings.TrimSpace(parsed.tag))
+	if !result.IsPrimeHead && result.PrimeSource && canonicalOK && canonical.IsPrimeHead && canonical.HeadKind == "immutable" &&
+		(minorAlias || parsed.tag == "") {
+		if minorAlias {
+			match := imageLookupMinorHeadPattern.FindStringSubmatch(strings.TrimSpace(parsed.tag))
+			if len(match) == 3 && canonical.VersionLine == match[1]+"."+match[2] {
+				result.IsPrimeHead = true
+				result.HeadKind = "moving"
+				result.Mutable = true
+			}
+		} else {
+			result.IsPrimeHead = true
+			result.HeadKind = "immutable"
+		}
+		if result.IsPrimeHead {
+			result.Version = canonical.Version
+			result.VersionLine = canonical.VersionLine
+			result.Commit = canonical.Commit
+			result.Selector = canonical.Selector
+			companionRepository := ""
+			_, companionRepository = imageLookupRepositoryRole(parsed.repository)
+			if companionRepository != "" {
+				result.CompanionReference = parsed.registry + "/" + companionRepository + ":" + canonicalTag
+			}
+		}
+	}
+	if !result.IsPrimeHead {
+		return result
+	}
+	expectedRepository := ""
+	switch result.ImageRole {
+	case "server":
+		expectedRepository = "rancher/rancher"
+		if !result.PrimeSource {
+			result.Issues = append(result.Issues, "org.opencontainers.image.source is not the canonical Rancher Prime repository")
+		}
+	case "agent":
+		expectedRepository = "rancher/rancher-agent"
+	default:
+		result.Issues = append(result.Issues, "Prime head classification is supported only for Rancher server and agent images")
+	}
+	if !canonicalOK {
+		result.Issues = append(result.Issues, "org.opensuse.reference does not contain a valid canonical tag")
+	} else {
+		if expectedRepository != "" && canonicalRepository != expectedRepository {
+			result.Issues = append(result.Issues, "org.opensuse.reference names an unexpected canonical repository")
+		}
+		result.CanonicalMatchesRequest = canonical.IsPrimeHead && canonical.HeadKind == "immutable" && canonical.Version == result.Version
+		if requested.HeadKind == "immutable" {
+			result.CanonicalMatchesRequest = result.CanonicalMatchesRequest && strings.EqualFold(canonicalTag, requested.Name)
+		}
+		if !result.CanonicalMatchesRequest {
+			result.Issues = append(result.Issues, "org.opensuse.reference does not identify the expected immutable Prime head tag")
+		}
+	}
+	if result.ImageRole == "server" {
+		if imageLookupGitRevisionPattern.MatchString(result.OSSRevision) && result.Commit != "" {
+			result.CommitMatchesOSS = strings.HasPrefix(result.OSSRevision, strings.ToLower(result.Commit))
+		}
+		if !result.CommitMatchesOSS {
+			result.Issues = append(result.Issues, "org.opencontainers.image.oss.revision does not match the tag commit")
+		}
+	}
+	result.Consistent = len(result.Issues) == 0
+	return result
+}
+
+func imageLookupCanonicalTag(reference string) (string, string, bool) {
+	reference = strings.TrimSpace(reference)
+	if reference == "" || imageLookupHasUnsafeCharacters(reference) {
+		return "", "", false
+	}
+	parsed, err := name.ParseReference(imageLookupRegistryForLibraryReference(reference), name.WeakValidation)
+	if err != nil {
+		return "", "", false
+	}
+	tag, ok := parsed.(name.Tag)
+	if !ok {
+		return "", "", false
+	}
+	return tag.Context().RepositoryStr(), tag.TagStr(), true
+}
+
+func imageLookupRancherPrimeSource(source string) bool {
+	source = strings.ToLower(strings.TrimSpace(source))
+	source = strings.TrimSuffix(source, "/")
+	source = strings.TrimSuffix(source, ".git")
+	return source == "https://github.com/rancher/rancher-prime"
+}
+
 func imageLookupTagChannel(tag string) string {
 	lower := strings.ToLower(tag)
 	switch {
@@ -1592,7 +2598,7 @@ func imageLookupTagMatches(tag, channel, query string) bool {
 
 func imageLookupQuickQuery(query string) bool {
 	switch strings.ToLower(strings.TrimSpace(query)) {
-	case "head", "devel", "alpha", "rcs", "rc", "stable":
+	case "head", "devel", "alpha", "rcs", "rc", "stable", "prime-head", "primehead", "prime_head":
 		return true
 	default:
 		return false

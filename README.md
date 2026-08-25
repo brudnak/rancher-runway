@@ -152,13 +152,41 @@ builds without a Docker daemon or `skopeo` command line workflow.
   `registry.suse.com` together or one at a time.
 - Browse `rancher/rancher`, `rancher/rancher-agent`, and
   `rancher/rancher-webhook`, or paste a custom public HTTPS repository.
-- Filter head, development, alpha, RCS, RC, and stable tags, then sort each
-  result group naturally or alphabetically. Architecture-suffixed tags are
-  grouped with their base build.
-- Select a tag to inspect its digest, image and upload timestamps, platforms,
+- Prime-head lookup distinguishes a mutable patch selector such as
+  `2.15.1-head` from an immutable tag such as
+  `v2.15.1-<7-to-40-character-hex-SHA>-head`; the leading `v` is optional for
+  either form. A patch selector is a lookup instruction, not a literal image
+  tag.
+- Resolving a patch selector searches only `stgregistry.suse.com` for matching
+  immutable `rancher/rancher` tags and requires the same exact tag on
+  `rancher/rancher-agent` in that registry. It does not combine components from
+  different registries or fall back to another registry.
+- An eligible Prime-head pair must declare role-correct server and agent
+  repositories in `org.opensuse.reference`, with the same exact canonical tag,
+  the canonical Rancher Prime source on the server, and a full
+  `org.opencontainers.image.oss.revision` whose prefix matches the SHA in the
+  tag. Both images must also declare OCI creation times.
+  Complete pairs are ranked by the later of those two times, with the exact tag
+  breaking a tie. A registry lookup error fails the resolution closed instead
+  of silently selecting a possibly stale pair.
+- Filter by release channel, architecture, Prime-head status, mutable or
+  immutable head kind, version or patch line, commit fragment, and pair
+  verification status. Sort by version and tag, registry upload time when
+  available, or verified pair completion rank. An exact tagged or digest
+  reference can also be inspected directly without first finding it in a tag
+  result page.
+- Select a tag to inspect its digest, image creation time, platforms,
   configuration, labels, environment, entrypoint, OCI build history, layers,
-  and sizes. For Rancher images, the selected platform's webhook version is
-  highlighted in the overview when it is declared in the image environment.
+  and sizes. Upload time is separate registry metadata: Docker Hub may provide
+  it, while the other registries commonly leave it unavailable. For Rancher
+  images, the selected platform's webhook version is highlighted in the
+  overview when it is declared in the image environment.
+- Architecture-suffixed tags retain their base-tag association but remain
+  distinct registry tags. Inspect the image manifest's platform list for the
+  authoritative architectures; a suffix alone does not prove that the base tag
+  is a multi-platform image.
+- `rancher/rancher-webhook` remains a separately searchable image family and is
+  never counted as one half of a Prime server/agent pair.
 - When an image contains `build.yaml`, the detail drawer safely reads the
   bounded eligible image layers and renders both a structured view and the
   original YAML. Oversized layers are reported as skipped instead of being

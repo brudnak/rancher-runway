@@ -12,7 +12,7 @@
           <div>
             <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Image Lookup</h2>
             <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-              Find Rancher image tags across registries, then inspect manifests, platforms, layers, configuration, and embedded build metadata.
+              Discover community and Prime-head image builds, verify server/agent candidates, then inspect manifests, provenance, platforms, and embedded build metadata.
             </p>
           </div>
         </div>
@@ -54,13 +54,13 @@
         </label>
 
         <label class="grid gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300 xl:col-span-4">
-          <span>Tag search <span class="font-normal text-zinc-400">(optional)</span></span>
+          <span>Tag, selector, SHA, or full reference <span class="font-normal text-zinc-400">(optional)</span></span>
           <input
             v-model.trim="query"
             type="search"
             autocomplete="off"
             :disabled="searchLoading"
-            placeholder="2.15.1-rcs-c936, head, commit SHA..."
+            placeholder="v2.15.1-head, v2.15.1-SHA-head, or registry/image:tag"
             class="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3.5 text-sm font-semibold text-zinc-900 outline-none placeholder:font-normal placeholder:text-zinc-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-white/10 dark:bg-zinc-900 dark:text-white dark:placeholder:text-zinc-500"
             @input="syncQuickFilterFromQuery($event.target.value)"
           />
@@ -76,7 +76,7 @@
             <svg v-else xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.25" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-4.35-4.35m2.1-5.4a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z" />
             </svg>
-            {{ searchLoading ? "Searching" : "Search" }}
+            {{ searchButtonLabel }}
           </button>
           <button
             v-if="searched || searchError"
@@ -108,6 +108,26 @@
         </label>
       </div>
 
+      <div
+        class="mt-4 flex flex-col gap-2 rounded-xl border px-3.5 py-3 text-xs leading-5 sm:flex-row sm:items-center sm:justify-between"
+        :class="lookupHintClass"
+      >
+        <div class="min-w-0">
+          <span class="font-bold">{{ lookupHintTitle }}</span>
+          <span class="ml-1">{{ lookupHint }}</span>
+        </div>
+        <button
+          v-if="directInspectReference"
+          type="button"
+          :disabled="inspectLoading"
+          class="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 font-bold text-emerald-800 hover:bg-emerald-50 disabled:opacity-55 dark:border-emerald-500/30 dark:bg-white/[0.05] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
+          @click="inspectExactInput"
+        >
+          <span v-if="inspectLoading" class="spinner !h-3.5 !w-3.5 !border-[1.5px]"></span>
+          Inspect exact reference
+        </button>
+      </div>
+
       <div class="mt-4 flex flex-col gap-3 border-t border-zinc-200/70 pt-4 dark:border-white/10 sm:flex-row sm:items-center sm:justify-between">
         <fieldset class="min-w-0">
           <legend class="sr-only">Filter loaded tags by release channel</legend>
@@ -129,8 +149,61 @@
           </div>
         </fieldset>
         <p class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-          Up to 200 tags per registry. Channel chips query the registries again so matching tags are not hidden beyond the current page.
+          Prime heads are patch-qualified staging builds. Use a moving selector to discover verified immutable server/agent candidates.
         </p>
+      </div>
+
+      <div class="mt-4 grid gap-3 border-t border-zinc-200/70 pt-4 dark:border-white/10 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <label class="grid gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-300">
+          <span>Prime scope</span>
+          <select v-model="primeHeadFilter" :disabled="searchLoading" class="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-900 outline-none focus:border-emerald-500 dark:border-white/10 dark:bg-zinc-900 dark:text-white">
+            <option value="all">All images</option>
+            <option value="only">Prime heads only</option>
+            <option value="exclude">Exclude Prime heads</option>
+          </select>
+        </label>
+
+        <label class="grid gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-300">
+          <span>Prime head form</span>
+          <select v-model="headKindFilter" :disabled="searchLoading || primeHeadFilter === 'exclude'" class="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-900 outline-none focus:border-emerald-500 disabled:opacity-55 dark:border-white/10 dark:bg-zinc-900 dark:text-white">
+            <option value="all">Moving + immutable</option>
+            <option value="moving">Moving selectors</option>
+            <option value="immutable">Immutable builds</option>
+          </select>
+        </label>
+
+        <label class="grid gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-300">
+          <span>Architecture</span>
+          <select v-model="architectureFilter" :disabled="searchLoading" class="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-900 outline-none focus:border-emerald-500 dark:border-white/10 dark:bg-zinc-900 dark:text-white">
+            <option v-for="option in architectureOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+        </label>
+
+        <label class="grid gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-300">
+          <span>Release line / patch</span>
+          <input v-model.trim="versionLineFilter" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" :disabled="searchLoading" placeholder="2.15 or 2.15.1" class="h-10 rounded-xl border border-zinc-200 bg-white px-3 font-mono text-sm text-zinc-900 outline-none placeholder:font-sans placeholder:text-zinc-400 focus:border-emerald-500 dark:border-white/10 dark:bg-zinc-900 dark:text-white" />
+        </label>
+
+        <label class="grid gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-300">
+          <span>Prime commit SHA</span>
+          <input v-model.trim="commitFilter" type="text" autocomplete="off" spellcheck="false" :disabled="searchLoading" placeholder="7–40 hex characters" class="h-10 rounded-xl border border-zinc-200 bg-white px-3 font-mono text-sm text-zinc-900 outline-none placeholder:font-sans placeholder:text-zinc-400 focus:border-emerald-500 dark:border-white/10 dark:bg-zinc-900 dark:text-white" />
+        </label>
+
+        <label class="grid gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-300">
+          <span>Pair evidence</span>
+          <select v-model="pairStatusFilter" :disabled="searchLoading" class="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-semibold text-zinc-900 outline-none focus:border-emerald-500 dark:border-white/10 dark:bg-zinc-900 dark:text-white">
+            <option value="all">All candidates</option>
+            <option value="verified">Verified complete</option>
+            <option value="attention">Needs attention</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="mt-3 flex flex-col gap-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+        <span>Filters refine loaded rows immediately; Search applies supported filters at the registry lookup so matches beyond the current 200-tag page can be considered.</span>
+        <button v-if="activeAdvancedFilterCount" type="button" :disabled="searchLoading" class="shrink-0 font-bold text-emerald-700 hover:underline dark:text-emerald-300" @click="resetAdvancedFilters">
+          Reset {{ activeAdvancedFilterCount }} filter{{ activeAdvancedFilterCount === 1 ? "" : "s" }}
+        </button>
       </div>
     </form>
 
@@ -162,7 +235,7 @@
           </div>
           <h3 class="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">Search registry tags</h3>
           <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-            Choose a registry and image family. Leave the search blank to browse the newest available tags, or enter an exact build fragment to narrow the result.
+            Choose a registry and image family. Leave the search blank to browse available tags, enter a patch-qualified Prime selector to discover verified candidates, or paste an exact image reference.
           </p>
         </div>
 
@@ -177,10 +250,15 @@
                 <span>Sort</span>
                 <select
                   v-model="resultSort"
-                  class="max-w-[9.5rem] bg-transparent text-xs font-bold text-zinc-800 outline-none dark:text-zinc-200"
+                  class="max-w-[13rem] bg-transparent text-xs font-bold text-zinc-800 outline-none dark:text-zinc-200"
                   aria-label="Sort image tags"
+                  @change="handleResultSortChange"
                 >
-                  <option value="natural">Natural / newest</option>
+                  <option value="pair-rank">Verified pair completion rank (when available)</option>
+                  <option value="version-desc">Version / tag ↓</option>
+                  <option value="version-asc">Version / tag ↑</option>
+                  <option value="uploaded-desc">Upload time ↓ (when available)</option>
+                  <option value="uploaded-asc">Upload time ↑ (when available)</option>
                   <option value="tag-asc">Tag A–Z</option>
                   <option value="tag-desc">Tag Z–A</option>
                 </select>
@@ -195,6 +273,11 @@
             <p class="mt-2 text-sm leading-6 text-zinc-500 dark:text-zinc-400">Try a broader tag search or another registry and image family.</p>
           </div>
 
+          <div v-else-if="!visibleTagCount" class="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/60 px-6 py-10 text-center dark:border-white/15 dark:bg-white/[0.02]">
+            <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-100">No candidates pass the active filters</h3>
+            <p class="mt-2 text-sm leading-6 text-zinc-500 dark:text-zinc-400">Reset one or more Prime, head-form, architecture, version, commit, or pair filters, then search again if the registry response was truncated.</p>
+          </div>
+
           <article
             v-for="group in displayGroups"
             :key="group.key || `${group.registry}/${group.repository}`"
@@ -204,12 +287,17 @@
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
                   <h3 class="font-bold text-zinc-900 dark:text-zinc-100">{{ group.label || group.registry || "Registry" }}</h3>
+                  <span v-if="group.imageRole" class="rounded-full border border-zinc-200 bg-white px-2.5 py-0.5 text-[11px] font-bold text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300">{{ roleLabel(group.imageRole) }}</span>
                   <span class="rounded-full border px-2.5 py-0.5 text-[11px] font-bold" :class="groupStatusClass(group)">
                     {{ group.error ? "Lookup error" : `${group.visibleTags.length} shown` }}
                   </span>
                   <span v-if="group.truncated" class="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-bold text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300">Truncated</span>
+                  <span v-if="group.primeHeadCount" class="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-0.5 text-[11px] font-bold text-violet-700 dark:border-violet-500/25 dark:bg-violet-500/10 dark:text-violet-300">{{ group.primeHeadCount }} Prime head{{ group.primeHeadCount === 1 ? "" : "s" }}</span>
+                  <span v-if="group.verifiedPrimeHeadCount" class="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300">{{ group.verifiedPrimeHeadCount }} verified</span>
+                  <span v-if="Number(group.invalidPrimeHeadCount || 0) + Number(group.missingCompanionCount || 0)" class="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-0.5 text-[11px] font-bold text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-300">{{ Number(group.invalidPrimeHeadCount || 0) + Number(group.missingCompanionCount || 0) }} need attention</span>
                 </div>
                 <div class="mt-1 break-all font-mono text-xs text-zinc-500 dark:text-zinc-400">{{ group.reference || `${group.registry}/${group.repository}` }}</div>
+                <div v-if="group.companionRepository" class="mt-1 break-all text-[11px] text-zinc-500 dark:text-zinc-500">Expected pair repository: <span class="font-mono">{{ group.companionRepository }}</span></div>
               </div>
               <div class="shrink-0 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
                 {{ Number(group.matched || 0) }} matched · {{ Number(group.scanned || 0) }} scanned
@@ -220,19 +308,19 @@
               {{ group.error }}
             </div>
             <div v-if="group.truncated" class="border-b border-amber-200 bg-amber-50/70 px-4 py-2.5 text-xs font-semibold leading-5 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-              Results were truncated by the registry scan or 200-result limit. Add a tag fragment to narrow the search.
+              Results were truncated by the registry scan or 200-result limit. Add a release line, patch, or SHA to narrow discovery. Tag/SHA order is not build chronology; only verified pair completion time establishes the latest complete Prime-head pair.
             </div>
 
             <div v-if="group.visibleTags.length" class="overflow-x-auto">
-              <table class="w-full min-w-[760px] table-fixed border-collapse text-left">
+              <table class="w-full min-w-[1020px] table-fixed border-collapse text-left">
                 <thead class="bg-zinc-50/50 text-[11px] font-bold uppercase tracking-wide text-zinc-500 dark:bg-white/[0.018] dark:text-zinc-400">
                   <tr>
-                    <th scope="col" class="w-[34%] px-4 py-2.5">Tag</th>
-                    <th scope="col" class="w-[13%] px-3 py-2.5">Channel</th>
-                    <th scope="col" class="w-[13%] px-3 py-2.5">Architecture</th>
-                    <th scope="col" class="w-[17%] px-3 py-2.5">Uploaded</th>
-                    <th scope="col" class="w-[10%] px-3 py-2.5">Size</th>
-                    <th scope="col" class="w-[13%] px-3 py-2.5">Digest</th>
+                    <th scope="col" class="w-[27%] px-4 py-2.5">Tag</th>
+                    <th scope="col" class="w-[23%] px-3 py-2.5">Build identity</th>
+                    <th scope="col" class="w-[16%] px-3 py-2.5">Pair evidence</th>
+                    <th scope="col" class="w-[10%] px-3 py-2.5">Architecture</th>
+                    <th scope="col" class="w-[13%] px-3 py-2.5">Time</th>
+                    <th scope="col" class="w-[11%] px-3 py-2.5">Image</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-zinc-200/70 dark:divide-white/10">
@@ -252,22 +340,52 @@
                         <span class="break-all">{{ tag.name || tagReference(group, tag) }}</span>
                       </button>
                       <div v-if="tag.baseTag" class="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-500" :title="tag.baseTag">Base {{ tag.baseTag }}</div>
+                      <div class="mt-1 flex flex-wrap gap-1.5">
+                        <span class="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] font-bold text-zinc-600 dark:border-white/10 dark:bg-white/[0.035] dark:text-zinc-400">{{ roleLabel(tag.imageRole) }}</span>
+                        <span v-if="tag.artifact" class="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300">Artifact</span>
+                      </div>
                     </td>
                     <td class="px-3 py-3 align-top">
-                      <span class="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold" :class="channelClass(tag)">{{ tag.channel || "unknown" }}</span>
+                      <div class="flex flex-wrap gap-1.5">
+                        <span class="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold" :class="channelClass(tag)">{{ tag.channel || "unknown" }}</span>
+                        <span v-if="tag.isPrimeHead" class="inline-flex rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-bold text-violet-700 dark:border-violet-500/25 dark:bg-violet-500/10 dark:text-violet-300">Prime head</span>
+                        <span v-if="tag.headKind" class="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold" :class="headKindClass(tag.headKind)">{{ headKindLabel(tag.headKind) }}</span>
+                      </div>
+                      <div v-if="tag.isPrimeHead" class="mt-2 space-y-1 text-[11px] leading-4 text-zinc-500 dark:text-zinc-400" :title="primeMetadataTitle(tag)">
+                        <div v-if="tag.version"><span class="font-semibold">Patch</span> <code>{{ normalizeVersionLabel(tag.version) }}</code></div>
+                        <div v-if="tag.commit"><span class="font-semibold">Commit</span> <code>{{ shortCommit(tag.commit) }}</code></div>
+                        <div v-if="tag.selector && tag.headKind === 'immutable'"><span class="font-semibold">Moving selector</span> <code>{{ tag.selector }}</code></div>
+                        <div v-if="tag.ossRevision"><span class="font-semibold">OSS revision</span> <code>{{ shortCommit(tag.ossRevision) }}</code></div>
+                        <div v-if="tag.sourceRepository" class="truncate" :title="tag.sourceRepository"><span class="font-semibold">Source</span> {{ compactSource(tag.sourceRepository) }}</div>
+                        <div v-if="tag.primeSourceValid === true" class="font-bold text-emerald-700 dark:text-emerald-300">Canonical Prime source</div>
+                        <div v-if="tag.pairStatus === 'invalid' && (tag.primeSourceValid === false || tag.provenanceValid === false)" class="font-bold text-rose-700 dark:text-rose-300">Prime provenance needs attention</div>
+                      </div>
+                    </td>
+                    <td class="px-3 py-3 align-top">
+                      <template v-if="tag.isPrimeHead">
+                        <span class="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold" :class="pairStatusClass(tag)">{{ pairStatusLabel(tag) }}</span>
+                        <div v-if="tag.resolvedRank" class="mt-2 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">Resolved rank #{{ tag.resolvedRank }}</div>
+                        <div v-if="tag.companionReference" class="mt-1 truncate font-mono text-[10px] text-zinc-500 dark:text-zinc-500" :title="tag.companionReference">{{ tag.companionVerified ? "Verified with" : "Expected" }} {{ tag.companionReference }}</div>
+                        <div v-if="tag.pairError" class="mt-1 line-clamp-3 text-[10px] font-semibold leading-4" :class="tag.headKind === 'moving' ? 'text-amber-700 dark:text-amber-300' : 'text-rose-700 dark:text-rose-300'" :title="tag.pairError">{{ tag.pairError }}</div>
+                      </template>
+                      <span v-else class="text-xs text-zinc-400">—</span>
                     </td>
                     <td class="break-words px-3 py-3 align-top text-xs font-semibold text-zinc-600 dark:text-zinc-300">{{ architectureLabel(tag.architecture) }}</td>
-                    <td class="px-3 py-3 align-top text-xs text-zinc-600 dark:text-zinc-300">{{ formatDate(tag.uploadedAt) }}</td>
-                    <td class="px-3 py-3 align-top text-xs font-semibold text-zinc-600 dark:text-zinc-300">{{ formatBytes(tag.size) }}</td>
-                    <td class="px-3 py-3 align-top">
-                      <code class="text-[11px] text-zinc-500 dark:text-zinc-400" :title="tag.digest || ''">{{ shortDigest(tag.digest) }}</code>
+                    <td class="px-3 py-3 align-top text-[11px] leading-5 text-zinc-600 dark:text-zinc-300">
+                      <div v-if="tag.pairCompletedAt"><span class="block text-[10px] font-bold uppercase tracking-wide text-zinc-400">Pair complete</span>{{ formatDate(tag.pairCompletedAt) }}</div>
+                      <div v-if="tag.uploadedAt" :class="tag.pairCompletedAt ? 'mt-2' : ''"><span class="block text-[10px] font-bold uppercase tracking-wide text-zinc-400">Uploaded</span>{{ formatDate(tag.uploadedAt) }}</div>
+                      <span v-if="!tag.pairCompletedAt && !tag.uploadedAt">—</span>
+                    </td>
+                    <td class="px-3 py-3 align-top text-[11px] text-zinc-600 dark:text-zinc-300">
+                      <div class="font-semibold">{{ formatBytes(tag.size) }}</div>
+                      <code class="mt-1 block break-all text-[10px] text-zinc-500 dark:text-zinc-400" :title="tag.digest || ''">{{ shortDigest(tag.digest) }}</code>
                     </td>
                   </tr>
                 </tbody>
               </table>
             </div>
             <div v-else-if="!group.error" class="px-5 py-8 text-center text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-              {{ group.tags.length ? `No ${quickFilterLabel.toLowerCase()} tags in this result.` : "No matching tags were found in this repository." }}
+              {{ group.tags.length ? "No loaded tags pass the current filters." : "No matching tags were found in this repository." }}
             </div>
           </article>
         </template>
@@ -628,10 +746,10 @@ import { apiFetch } from "./store.js";
 
 const registryOptions = [
   { value: "all", label: "All known registries" },
-  { value: "docker.io", label: "Docker Hub" },
-  { value: "stgregistry.suse.com", label: "SUSE staging" },
-  { value: "registry.rancher.com", label: "Rancher Prime" },
+  { value: "stgregistry.suse.com", label: "SUSE staging · Prime heads" },
+  { value: "registry.rancher.com", label: "Rancher Prime · released" },
   { value: "registry.suse.com", label: "SUSE registry" },
+  { value: "docker.io", label: "Docker Hub" },
 ];
 
 const imageFamilyOptions = [
@@ -643,6 +761,7 @@ const imageFamilyOptions = [
 ];
 
 const quickFilters = [
+  { id: "prime-head", label: "Prime heads" },
   { id: "head", label: "Head" },
   { id: "devel", label: "Devel" },
   { id: "alpha", label: "Alpha" },
@@ -661,7 +780,14 @@ const searched = ref(false);
 const searchLoading = ref(false);
 const searchError = ref("");
 const searchResponse = ref(null);
-const resultSort = ref("natural");
+const primeHeadFilter = ref("all");
+const headKindFilter = ref("all");
+const architectureFilter = ref("all");
+const versionLineFilter = ref("");
+const commitFilter = ref("");
+const pairStatusFilter = ref("all");
+const resultSort = ref("version-desc");
+const resultSortTouched = ref(false);
 
 const selectedReference = ref("");
 const inspectPlatform = ref("linux/amd64");
@@ -680,8 +806,36 @@ let inspectController = null;
 let sourceBuildController = null;
 let copyNoticeTimer = null;
 
-watch([registry, imageFamily, customRepository, query], () => {
+watch([
+  registry,
+  imageFamily,
+  customRepository,
+  query,
+  primeHeadFilter,
+  headKindFilter,
+  architectureFilter,
+  versionLineFilter,
+  commitFilter,
+  pairStatusFilter,
+], () => {
   if (!searchLoading.value) searchError.value = "";
+});
+
+watch(primeHeadFilter, value => {
+  if (value === "exclude") headKindFilter.value = "all";
+  if (value !== "only" && quickFilter.value === "prime-head") quickFilter.value = "head";
+  if (value === "only" && imageFamily.value !== "custom") {
+    registry.value = "stgregistry.suse.com";
+    if (imageFamily.value === "rancher/rancher-webhook") imageFamily.value = "all";
+  }
+});
+
+watch(headKindFilter, value => {
+  if (value !== "all") primeHeadFilter.value = "only";
+});
+
+watch([commitFilter, pairStatusFilter], ([commit, pairStatus]) => {
+  if (commit.trim() || pairStatus !== "all") primeHeadFilter.value = "only";
 });
 
 const searchRepository = computed(() => (
@@ -694,31 +848,246 @@ const customHasExplicitRegistry = computed(() => {
   return normalized.includes("/") && (first.includes(".") || first.includes(":") || first === "localhost");
 });
 
-const channelQueryIDs = new Set(quickFilters.map(filter => filter.id));
+const channelQueryIDs = new Set(["head", "devel", "alpha", "rcs", "rc", "stable", "all"]);
+const quickFilterIDs = new Set(quickFilters.map(filter => filter.id));
 
 const syncQuickFilterFromQuery = value => {
   const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "prime-head" || normalized === "primehead") {
+    quickFilter.value = "prime-head";
+    primeHeadFilter.value = "only";
+    registry.value = "stgregistry.suse.com";
+    if (imageFamily.value === "rancher/rancher-webhook") imageFamily.value = "all";
+    return;
+  }
   quickFilter.value = normalized && channelQueryIDs.has(normalized) ? normalized : "all";
 };
 
 const applyQuickFilter = filter => {
-  quickFilter.value = channelQueryIDs.has(filter) ? filter : "all";
-  query.value = quickFilter.value === "all" ? "" : quickFilter.value;
+  quickFilter.value = quickFilterIDs.has(filter) ? filter : "all";
+  if (quickFilter.value === "prime-head") {
+    query.value = "head";
+    primeHeadFilter.value = "only";
+    headKindFilter.value = "all";
+    registry.value = "stgregistry.suse.com";
+    if (imageFamily.value === "rancher/rancher-webhook") imageFamily.value = "all";
+  } else {
+    query.value = quickFilter.value === "all" ? "" : quickFilter.value;
+  }
   if (searched.value && !searchLoading.value) {
     void searchImages();
   }
+};
+
+const resetAdvancedFilters = () => {
+  primeHeadFilter.value = "all";
+  headKindFilter.value = "all";
+  architectureFilter.value = "all";
+  versionLineFilter.value = "";
+  commitFilter.value = "";
+  pairStatusFilter.value = "all";
+  if (quickFilter.value === "prime-head") {
+    quickFilter.value = "head";
+    query.value = "head";
+  }
+};
+
+const activeAdvancedFilterCount = computed(() => [
+  primeHeadFilter.value !== "all",
+  headKindFilter.value !== "all",
+  architectureFilter.value !== "all",
+  Boolean(versionLineFilter.value.trim()),
+  Boolean(commitFilter.value.trim()),
+  pairStatusFilter.value !== "all",
+].filter(Boolean).length);
+
+const stripReferenceScheme = value => String(value || "")
+  .trim()
+  .replace(/^(?:docker|oci):\/\//i, "")
+  .replace(/^https:\/\//i, "");
+
+const parseFullReferenceInput = value => {
+  const reference = stripReferenceScheme(value);
+  if (!reference || /\s/.test(reference)) return null;
+  const lastSlash = reference.lastIndexOf("/");
+  if (lastSlash <= 0) return null;
+  const digestSeparator = reference.lastIndexOf("@");
+  const tagSeparator = reference.lastIndexOf(":");
+  const separator = digestSeparator > lastSlash ? digestSeparator : tagSeparator > lastSlash ? tagSeparator : -1;
+  if (separator <= lastSlash || separator === reference.length - 1) return null;
+  return {
+    reference,
+    selector: reference.slice(separator + 1),
+    digest: reference[separator] === "@",
+  };
+};
+
+const queryReferenceDetails = computed(() => parseFullReferenceInput(query.value));
+const querySelector = computed(() => String(queryReferenceDetails.value?.selector || query.value || "").trim());
+const isPrimeMovingSelectorInput = computed(() => primeMovingTagPattern.test(querySelector.value));
+const isImmutablePrimeHeadInput = computed(() => primeImmutableTagPattern.test(querySelector.value));
+const selectedLookupBase = computed(() => {
+  const repository = imageFamily.value === "custom"
+    ? normalizeCustomRepository(customRepository.value)
+    : imageFamily.value;
+  if (!repository || repository === "all" || repository === "custom" || parseFullReferenceInput(repository)) return "";
+  if (customHasExplicitRegistry.value) return repository;
+  return registry.value !== "all" ? `${registry.value}/${repository.replace(/^\/+/, "")}` : "";
+});
+const directInspectReference = computed(() => {
+  const details = queryReferenceDetails.value;
+  if (isPrimeMovingSelectorInput.value) return "";
+  if (details) return details.reference;
+  const selector = querySelector.value;
+  if (!selectedLookupBase.value || !selector || channelQueryIDs.has(selector.toLowerCase()) || ["prime-head", "primehead"].includes(selector.toLowerCase())) return "";
+  if (/^sha256:[0-9a-f]{64}$/i.test(selector)) return `${selectedLookupBase.value}@${selector}`;
+  return /^[0-9A-Za-z_][0-9A-Za-z_.-]{0,127}$/.test(selector) ? `${selectedLookupBase.value}:${selector}` : "";
+});
+const searchButtonLabel = computed(() => searchLoading.value
+  ? "Searching"
+  : isPrimeMovingSelectorInput.value
+    ? "Discover candidates"
+    : "Search"
+);
+const lookupHintTitle = computed(() => isPrimeMovingSelectorInput.value
+  ? "Moving Prime selector detected."
+  : directInspectReference.value
+    ? "Exact reference detected."
+    : "Direct lookup supported."
+);
+const lookupHint = computed(() => {
+  if (isPrimeMovingSelectorInput.value) {
+    return "A patch alias often has no literal manifest. Discovery expands it to immutable staging tags and, when available, ranks verified server/agent pairs by pair completion time.";
+  }
+  if (directInspectReference.value) {
+    return "Search looks up the exact repository tag or digest; Inspect reads that reference immediately without depending on a tag-list result.";
+  }
+  return "Paste a full image:tag or image@sha256 reference to inspect it directly. Prime forms are vX.Y.Z-head (moving selector) and vX.Y.Z-SHA-head (immutable build).";
+});
+const lookupHintClass = computed(() => isPrimeMovingSelectorInput.value
+  ? "border-violet-200 bg-violet-50/70 text-violet-800 dark:border-violet-500/25 dark:bg-violet-500/10 dark:text-violet-200"
+  : directInspectReference.value
+    ? "border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200"
+    : "border-zinc-200 bg-white text-zinc-600 dark:border-white/10 dark:bg-white/[0.025] dark:text-zinc-300"
+);
+
+const inspectExactInput = () => {
+  if (directInspectReference.value) void inspectReference(directInspectReference.value);
 };
 
 const groups = computed(() => (
   Array.isArray(searchResponse.value?.groups) ? searchResponse.value.groups : []
 ));
 
+const architectureOptions = computed(() => {
+  const architectures = new Set(["multi", "amd64", "arm64", "s390x", "ppc64le", "386", "arm"]);
+  groups.value.forEach(group => {
+    (Array.isArray(group?.tags) ? group.tags : []).forEach(tag => {
+      const values = Array.isArray(tag?.architecture) ? tag.architecture : [tag?.architecture];
+      values.flatMap(value => String(value || "").split(/[\s,]+/)).forEach(value => {
+        const normalized = value.trim().toLowerCase();
+        if (normalized) architectures.add(normalized);
+      });
+    });
+  });
+  return [
+    { value: "all", label: "All architectures" },
+    ...[...architectures].sort((left, right) => left.localeCompare(right)).map(value => ({
+      value,
+      label: value === "multi" ? "Unsuffixed / base tag" : value,
+    })),
+  ];
+});
+
 const quickFilterLabel = computed(() => (
   quickFilters.find(filter => filter.id === quickFilter.value)?.label || "All"
 ));
 
+const optionalBoolean = value => typeof value === "boolean" ? value : null;
+const normalizedHeadKind = value => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["moving", "mutable", "alias", "selector"].includes(normalized)) return "moving";
+  if (["immutable", "exact", "commit"].includes(normalized)) return "immutable";
+  return "";
+};
+
+const normalizedImageRole = (value, repository = "") => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["server", "rancher", "rancher-server"].includes(normalized)) return "server";
+  if (["agent", "rancher-agent"].includes(normalized)) return "agent";
+  if (["webhook", "rancher-webhook"].includes(normalized)) return "webhook";
+  const path = String(repository || "").toLowerCase().replace(/\/+$/, "");
+  if (path.endsWith("/rancher-agent")) return "agent";
+  if (path.endsWith("/rancher-webhook")) return "webhook";
+  if (path.endsWith("/rancher")) return "server";
+  return normalized || "other";
+};
+
+const primeMovingTagPattern = /^v?(\d+)\.(\d+)\.(\d+)-head$/i;
+const primeImmutableTagPattern = /^v?(\d+)\.(\d+)\.(\d+)-([0-9a-f]{7,40})-head$/i;
+
+const deriveTagMetadata = (tag, group = {}) => {
+  const source = tag && typeof tag === "object" ? tag : {};
+  const baseName = String(source.baseTag || source.name || "").trim();
+  const immutableMatch = baseName.match(primeImmutableTagPattern);
+  const movingMatch = baseName.match(primeMovingTagPattern);
+  const syntaxIsPrime = Boolean(immutableMatch || movingMatch);
+  const explicitPrime = optionalBoolean(source.isPrimeHead);
+  const isPrimeHead = explicitPrime == null ? syntaxIsPrime : explicitPrime;
+  const inferredKind = movingMatch ? "moving" : immutableMatch ? "immutable" : "";
+  const headKind = normalizedHeadKind(source.headKind) || inferredKind;
+  const version = String(source.version || (immutableMatch || movingMatch
+    ? `${(immutableMatch || movingMatch)[1]}.${(immutableMatch || movingMatch)[2]}.${(immutableMatch || movingMatch)[3]}`
+    : "")).replace(/^v/i, "");
+  const versionParts = version.split(".");
+  const versionLine = String(source.versionLine || (versionParts.length >= 2 ? `${versionParts[0]}.${versionParts[1]}` : "")).replace(/^v/i, "");
+  const commit = String(source.commit || immutableMatch?.[4] || "").trim().toLowerCase();
+  const pairStatus = String(source.pairStatus || "").trim().toLowerCase()
+    || (source.companionVerified === true || source.pairComplete === true ? "verified" : isPrimeHead ? "unverified" : "");
+  const rank = Number(source.resolvedRank);
+  const imageRole = normalizedImageRole(source.imageRole || group.imageRole, group.repository);
+  const primeSourceValid = optionalBoolean(source.primeSource);
+  const sourceRepository = typeof source.primeSource === "string"
+    ? source.primeSource
+    : typeof source.source === "string"
+      ? source.source
+      : typeof source.sourceUrl === "string"
+        ? source.sourceUrl
+        : "";
+
+  return {
+    ...source,
+    isPrimeHead,
+    headKind,
+    mutable: optionalBoolean(source.mutable) ?? headKind === "moving",
+    version,
+    versionLine,
+    commit,
+    selector: String(source.selector || (version ? `v${version}-head` : "")),
+    imageRole,
+    companionReference: String(source.companionReference || ""),
+    companionVerified: source.companionVerified === true,
+    pairStatus,
+    pairComplete: source.pairComplete === true || pairStatus === "verified",
+    pairCompletedAt: source.pairCompletedAt || "",
+    pairError: String(source.pairError || ""),
+    provenanceValid: optionalBoolean(source.provenanceValid) ?? optionalBoolean(source.consistent),
+    primeSourceValid,
+    sourceRepository,
+    revision: String(source.revision || ""),
+    canonicalMatchesRequest: optionalBoolean(source.canonicalMatchesRequest),
+    commitMatchesOss: optionalBoolean(source.commitMatchesOss),
+    issues: Array.isArray(source.issues) ? source.issues.map(issue => String(issue)).filter(Boolean) : [],
+    canonicalReference: String(source.canonicalReference || ""),
+    ossRevision: String(source.ossRevision || ""),
+    resolvedRank: Number.isFinite(rank) && rank > 0 ? rank : 0,
+    artifact: source.artifact === true,
+  };
+};
+
 const tagMatchesQuickFilter = tag => {
   if (quickFilter.value === "all") return true;
+  if (quickFilter.value === "prime-head") return tag.isPrimeHead === true;
   const channel = String(tag?.channel || "").trim().toLowerCase();
   const name = String(tag?.name || "").trim().toLowerCase();
   const combined = `${channel} ${name}`;
@@ -740,41 +1109,156 @@ const tagMatchesQuickFilter = tag => {
   }
 };
 
+const tagArchitectures = tag => {
+  const raw = Array.isArray(tag?.architecture) ? tag.architecture : [tag?.architecture];
+  return raw
+    .flatMap(value => String(value || "").split(/[\s,]+/))
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean);
+};
+
+const tagMatchesAdvancedFilters = tag => {
+  if (primeHeadFilter.value === "only" && !tag.isPrimeHead) return false;
+  if (primeHeadFilter.value === "exclude" && tag.isPrimeHead) return false;
+  if (headKindFilter.value !== "all" && tag.headKind !== headKindFilter.value) return false;
+  if (architectureFilter.value !== "all" && !tagArchitectures(tag).includes(architectureFilter.value)) return false;
+
+  const requestedVersion = versionLineFilter.value.trim().toLowerCase().replace(/^v/, "");
+  if (requestedVersion) {
+    const searchable = [tag.version, tag.versionLine, tag.selector, tag.name, tag.baseTag]
+      .map(value => String(value || "").toLowerCase().replace(/^v/, ""));
+    if (!searchable.some(value => value === requestedVersion || value.startsWith(`${requestedVersion}-`) || value.startsWith(`${requestedVersion}.`))) return false;
+  }
+
+  const requestedCommit = commitFilter.value.trim().toLowerCase();
+  if (requestedCommit) {
+    const searchable = [tag.commit, tag.ossRevision, tag.name, tag.canonicalReference]
+      .map(value => String(value || "").toLowerCase());
+    if (!searchable.some(value => value.includes(requestedCommit))) return false;
+  }
+
+  if (pairStatusFilter.value === "verified" && !(tag.pairStatus === "verified" && tag.pairComplete)) return false;
+  if (pairStatusFilter.value === "attention" && (!tag.isPrimeHead || (tag.pairStatus === "verified" && tag.pairComplete))) return false;
+  return true;
+};
+
 const tagSortValue = tag => String(tag?.name || tag?.reference || "");
-const sortVisibleTags = tags => {
-  const visible = tags.filter(tagMatchesQuickFilter);
-  if (resultSort.value === "natural") return visible;
-  const direction = resultSort.value === "tag-desc" ? -1 : 1;
+const compareTagText = (left, right) => tagSortValue(left).localeCompare(tagSortValue(right), undefined, {
+  numeric: true,
+  sensitivity: "base",
+});
+const versionTuple = tag => String(tag?.version || tag?.versionLine || "")
+  .replace(/^v/i, "")
+  .split(".")
+  .map(value => Number(value));
+const compareVersion = (left, right, direction) => {
+  const leftVersion = versionTuple(left);
+  const rightVersion = versionTuple(right);
+  const leftValid = leftVersion.length >= 2 && leftVersion.every(Number.isFinite);
+  const rightValid = rightVersion.length >= 2 && rightVersion.every(Number.isFinite);
+  if (leftValid !== rightValid) return leftValid ? -1 : 1;
+  if (!leftValid) return compareTagText(left, right) * direction;
+  for (let index = 0; index < Math.max(leftVersion.length, rightVersion.length); index += 1) {
+    const compared = (leftVersion[index] || 0) - (rightVersion[index] || 0);
+    if (compared) return compared * direction;
+  }
+  return compareTagText(left, right) * direction;
+};
+const sortableTime = value => {
+  const timestamp = new Date(value || "").getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+};
+const compareOptionalTime = (left, right, direction) => {
+  const leftTime = sortableTime(left);
+  const rightTime = sortableTime(right);
+  if ((leftTime == null) !== (rightTime == null)) return leftTime == null ? 1 : -1;
+  if (leftTime == null) return 0;
+  return (leftTime - rightTime) * direction;
+};
+
+const sortVisibleTags = (tags, group) => {
+  const visible = tags
+    .map(tag => deriveTagMetadata(tag, group))
+    .filter(tag => tagMatchesQuickFilter(tag) && tagMatchesAdvancedFilters(tag));
   return visible
     .map((tag, index) => ({ tag, index }))
     .sort((left, right) => {
-      const compared = tagSortValue(left.tag).localeCompare(tagSortValue(right.tag), undefined, {
-        numeric: true,
-        sensitivity: "base",
-      });
-      return compared === 0 ? left.index - right.index : compared * direction;
+      let compared = 0;
+      switch (resultSort.value) {
+      case "pair-rank": {
+        const leftRank = left.tag.resolvedRank || Number.POSITIVE_INFINITY;
+        const rightRank = right.tag.resolvedRank || Number.POSITIVE_INFINITY;
+        compared = leftRank - rightRank;
+        if (!compared) compared = compareOptionalTime(left.tag.pairCompletedAt, right.tag.pairCompletedAt, -1);
+        break;
+      }
+      case "uploaded-desc":
+        compared = compareOptionalTime(left.tag.uploadedAt, right.tag.uploadedAt, -1);
+        break;
+      case "uploaded-asc":
+        compared = compareOptionalTime(left.tag.uploadedAt, right.tag.uploadedAt, 1);
+        break;
+      case "version-desc":
+        compared = compareVersion(left.tag, right.tag, -1);
+        break;
+      case "version-asc":
+        compared = compareVersion(left.tag, right.tag, 1);
+        break;
+      case "tag-desc":
+        compared = compareTagText(left.tag, right.tag) * -1;
+        break;
+      default:
+        compared = compareTagText(left.tag, right.tag);
+      }
+      return compared === 0 ? left.index - right.index : compared;
     })
     .map(item => item.tag);
 };
 
 const displayGroups = computed(() => groups.value.map(group => {
   const tags = Array.isArray(group?.tags) ? group.tags : [];
+  const decoratedTags = tags.map(tag => deriveTagMetadata(tag, group));
+  const primeHeadCount = Number(group?.primeHeadCount);
+  const movingPrimeHeadCount = Number(group?.movingPrimeHeadCount);
+  const immutablePrimeHeadCount = Number(group?.immutablePrimeHeadCount);
   return {
     ...group,
     tags,
-    visibleTags: sortVisibleTags(tags),
+    imageRole: normalizedImageRole(group?.imageRole, group?.repository),
+    companionRepository: String(group?.companionRepository || ""),
+    primeHeadCount: Number.isFinite(primeHeadCount) ? primeHeadCount : decoratedTags.filter(tag => tag.isPrimeHead).length,
+    movingPrimeHeadCount: Number.isFinite(movingPrimeHeadCount) ? movingPrimeHeadCount : decoratedTags.filter(tag => tag.isPrimeHead && tag.headKind === "moving").length,
+    immutablePrimeHeadCount: Number.isFinite(immutablePrimeHeadCount) ? immutablePrimeHeadCount : decoratedTags.filter(tag => tag.isPrimeHead && tag.headKind === "immutable").length,
+    visibleTags: sortVisibleTags(tags, group),
   };
-}));
+}).filter(group => group.visibleTags.length || group.error || activeAdvancedFilterCount.value === 0));
 
 const visibleTagCount = computed(() => displayGroups.value.reduce((total, group) => total + group.visibleTags.length, 0));
 const totalMatched = computed(() => groups.value.reduce((total, group) => total + Number(group?.matched || 0), 0));
 const totalScanned = computed(() => groups.value.reduce((total, group) => total + Number(group?.scanned || 0), 0));
 const failedGroupCount = computed(() => groups.value.filter(group => group?.error).length);
+const visiblePrimeHeadCount = computed(() => displayGroups.value.reduce((total, group) => (
+  total + group.visibleTags.filter(tag => tag.isPrimeHead).length
+), 0));
+const verifiedPairCount = computed(() => {
+  const exactPairs = new Set();
+  displayGroups.value.forEach(group => {
+    group.visibleTags.forEach(tag => {
+      if (!tag.isPrimeHead || tag.pairStatus !== "verified" || !tag.pairComplete) return;
+      const registryHost = String(group.registry || "").trim().toLowerCase();
+      const exactTag = String(tag.name || "").trim().toLowerCase();
+      if (registryHost && exactTag) exactPairs.add(`${registryHost}:${exactTag}`);
+    });
+  });
+  return exactPairs.size;
+});
 
 const resultSummary = computed(() => {
   const sourceCount = groups.value.length;
-  const sourceLabel = `${sourceCount} registr${sourceCount === 1 ? "y" : "ies"}`;
-  const queryLabel = String(searchResponse.value?.query || query.value || "").trim();
+  const sourceLabel = `${sourceCount} source group${sourceCount === 1 ? "" : "s"}`;
+  const queryLabel = quickFilter.value === "prime-head"
+    ? "Prime heads"
+    : String(searchResponse.value?.requestedQuery || searchResponse.value?.query || query.value || "").trim();
   return queryLabel
     ? `${totalMatched.value} matching tag${totalMatched.value === 1 ? "" : "s"} for “${queryLabel}” across ${sourceLabel}.`
     : `${totalMatched.value} tag${totalMatched.value === 1 ? "" : "s"} returned across ${sourceLabel}.`;
@@ -783,6 +1267,11 @@ const resultSummary = computed(() => {
 const scanSummary = computed(() => {
   const pieces = [`${totalScanned.value} tag${totalScanned.value === 1 ? "" : "s"} scanned`];
   if (quickFilter.value !== "all") pieces.push(`${quickFilterLabel.value} filter active`);
+  if (activeAdvancedFilterCount.value) pieces.push(`${activeAdvancedFilterCount.value} detailed filter${activeAdvancedFilterCount.value === 1 ? "" : "s"}`);
+  if (searchResponse.value?.aliasFallbackExpanded) pieces.push("selector expanded with compatibility fallback");
+  if (searchResponse.value?.legacyRequestFallback) pieces.push("legacy API compatibility mode");
+  if (visiblePrimeHeadCount.value) pieces.push(`${visiblePrimeHeadCount.value} Prime-head candidate${visiblePrimeHeadCount.value === 1 ? "" : "s"}`);
+  if (verifiedPairCount.value) pieces.push(`${verifiedPairCount.value} verified complete pair${verifiedPairCount.value === 1 ? "" : "s"}`);
   if (failedGroupCount.value) pieces.push(`${failedGroupCount.value} registry error${failedGroupCount.value === 1 ? "" : "s"}`);
   return pieces.join(" · ");
 });
@@ -811,7 +1300,13 @@ const inspectPlatformOptions = computed(() => [...new Set([
   "linux/ppc64le",
   ...platforms.value.map(platformReference).filter(Boolean),
 ])]);
-const warnings = computed(() => Array.isArray(inspection.value?.warnings) ? inspection.value.warnings.filter(Boolean) : []);
+const warnings = computed(() => {
+  const values = Array.isArray(inspection.value?.warnings) ? inspection.value.warnings.filter(Boolean) : [];
+  const primeIssues = Array.isArray(inspection.value?.primeHead?.issues)
+    ? inspection.value.primeHead.issues.filter(Boolean).map(issue => `Prime provenance: ${issue}`)
+    : [];
+  return [...values, ...primeIssues];
+});
 const imageConfig = computed(() => inspection.value?.config && typeof inspection.value.config === "object" ? inspection.value.config : {});
 const layers = computed(() => Array.isArray(inspection.value?.layers) ? inspection.value.layers : []);
 const embeddedBuildYaml = computed(() => inspection.value?.buildYaml && typeof inspection.value.buildYaml === "object" ? inspection.value.buildYaml : {});
@@ -924,6 +1419,20 @@ const configHistoryEmptyLayers = computed(() => (
 ));
 const configHistoryTruncated = computed(() => configHistoryTotal.value > configHistory.value.length);
 
+const inspectionPrimeHead = computed(() => {
+  const raw = inspection.value?.primeHead;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return deriveTagMetadata({
+    ...raw,
+    isPrimeHead: optionalBoolean(raw.isPrimeHead) ?? true,
+    name: raw.tag || inspection.value?.tag || "",
+  }, {
+    registry: inspection.value?.registry,
+    repository: inspection.value?.repository,
+    imageRole: raw.imageRole,
+  });
+});
+
 const detailOverview = computed(() => {
   if (!inspection.value) return [];
   const values = [
@@ -946,6 +1455,39 @@ const detailOverview = computed(() => {
     { label: "Uploaded", value: formatDate(inspection.value.uploadedAt) },
     { label: "Selected image size", value: formatBytes(inspection.value.size) },
   ];
+  const primeHead = inspectionPrimeHead.value;
+  if (primeHead?.isPrimeHead) {
+    values.push(
+      { label: "Prime head form", value: headKindLabel(primeHead.headKind), accent: true },
+      { label: "Prime patch", value: normalizeVersionLabel(primeHead.version), mono: true, accent: true },
+      { label: "Moving selector", value: primeHead.selector, mono: true },
+      { label: "Tag commit", value: shortCommit(primeHead.commit), title: primeHead.commit, mono: true },
+      { label: "Image role", value: roleLabel(primeHead.imageRole) },
+      { label: "Pair evidence", value: pairStatusLabel(primeHead), title: primeHead.pairError },
+      { label: "Companion image", value: primeHead.companionReference, mono: true },
+      { label: "Pair completed", value: formatDate(primeHead.pairCompletedAt) },
+      { label: "Resolved rank", value: primeHead.resolvedRank ? `#${primeHead.resolvedRank}` : "" },
+      { label: "Canonical image", value: primeHead.canonicalReference, mono: true },
+      { label: "Prime source", value: primeHead.sourceRepository, mono: true },
+      { label: "Source revision", value: shortCommit(primeHead.revision), title: primeHead.revision, mono: true },
+      { label: "OSS revision", value: shortCommit(primeHead.ossRevision), title: primeHead.ossRevision, mono: true },
+      { label: "Canonical tag matches", value: primeHead.canonicalMatchesRequest == null ? "" : primeHead.canonicalMatchesRequest ? "Yes" : "No" },
+      {
+        label: "Tag commit matches OSS",
+        value: primeHead.imageRole !== "server" || primeHead.commitMatchesOss == null
+          ? ""
+          : primeHead.commitMatchesOss ? "Yes" : "No",
+      },
+      {
+        label: "Prime provenance",
+        value: primeHead.provenanceValid === true && (primeHead.imageRole !== "server" || primeHead.primeSourceValid !== false)
+          ? "Validated"
+          : primeHead.provenanceValid === false || (primeHead.imageRole === "server" && primeHead.primeSourceValid === false)
+            ? "Needs attention"
+            : "Unverified",
+      },
+    );
+  }
   return values.filter(item => item.value && item.value !== "—");
 });
 
@@ -1123,7 +1665,47 @@ const normalizeCustomRepository = value => String(value || "")
   .replace(/^https?:\/\//i, "")
   .replace(/\/+$/, "");
 
+const resultSortRequest = pairLookupEligible => {
+  switch (resultSort.value) {
+  case "pair-rank": return pairLookupEligible
+    ? { sortBy: "pair-completed", sortOrder: "desc" }
+    : { sortBy: "natural", sortOrder: "desc" };
+  case "uploaded-desc": return { sortBy: "uploaded", sortOrder: "desc" };
+  case "uploaded-asc": return { sortBy: "uploaded", sortOrder: "asc" };
+  case "version-asc": return { sortBy: "version", sortOrder: "asc" };
+  case "version-desc": return { sortBy: "version", sortOrder: "desc" };
+  case "tag-desc": return { sortBy: "tag", sortOrder: "desc" };
+  case "tag-asc": return { sortBy: "tag", sortOrder: "asc" };
+  default: return { sortBy: "natural", sortOrder: "desc" };
+  }
+};
+
 const searchImages = async () => {
+  if (!resultSortTouched.value) {
+    resultSort.value = isPrimeMovingSelectorInput.value ? "pair-rank" : "version-desc";
+  }
+  if ((isPrimeMovingSelectorInput.value || isImmutablePrimeHeadInput.value)
+    && !queryReferenceDetails.value
+    && imageFamily.value !== "custom") {
+    registry.value = "stgregistry.suse.com";
+    if (imageFamily.value === "rancher/rancher-webhook") imageFamily.value = "all";
+  }
+
+  const normalizedVersionLine = versionLineFilter.value.trim().replace(/^v/i, "");
+  if (normalizedVersionLine && !/^\d+\.\d+(?:\.\d+)?$/.test(normalizedVersionLine)) {
+    searchResponse.value = null;
+    searched.value = false;
+    searchError.value = "Release line / patch must look like 2.15 or 2.15.1.";
+    return;
+  }
+  const normalizedCommit = commitFilter.value.trim().toLowerCase();
+  if (normalizedCommit && !/^[0-9a-f]{7,40}$/.test(normalizedCommit)) {
+    searchResponse.value = null;
+    searched.value = false;
+    searchError.value = "Commit SHA must contain 7–40 hexadecimal characters.";
+    return;
+  }
+
   const repository = imageFamily.value === "custom"
     ? normalizeCustomRepository(customRepository.value)
     : imageFamily.value;
@@ -1152,20 +1734,100 @@ const searchImages = async () => {
   closeDetails();
 
   try {
-    const response = await apiFetch("/api/images/search", {
-      method: "POST",
-      signal: controller.signal,
-      body: JSON.stringify({
-        registry: registry.value,
-        repository,
-        query: query.value.trim(),
-        limit: 200,
-        includeArtifacts: false,
-      }),
+    const normalizedQuery = query.value.trim();
+    const requestQuery = ["prime-head", "primehead"].includes(normalizedQuery.toLowerCase()) ? "head" : normalizedQuery;
+    const queryReference = queryReferenceDetails.value?.reference || "";
+    const referenceSelectorOffset = queryReferenceDetails.value?.digest
+      ? queryReference.lastIndexOf("@")
+      : queryReference.lastIndexOf(":");
+    const referenceBase = queryReference
+      ? queryReference.slice(0, referenceSelectorOffset)
+      : "";
+    const referenceParts = referenceBase.split("/");
+    const effectiveRegistry = queryReference ? referenceParts[0]?.toLowerCase() : registry.value;
+    const effectiveRepository = queryReference ? referenceParts.slice(1).join("/") : repository.replace(/^stgregistry\.suse\.com\//i, "");
+    const primePairSelector = isPrimeMovingSelectorInput.value
+      || isImmutablePrimeHeadInput.value
+      || ((quickFilter.value === "prime-head" || primeHeadFilter.value === "only") && /^\d+\.\d+\.\d+$/.test(normalizedVersionLine));
+    const pairLookupEligible = primePairSelector
+      && (effectiveRegistry === "all" || effectiveRegistry === "stgregistry.suse.com")
+      && ["all", "rancher/rancher", "rancher/rancher-agent"].includes(effectiveRepository);
+    const sortRequest = resultSortRequest(pairLookupEligible);
+    const supportedArchitectures = new Set(["all", "multi", "amd64", "arm64", "s390x", "ppc64le", "386", "arm"]);
+    const requestedChannel = quickFilter.value === "prime-head"
+      ? "head"
+      : channelQueryIDs.has(quickFilter.value) && quickFilter.value !== "all"
+        ? quickFilter.value
+        : "all";
+    const requestBody = {
+      registry: registry.value,
+      repository,
+      query: requestQuery,
+      limit: 200,
+      includeArtifacts: false,
+      channel: requestedChannel,
+      architecture: supportedArchitectures.has(architectureFilter.value) ? architectureFilter.value : "all",
+      primeHead: quickFilter.value === "prime-head" ? "only" : primeHeadFilter.value,
+      headKind: primeHeadFilter.value === "exclude" ? "all" : headKindFilter.value,
+      versionLine: normalizedVersionLine,
+      commit: normalizedCommit,
+      pairStatus: pairLookupEligible && pairStatusFilter.value === "verified" ? "verified" : "all",
+      sortBy: sortRequest.sortBy,
+      sortOrder: sortRequest.sortOrder,
+    };
+    let legacyRequestFallback = false;
+    const legacyBody = body => ({
+      registry: body.registry,
+      repository: body.repository,
+      query: body.query,
+      limit: body.limit,
+      includeArtifacts: body.includeArtifacts,
     });
-    const payload = await response.json();
+    const fetchSearchPayload = async body => {
+      const send = async payload => {
+        const response = await apiFetch("/api/images/search", {
+          method: "POST",
+          signal: controller.signal,
+          body: JSON.stringify(payload),
+        });
+        return response.json();
+      };
+      if (legacyRequestFallback) return send(legacyBody(body));
+      try {
+        return await send(body);
+      } catch (error) {
+        if (!/unknown field/i.test(String(error?.message || ""))) throw error;
+        legacyRequestFallback = true;
+        return send(legacyBody(body));
+      }
+    };
+    let payload = await fetchSearchPayload(requestBody);
+    const returnedTags = Array.isArray(payload?.groups)
+      ? payload.groups.reduce((total, group) => total + (Array.isArray(group?.tags) ? group.tags.length : 0), 0)
+      : 0;
+    const returnedGroupError = Array.isArray(payload?.groups) && payload.groups.some(group => group?.error);
+    let aliasFallbackExpanded = false;
+    if (legacyRequestFallback && isPrimeMovingSelectorInput.value && returnedTags === 0 && !returnedGroupError) {
+      const selectorMatch = querySelector.value.match(primeMovingTagPattern);
+      if (selectorMatch) {
+        const prefix = `${querySelector.value.toLowerCase().startsWith("v") ? "v" : ""}${selectorMatch[1]}.${selectorMatch[2]}.${selectorMatch[3]}-`;
+        let fallbackQuery = prefix;
+        if (queryReferenceDetails.value) {
+          const exactReference = queryReferenceDetails.value.reference;
+          const separator = exactReference.lastIndexOf("@");
+          const tagSeparator = exactReference.lastIndexOf(":");
+          const selectorOffset = separator > exactReference.lastIndexOf("/") ? separator : tagSeparator;
+          fallbackQuery = `${exactReference.slice(0, selectorOffset)}:${prefix}`;
+        }
+        payload = await fetchSearchPayload({ ...requestBody, query: fallbackQuery });
+        aliasFallbackExpanded = true;
+      }
+    }
     searchResponse.value = {
       ...payload,
+      requestedQuery: normalizedQuery,
+      aliasFallbackExpanded,
+      legacyRequestFallback,
       groups: Array.isArray(payload?.groups) ? payload.groups : [],
     };
     searched.value = true;
@@ -1178,6 +1840,12 @@ const searchImages = async () => {
       searchLoading.value = false;
     }
   }
+};
+
+const handleResultSortChange = async () => {
+  resultSortTouched.value = true;
+  if (!searched.value || searchLoading.value || !searchResponse.value) return;
+  await searchImages();
 };
 
 const clearSearch = () => {
@@ -1346,6 +2014,71 @@ const groupStatusClass = group => group?.error
     ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300"
     : "border-zinc-200 bg-white text-zinc-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400";
 
+const roleLabel = value => {
+  switch (normalizedImageRole(value)) {
+  case "server": return "Server";
+  case "agent": return "Agent";
+  case "webhook": return "Webhook";
+  default: return "Image";
+  }
+};
+
+const headKindLabel = value => {
+  const kind = normalizedHeadKind(value);
+  return kind === "moving" ? "Moving selector" : kind === "immutable" ? "Immutable" : "Head";
+};
+const headKindClass = value => normalizedHeadKind(value) === "moving"
+  ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300"
+  : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300";
+
+const pairStatusLabel = tag => {
+  if (tag?.headKind === "moving") return "Selector only";
+  switch (String(tag?.pairStatus || "").toLowerCase()) {
+  case "verified": return tag?.pairComplete ? "Verified complete" : "Verified";
+  case "missing": return "Companion missing";
+  case "invalid": return "Invalid pair";
+  case "error": return "Pair lookup error";
+  default: return "Unverified";
+  }
+};
+
+const pairStatusClass = tag => {
+  if (tag?.headKind === "moving") {
+    return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300";
+  }
+  if (tag?.pairStatus === "verified" && tag?.pairComplete) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300";
+  }
+  if (["missing", "invalid", "error"].includes(String(tag?.pairStatus || "").toLowerCase()) || tag?.pairError) {
+    return "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-300";
+  }
+  return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300";
+};
+
+const normalizeVersionLabel = value => {
+  const normalized = String(value || "").trim();
+  return normalized ? (normalized.toLowerCase().startsWith("v") ? normalized : `v${normalized}`) : "";
+};
+
+const shortCommit = value => {
+  const normalized = String(value || "").trim();
+  return normalized.length > 12 ? `${normalized.slice(0, 12)}…` : normalized;
+};
+
+const compactSource = value => String(value || "")
+  .replace(/^https?:\/\/github\.com\//i, "")
+  .replace(/\.git$/i, "");
+
+const primeMetadataTitle = tag => [
+  tag?.version ? `Patch: ${normalizeVersionLabel(tag.version)}` : "",
+  tag?.versionLine ? `Release line: ${normalizeVersionLabel(tag.versionLine)}` : "",
+  tag?.commit ? `Tag commit: ${tag.commit}` : "",
+  tag?.selector ? `Moving selector: ${tag.selector}` : "",
+  tag?.canonicalReference ? `Canonical reference: ${tag.canonicalReference}` : "",
+  tag?.sourceRepository ? `Source: ${tag.sourceRepository}` : "",
+  tag?.ossRevision ? `OSS revision: ${tag.ossRevision}` : "",
+].filter(Boolean).join("\n");
+
 const channelClass = tag => {
   const value = `${String(tag?.channel || "")} ${String(tag?.name || "")}`.toLowerCase();
   if (value.includes("head") || value.includes("devel") || value.includes("alpha") || value.includes("beta")) {
@@ -1364,8 +2097,9 @@ const channelClass = tag => {
 };
 
 const architectureLabel = value => {
-  if (Array.isArray(value)) return value.filter(Boolean).join(", ") || "—";
-  return String(value || "—");
+  const displayValue = item => String(item || "").toLowerCase() === "multi" ? "Unsuffixed / base tag" : String(item || "");
+  if (Array.isArray(value)) return value.filter(Boolean).map(displayValue).join(", ") || "—";
+  return displayValue(value) || "—";
 };
 
 const platformLabel = value => {
