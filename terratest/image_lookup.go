@@ -36,6 +36,7 @@ const (
 	imageLookupRequestLimit       = 64 << 10
 	imageLookupDefaultResultLimit = 50
 	imageLookupMaxResultLimit     = 200
+	imageLookupMaxRecentDays      = 3650
 	imageLookupMaxTagScan         = 10000
 	imageLookupTagPageSize        = 1000
 	imageLookupMaxBuildYAML       = 1 << 20
@@ -86,6 +87,8 @@ type imageLookupSearchRequest struct {
 	Repository       string `json:"repository"`
 	Query            string `json:"query"`
 	Limit            int    `json:"limit"`
+	RecentDays       int    `json:"recentDays"`
+	ScanMode         string `json:"scanMode"`
 	IncludeArtifacts bool   `json:"includeArtifacts"`
 	Channel          string `json:"channel"`
 	Architecture     string `json:"architecture"`
@@ -100,6 +103,9 @@ type imageLookupSearchRequest struct {
 
 type imageLookupSearchResponse struct {
 	Query        string                   `json:"query"`
+	RecentDays   int                      `json:"recentDays"`
+	RecentCutoff string                   `json:"recentCutoff,omitempty"`
+	ScanMode     string                   `json:"scanMode"`
 	Channel      string                   `json:"channel"`
 	Architecture string                   `json:"architecture"`
 	PrimeHead    string                   `json:"primeHead"`
@@ -130,6 +136,8 @@ type imageLookupSearchGroup struct {
 	VerifiedPrimeHeadCount  int              `json:"verifiedPrimeHeadCount"`
 	InvalidPrimeHeadCount   int              `json:"invalidPrimeHeadCount"`
 	MissingCompanionCount   int              `json:"missingCompanionCount"`
+	RecentExcludedCount     int              `json:"recentExcludedCount"`
+	UnknownTimestampCount   int              `json:"unknownTimestampCount"`
 	Truncated               bool             `json:"truncated"`
 	Error                   string           `json:"error,omitempty"`
 }
@@ -161,6 +169,7 @@ type imageLookupTag struct {
 	OSSRevision        string `json:"ossRevision,omitempty"`
 	ResolvedRank       int    `json:"resolvedRank,omitempty"`
 	Artifact           bool   `json:"artifact"`
+	CreatedAt          string `json:"createdAt,omitempty"`
 	UploadedAt         string `json:"uploadedAt,omitempty"`
 	Digest             string `json:"digest,omitempty"`
 	Size               int64  `json:"size,omitempty"`
@@ -328,6 +337,9 @@ type imageLookupSearchOptions struct {
 	exactLookup      bool
 	verifyPrimePairs bool
 	primeVersion     string
+	recentDays       int
+	recentCutoff     time.Time
+	scanMode         string
 }
 
 type imageLookupReference struct {
@@ -403,9 +415,15 @@ func (s *imageLookupService) Search(ctx context.Context, request imageLookupSear
 	if err != nil {
 		return imageLookupSearchResponse{}, err
 	}
+	searchedAt := s.now().UTC()
+	if options.recentDays > 0 {
+		options.recentCutoff = searchedAt.Add(-time.Duration(options.recentDays) * 24 * time.Hour)
+	}
 
 	response := imageLookupSearchResponse{
 		Query:        options.query,
+		RecentDays:   options.recentDays,
+		ScanMode:     options.scanMode,
 		Channel:      options.channel,
 		Architecture: options.architecture,
 		PrimeHead:    options.primeHead,
@@ -415,8 +433,11 @@ func (s *imageLookupService) Search(ctx context.Context, request imageLookupSear
 		PairStatus:   options.pairStatus,
 		SortBy:       options.sortBy,
 		SortOrder:    options.sortOrder,
-		SearchedAt:   s.now().UTC(),
+		SearchedAt:   searchedAt,
 		Groups:       make([]imageLookupSearchGroup, len(targets)),
+	}
+	if !options.recentCutoff.IsZero() {
+		response.RecentCutoff = imageLookupFormatTime(options.recentCutoff)
 	}
 
 	workerLimit := 4
@@ -511,6 +532,9 @@ func (s *imageLookupService) searchTargetWithOptions(ctx context.Context, target
 				group.Matched = 1
 				group.Tags = []imageLookupTag{result}
 			}
+			if !options.verifyPrimePairs {
+				imageLookupApplyRecentFilter(&group, options)
+			}
 			return group
 		}
 		if !imageLookupRegistryNotFound(getErr) {
@@ -530,19 +554,23 @@ func (s *imageLookupService) searchTargetWithOptions(ctx context.Context, target
 			if imageLookupTagMatchesOptions(tag, options) {
 				group.Matched = 1
 				group.Tags = []imageLookupTag{tag}
-				imageLookupCountPrimeHeads(&group, group.Tags)
 			}
 			if target.registry == "docker.io" {
-				complete, metadataErr := s.enrichDockerHubTags(ctx, target.repository, options.query, group.Tags, options.sortBy == "uploaded")
-				if options.sortBy == "uploaded" {
+				requireComplete := options.sortBy == "uploaded" || options.recentDays > 0
+				complete, metadataErr := s.enrichDockerHubTags(ctx, target.repository, options.query, group.Tags, requireComplete)
+				if requireComplete {
 					switch {
 					case metadataErr != nil:
 						group.Error = imageLookupSafeError(metadataErr)
-					case !complete:
+					case !complete && options.sortBy == "uploaded":
 						group.Error = "Docker Hub did not expose upload metadata for every matched tag"
 					}
 				}
 			}
+			if !options.verifyPrimePairs {
+				imageLookupApplyRecentFilter(&group, options)
+			}
+			imageLookupCountPrimeHeads(&group, group.Tags)
 			return group
 		}
 		if !imageLookupRegistryNotFound(getErr) {
@@ -605,15 +633,20 @@ func (s *imageLookupService) searchTargetWithOptions(ctx context.Context, target
 
 	group.Matched = len(matches)
 	if target.registry == "docker.io" && len(matches) > 0 {
-		complete, metadataErr := s.enrichDockerHubTags(ctx, target.repository, options.query, matches, options.sortBy == "uploaded")
-		if options.sortBy == "uploaded" {
+		requireComplete := options.sortBy == "uploaded" || options.recentDays > 0
+		complete, metadataErr := s.enrichDockerHubTags(ctx, target.repository, options.query, matches, requireComplete)
+		if requireComplete {
 			switch {
 			case metadataErr != nil:
 				group.Error = imageLookupSafeError(metadataErr)
-			case !complete:
+			case !complete && options.sortBy == "uploaded":
 				group.Error = "Docker Hub did not expose upload metadata for every matched tag"
 			}
 		}
+	}
+	if !options.verifyPrimePairs && !options.recentCutoff.IsZero() {
+		matches, group.RecentExcludedCount, group.UnknownTimestampCount = imageLookupFilterRecentTags(matches, options.recentCutoff)
+		group.Matched = len(matches)
 	}
 	imageLookupSortTags(matches, options.sortBy, options.sortOrder)
 	imageLookupCountPrimeHeads(&group, matches)
@@ -757,9 +790,6 @@ func (s *imageLookupService) verifyPrimeHeadPairs(ctx context.Context, response 
 
 	for groupIndex := range response.Groups {
 		group := &response.Groups[groupIndex]
-		group.VerifiedPrimeHeadCount = 0
-		group.InvalidPrimeHeadCount = 0
-		group.MissingCompanionCount = 0
 		for tagIndex := range group.Tags {
 			tag := &group.Tags[tagIndex]
 			result, ok := byTag[tag.Name]
@@ -783,13 +813,8 @@ func (s *imageLookupService) verifyPrimeHeadPairs(ctx context.Context, response 
 			tag.Source = result.server.SourceURL
 			tag.CanonicalReference = provenance.CanonicalReference
 			tag.OSSRevision = strings.ToLower(strings.TrimSpace(provenance.OSSRevision))
-			switch result.status {
-			case "verified":
-				group.VerifiedPrimeHeadCount++
-			case "invalid":
-				group.InvalidPrimeHeadCount++
-			case "missing":
-				group.MissingCompanionCount++
+			if !provenance.CreatedAt.IsZero() {
+				tag.CreatedAt = imageLookupFormatTime(provenance.CreatedAt)
 			}
 		}
 		if options.pairStatus != "all" {
@@ -802,9 +827,12 @@ func (s *imageLookupService) verifyPrimeHeadPairs(ctx context.Context, response 
 			group.Tags = filtered
 			group.Matched = len(filtered)
 		}
+		imageLookupApplyRecentFilter(group, options)
 		if options.sortBy == "pair-completed" {
 			imageLookupSortTags(group.Tags, options.sortBy, options.sortOrder)
 		}
+		imageLookupCountPrimeHeads(group, group.Tags)
+		imageLookupCountPrimePairStatuses(group, group.Tags)
 	}
 	return nil
 }
@@ -1351,6 +1379,7 @@ func (s *imageLookupService) searchParameters(request imageLookupSearchRequest) 
 		pairStatus:       "all",
 		sortBy:           "natural",
 		sortOrder:        "desc",
+		scanMode:         "auto",
 	}
 	registryValue := strings.TrimSpace(request.Registry)
 	if registryValue == "" {
@@ -1371,6 +1400,10 @@ func (s *imageLookupService) searchParameters(request imageLookupSearchRequest) 
 		return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: fmt.Sprintf("limit must be between 1 and %d", imageLookupMaxResultLimit)}
 	}
 	options.limit = limit
+	if request.RecentDays < 0 || request.RecentDays > imageLookupMaxRecentDays {
+		return nil, imageLookupSearchOptions{}, &imageLookupInputError{message: fmt.Sprintf("recentDays must be 0 (all dates) or between 1 and %d", imageLookupMaxRecentDays)}
+	}
+	options.recentDays = request.RecentDays
 
 	repositoryValue := strings.TrimSpace(request.Repository)
 	var explicitRegistry string
@@ -1429,6 +1462,9 @@ func (s *imageLookupService) searchParameters(request imageLookupSearchRequest) 
 	if options.sortOrder, err = imageLookupChoice(request.SortOrder, "desc", "asc", "desc"); err != nil {
 		return nil, imageLookupSearchOptions{}, err
 	}
+	if options.scanMode, err = imageLookupChoice(request.ScanMode, "auto", "auto", "bounded", "complete"); err != nil {
+		return nil, imageLookupSearchOptions{}, err
+	}
 	if options.versionLine, err = imageLookupNormalizeVersionLine(request.VersionLine); err != nil {
 		return nil, imageLookupSearchOptions{}, err
 	}
@@ -1478,7 +1514,18 @@ func (s *imageLookupService) searchParameters(request imageLookupSearchRequest) 
 		}
 	}
 	options.query = query
-	options.fullScan = imageLookupEnrichedSearchRequested(request) || primeAliasQuery || primeQueryKind == "moving" || imageLookupBarePatchVersion(query)
+	autoFullScan := imageLookupEnrichedSearchRequested(request) || primeAliasQuery || primeQueryKind == "moving" || imageLookupBarePatchVersion(query)
+	switch options.scanMode {
+	case "bounded":
+		// Date filtering and pair verification require a complete candidate set.
+		// Other filters and sorts may operate on the bounded sample; Truncated
+		// tells clients that the result is not a global ordering.
+		options.fullScan = options.recentDays > 0 || options.verifyPrimePairs
+	case "complete":
+		options.fullScan = true
+	default:
+		options.fullScan = autoFullScan
+	}
 
 	registries := []string{}
 	if explicitRegistry != "" {
@@ -2185,15 +2232,20 @@ func imageLookupCommitPrefix(value string) bool {
 }
 
 func imageLookupEnrichedSearchRequested(request imageLookupSearchRequest) bool {
-	return strings.TrimSpace(request.Channel) != "" ||
-		strings.TrimSpace(request.Architecture) != "" ||
-		strings.TrimSpace(request.PrimeHead) != "" ||
-		strings.TrimSpace(request.HeadKind) != "" ||
+	nonDefault := func(value, defaultValue string) bool {
+		value = strings.ToLower(strings.TrimSpace(value))
+		return value != "" && value != defaultValue
+	}
+	return nonDefault(request.Channel, "all") ||
+		nonDefault(request.Architecture, "all") ||
+		nonDefault(request.PrimeHead, "all") ||
+		nonDefault(request.HeadKind, "all") ||
 		strings.TrimSpace(request.VersionLine) != "" ||
 		strings.TrimSpace(request.Commit) != "" ||
-		strings.TrimSpace(request.PairStatus) != "" ||
-		strings.TrimSpace(request.SortBy) != "" ||
-		strings.TrimSpace(request.SortOrder) != ""
+		nonDefault(request.PairStatus, "all") ||
+		nonDefault(request.SortBy, "natural") ||
+		nonDefault(request.SortOrder, "desc") ||
+		request.RecentDays > 0
 }
 
 func imageLookupRepositoryRole(repository string) (string, string) {
@@ -2361,6 +2413,46 @@ func imageLookupTagMatchesOptions(tag imageLookupTag, options imageLookupSearchO
 	return true
 }
 
+// imageLookupFilterRecentTags applies an evidence-based cutoff. Unknown
+// timestamps are excluded rather than guessed: OCI tag-list responses do not
+// contain upload dates and do not guarantee chronological ordering.
+func imageLookupFilterRecentTags(tags []imageLookupTag, cutoff time.Time) ([]imageLookupTag, int, int) {
+	if cutoff.IsZero() {
+		return tags, 0, 0
+	}
+	filtered := tags[:0]
+	excluded, unknown := 0, 0
+	for _, tag := range tags {
+		observedAt, ok := imageLookupTagObservedAt(tag)
+		switch {
+		case !ok:
+			unknown++
+		case observedAt.Before(cutoff):
+			excluded++
+		default:
+			filtered = append(filtered, tag)
+		}
+	}
+	return filtered, excluded, unknown
+}
+
+func imageLookupTagObservedAt(tag imageLookupTag) (time.Time, bool) {
+	for _, value := range []string{tag.PairCompletedAt, tag.UploadedAt, tag.CreatedAt} {
+		if observedAt, err := time.Parse(time.RFC3339Nano, value); err == nil && !observedAt.IsZero() {
+			return observedAt.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+func imageLookupApplyRecentFilter(group *imageLookupSearchGroup, options imageLookupSearchOptions) {
+	if options.recentCutoff.IsZero() {
+		return
+	}
+	group.Tags, group.RecentExcludedCount, group.UnknownTimestampCount = imageLookupFilterRecentTags(group.Tags, options.recentCutoff)
+	group.Matched = len(group.Tags)
+}
+
 func imageLookupSortTags(tags []imageLookupTag, sortBy, sortOrder string) {
 	descending := sortOrder != "asc"
 	sort.SliceStable(tags, func(i, j int) bool {
@@ -2446,6 +2538,22 @@ func imageLookupCountPrimeHeads(group *imageLookupSearchGroup, tags []imageLooku
 			group.MovingPrimeHeadCount++
 		case "immutable":
 			group.ImmutablePrimeHeadCount++
+		}
+	}
+}
+
+func imageLookupCountPrimePairStatuses(group *imageLookupSearchGroup, tags []imageLookupTag) {
+	group.VerifiedPrimeHeadCount = 0
+	group.InvalidPrimeHeadCount = 0
+	group.MissingCompanionCount = 0
+	for _, tag := range tags {
+		switch tag.PairStatus {
+		case "verified":
+			group.VerifiedPrimeHeadCount++
+		case "invalid":
+			group.InvalidPrimeHeadCount++
+		case "missing":
+			group.MissingCompanionCount++
 		}
 	}
 }

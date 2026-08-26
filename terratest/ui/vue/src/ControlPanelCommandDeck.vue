@@ -74,6 +74,7 @@ const operationSummary = computed(() => {
   const active = [
     ["setup", "Setup", state.value?.setup],
     ["readiness", "Readiness", state.value?.readiness],
+    ["downstream", "Downstream", state.value?.downstream],
     ["cleanup", "Destroy", state.value?.cleanup],
     ["linodeSetup", "Linode setup", state.value?.linodeSetup],
     ["linodeCleanup", "Linode destroy", state.value?.linodeCleanup],
@@ -99,6 +100,7 @@ const operationSummary = computed(() => {
 const lifecycleRunning = currentState => Boolean(
   currentState?.setup?.running ||
   currentState?.readiness?.running ||
+  currentState?.downstream?.running ||
   currentState?.cleanup?.running ||
   currentState?.linodeSetup?.running ||
   currentState?.linodeCleanup?.running
@@ -140,7 +142,7 @@ const tiles = computed(() => {
           tone: "sky",
           eyebrow: "Safety gate",
           title: `${operation.label} is active`,
-          detail: "Setup, readiness, and destroy are serialized so the run state and AWS target stay unambiguous.",
+          detail: "Setup, readiness, downstream provisioning, and destroy are serialized so the run state and cloud targets stay unambiguous.",
           meta: "Busy",
           action: "runs",
           actionLabel: "Inspect run",
@@ -186,7 +188,7 @@ const tiles = computed(() => {
         tone: "amber",
         eyebrow: "AWS exposure",
         title: `${awsItems.length} resource${awsItems.length === 1 ? "" : "s"} visible`,
-        detail: "Inventory is read-only. Destructive actions remain per-slot and require typed confirmation before Terraform destroy starts.",
+        detail: "Inventory is read-only. Destructive actions remain per-slot and require typed confirmation before downstream-first cleanup starts.",
         meta: "Live",
         action: "aws",
         actionLabel: "Open inventory",

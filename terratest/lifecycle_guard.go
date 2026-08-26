@@ -19,6 +19,7 @@ var explicitLifecycleTests = []string{
 	"TestHACleanup",
 	"TestHAControlPanel",
 	"TestHAProvisionLinodeDownstream",
+	"TestHAProvisionConfiguredLinodeDownstreams",
 	"TestHADeleteLinodeDownstream",
 }
 

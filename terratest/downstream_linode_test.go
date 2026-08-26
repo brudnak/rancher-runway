@@ -1,21 +1,25 @@
 package test
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 )
 
 func TestRenderLinodeDownstreamResources(t *testing.T) {
 	cfg := downstreamProvisioningConfig{
-		ClusterName:  "test-cluster",
-		MachineName:  "nc-test-cluster-pool1-abc12",
-		SecretName:   "cc-test-cluster",
-		Namespace:    "fleet-default",
-		Region:       "us-ord",
-		InstanceType: "g6-standard-2",
-		Image:        "linode/ubuntu22.04",
-		K3SVersion:   "v1.33.4+k3s1",
-		LinodeToken:  "secret-token",
+		ClusterName:       "test-cluster",
+		MachineName:       "nc-test-cluster-pool1-abc12",
+		SecretName:        "cc-test-cluster",
+		Namespace:         "fleet-default",
+		Distribution:      "k3s",
+		KubernetesVersion: "v1.33.4+k3s1",
+		Region:            "us-ord",
+		InstanceType:      "g6-standard-2",
+		Image:             "linode/ubuntu22.04",
+		LinodeToken:       "secret-token",
 	}
 
 	secretManifest := renderLinodeCredentialSecretManifest(cfg)
@@ -40,7 +44,7 @@ func TestRenderLinodeDownstreamResources(t *testing.T) {
 	if !ok {
 		t.Fatalf("machine config payload metadata has unexpected shape: %#v", payload["metadata"])
 	}
-	if metadata["namespace"] != "fleet-default" || metadata["generateName"] != "nc-test-cluster-pool1-" {
+	if metadata["namespace"] != "fleet-default" || metadata["name"] != "nc-test-cluster-pool1-abc12" {
 		t.Fatalf("unexpected machine config payload metadata: %#v", metadata)
 	}
 	if _, ok := payload["interfaces"].([]interface{}); !ok {
@@ -79,98 +83,183 @@ func TestRenderLinodeDownstreamResources(t *testing.T) {
 
 }
 
-func TestDNSLabel(t *testing.T) {
-	got := dnsLabel("Rancher_Runway/Some Lane!!")
-	if got != "rancher-runway-some-lane" {
-		t.Fatalf("dnsLabel() = %q", got)
+func TestRenderLinodeDownstreamRKE2ManifestOmitsK3sOnlyConfig(t *testing.T) {
+	cfg := downstreamProvisioningConfig{
+		ClusterName:       "rke2-cluster",
+		MachineName:       "nc-rke2-cluster-pool1-abc12",
+		SecretName:        "cc-rke2-cluster",
+		Namespace:         defaultLinodeNamespace,
+		Distribution:      "rke2",
+		KubernetesVersion: "v1.36.3+rke2r1",
 	}
-}
-
-func TestNormalizeK3SVersion(t *testing.T) {
-	tests := map[string]string{
-		"1.35.3+k3s1":    "v1.35.3+k3s1",
-		" v1.34.6+k3s1 ": "v1.34.6+k3s1",
-		"":               "",
+	manifest := renderLinodeDownstreamClusterManifest(cfg)
+	if !strings.Contains(manifest, `kubernetesVersion: "v1.36.3+rke2r1"`) {
+		t.Fatalf("RKE2 manifest does not contain the requested version:\n%s", manifest)
 	}
-
-	for input, expected := range tests {
-		if got := normalizeK3SVersion(input); got != expected {
-			t.Fatalf("normalizeK3SVersion(%q) = %q, want %q", input, got, expected)
+	if strings.Contains(manifest, "ingress-controller: traefik") {
+		t.Fatalf("RKE2 manifest contains K3s-only ingress configuration:\n%s", manifest)
+	}
+	for _, role := range []string{"controlPlaneRole: true", "etcdRole: true", "workerRole: true", "quantity: 1"} {
+		if !strings.Contains(manifest, role) {
+			t.Fatalf("RKE2 manifest missing one-node all-role setting %q:\n%s", role, manifest)
 		}
 	}
 }
 
-func TestSelectLatestK3SReleaseVersion(t *testing.T) {
-	releases := []k3sRelease{
-		{Version: "v1.35.3+k3s1"},
+func TestConfiguredLinodeDownstreamPlansPreferFrozenEnvironment(t *testing.T) {
+	frozen := []settings.LinodeDownstreamPlan{
 		{
-			Version:                 "v1.33.8+k3s1",
-			MinChannelServerVersion: "v2.12.0-alpha1",
-			MaxChannelServerVersion: "v2.14.99",
-			ServerArgs:              map[string]interface{}{},
-			AgentArgs:               map[string]interface{}{},
+			Enabled:      true,
+			Distribution: "rke2",
+			Region:       "us-sea",
+			InstanceType: "g6-standard-4",
+			Image:        "linode/ubuntu24.04",
 		},
-		{
-			Version:                 "v1.34.6+k3s1",
-			MinChannelServerVersion: "v2.13.0-alpha1",
-			MaxChannelServerVersion: "v2.15.99",
-			ServerArgs:              map[string]interface{}{},
-			AgentArgs:               map[string]interface{}{},
-		},
-		{
-			Version:                 "v1.35.2+k3s1",
-			MinChannelServerVersion: "v2.14.0-alpha1",
-			MaxChannelServerVersion: "v2.15.99",
-			ServerArgs:              map[string]interface{}{},
-			AgentArgs:               map[string]interface{}{},
-		},
-		{
-			Version:                 "v1.36.0+k3s1",
-			MinChannelServerVersion: "v2.16.0-alpha1",
-			MaxChannelServerVersion: "v2.16.99",
-			ServerArgs:              map[string]interface{}{},
-			AgentArgs:               map[string]interface{}{},
-		},
+		settings.DefaultLinodeDownstreamPlan(),
 	}
+	data := `[{"enabled":true,"distribution":"rke2","region":"us-sea","instanceType":"g6-standard-4","image":"linode/ubuntu24.04"},{"enabled":false,"distribution":"k3s","region":"us-ord","instanceType":"g6-standard-2","image":"linode/ubuntu22.04"}]`
+	t.Setenv(configuredDownstreamLinodePlansEnv, data)
 
-	got, err := selectLatestK3SReleaseVersion(releases, "v2.15.0-alpha3")
+	plans, err := configuredLinodeDownstreamPlans(2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "v1.35.2+k3s1" {
-		t.Fatalf("selectLatestK3SReleaseVersion() = %q, want %q", got, "v1.35.2+k3s1")
+	if len(plans) != len(frozen) || !plans[0].Enabled || plans[0].Distribution != "rke2" || plans[0].Region != "us-sea" {
+		t.Fatalf("unexpected frozen plans: %#v", plans)
 	}
+}
 
-	got, err = selectLatestK3SReleaseVersion(releases, "v2.13.5")
+func TestConfiguredLinodeDownstreamPlansRejectEmptyFrozenEnvironment(t *testing.T) {
+	t.Setenv(configuredDownstreamLinodePlansEnv, " ")
+	if _, err := configuredLinodeDownstreamPlans(1); err == nil {
+		t.Fatal("expected an explicitly empty frozen plan environment to fail closed")
+	}
+}
+
+func TestLegacyLinodeDownstreamPlansStillEnableEveryHAWithLegacyOverrides(t *testing.T) {
+	t.Setenv("K3S_VERSION", "1.35.8+k3s1")
+	t.Setenv("LINODE_REGION", "us-sea")
+	t.Setenv("LINODE_INSTANCE_TYPE", "g6-standard-4")
+	t.Setenv("LINODE_IMAGE", "linode/ubuntu24.04")
+
+	plans, err := legacyLinodeDownstreamPlans(3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "v1.34.6+k3s1" {
-		t.Fatalf("selectLatestK3SReleaseVersion() = %q, want %q", got, "v1.34.6+k3s1")
+	if len(plans) != 3 {
+		t.Fatalf("legacy plan count = %d, want 3", len(plans))
+	}
+	for index, plan := range plans {
+		if !plan.Enabled || plan.Distribution != "k3s" || plan.KubernetesVersion != "v1.35.8+k3s1" || plan.Region != "us-sea" || plan.InstanceType != "g6-standard-4" || plan.Image != "linode/ubuntu24.04" {
+			t.Fatalf("legacy plan %d changed behavior: %#v", index+1, plan)
+		}
 	}
 }
 
-func TestSelectLatestK3SReleaseVersionRequiresCompatibleRange(t *testing.T) {
-	releases := []k3sRelease{
-		{
-			Version:                 "v1.35.2+k3s1",
-			MinChannelServerVersion: "v2.14.0-alpha1",
-			MaxChannelServerVersion: "v2.15.99",
-			ServerArgs:              map[string]interface{}{},
-			AgentArgs:               map[string]interface{}{},
+func TestValidateLinodeDownstreamPlansAgainstCatalog(t *testing.T) {
+	catalog := linodeCatalogResponse{
+		Regions: []linodeCatalogRegion{{ID: "us-ord"}},
+		Types:   []linodeCatalogType{{ID: "g6-standard-2"}},
+		Images:  []linodeCatalogImage{{ID: "linode/ubuntu22.04"}},
+	}
+	valid := settings.DefaultLinodeDownstreamPlan()
+	valid.Enabled = true
+	if err := validateLinodeDownstreamPlansAgainstCatalog([]settings.LinodeDownstreamPlan{valid}, catalog); err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := valid
+	invalid.Region = "missing-region"
+	if err := validateLinodeDownstreamPlansAgainstCatalog([]settings.LinodeDownstreamPlan{invalid}, catalog); err == nil {
+		t.Fatal("expected unavailable enabled region to be rejected")
+	}
+	invalid.Enabled = false
+	if err := validateLinodeDownstreamPlansAgainstCatalog([]settings.LinodeDownstreamPlan{invalid}, catalog); err != nil {
+		t.Fatalf("disabled plan should not block provider preflight: %v", err)
+	}
+}
+
+func TestDownstreamCatalogPreflightExcludesReusableActiveRows(t *testing.T) {
+	activePlan := settings.DefaultLinodeDownstreamPlan()
+	activePlan.Enabled = true
+	activePlan.Region = "retired-region"
+	activePlan.InstanceType = "retired-type"
+	activePlan.Image = "retired/image"
+
+	retryPlan := settings.DefaultLinodeDownstreamPlan()
+	retryPlan.Enabled = true
+	plans := []settings.LinodeDownstreamPlan{activePlan, retryPlan}
+	records := map[int]downstreamOutputRecord{
+		1: {
+			HAIndex:             1,
+			ClusterName:         "active-on-retired-provider-options",
+			Namespace:           defaultLinodeNamespace,
+			ManagementClusterID: "c-m-active",
+			Phase:               "active",
+		},
+		2: {
+			HAIndex:     2,
+			ClusterName: "failed-on-current-provider-options",
+			Namespace:   defaultLinodeNamespace,
+			Phase:       "failed",
 		},
 	}
+	statusCalls := 0
+	work, err := determineDownstreamProvisioningWork(
+		plans,
+		func(haIndex int) (downstreamOutputRecord, bool, error) {
+			record, found := records[haIndex]
+			return record, found, nil
+		},
+		func(int) (string, error) {
+			return "/management.kubeconfig", nil
+		},
+		func(_, _, clusterName string) (provisioningClusterStatus, error) {
+			statusCalls++
+			if clusterName != records[1].ClusterName {
+				t.Fatalf("unexpected live verification for %s", clusterName)
+			}
+			status := provisioningClusterStatus{}
+			status.Status.Phase = "Active"
+			status.Status.Ready = true
+			status.Status.ClusterName = records[1].ManagementClusterID
+			return status, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if statusCalls != 1 {
+		t.Fatalf("live status calls = %d, want 1 for only the recorded active row", statusCalls)
+	}
+	if len(work) != 1 || work[0].InstanceNum != 2 || work[0].Existing == nil || work[0].Existing.Phase != "failed" {
+		t.Fatalf("provisioning work = %#v, want only failed HA 2", work)
+	}
 
-	if _, err := selectLatestK3SReleaseVersion(releases, "v2.13.5"); err == nil {
-		t.Fatal("expected incompatible K3s release to be rejected")
+	plansNeedingMutation, err := downstreamPlansForProvisioningWork(len(plans), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plansNeedingMutation[0].Enabled || !plansNeedingMutation[1].Enabled {
+		t.Fatalf("catalog preflight mask = %#v, want only HA 2 enabled", plansNeedingMutation)
+	}
+	catalog := linodeCatalogResponse{
+		Regions: []linodeCatalogRegion{{ID: retryPlan.Region}},
+		Types:   []linodeCatalogType{{ID: retryPlan.InstanceType}},
+		Images:  []linodeCatalogImage{{ID: retryPlan.Image}},
+	}
+	if err := validateLinodeDownstreamPlansAgainstCatalog(plansNeedingMutation, catalog); err != nil {
+		t.Fatalf("reusable active row with retired provider options blocked retry: %v", err)
+	}
+	if err := validateLinodeDownstreamPlansAgainstCatalog(plans, catalog); err == nil {
+		t.Fatal("test setup error: full-plan validation unexpectedly accepted the retired active row")
 	}
 }
 
-func TestKDMMetadataURLForRancherVersion(t *testing.T) {
-	got := kdmMetadataURLForRancherVersion("v2.15.0-alpha3")
-	want := "https://releases.rancher.com/kontainer-driver-metadata/dev-v2.15/data.json"
-	if got != want {
-		t.Fatalf("kdmMetadataURLForRancherVersion() = %q, want %q", got, want)
+func TestDNSLabel(t *testing.T) {
+	got := dnsLabel("Rancher_Runway/Some Lane!!")
+	if got != "rancher-runway-some-lane" {
+		t.Fatalf("dnsLabel() = %q", got)
 	}
 }
 
@@ -198,6 +287,96 @@ func TestDownstreamClusterNamePrefix(t *testing.T) {
 				t.Fatalf("downstreamClusterNamePrefix() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDownstreamClusterNamePreservesRunAndUniqueSuffix(t *testing.T) {
+	got := downstreamClusterName(strings.Repeat("very-long-prefix-", 8), "1234567890", 2, "abc12345")
+	if len(got) > 53 {
+		t.Fatalf("cluster name length = %d: %s", len(got), got)
+	}
+	if !strings.HasSuffix(got, "34567890-ha2-abc12345") {
+		t.Fatalf("cluster name lost collision-resistant suffix: %s", got)
+	}
+}
+
+func TestDownstreamProvisioningRunIDFallsBackToPanelRunID(t *testing.T) {
+	t.Setenv("GITHUB_RUN_ID", "")
+	t.Setenv("SIGNOFF_RUN_ID", "")
+	t.Setenv(runIDEnv, "panel-run-12345678")
+	if got := downstreamProvisioningRunID(); got != "panel-run-12345678" {
+		t.Fatalf("downstreamProvisioningRunID() = %q", got)
+	}
+	name := downstreamClusterName("runway", downstreamProvisioningRunID(), 1, "abc12345")
+	if !strings.Contains(name, "12345678-ha1-abc12345") {
+		t.Fatalf("panel run id was not included in downstream resource name: %s", name)
+	}
+}
+
+func TestReusableActiveDownstreamRecordSkipsSuccessfulRowOnRetry(t *testing.T) {
+	record := downstreamOutputRecord{
+		HAIndex:             1,
+		ClusterName:         "already-active",
+		Namespace:           defaultLinodeNamespace,
+		ManagementClusterID: "c-m-active",
+		Phase:               "active",
+	}
+	called := 0
+	reusable, err := reusableActiveDownstreamRecord(record, "/management.kubeconfig", func(kubeconfigPath, namespace, clusterName string) (provisioningClusterStatus, error) {
+		called++
+		if kubeconfigPath != "/management.kubeconfig" || namespace != defaultLinodeNamespace || clusterName != record.ClusterName {
+			t.Fatalf("unexpected verification target: %s %s/%s", kubeconfigPath, namespace, clusterName)
+		}
+		status := provisioningClusterStatus{}
+		status.Status.Phase = "Active"
+		status.Status.Ready = true
+		status.Status.ClusterName = record.ManagementClusterID
+		return status, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reusable || called != 1 {
+		t.Fatalf("active record reusable=%t status calls=%d", reusable, called)
+	}
+}
+
+func TestReusableActiveDownstreamRecordRetriesOnlyIncompleteOrMissingRows(t *testing.T) {
+	failedRecord := downstreamOutputRecord{ClusterName: "failed", Phase: "failed"}
+	called := false
+	reusable, err := reusableActiveDownstreamRecord(failedRecord, "unused", func(_, _, _ string) (provisioningClusterStatus, error) {
+		called = true
+		return provisioningClusterStatus{}, nil
+	})
+	if err != nil || reusable || called {
+		t.Fatalf("failed row reusable=%t called=%t err=%v", reusable, called, err)
+	}
+
+	missingRecord := downstreamOutputRecord{
+		ClusterName:         "missing",
+		Namespace:           defaultLinodeNamespace,
+		ManagementClusterID: "c-m-missing",
+		Phase:               "active",
+	}
+	reusable, err = reusableActiveDownstreamRecord(missingRecord, "unused", func(_, _, _ string) (provisioningClusterStatus, error) {
+		return provisioningClusterStatus{}, errors.New("Error from server (NotFound): clusters.provisioning.cattle.io missing not found")
+	})
+	if err != nil || reusable {
+		t.Fatalf("missing active row reusable=%t err=%v", reusable, err)
+	}
+}
+
+func TestReusableActiveDownstreamRecordDoesNotDeleteOnUncertainState(t *testing.T) {
+	record := downstreamOutputRecord{
+		ClusterName:         "active-but-unreachable",
+		Namespace:           defaultLinodeNamespace,
+		ManagementClusterID: "c-m-active",
+		Phase:               "active",
+	}
+	if reusable, err := reusableActiveDownstreamRecord(record, "unused", func(_, _, _ string) (provisioningClusterStatus, error) {
+		return provisioningClusterStatus{}, errors.New("temporary API timeout")
+	}); err == nil || reusable {
+		t.Fatalf("uncertain active row reusable=%t err=%v", reusable, err)
 	}
 }
 

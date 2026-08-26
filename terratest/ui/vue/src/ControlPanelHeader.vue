@@ -126,6 +126,7 @@ const activeGPUClusters = currentState => clusterItems(currentState).filter(clus
 const activeOperation = computed(() => [
   ["setup", "Setup", state.value?.setup],
   ["readiness", "Readiness", state.value?.readiness],
+  ["downstream", "Downstream", state.value?.downstream],
   ["cleanup", "Destroy", state.value?.cleanup],
   ["linodeSetup", "Linode setup", state.value?.linodeSetup],
   ["linodeCleanup", "Linode destroy", state.value?.linodeCleanup],

@@ -31,6 +31,7 @@ export const runHostnameLabel = run => {
 export const activeOperations = state => [
   ['setup', 'Setup', state?.setup],
   ['readiness', 'Readiness', state?.readiness],
+  ['downstream', 'Downstream', state?.downstream],
   ['cleanup', 'Destroy', state?.cleanup],
   ['linodeSetup', 'Linode setup', state?.linodeSetup],
   ['linodeCleanup', 'Linode destroy', state?.linodeCleanup]
@@ -52,16 +53,20 @@ export const operationBadgeHTML = operation => {
 
 export const runHasFailure = run => {
   const status = String(run?.status || '').toLowerCase()
-  return status.includes('failed') || status.includes('error')
+  const downstreamStatus = String(run?.downstreamStatus || '').toLowerCase()
+  return status.includes('failed') || status.includes('error') || downstreamStatus === 'downstream_failed'
 }
 
 export const readinessFailedRun = (runs, state) => {
   const readiness = state?.readiness || {}
   if (readiness.running || !readiness.error) {
-    return runs.find(run => runHasFailure(run)) || null
+    return runs.find(run => {
+      const status = String(run?.status || '').toLowerCase()
+      return status.includes('readiness_failed')
+    }) || null
   }
   const failedRunId = readiness.runId || ''
-  return runs.find(run => sameRunKey(run.runId, failedRunId)) || runs.find(run => runHasFailure(run)) || null
+  return runs.find(run => sameRunKey(run.runId, failedRunId)) || runs.find(run => String(run?.status || '').toLowerCase().includes('readiness_failed')) || null
 }
 
 export const runClusterStats = (run, state) => {
@@ -92,12 +97,25 @@ export const runTimelineHTML = (run, state) => {
   const setupRunning = (state?.setup?.running && sameRunKey(state.setup.runId, run.runId)) ||
     (state?.linodeSetup?.running && sameRunKey(state.linodeSetup.runId, run.runId))
   const readinessRunning = state?.readiness?.running && sameRunKey(state.readiness.runId, run.runId)
+  const downstreamRunning = state?.downstream?.running && sameRunKey(state.downstream.runId, run.runId)
   const cleanupRunning = (state?.cleanup?.running && sameRunKey(state.cleanup.runId, run.runId)) ||
     (state?.linodeCleanup?.running && sameRunKey(state.linodeCleanup.runId, run.runId))
   const setupDone = status.includes('setup_complete') || status === 'ready' || status.includes('readiness') || status.includes('cleanup')
   const readinessDone = status === 'ready'
+  const downstreamStatus = String(run?.downstreamStatus || '').toLowerCase()
+  const hasDownstreamPlan = Array.isArray(run?.downstreamLinodePlans) && run.downstreamLinodePlans.some(plan => plan?.enabled)
 
   const steps = [
+    ...(hasDownstreamPlan || downstreamStatus ? [{
+      label: 'Downstream',
+      state: downstreamRunning || downstreamStatus === 'downstream_running'
+        ? 'active'
+        : downstreamStatus === 'downstream_failed'
+          ? 'failed'
+          : downstreamStatus === 'downstream_ready'
+            ? 'done'
+            : 'waiting'
+    }] : []),
     {
       label: 'Setup',
       state: setupRunning ? 'active' : status.includes('setup_failed') ? 'failed' : setupDone ? 'done' : 'waiting'

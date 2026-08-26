@@ -252,7 +252,7 @@ func TestCleanupBatchChildRefusesPidlessCancellationRace(t *testing.T) {
 		Operation:   panelOperationCleanup,
 		DisplayName: "cleanup",
 		TestName:    "TestHACleanup",
-		Timeout:     "30m",
+		Timeout:     "60m",
 		RunID:       "run-a",
 		BatchChild:  true,
 	})

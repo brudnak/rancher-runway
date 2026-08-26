@@ -97,6 +97,66 @@ tf_vars:
 	}
 }
 
+func TestUpdateAutoModeConfigFilePersistsAutomaticLinodeDownstreamPlans(t *testing.T) {
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	t.Setenv("LINODE_TOKEN", "test-token")
+	configPath := filepath.Join(t.TempDir(), "tool-config.yml")
+	initialConfig := `deployment:
+  type: ha-rke2
+rancher:
+  mode: auto
+  versions:
+    - "2.15-head"
+    - "2.14-head"
+  bootstrap_password: "admin"
+total_has: 2
+`
+	if err := os.WriteFile(configPath, []byte(initialConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first := settings.DefaultLinodeDownstreamPlan()
+	first.Enabled = true
+	first.Distribution = "rke2"
+	second := settings.DefaultLinodeDownstreamPlan()
+	if err := updateAutoModeConfigFile(configPath, settings.PreflightConfigUpdate{
+		DeploymentType:        deploymentTypeHARKE2,
+		Mode:                  "auto",
+		Versions:              []string{"2.15-head", "2.14-head"},
+		DownstreamLinodePlans: []settings.LinodeDownstreamPlan{first, second},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Downstream struct {
+			Linode struct {
+				Plans []struct {
+					Enabled      bool   `yaml:"enabled"`
+					Distribution string `yaml:"distribution"`
+					Region       string `yaml:"region"`
+					InstanceType string `yaml:"instance_type"`
+					Image        string `yaml:"image"`
+				} `yaml:"plans"`
+			} `yaml:"linode"`
+		} `yaml:"downstream"`
+	}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	plans := parsed.Downstream.Linode.Plans
+	if len(plans) != 2 || !plans[0].Enabled || plans[0].Distribution != "rke2" || plans[0].Region != "us-ord" || plans[0].InstanceType != "g6-standard-2" || plans[0].Image != "linode/ubuntu22.04" || plans[1].Enabled {
+		t.Fatalf("unexpected downstream config: %#v", plans)
+	}
+	if got := settings.CurrentLinodeDownstreamPlans(2); len(got) != 2 || !got[0].Enabled || got[0].Distribution != "rke2" {
+		t.Fatalf("unexpected in-memory downstream plans: %#v", got)
+	}
+}
+
 func TestUpdateAutoModeConfigFilePreservesExactDockerHubImage(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()

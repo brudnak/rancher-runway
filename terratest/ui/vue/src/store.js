@@ -44,7 +44,7 @@ export const fullscreen = ref(false);
 // Logs State
 export const logs = reactive({
   show: false,
-  mode: "", // 'live', 'tail', 'docker', 'setup', 'linodeSetup', 'readiness', 'cleanup', 'linodeCleanup', 'cleanupBatch'
+  mode: "", // 'live', 'tail', 'docker', 'setup', 'linodeSetup', 'readiness', 'downstream', 'cleanup', 'linodeCleanup', 'cleanupBatch'
   clusterId: "",
   namespace: "",
   podName: "",
@@ -91,6 +91,7 @@ export const selectedCleanupRunId = ref("");
 export const selectedCleanupRunIds = ref([]);
 export const cleanupStarting = ref(false);
 export const cleanupBatchStarting = ref(false);
+export const downstreamRetryingRunId = ref("");
 export const dismissedCleanupResultKey = ref("");
 export const costResetting = ref(false);
 export const localArtifactsCleaning = ref(false);
@@ -153,7 +154,7 @@ export const apiFetch = async (path, options = {}) => {
 
 // Lifecycle checkers
 export const awsLifecycleRunning = computed(() =>
-  Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.cleanup?.running)
+  Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running || state.value?.cleanup?.running)
 );
 export const linodeLifecycleRunning = computed(() =>
   Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running)
@@ -253,6 +254,18 @@ export const lifecycleBusyDetail = () => {
       busy: true,
       operation: "readiness",
       message: "Readiness checks are running. AWS actions are locked, but Linode Docker setup can run in parallel.",
+      busyByDeployment: {
+        "ha-rke2": true,
+        "hosted-tenant-k3s": true,
+        "linode-docker-cattle": linodeLifecycleRunning.value,
+      },
+    };
+  }
+  if (curState?.downstream?.running) {
+    return {
+      busy: true,
+      operation: "downstream",
+      message: "Downstream provisioning is running against a ready management Rancher. Setup, readiness, and destroy stay locked until it finishes.",
       busyByDeployment: {
         "ha-rke2": true,
         "hosted-tenant-k3s": true,
@@ -480,6 +493,7 @@ export const maybeShowGPUReminder = curState => {
   const busy = Boolean(
     curState?.setup?.running ||
     curState?.readiness?.running ||
+    curState?.downstream?.running ||
     curState?.cleanup?.running ||
     curState?.cleanupBatch?.running ||
     cleanupStarting.value ||
@@ -541,6 +555,9 @@ export const updateLeaderTracking = curState => {
 export const logFilename = () => {
   if (logs.mode === "readiness") {
     return `readiness${logs.search ? "-filtered" : ""}.log`;
+  }
+  if (logs.mode === "downstream") {
+    return `downstream${logs.search ? "-filtered" : ""}.log`;
   }
   if (logs.mode === "setup" || logs.mode === "linodeSetup") {
     return `${logs.mode === "linodeSetup" ? "linode-setup" : "setup"}${logs.search ? "-filtered" : ""}.log`;
@@ -827,6 +844,16 @@ export const openReadinessLogs = () => {
   openLogModal();
 };
 
+export const openDownstreamLogs = () => {
+  stopStream({ internal: true });
+  setActiveLogContext("downstream", "local", "terratest", "downstream");
+  const downstream = state.value?.downstream || {};
+  logs.rawText = operationOutput(downstream).join("\n");
+  logs.liveState = downstream.running ? "downstreamRunning" : downstream.error ? "downstreamError" : downstream.finishedAt ? "downstreamDone" : "idle";
+  renderLogViewer();
+  openLogModal();
+};
+
 export const openCleanupLogs = (linode = false) => {
   stopStream({ internal: true });
   setActiveLogContext(linode ? "linodeCleanup" : "cleanup", linode ? "linode" : "local", "terratest", "cleanup");
@@ -860,6 +887,14 @@ const syncCleanupBatchLogModal = currentState => {
   const cleanupBatch = currentState?.cleanupBatch || {};
   logs.rawText = operationOutput(cleanupBatch).join("\n");
   logs.liveState = cleanupBatchLiveState(cleanupBatch);
+  renderLogViewer();
+};
+
+const syncDownstreamLogModal = currentState => {
+  if (!logs.show || logs.mode !== "downstream") return;
+  const downstream = currentState?.downstream || {};
+  logs.rawText = operationOutput(downstream).join("\n");
+  logs.liveState = downstream.running ? "downstreamRunning" : downstream.error ? "downstreamError" : downstream.finishedAt ? "downstreamDone" : "idle";
   renderLogViewer();
 };
 
@@ -1052,6 +1087,7 @@ export const runSetup = async () => {
 export const abortOperation = async (operation, runId = "", options = {}) => {
   if (!options.skipConfirmation) {
     const cleanupBatchAbort = operation === "cleanupBatch";
+    const downstreamAbort = operation === "downstream";
     const label = operation === "setup" || operation === "linodeSetup"
       ? "setup"
       : cleanupBatchAbort
@@ -1060,11 +1096,13 @@ export const abortOperation = async (operation, runId = "", options = {}) => {
     const confirmed = await requestTypedConfirmation({
       title: cleanupBatchAbort ? "Stop destroy batch?" : `Stop ${label} process?`,
       body: cleanupBatchAbort
-        ? "This interrupts the Terraform destroy currently in progress and prevents queued slots from starting. Queued slots stay recorded. The current slot also stays recorded, but its infrastructure may be partially destroyed and should be reviewed before retrying."
-        : `This asks the local ${label} test process to stop and preserves Terraform state plus the run record. It does not destroy AWS resources.`,
+        ? "This interrupts the current cleanup phase—recorded Linode downstream deletion or Terraform destroy—and prevents queued slots from starting. Queued slots stay recorded. The current slot also stays recorded, but its infrastructure may be partially cleaned up and should be reviewed before retrying."
+        : downstreamAbort
+          ? "This stops only downstream provisioning. The ready management Rancher and its run record stay intact; any partial Linode resources remain recorded for retry or destroy."
+          : `This asks the local ${label} test process to stop and preserves Terraform state plus the run record. It does not destroy AWS resources.`,
       typedValue: "stop",
       confirmText: cleanupBatchAbort ? "Stop destroy batch" : "Request stop",
-      accentText: cleanupBatchAbort ? "Terraform destroy interruption" : "Confirmation required",
+      accentText: cleanupBatchAbort ? "Cleanup interruption" : "Confirmation required",
     });
     if (!confirmed) {
       return false;
@@ -1104,7 +1142,7 @@ export const stopOperationThenOpenDestroy = async (operation, runId = "") => {
   const label = operation === "setup" ? "setup" : "readiness";
   const confirmed = await requestTypedConfirmation({
     title: `Stop ${label}, then open destroy?`,
-    body: `This requests a stop for the running ${label} process and moves run ${targetRunId || "this slot"} into the Destroy tab. Terraform destroy still requires its own typed "destroy" confirmation before AWS cleanup starts.`,
+    body: `This requests a stop for the running ${label} process and moves run ${targetRunId || "this slot"} into the Destroy tab. Cleanup still requires its own typed "destroy" confirmation. For an HA run, any recorded Linode downstream clusters are deleted first; if none exist, cleanup proceeds directly to AWS management Terraform destroy. AWS destroy will not start if downstream deletion fails.`,
     typedValue: "confirm",
     confirmText: "Stop and open destroy",
     accentText: "Stop before destroy",
@@ -1141,6 +1179,55 @@ export const runReadiness = async () => {
   }
 };
 
+export const retryDownstream = async runId => {
+  const targetRunId = String(runId || "").trim();
+  if (!targetRunId || downstreamRetryingRunId.value || lifecycleRunning.value || bootPending.value) {
+    return;
+  }
+
+  const confirmed = await requestTypedConfirmation({
+    title: `Retry downstream provisioning for run ${targetRunId}?`,
+    body: "The management Rancher is already ready. This retries only the frozen Linode downstream plan and may create billable Linode resources; it does not rerun or destroy management setup.",
+    typedValue: "retry downstream",
+    confirmText: "Retry downstream",
+    accentText: "Linode provisioning retry",
+  });
+  if (!confirmed) return;
+
+  downstreamRetryingRunId.value = targetRunId;
+  try {
+    await apiFetch("/api/downstream/retry", {
+      method: "POST",
+      body: JSON.stringify({ runId: targetRunId, confirm: "retry downstream" }),
+    });
+    state.value = {
+      ...(state.value || {}),
+      downstream: {
+        ...(state.value?.downstream || {}),
+        running: true,
+        runId: targetRunId,
+        error: "",
+        output: ["[control-panel] Downstream retry requested..."],
+        startedAt: new Date().toISOString(),
+      },
+      workspace: {
+        ...(state.value?.workspace || {}),
+        runs: (state.value?.workspace?.runs || []).map(run => sameRunKey(run.runId, targetRunId)
+          ? { ...run, downstreamStatus: "downstream_running", downstreamError: "" }
+          : run),
+      },
+    };
+    refreshStatus.value = "Downstream retry requested...";
+    dispatchSetupLifecycleState();
+    openDownstreamLogs();
+    refresh();
+  } catch (error) {
+    refreshStatus.value = error instanceof Error ? error.message : "Downstream retry failed.";
+  } finally {
+    downstreamRetryingRunId.value = "";
+  }
+};
+
 export const runCleanup = async (runId = selectedCleanupRunId.value) => {
   const targetRunId = String(runId || "").trim();
   if (!targetRunId) {
@@ -1154,7 +1241,7 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
   const linodeRun = runIsLinodeDocker(targetRun);
   const destroyBlocked = linodeRun
     ? state.value?.linodeCleanup?.running || state.value?.linodeSetup?.running
-    : state.value?.cleanup?.running || state.value?.setup?.running || state.value?.readiness?.running;
+    : state.value?.cleanup?.running || state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running;
 
   if (cleanupStarting.value || cleanupBatchStarting.value || state.value?.cleanupBatch?.running || destroyBlocked) {
     return;
@@ -1164,10 +1251,10 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
     title: `Destroy run ${targetRunId}?`,
     body: linodeRun
       ? "This runs Terraform destroy from the selected Linode run state. It deletes the Linode instance and its AWS Route53 record, then removes the run slot only after destroy succeeds."
-      : "This runs Terraform destroy from the selected run state. It is intended to delete AWS resources for that run, then remove the run slot only after destroy succeeds.",
+      : "Any recorded Linode downstream clusters are deleted first; if none exist, cleanup proceeds directly to Terraform destroy for the AWS management infrastructure. AWS destroy will not start if downstream deletion fails. The run slot is removed only after the complete cleanup succeeds.",
     typedValue: "destroy",
     confirmText: "Start destroy",
-    accentText: "AWS destroy confirmation",
+    accentText: linodeRun ? "Linode destroy confirmation" : "Downstream-first destroy confirmation",
   });
   if (!confirmed) return;
 
@@ -1222,7 +1309,7 @@ export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRun
     title: all
       ? `Destroy all ${requestedRunIds.length} run slots?`
       : `Destroy ${requestedRunIds.length} selected run slot${requestedRunIds.length === 1 ? "" : "s"}?`,
-    body: `Terraform destroy will run sequentially for this fixed set: ${targetSummary}. Successful slots are removed; failed slots stay recorded and the batch continues with the remaining targets.`,
+    body: `For each HA management run, any recorded Linode downstream clusters are deleted first; when none exist, cleanup proceeds directly to AWS management Terraform destroy. A downstream deletion failure prevents AWS destroy for that run. Linode Docker slots use their recorded Linode and Route53 Terraform destroy. Cleanup runs sequentially for this fixed set: ${targetSummary}. Successful slots are removed; failed slots stay recorded and the batch continues with the remaining targets.`,
     typedValue: confirmationText,
     confirmText: all ? "Destroy all slots" : "Destroy selected slots",
     accentText: all ? "Destroy every recorded slot" : "Bulk destroy confirmation",
@@ -1456,6 +1543,7 @@ export const refresh = async () => {
 
     dispatchSetupLifecycleState();
     syncCleanupBatchLogModal(fetched);
+    syncDownstreamLogModal(fetched);
 
     if (pendingAbortOperation.value && !fetched?.[pendingAbortOperation.value]?.running) {
       pendingAbortOperation.value = "";

@@ -318,6 +318,7 @@ const logModalKind = computed(() => {
   if (logs.mode === "setup") return "Setup logs";
   if (logs.mode === "linodeSetup") return "Linode setup logs";
   if (logs.mode === "readiness") return "Readiness logs";
+  if (logs.mode === "downstream") return "Downstream logs";
   if (logs.mode === "cleanup") return "Destroy logs";
   if (logs.mode === "linodeCleanup") return "Linode destroy logs";
   if (logs.mode === "cleanupBatch") return "Destroy batch logs";
@@ -329,6 +330,7 @@ const logModalTitle = computed(() => {
   if (logs.mode === "setup") return "Setup";
   if (logs.mode === "linodeSetup") return "Linode setup";
   if (logs.mode === "readiness") return "Readiness";
+  if (logs.mode === "downstream") return "Linode downstream provisioning";
   if (logs.mode === "cleanup") return "Destroy run";
   if (logs.mode === "linodeCleanup") return "Linode destroy run";
   if (logs.mode === "cleanupBatch") return "Sequential slot destroy";
@@ -343,8 +345,9 @@ const logModalSubtitle = computed(() => {
   if (logs.mode === "setup") return "go test -v -run ^TestHaSetup$ -timeout 90m -count=1 ./terratest";
   if (logs.mode === "linodeSetup") return "go test -v -run ^TestHaSetup$ -timeout 90m -count=1 ./terratest";
   if (logs.mode === "readiness") return state.value?.readiness?.command || "go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest";
-  if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") return "go test -v -run TestHACleanup -timeout 20m ./terratest";
-  if (logs.mode === "cleanupBatch") return "Runs Terraform destroy once per recorded slot and continues past individual failures";
+  if (logs.mode === "downstream") return state.value?.downstream?.command || "go test -v -run ^TestHAProvisionConfiguredLinodeDownstreams$ -timeout 35m -count=1 ./terratest";
+  if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") return "go test -v -run ^TestHACleanup$ -timeout 60m -count=1 ./terratest";
+  if (logs.mode === "cleanupBatch") return "Deletes recorded Linode downstreams before each HA run's Terraform destroy and continues past individual slot failures";
   return `${logs.namespace} • ${logs.clusterId} • ${logs.mode === "live" ? "live stream" : "tail snapshot"}`;
 });
 
@@ -361,6 +364,9 @@ const liveLogStateLabel = computed(() => {
     readinessRunning: "Readiness running",
     readinessDone: "Readiness completed",
     readinessError: "Readiness failed",
+    downstreamRunning: "Downstream provisioning running",
+    downstreamDone: "Downstream provisioning completed",
+    downstreamError: "Downstream provisioning failed; management remains ready",
     cleanupRunning: "Destroy running",
     cleanupDone: "Destroy completed",
     cleanupError: "Destroy failed",
@@ -391,6 +397,9 @@ const liveLogStateIconClass = computed(() => {
     readinessRunning: "bg-sky-500 animate-pulse",
     readinessDone: "bg-emerald-500",
     readinessError: "bg-rose-500",
+    downstreamRunning: "bg-sky-500 animate-pulse",
+    downstreamDone: "bg-emerald-500",
+    downstreamError: "bg-rose-500",
     cleanupRunning: "bg-sky-500 animate-pulse",
     cleanupDone: "bg-emerald-500",
     cleanupError: "bg-rose-500",
@@ -421,6 +430,9 @@ const liveLogStateContainerClass = computed(() => {
     readinessRunning: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
     readinessDone: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
     readinessError: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
+    downstreamRunning: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
+    downstreamDone: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
+    downstreamError: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
     cleanupRunning: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
     cleanupDone: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
     cleanupError: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
@@ -450,8 +462,8 @@ const stopStreamBtnLabel = computed(() => {
 });
 
 const stopStreamBtnHidden = computed(() => {
-  const operationContext = ["setup", "linodeSetup", "readiness", "cleanup", "linodeCleanup", "cleanupBatch"].includes(logs.mode);
-  return operationContext || logs.liveState.startsWith("cleanup") || logs.liveState.startsWith("setup") || logs.liveState.startsWith("readiness") || logs.liveState.startsWith("linode");
+  const operationContext = ["setup", "linodeSetup", "readiness", "downstream", "cleanup", "linodeCleanup", "cleanupBatch"].includes(logs.mode);
+  return operationContext || logs.liveState.startsWith("cleanup") || logs.liveState.startsWith("setup") || logs.liveState.startsWith("readiness") || logs.liveState.startsWith("downstream") || logs.liveState.startsWith("linode");
 });
 
 const logEntries = computed(() => {
@@ -468,11 +480,12 @@ const logWaiting = computed(() => {
   const waitingForLive = logs.mode === "live" && (logs.liveState === "connecting" || logs.liveState === "live");
   const waitingForSetup = logs.mode === "setup" && logs.liveState === "setupRunning";
   const waitingForReadiness = logs.mode === "readiness" && logs.liveState === "readinessRunning";
+  const waitingForDownstream = logs.mode === "downstream" && logs.liveState === "downstreamRunning";
   const waitingForCleanup = logs.mode === "cleanup" && logs.liveState === "cleanupRunning";
   const waitingForLinodeSetup = logs.mode === "linodeSetup" && logs.liveState === "linodeSetupRunning";
   const waitingForLinodeCleanup = logs.mode === "linodeCleanup" && logs.liveState === "linodeCleanupRunning";
   const waitingForCleanupBatch = logs.mode === "cleanupBatch" && ["cleanupBatchRunning", "cleanupBatchCanceling"].includes(logs.liveState);
-  return waitingForLive || waitingForSetup || waitingForReadiness || waitingForCleanup || waitingForLinodeSetup || waitingForLinodeCleanup || waitingForCleanupBatch;
+  return waitingForLive || waitingForSetup || waitingForReadiness || waitingForDownstream || waitingForCleanup || waitingForLinodeSetup || waitingForLinodeCleanup || waitingForCleanupBatch;
 });
 
 const logWaitingMessage = computed(() => {
@@ -493,6 +506,9 @@ const logWaitingMessage = computed(() => {
   }
   if (logs.mode === "readiness" && logs.liveState === "readinessRunning") {
     return "Waiting for readiness output...";
+  }
+  if (logs.mode === "downstream" && logs.liveState === "downstreamRunning") {
+    return "Waiting for downstream provisioning output...";
   }
   if (logs.mode === "cleanup" && logs.liveState === "cleanupRunning") {
     return "Waiting for cleanup output...";

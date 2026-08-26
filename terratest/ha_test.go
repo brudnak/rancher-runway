@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/gruntwork-io/terratest/modules/terraform"
@@ -143,6 +144,10 @@ func TestHACleanup(t *testing.T) {
 	defer cleanupTerraformNonStateFiles()
 
 	totalHAs := configuredRancherInstanceCount()
+	downstreamDeleteTimeout := durationFromEnv("LINODE_DOWNSTREAM_DELETE_TIMEOUT", 20*time.Minute)
+	if err := cleanupRecordedLinodeDownstreams(downstreamDeleteTimeout); err != nil {
+		t.Fatalf("Downstream cleanup failed; management Rancher infrastructure will not be destroyed: %v", err)
+	}
 	if err := validateSecretEnvironment(); err != nil {
 		t.Fatalf("Secret environment preflight failed before cleanup: %v", err)
 	}

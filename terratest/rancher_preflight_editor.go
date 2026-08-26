@@ -785,6 +785,17 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	if err != nil {
 		return err
 	}
+	if mode == "auto" && !hostedTenant && !linodeDocker {
+		update.DownstreamLinodePlans, err = settings.NormalizeLinodeDownstreamPlans(update.DownstreamLinodePlans, len(normalizedVersions))
+		if err != nil {
+			return err
+		}
+		if settings.AnyLinodeDownstreamPlanEnabled(update.DownstreamLinodePlans) && strings.TrimSpace(linodeAccessToken()) == "" {
+			return fmt.Errorf("automatic Linode downstream provisioning requires LINODE_TOKEN or LINODE_ACCESS_TOKEN")
+		}
+	} else {
+		update.DownstreamLinodePlans = nil
+	}
 	if update.TFVars != nil && (mode != "auto" || linodeDocker) {
 		// Registry controls are hidden outside HA/hosted auto mode. Preserve the
 		// saved selection instead of treating an omitted form field as a clear.
@@ -950,6 +961,21 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		setStringMapValue(rke2Node, "install_script_sha256s", normalizedK8SVersions, installerSHA256s)
 		deleteMappingKey(rke2Node, "install_script_sha256")
 	}
+	if settings.AnyLinodeDownstreamPlanEnabled(update.DownstreamLinodePlans) {
+		downstreamNode := ensureMappingValue(root, "downstream")
+		linodeDownstreamNode := ensureMappingValue(downstreamNode, "linode")
+		setLinodeDownstreamPlanSequenceValue(linodeDownstreamNode, "plans", update.DownstreamLinodePlans)
+	} else if downstreamNode := mappingValue(root, "downstream"); downstreamNode != nil {
+		if linodeDownstreamNode := mappingValue(downstreamNode, "linode"); linodeDownstreamNode != nil {
+			deleteMappingKey(linodeDownstreamNode, "plans")
+			if len(linodeDownstreamNode.Content) == 0 {
+				deleteMappingKey(downstreamNode, "linode")
+			}
+		}
+		if len(downstreamNode.Content) == 0 {
+			deleteMappingKey(root, "downstream")
+		}
+	}
 	if update.TFVars != nil {
 		tfVarsNode := ensureMappingValue(root, "tf_vars")
 		for _, key := range settings.EditableTFVarKeys {
@@ -1021,6 +1047,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 			viper.Set("rancher.agent_images", []string{})
 		}
 		viper.Set("rancher.helm_commands", []string{})
+		viper.Set(settings.DownstreamLinodeConfigKey, update.DownstreamLinodePlans)
 		viper.Set("total_has", len(normalizedVersions))
 		if hostedTenant {
 			viper.Set("total_rancher_instances", len(normalizedVersions))
@@ -1032,6 +1059,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("rancher.agent_image", "")
 		viper.Set("rancher.agent_images", []string{})
 		viper.Set("rancher.helm_commands", normalizedHelmCommands)
+		viper.Set(settings.DownstreamLinodeConfigKey, []settings.LinodeDownstreamPlan{})
 		viper.Set("k8s.versions", normalizedK8SVersions)
 		viper.Set("k8s.version", "")
 		checksumMap := make(map[string]string, len(normalizedK8SVersions))
@@ -1333,6 +1361,34 @@ func setStringMapValue(mapping *yaml.Node, key string, keys []string, values []s
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: keyValue},
 			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Style: yaml.DoubleQuotedStyle, Value: values[i]},
 		)
+	}
+}
+
+func setLinodeDownstreamPlanSequenceValue(mapping *yaml.Node, key string, plans []settings.LinodeDownstreamPlan) {
+	sequenceNode := mappingValue(mapping, key)
+	if sequenceNode == nil {
+		mapping.Content = append(mapping.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+			&yaml.Node{},
+		)
+		sequenceNode = mapping.Content[len(mapping.Content)-1]
+	}
+
+	sequenceNode.Kind = yaml.SequenceNode
+	sequenceNode.Tag = "!!seq"
+	sequenceNode.Style = 0
+	sequenceNode.Content = make([]*yaml.Node, 0, len(plans))
+	for _, plan := range plans {
+		planNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		setBoolValue(planNode, "enabled", plan.Enabled)
+		setStringValue(planNode, "distribution", plan.Distribution)
+		if plan.KubernetesVersion != "" {
+			setStringValue(planNode, "kubernetes_version", plan.KubernetesVersion)
+		}
+		setStringValue(planNode, "region", plan.Region)
+		setStringValue(planNode, "instance_type", plan.InstanceType)
+		setStringValue(planNode, "image", plan.Image)
+		sequenceNode.Content = append(sequenceNode.Content, planNode)
 	}
 }
 

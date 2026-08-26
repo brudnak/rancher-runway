@@ -149,6 +149,7 @@
         <form id="setupForm" method="post" action="{{.BasePath}}/submit?token={{.Token}}" hx-post="{{.BasePath}}/submit?token={{.Token}}" hx-trigger="confirmed-submit" hx-swap="none">
           <input id="modeInput" type="hidden" name="mode" value="auto" />
           <input id="deploymentTypeInput" type="hidden" name="deploymentType" value="ha-rke2" />
+          <input id="downstreamLinodePlansInput" type="hidden" name="downstreamLinodePlans" value="[]" />
           <div class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-xl shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/30 sm:p-5">
               <div class="mb-5 rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
                 <div class="mb-3 flex flex-wrap items-center justify-between gap-3">

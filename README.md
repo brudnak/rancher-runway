@@ -175,6 +175,20 @@ builds without a Docker daemon or `skopeo` command line workflow.
   available, or verified pair completion rank. An exact tagged or digest
   reference can also be inspected directly without first finding it in a tag
   result page.
+- Ordinary browsing defaults to **Fast · first matching tags**, a bounded scan
+  that stops after the 200-row per-source result limit. Choose an explicit
+  version, tag, upload-time, or pair-completion sort when complete global
+  ordering is more important than speed. Prime-pair verification and date
+  filtering still scan the complete candidate set needed for a correct answer.
+- Entering a bare patch such as `2.15.1` offers the corresponding
+  `v2.15.1-head` Prime lookup. **Base tags only** hides architecture-suffixed
+  variants when the unsuffixed selector is what matters.
+- **Last 30 days** is an opt-in evidence-based filter. It uses verified pair
+  completion time first, then registry upload time or inspected image creation
+  time. Images with no reliable timestamp are excluded and counted rather than
+  assigned a guessed date. OCI tag listings do not include timestamps or
+  guarantee newest-first order, so this filter cannot avoid the initial
+  staging tag scan and is not enabled by default.
 - Select a tag to inspect its digest, image creation time, platforms,
   configuration, labels, environment, entrypoint, OCI build history, layers,
   and sizes. Upload time is separate registry metadata: Docker Hub may provide
@@ -184,7 +198,9 @@ builds without a Docker daemon or `skopeo` command line workflow.
 - Architecture-suffixed tags retain their base-tag association but remain
   distinct registry tags. Inspect the image manifest's platform list for the
   authoritative architectures; a suffix alone does not prove that the base tag
-  is a multi-platform image.
+  is a multi-platform image. Opening an architecture-suffixed row automatically
+  selects its matching inspect platform, so an ARM64-only index is not queried
+  as `linux/amd64`.
 - `rancher/rancher-webhook` remains a separately searchable image family and is
   never counted as one half of a Prime server/agent pair.
 - When an image contains `build.yaml`, the detail drawer safely reads the

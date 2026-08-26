@@ -40,8 +40,39 @@ let deploymentType = normalizeDeploymentType(setupData.deploymentType || config.
 const hostedTenantMinInstances = 2
 const hostedTenantMaxInstances = 4
 const linodeDockerMaxInstances = 6
+const downstreamLinodePlanDefaults = Object.freeze({
+  enabled: false,
+  distribution: 'k3s',
+  kubernetesVersion: '',
+  region: 'us-ord',
+  instanceType: 'g6-standard-2',
+  image: 'linode/ubuntu22.04'
+})
+const normalizeDownstreamLinodePlan = value => {
+  const plan = value && typeof value === 'object' ? value : {}
+  return {
+    enabled: Boolean(plan.enabled),
+    distribution: String(plan.distribution || '').trim().toLowerCase() === 'rke2' ? 'rke2' : 'k3s',
+    // Blank versions resolve from Rancher after readiness; configured exact versions stay pinned.
+    kubernetesVersion: String(plan.kubernetesVersion || '').trim(),
+    region: String(plan.region || downstreamLinodePlanDefaults.region).trim() || downstreamLinodePlanDefaults.region,
+    instanceType: String(plan.instanceType || downstreamLinodePlanDefaults.instanceType).trim() || downstreamLinodePlanDefaults.instanceType,
+    image: String(plan.image || downstreamLinodePlanDefaults.image).trim() || downstreamLinodePlanDefaults.image
+  }
+}
+const cloneDownstreamLinodePlans = plans => plans.map(plan => normalizeDownstreamLinodePlan(plan))
+const configuredDownstreamLinodePlans = Array.isArray(config.downstreamLinodePlans)
+  ? cloneDownstreamLinodePlans(config.downstreamLinodePlans)
+  : []
+let downstreamLinodePlans = versions.map((_, index) => normalizeDownstreamLinodePlan(
+  deploymentType === 'ha-rke2' ? configuredDownstreamLinodePlans[index] : undefined
+))
 const deploymentVersionSets = new Map([[deploymentType, versions.slice()]])
 const deploymentAgentImageSets = new Map([[deploymentType, agentImages.slice()]])
+const deploymentDownstreamLinodePlanSets = new Map([[deploymentType, cloneDownstreamLinodePlans(downstreamLinodePlans)]])
+if (deploymentType !== 'ha-rke2' && configuredDownstreamLinodePlans.length) {
+  deploymentDownstreamLinodePlanSets.set('ha-rke2', cloneDownstreamLinodePlans(configuredDownstreamLinodePlans))
+}
 const advancedDetailsOpenByDeployment = new Map([
   ['ha-rke2', false],
   ['hosted-tenant-k3s', false],
@@ -71,6 +102,15 @@ let gpuWorkerOverridesUnlocked = false
 let gpuWorkerPriceLookup = null
 let gpuWorkerPriceLookupPending = false
 let gpuWorkerPriceLookupError = ''
+let downstreamLinodeCatalog = {
+  status: 'idle',
+  source: '',
+  regions: [],
+  types: [],
+  images: [],
+  error: ''
+}
+let downstreamLinodeCatalogPromise = null
 
 const rowClass = 'grid gap-3 rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center'
 const inputClass = 'w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100'
@@ -81,6 +121,7 @@ const unlockIcon = '<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" view
 const setupFormEl = byId('setupForm')
 const modeInputEl = byId('modeInput')
 const deploymentTypeInputEl = byId('deploymentTypeInput')
+const downstreamLinodePlansInputEl = byId('downstreamLinodePlansInput')
 const haRke2DeploymentBtnEl = byId('haRke2DeploymentBtn')
 const hostedTenantDeploymentBtnEl = byId('hostedTenantDeploymentBtn')
 const linodeDockerDeploymentBtnEl = byId('linodeDockerDeploymentBtn')
@@ -475,6 +516,307 @@ customHostname = sanitizeDisplayValue(setupData.customHostname || '')
 
 const isHostedTenantDeployment = () => deploymentType === 'hosted-tenant-k3s'
 const isLinodeDockerDeployment = () => deploymentType === 'linode-docker-cattle'
+const isDownstreamLinodeEligible = () => deploymentType === 'ha-rke2' && setupMode === 'auto'
+
+const syncDownstreamLinodePlansInput = () => {
+  if (!downstreamLinodePlansInputEl) {
+    return
+  }
+  const serializedPlans = downstreamLinodePlans.map(plan => {
+    const normalized = normalizeDownstreamLinodePlan(plan)
+    return isDownstreamLinodeEligible() ? normalized : { ...normalized, enabled: false }
+  })
+  downstreamLinodePlansInputEl.value = JSON.stringify(serializedPlans)
+}
+
+const alignDownstreamLinodePlans = () => {
+  while (downstreamLinodePlans.length < versions.length) {
+    downstreamLinodePlans.push(normalizeDownstreamLinodePlan())
+  }
+  if (downstreamLinodePlans.length > versions.length) {
+    downstreamLinodePlans = downstreamLinodePlans.slice(0, versions.length)
+  }
+  downstreamLinodePlans = cloneDownstreamLinodePlans(downstreamLinodePlans)
+  syncDownstreamLinodePlansInput()
+}
+
+const downstreamLinodeCatalogOption = value => {
+  if (typeof value === 'string') {
+    const id = value.trim()
+    return id ? { value: id, label: id } : null
+  }
+  if (!value || typeof value !== 'object') {
+    return null
+  }
+  const id = String(value.id || value.value || value.slug || '').trim()
+  if (!id) {
+    return null
+  }
+  const rawLabel = String(value.label || value.name || value.description || id).trim()
+  return {
+    value: id,
+    label: rawLabel && rawLabel !== id ? `${rawLabel} (${id})` : id
+  }
+}
+
+const normalizeDownstreamLinodeCatalogOptions = values => {
+  const seen = new Set()
+  return (Array.isArray(values) ? values : [])
+    .map(downstreamLinodeCatalogOption)
+    .filter(option => {
+      if (!option || seen.has(option.value)) {
+        return false
+      }
+      seen.add(option.value)
+      return true
+    })
+}
+
+const downstreamLinodeCatalogStatusText = () => {
+  if (downstreamLinodeCatalog.status === 'loading') {
+    return 'Loading live Linode regions, instance types, and OS images…'
+  }
+  if (downstreamLinodeCatalog.status === 'error') {
+    return `Live Linode catalog unavailable: ${downstreamLinodeCatalog.error} Known defaults remain available.`
+  }
+  if (downstreamLinodeCatalog.status === 'ready') {
+    return downstreamLinodeCatalog.source
+      ? `Live Linode catalog loaded from ${downstreamLinodeCatalog.source}.`
+      : 'Live Linode catalog loaded.'
+  }
+  return 'Preparing the live Linode catalog…'
+}
+
+const downstreamLinodeCatalogStatusHTML = () => `
+  <p class="min-h-5 text-xs leading-5 ${downstreamLinodeCatalog.status === 'error' ? 'text-amber-700 dark:text-amber-300' : 'text-zinc-500 dark:text-zinc-400'}" data-downstream-linode-catalog-status role="status" aria-live="polite">${escapeHtml(downstreamLinodeCatalogStatusText())}</p>
+`
+
+const downstreamLinodeCatalogOptions = (field, currentValue) => {
+  const fallbackByField = {
+    region: downstreamLinodePlanDefaults.region,
+    instanceType: downstreamLinodePlanDefaults.instanceType,
+    image: downstreamLinodePlanDefaults.image
+  }
+  const collectionByField = {
+    region: downstreamLinodeCatalog.regions,
+    instanceType: downstreamLinodeCatalog.types,
+    image: downstreamLinodeCatalog.images
+  }
+  const fallback = fallbackByField[field]
+  const current = String(currentValue || fallback).trim() || fallback
+  const options = [
+    { value: fallback, label: `${fallback} (default)` },
+    ...(current !== fallback ? [{ value: current, label: `${current} (configured)` }] : []),
+    ...(collectionByField[field] || [])
+  ]
+  const seen = new Set()
+  return options
+    .filter(option => {
+      if (!option.value || seen.has(option.value)) {
+        return false
+      }
+      seen.add(option.value)
+      return true
+    })
+    .map(option => `<option value="${escapeHtml(option.value)}"${option.value === current ? ' selected' : ''}>${escapeHtml(option.label)}</option>`)
+    .join('')
+}
+
+const downstreamLinodePlanSummary = plan => {
+  const normalized = normalizeDownstreamLinodePlan(plan)
+  const usesDefaults = normalized.distribution === downstreamLinodePlanDefaults.distribution &&
+    normalized.region === downstreamLinodePlanDefaults.region &&
+    normalized.instanceType === downstreamLinodePlanDefaults.instanceType &&
+    normalized.image === downstreamLinodePlanDefaults.image
+  const distribution = normalized.distribution === 'rke2' ? 'RKE2' : 'K3s'
+  const versionAttention = downstreamLinodeKubernetesVersionMismatch(normalized)
+    ? ` Needs attention: the pinned version does not match ${distribution}.`
+    : ''
+  return `${usesDefaults ? 'Defaults' : 'Selected'}: ${distribution} · ${normalized.region} · ${normalized.instanceType} · ${normalized.image}. Kubernetes: ${downstreamLinodeKubernetesVersionText(normalized)}.${versionAttention}`
+}
+
+const downstreamLinodeKubernetesVersionText = plan => {
+  const normalized = normalizeDownstreamLinodePlan(plan)
+  return normalized.kubernetesVersion
+    ? `Pinned: ${normalized.kubernetesVersion}`
+    : 'Rancher default (resolved after readiness)'
+}
+
+const downstreamLinodeKubernetesVersionMismatch = plan => {
+  const normalized = normalizeDownstreamLinodePlan(plan)
+  if (!normalized.kubernetesVersion) {
+    return false
+  }
+  const pinned = normalized.kubernetesVersion.toLowerCase()
+  return !pinned.startsWith('v1.') || !pinned.includes(`+${normalized.distribution}`)
+}
+
+const downstreamLinodeKubernetesVersionNote = plan => {
+  const normalized = normalizeDownstreamLinodePlan(plan)
+  if (!normalized.kubernetesVersion) {
+    return 'Runway asks the live Rancher for its default after readiness.'
+  }
+
+  const pinned = normalized.kubernetesVersion.toLowerCase()
+  const looksLikeRKE2 = /(?:\+|-)rke2/.test(pinned)
+  const looksLikeK3s = /(?:\+|-)k3s/.test(pinned)
+  if (normalized.distribution === 'k3s' && looksLikeRKE2) {
+    return 'This pinned version is for RKE2 while the plan uses K3s. Setup preserved it instead of silently changing it; switch Distribution back to RKE2 or choose Use Rancher default before saving.'
+  }
+  if (normalized.distribution === 'rke2' && looksLikeK3s) {
+    return 'This pinned version is for K3s while the plan uses RKE2. Setup preserved it instead of silently changing it; switch Distribution back to K3s or choose Use Rancher default before saving.'
+  }
+  if (downstreamLinodeKubernetesVersionMismatch(normalized)) {
+    return `This pinned version does not match Rancher's ${normalized.distribution.toUpperCase()} version format. Setup preserved it instead of silently changing it; choose Use Rancher default before saving.`
+  }
+  return 'This exact version is preserved. Runway verifies that the live Rancher offers it before provisioning.'
+}
+
+const refreshDownstreamLinodeKubernetesVersionControls = index => {
+  const plan = downstreamLinodePlans[index]
+  if (!plan) {
+    return
+  }
+  const output = rowsEl.querySelector(`[data-downstream-linode-kubernetes-version-index="${index}"]`)
+  const note = rowsEl.querySelector(`[data-downstream-linode-kubernetes-version-note-index="${index}"]`)
+  const useDefault = rowsEl.querySelector(`button[data-downstream-linode-use-default-index="${index}"]`)
+  if (output) {
+    output.textContent = downstreamLinodeKubernetesVersionText(plan)
+  }
+  if (note) {
+    note.textContent = downstreamLinodeKubernetesVersionNote(plan)
+    const mismatch = downstreamLinodeKubernetesVersionMismatch(plan)
+    note.classList.toggle('text-rose-700', mismatch)
+    note.classList.toggle('dark:text-rose-300', mismatch)
+    note.classList.toggle('text-zinc-500', !mismatch)
+    note.classList.toggle('dark:text-zinc-400', !mismatch)
+  }
+  if (useDefault) {
+    useDefault.disabled = !normalizeDownstreamLinodePlan(plan).kubernetesVersion
+  }
+}
+
+const downstreamLinodePlanHTML = index => {
+  if (!isDownstreamLinodeEligible()) {
+    return ''
+  }
+  const plan = normalizeDownstreamLinodePlan(downstreamLinodePlans[index])
+  const checkboxId = `downstream-linode-enabled-${index}`
+  const controlsId = `downstream-linode-controls-${index}`
+  const noteId = `downstream-linode-note-${index}`
+  const versionNoteId = `downstream-linode-version-note-${index}`
+  const versionMismatch = downstreamLinodeKubernetesVersionMismatch(plan)
+  const hiddenClass = plan.enabled ? '' : ' hidden'
+
+  return `
+    <section class="min-w-0 rounded-lg border border-sky-200 bg-sky-50/60 dark:border-sky-500/20 dark:bg-sky-500/[0.06]" data-downstream-linode-row="${index}">
+      <label class="flex min-w-0 cursor-pointer items-start gap-3 p-3" for="${checkboxId}">
+        <input id="${checkboxId}" class="mt-0.5 h-4 w-4 shrink-0 accent-emerald-500" type="checkbox" data-downstream-linode-enabled-index="${index}" aria-controls="${controlsId}" aria-describedby="${noteId}" aria-expanded="${plan.enabled ? 'true' : 'false'}"${plan.enabled ? ' checked' : ''} />
+        <span class="min-w-0">
+          <span class="block text-sm font-semibold leading-5 text-zinc-900 dark:text-zinc-100">Create a downstream Linode cluster after this Rancher is ready</span>
+          <span id="${noteId}" class="mt-1 block text-xs leading-5 text-zinc-600 dark:text-zinc-400">Runway automatically provisions it after readiness. A downstream failure does not delete Rancher.</span>
+        </span>
+      </label>
+      <div id="${controlsId}" class="grid min-w-0 gap-3 border-t border-sky-200 px-3 pb-3 pt-3 dark:border-sky-500/20${hiddenClass}" data-downstream-linode-controls-index="${index}">
+        <p class="min-w-0 break-words text-xs font-medium leading-5 text-zinc-700 dark:text-zinc-300" data-downstream-linode-summary-index="${index}">${escapeHtml(downstreamLinodePlanSummary(plan))}</p>
+        ${downstreamLinodeCatalogStatusHTML()}
+        <details class="min-w-0 rounded-lg border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-950/30" data-downstream-linode-customize-index="${index}">
+          <summary class="cursor-pointer rounded-lg px-3 py-2 text-xs font-semibold text-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 dark:text-zinc-200">Customize downstream cluster</summary>
+          <div class="grid min-w-0 gap-3 border-t border-zinc-200 p-3 dark:border-white/10 sm:grid-cols-2">
+            <label class="grid min-w-0 gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+              Distribution
+              <select class="${inputClass}" data-downstream-linode-plan-index="${index}" data-downstream-linode-plan-field="distribution">
+                <option value="k3s"${plan.distribution === 'k3s' ? ' selected' : ''}>K3s</option>
+                <option value="rke2"${plan.distribution === 'rke2' ? ' selected' : ''}>RKE2</option>
+              </select>
+            </label>
+            <label class="grid min-w-0 gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+              Region
+              <select class="${inputClass}" data-downstream-linode-plan-index="${index}" data-downstream-linode-plan-field="region" data-downstream-linode-catalog-field="region">${downstreamLinodeCatalogOptions('region', plan.region)}</select>
+            </label>
+            <label class="grid min-w-0 gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+              Instance type
+              <select class="${inputClass}" data-downstream-linode-plan-index="${index}" data-downstream-linode-plan-field="instanceType" data-downstream-linode-catalog-field="instanceType">${downstreamLinodeCatalogOptions('instanceType', plan.instanceType)}</select>
+            </label>
+            <label class="grid min-w-0 gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400">
+              OS image
+              <select class="${inputClass}" data-downstream-linode-plan-index="${index}" data-downstream-linode-plan-field="image" data-downstream-linode-catalog-field="image">${downstreamLinodeCatalogOptions('image', plan.image)}</select>
+            </label>
+            <div class="grid min-w-0 gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400 sm:col-span-2">
+              <span>Kubernetes version</span>
+              <div class="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+                <output class="min-w-0 flex-1 break-all rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 font-medium text-zinc-700 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300" data-downstream-linode-kubernetes-version-index="${index}" aria-describedby="${versionNoteId}">${escapeHtml(downstreamLinodeKubernetesVersionText(plan))}</output>
+                <button class="shrink-0 rounded-lg border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" type="button" data-downstream-linode-use-default-index="${index}"${plan.kubernetesVersion ? '' : ' disabled'}>Use Rancher default</button>
+              </div>
+              <p id="${versionNoteId}" class="min-w-0 break-words text-xs font-normal leading-5 ${versionMismatch ? 'text-rose-700 dark:text-rose-300' : 'text-zinc-500 dark:text-zinc-400'}" data-downstream-linode-kubernetes-version-note-index="${index}" role="status" aria-live="polite">${escapeHtml(downstreamLinodeKubernetesVersionNote(plan))}</p>
+            </div>
+          </div>
+        </details>
+      </div>
+    </section>
+  `
+}
+
+const refreshDownstreamLinodeCatalogControls = () => {
+  rowsEl.querySelectorAll('[data-downstream-linode-catalog-status]').forEach(status => {
+    status.textContent = downstreamLinodeCatalogStatusText()
+    status.classList.toggle('text-amber-700', downstreamLinodeCatalog.status === 'error')
+    status.classList.toggle('dark:text-amber-300', downstreamLinodeCatalog.status === 'error')
+    status.classList.toggle('text-zinc-500', downstreamLinodeCatalog.status !== 'error')
+    status.classList.toggle('dark:text-zinc-400', downstreamLinodeCatalog.status !== 'error')
+  })
+  rowsEl.querySelectorAll('select[data-downstream-linode-catalog-field]').forEach(select => {
+    const index = Number(select.getAttribute('data-downstream-linode-plan-index'))
+    const field = select.getAttribute('data-downstream-linode-catalog-field')
+    const plan = downstreamLinodePlans[index]
+    if (!plan || !['region', 'instanceType', 'image'].includes(field)) {
+      return
+    }
+    select.innerHTML = downstreamLinodeCatalogOptions(field, plan[field])
+  })
+}
+
+const loadDownstreamLinodeCatalog = () => {
+  if (downstreamLinodeCatalogPromise) {
+    return downstreamLinodeCatalogPromise
+  }
+
+  downstreamLinodeCatalog = { ...downstreamLinodeCatalog, status: 'loading', error: '' }
+  refreshDownstreamLinodeCatalogControls()
+  downstreamLinodeCatalogPromise = fetch(setupEndpoint(`/api/linode-catalog?token=${encodeURIComponent(token)}`), {
+    method: 'GET',
+    cache: 'no-store',
+    credentials: 'same-origin',
+    headers: { 'Accept': 'application/json' }
+  })
+    .then(async response => {
+      if (!response.ok) {
+        throw new Error(await response.text() || 'Linode catalog lookup failed.')
+      }
+      return response.json()
+    })
+    .then(payload => {
+      downstreamLinodeCatalog = {
+        status: 'ready',
+        source: String(payload?.source || '').trim(),
+        regions: normalizeDownstreamLinodeCatalogOptions(payload?.regions),
+        types: normalizeDownstreamLinodeCatalogOptions(payload?.types),
+        images: normalizeDownstreamLinodeCatalogOptions(payload?.images),
+        error: ''
+      }
+    })
+    .catch(error => {
+      const message = error instanceof Error ? error.message : 'Linode catalog lookup failed.'
+      downstreamLinodeCatalog = {
+        ...downstreamLinodeCatalog,
+        status: 'error',
+        error: String(message || 'Linode catalog lookup failed.').trim()
+      }
+    })
+    .finally(refreshDownstreamLinodeCatalogControls)
+
+  return downstreamLinodeCatalogPromise
+}
 
 const tfVarInput = key => setupQuery(`input[data-tf-var="${key}"]`)
 const tfVarField = key => tfVarInput(key)?.closest('label')
@@ -653,8 +995,10 @@ const maximumAutoRows = () => isHostedTenantDeployment()
       : Number.POSITIVE_INFINITY
 
 const saveDeploymentVersions = () => {
+  alignDownstreamLinodePlans()
   deploymentVersionSets.set(deploymentType, versions.slice())
   deploymentAgentImageSets.set(deploymentType, agentImages.slice())
+  deploymentDownstreamLinodePlanSets.set(deploymentType, cloneDownstreamLinodePlans(downstreamLinodePlans))
 }
 
 const saveAdvancedDetailsState = () => {
@@ -689,6 +1033,10 @@ const switchDeploymentType = nextDeploymentType => {
   deploymentType = nextDeploymentType
   versions = (deploymentVersionSets.get(nextDeploymentType) || seedVersionsForDeployment(nextDeploymentType)).slice()
   agentImages = (deploymentAgentImageSets.get(nextDeploymentType) || []).slice()
+  downstreamLinodePlans = cloneDownstreamLinodePlans(
+    deploymentDownstreamLinodePlanSets.get(nextDeploymentType) || versions.map(() => normalizeDownstreamLinodePlan())
+  )
+  alignDownstreamLinodePlans()
   clearValidationError()
   renderDeploymentType()
   renderCustomHostname()
@@ -706,6 +1054,7 @@ const ensureDeploymentCompatibleRows = () => {
     setupMode = 'auto'
     customHostnameEnabled = false
   }
+  alignDownstreamLinodePlans()
   saveDeploymentVersions()
 }
 
@@ -1129,6 +1478,7 @@ const renderRows = () => {
 			`<input type="hidden" name="agentImages" value="${escapeHtml(agentImage)}" data-agent-hidden-index="${index}" />`,
 			`<input class="${inputClass}${derivesAgent ? ' hidden' : ''}" type="text" value="${escapeHtml(agentImage)}" data-agent-index="${index}" placeholder="docker.io/user/rancher-agent:tag" />`
 		].join('')
+		const downstreamLinodeControls = downstreamLinodePlanHTML(index)
 
 		return [
 			`<div class="${rowClass}">`,
@@ -1136,6 +1486,7 @@ const renderRows = () => {
 			'<div class="grid gap-2">',
 			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="${versionPlaceholder}" />`,
 			agentControls,
+			downstreamLinodeControls,
 			'</div>',
 			`<div><button class="${removeButtonClass}" type="button" data-remove-index="${index}"${removeDisabled}>Remove</button></div>`,
       '</div>'
@@ -1190,6 +1541,62 @@ const renderRows = () => {
 	  })
   })
 
+  rowsEl.querySelectorAll('input[data-downstream-linode-enabled-index]').forEach(toggle => {
+    toggle.addEventListener('change', event => {
+      const index = Number(event.target.getAttribute('data-downstream-linode-enabled-index'))
+      const plan = downstreamLinodePlans[index]
+      if (!plan) {
+        return
+      }
+      plan.enabled = event.target.checked
+      const controls = rowsEl.querySelector(`[data-downstream-linode-controls-index="${index}"]`)
+      controls?.classList.toggle('hidden', !plan.enabled)
+      event.target.setAttribute('aria-expanded', plan.enabled ? 'true' : 'false')
+      syncDownstreamLinodePlansInput()
+      clearValidationError()
+      if (plan.enabled) {
+        void loadDownstreamLinodeCatalog()
+      }
+    })
+  })
+
+  rowsEl.querySelectorAll('select[data-downstream-linode-plan-field]').forEach(select => {
+    select.addEventListener('change', event => {
+      const index = Number(event.target.getAttribute('data-downstream-linode-plan-index'))
+      const field = event.target.getAttribute('data-downstream-linode-plan-field')
+      const plan = downstreamLinodePlans[index]
+      if (!plan || !['distribution', 'region', 'instanceType', 'image'].includes(field)) {
+        return
+      }
+      plan[field] = event.target.value
+      const summary = rowsEl.querySelector(`[data-downstream-linode-summary-index="${index}"]`)
+      if (summary) {
+        summary.textContent = downstreamLinodePlanSummary(plan)
+      }
+      refreshDownstreamLinodeKubernetesVersionControls(index)
+      syncDownstreamLinodePlansInput()
+      clearValidationError()
+    })
+  })
+
+  rowsEl.querySelectorAll('button[data-downstream-linode-use-default-index]').forEach(button => {
+    button.addEventListener('click', event => {
+      const index = Number(event.currentTarget.getAttribute('data-downstream-linode-use-default-index'))
+      const plan = downstreamLinodePlans[index]
+      if (!plan || !plan.kubernetesVersion) {
+        return
+      }
+      plan.kubernetesVersion = ''
+      const summary = rowsEl.querySelector(`[data-downstream-linode-summary-index="${index}"]`)
+      if (summary) {
+        summary.textContent = downstreamLinodePlanSummary(plan)
+      }
+      refreshDownstreamLinodeKubernetesVersionControls(index)
+      syncDownstreamLinodePlansInput()
+      clearValidationError()
+    })
+  })
+
   rowsEl.querySelectorAll('button[data-remove-index]').forEach(button => {
     button.addEventListener('click', () => {
       if (versions.length <= minimumAutoRows() || submitting || singleHARunLocked()) {
@@ -1199,10 +1606,14 @@ const renderRows = () => {
 		const index = Number(button.getAttribute('data-remove-index'))
 		versions.splice(index, 1)
 		agentImages.splice(index, 1)
+      downstreamLinodePlans.splice(index, 1)
       saveDeploymentVersions()
       renderRows()
     })
   })
+  if (isDownstreamLinodeEligible() && downstreamLinodePlans.some(plan => plan.enabled)) {
+    void loadDownstreamLinodeCatalog()
+  }
 }
 
 const normalizeServerCount = value => {
@@ -1486,6 +1897,7 @@ const renderMode = () => {
   if (modeInputEl) {
     modeInputEl.value = setupMode
   }
+  syncDownstreamLinodePlansInput()
   autoModeBtnEl?.setAttribute('aria-pressed', setupMode === 'auto' ? 'true' : 'false')
   manualModeBtnEl?.setAttribute('aria-pressed', setupMode === 'manual' ? 'true' : 'false')
   autoModePanelEl?.classList.toggle('hidden', setupMode !== 'auto')
@@ -1989,6 +2401,51 @@ const collectTFVars = () => {
   return tfVars
 }
 
+const validateEnabledDownstreamLinodePlans = () => {
+  if (!isDownstreamLinodeEligible()) {
+    return null
+  }
+  alignDownstreamLinodePlans()
+  const requiredFields = [
+    { key: 'distribution', label: 'Distribution', valid: value => ['k3s', 'rke2'].includes(String(value || '').trim().toLowerCase()) },
+    { key: 'region', label: 'Region', valid: value => Boolean(String(value || '').trim()) },
+    { key: 'instanceType', label: 'Instance type', valid: value => Boolean(String(value || '').trim()) },
+    { key: 'image', label: 'OS image', valid: value => Boolean(String(value || '').trim()) }
+  ]
+
+  for (let index = 0; index < downstreamLinodePlans.length; index += 1) {
+    const plan = downstreamLinodePlans[index]
+    if (!plan.enabled) {
+      continue
+    }
+    for (const field of requiredFields) {
+      if (!field.valid(plan[field.key])) {
+        const target = rowsEl.querySelector(`select[data-downstream-linode-plan-index="${index}"][data-downstream-linode-plan-field="${field.key}"]`)
+        if (target?.closest('details')) {
+          target.closest('details').open = true
+        }
+        return {
+          message: `${field.label} is required for the downstream Linode cluster after HA ${index + 1}.`,
+          target
+        }
+      }
+    }
+    if (downstreamLinodeKubernetesVersionMismatch(plan)) {
+      const target = rowsEl.querySelector(`button[data-downstream-linode-use-default-index="${index}"]`)
+      const details = target?.closest('details')
+      if (details) {
+        details.open = true
+      }
+      const normalized = normalizeDownstreamLinodePlan(plan)
+      return {
+        message: `Pinned Kubernetes version ${normalized.kubernetesVersion} does not match ${normalized.distribution.toUpperCase()} for the downstream cluster after HA ${index + 1}. Switch Distribution or choose Use Rancher default before saving.`,
+        target
+      }
+    }
+  }
+  return null
+}
+
 const validateSetup = () => {
   const trimmed = normalizedVersions()
   const manualTrimmed = normalizedManualCommands()
@@ -2041,6 +2498,10 @@ const validateSetup = () => {
           target: rowsEl.querySelector(`input[data-index="${i}"]`)
         }
       }
+    }
+    const downstreamValidationError = validateEnabledDownstreamLinodePlans()
+    if (downstreamValidationError) {
+      return downstreamValidationError
     }
   }
 
@@ -2409,7 +2870,7 @@ const setSubmittingState = nextSubmitting => {
     button.disabled = nextSubmitting
   })
 
-  rowsEl.querySelectorAll('input, button[data-remove-index]').forEach(element => {
+  rowsEl.querySelectorAll('input, select, button[data-remove-index]').forEach(element => {
     element.disabled = nextSubmitting || (panelBooting && element.hasAttribute('data-remove-index')) ||
       (element.hasAttribute('data-remove-index') && (singleHARunLocked() || versions.length <= minimumAutoRows()))
   })
@@ -2683,6 +3144,7 @@ const prepareSetupSubmit = async event => {
     }
   }
 
+  syncDownstreamLinodePlansInput()
   const formData = new FormData(setupFormEl)
   editorStatusBoxEl.textContent = 'Saving config and kicking off plan resolution...'
   beginResolutionUI()
@@ -2985,6 +3447,7 @@ addBtnEl.addEventListener('click', () => {
 
 	versions.push('')
 	agentImages.push('')
+  downstreamLinodePlans.push(normalizeDownstreamLinodePlan())
   saveDeploymentVersions()
   renderDeploymentType()
   renderRows()

@@ -70,7 +70,7 @@
           <div class="run-row-titlebar">
             <h3 class="run-title">Run {{ run.runId || "unknown" }}</h3>
             <span class="run-status-pill" :data-tone="runTone(run)">
-              {{ (operationForRun(run) ? "running" : run.status || "recorded").replaceAll("_", " ") }}
+              {{ runStatusLabel(run) }}
             </span>
             <span v-if="isCurrent(run)" class="run-current-pill">current slot</span>
             <span v-if="operationForRun(run)" class="run-live-pill">
@@ -118,6 +118,13 @@
             GPU worker node{{ Number(run.totalHAs || 1) === 1 ? "" : "s" }} requested:
             {{ run.totalHAs || 1 }} x {{ run.gpuWorkerInstanceType || "GPU instance" }}. Do not leave running unused.
           </div>
+          <div
+            v-if="run.downstreamStatus === 'downstream_failed'"
+            class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-900 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-100"
+          >
+            <div class="font-semibold">Management ready; downstream failed</div>
+            <div v-if="run.downstreamError" class="mt-1 break-words text-xs leading-5 text-rose-800/80 dark:text-rose-100/75">{{ run.downstreamError }}</div>
+          </div>
         </div>
 
         <div class="run-command-panel">
@@ -140,6 +147,16 @@
               :disabled="readinessDisabled(run)"
               :title="readinessTitle(run)"
               @click="handleRunAction(run, 'check-readiness')"
+            />
+            <RunAction
+              v-if="run.downstreamStatus === 'downstream_failed'"
+              action="retry-downstream"
+              :run-id="run.runId"
+              label="Retry downstream"
+              variant="blue"
+              :disabled="lifecycleRunning || downstreamRetryingRunId === run.runId"
+              title="Retry only the frozen Linode downstream plan; management Rancher stays ready."
+              @click="handleRunAction(run, 'retry-downstream')"
             />
             <RunAction
               v-bind="lifecycleAction(run)"
@@ -179,6 +196,14 @@
               variant="utility"
               @click="handleRunAction(run, 'open-readiness-logs')"
             />
+            <RunAction
+              v-if="runHasDownstreamPlan(run) || run.downstreamStatus"
+              action="open-downstream-logs"
+              :run-id="run.runId"
+              label="Downstream log"
+              variant="utility"
+              @click="handleRunAction(run, 'open-downstream-logs')"
+            />
           </div>
         </div>
       </article>
@@ -198,11 +223,15 @@ import {
   setActivePanelTab,
   setActiveDestroyTab,
   runReadiness,
+  retryDownstream,
+  downstreamRetryingRunId,
   openLocalPath,
   copyTextToClipboard,
   openSetupLogs,
   openReadinessLogs,
+  openDownstreamLogs,
   openCleanupLogs,
+  abortOperation,
   stopOperationThenOpenDestroy,
 } from "./store.js";
 
@@ -222,7 +251,7 @@ const awsItems = computed(() => Array.isArray(state.value?.aws?.items) ? state.v
 const currentRunID = computed(() => workspace.value?.currentRun?.runId || "");
 const totalHAs = computed(() => runs.value.reduce((total, run) => total + Number(run.totalHAs || 1), 0));
 
-const awsLifecycleRunning = computed(() => Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.cleanup?.running));
+const awsLifecycleRunning = computed(() => Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running || state.value?.cleanup?.running));
 const linodeLifecycleRunning = computed(() => Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running));
 const lifecycleRunning = computed(() => Boolean(awsLifecycleRunning.value || linodeLifecycleRunning.value));
 const canStart = computed(() => Boolean(workspace.value?.canStartIsolatedRun && !lifecycleRunning.value && !bootPending.value));
@@ -230,6 +259,7 @@ const canStart = computed(() => Boolean(workspace.value?.canStartIsolatedRun && 
 const activeOperations = computed(() => [
   { mode: "setup", label: "Setup", operation: state.value?.setup },
   { mode: "readiness", label: "Readiness", operation: state.value?.readiness },
+  { mode: "downstream", label: "Downstream", operation: state.value?.downstream },
   { mode: "cleanup", label: "Destroy", operation: state.value?.cleanup },
   { mode: "linodeSetup", label: "Linode setup", operation: state.value?.linodeSetup },
   { mode: "linodeCleanup", label: "Linode destroy", operation: state.value?.linodeCleanup },
@@ -253,23 +283,40 @@ const nextSetupLabel = computed(() => canStart.value
       ? "Running"
       : "Locked");
 
-const runHasFailure = run => {
+const runHasManagementFailure = run => {
   const status = String(run?.status || "").toLowerCase();
   return status.includes("failed") || status.includes("error");
 };
 
+const runHasFailure = run => runHasManagementFailure(run) || run?.downstreamStatus === "downstream_failed";
+
 const failedReadinessRun = computed(() => {
   const readiness = state.value?.readiness || {};
   if (readiness.running || !readiness.error) {
-    return runs.value.find(run => runHasFailure(run)) || null;
+    return runs.value.find(run => String(run?.status || "").toLowerCase().includes("readiness_failed")) || null;
   }
   const failedRunId = readiness.runId || "";
-  return runs.value.find(run => sameRunKey(run.runId, failedRunId)) || runs.value.find(run => runHasFailure(run)) || null;
+  return runs.value.find(run => sameRunKey(run.runId, failedRunId)) || runs.value.find(run => String(run?.status || "").toLowerCase().includes("readiness_failed")) || null;
 });
 
 const operationForRun = run => {
   const runId = run?.runId || "";
   return activeOperations.value.find(item => sameRunKey(item.operation?.runId, runId)) || null;
+};
+
+const runHasDownstreamPlan = run => Array.isArray(run?.downstreamLinodePlans) && run.downstreamLinodePlans.some(plan => Boolean(plan?.enabled));
+
+const runStatusLabel = run => {
+  if (operationForRun(run)) {
+    return operationForRun(run).mode === "downstream" ? "Management ready; downstream provisioning" : "running";
+  }
+  if (run?.downstreamStatus === "downstream_failed") {
+    return "Management ready; downstream failed";
+  }
+  if (run?.downstreamStatus === "downstream_ready") {
+    return "Management and downstream ready";
+  }
+  return String(run?.status || "recorded").replaceAll("_", " ");
 };
 
 const runTone = run => {
@@ -349,6 +396,7 @@ const runTerraformPath = run => run?.terraformModuleDir || (run?.terraformStateP
 const runIsLinodeDocker = run => run?.deploymentType === "linode-docker-cattle";
 const isCurrent = run => Boolean(currentRunID.value && sameRunKey(run.runId, currentRunID.value));
 const readinessRunningForRun = run => Boolean(state.value?.readiness?.running && sameRunKey(state.value.readiness.runId, run.runId));
+const downstreamRunningForRun = run => Boolean(state.value?.downstream?.running && sameRunKey(state.value.downstream.runId, run.runId));
 const setupRunningForRun = run => Boolean(state.value?.setup?.running && sameRunKey(state.value.setup.runId, run.runId));
 const linodeSetupRunningForRun = run => Boolean(state.value?.linodeSetup?.running && sameRunKey(state.value.linodeSetup.runId, run.runId));
 const providerLifecycleRunning = run => runIsLinodeDocker(run) ? linodeLifecycleRunning.value : awsLifecycleRunning.value;
@@ -386,6 +434,15 @@ const lifecycleAction = run => {
       title: "Requires typing confirm before stopping readiness and opening Destroy.",
     };
   }
+  if (downstreamRunningForRun(run)) {
+    return {
+      action: "stop-downstream",
+      runId: run.runId,
+      label: "Stop downstream",
+      variant: "danger",
+      title: "Stop downstream provisioning while preserving the ready management Rancher.",
+    };
+  }
   const disabled = Boolean(providerLifecycleRunning(run) || bootPending.value);
   const failed = runHasFailure(run);
   return {
@@ -402,15 +459,30 @@ const timelineSteps = run => {
   const status = String(run?.status || "").toLowerCase();
   const setupRunning = setupRunningForRun(run) || linodeSetupRunningForRun(run);
   const readinessRunning = readinessRunningForRun(run);
+  const downstreamRunning = downstreamRunningForRun(run);
   const cleanupRunning = (state.value?.cleanup?.running && sameRunKey(state.value.cleanup.runId, run.runId)) ||
     (state.value?.linodeCleanup?.running && sameRunKey(state.value.linodeCleanup.runId, run.runId));
   const setupDone = status.includes("setup_complete") || status === "ready" || status.includes("readiness") || status.includes("cleanup");
   const readinessDone = status === "ready";
-  return [
+  const downstreamStatus = String(run?.downstreamStatus || "").toLowerCase();
+  const steps = [
     { label: "Setup", state: setupRunning ? "active" : status.includes("setup_failed") ? "failed" : setupDone ? "done" : "waiting" },
     { label: "Readiness", state: readinessRunning ? "active" : status.includes("readiness_failed") ? "failed" : readinessDone ? "done" : "waiting" },
-    { label: "Destroy", state: cleanupRunning ? "active" : status.includes("cleanup_failed") ? "failed" : "waiting" },
   ];
+  if (runHasDownstreamPlan(run) || downstreamStatus) {
+    steps.push({
+      label: "Downstream",
+      state: downstreamRunning || downstreamStatus === "downstream_running"
+        ? "active"
+        : downstreamStatus === "downstream_failed"
+          ? "failed"
+          : downstreamStatus === "downstream_ready"
+            ? "done"
+            : "waiting",
+    });
+  }
+  steps.push({ label: "Destroy", state: cleanupRunning ? "active" : status.includes("cleanup_failed") ? "failed" : "waiting" });
+  return steps;
 };
 
 const timeLabel = value => value ? new Date(value).toLocaleTimeString() : "";
@@ -448,6 +520,9 @@ const operationLogAction = mode => {
   if (mode === "readiness") {
     return "open-readiness-logs";
   }
+  if (mode === "downstream") {
+    return "open-downstream-logs";
+  }
   if (mode === "cleanup" || mode === "linodeCleanup") {
     return "open-cleanup-logs";
   }
@@ -466,6 +541,8 @@ const handleRunAction = (runOrId, action) => {
     setActivePanelTab('clusters');
   } else if (action === 'check-readiness') {
     runReadiness();
+  } else if (action === 'retry-downstream') {
+    retryDownstream(runId);
   } else if (action === 'open-run-folder') {
     if (!runFolderAvailable(run)) {
       refreshStatus.value = 'Run folder is not available locally.';
@@ -478,6 +555,8 @@ const handleRunAction = (runOrId, action) => {
     openSetupLogs(runIsLinodeDocker(run));
   } else if (action === 'open-readiness-logs') {
     openReadinessLogs();
+  } else if (action === 'open-downstream-logs') {
+    openDownstreamLogs();
   } else if (action === 'open-cleanup-logs') {
     openCleanupLogs(runIsLinodeDocker(run));
   } else if (action === 'open-destroy') {
@@ -488,6 +567,8 @@ const handleRunAction = (runOrId, action) => {
     stopOperationThenOpenDestroy(runIsLinodeDocker(run) ? 'linodeSetup' : 'setup', runId);
   } else if (action === 'stop-readiness-open-destroy') {
     stopOperationThenOpenDestroy('readiness', runId);
+  } else if (action === 'stop-downstream') {
+    abortOperation('downstream', runId);
   }
 };
 
@@ -502,13 +583,15 @@ const ActiveOperationsBanner = defineComponent({
             `${props.operations.length} lifecycle op${props.operations.length === 1 ? "" : "s"} running`,
           ]),
           h("h3", { class: "mt-2 text-base font-semibold text-sky-950 dark:text-sky-100" }, "Active run work"),
-          h("p", { class: "mt-1 text-sm leading-6 text-sky-800/80 dark:text-sky-100/75" }, "Setup, readiness, and destroy actions stay locked only where they would collide with active state."),
+          h("p", { class: "mt-1 text-sm leading-6 text-sky-800/80 dark:text-sky-100/75" }, "Setup, readiness, downstream provisioning, and destroy actions stay locked only where they would collide with active state."),
         ]),
       ]),
       h("div", { class: "mt-3 grid gap-2 xl:grid-cols-2" }, props.operations.map(({ mode, label, operation }) => {
         const runId = operation?.runId || "";
         const stopAction = mode === "readiness"
           ? { action: "stop-readiness-open-destroy", label: "Stop, then destroy" }
+          : mode === "downstream"
+            ? { action: "stop-downstream", label: "Stop downstream" }
           : mode === "setup" || mode === "linodeSetup"
             ? { action: "stop-setup-open-destroy", label: "Stop, then destroy" }
             : null;
@@ -519,7 +602,15 @@ const ActiveOperationsBanner = defineComponent({
           ]),
           h("div", { class: "flex shrink-0 flex-wrap gap-2" }, [
             h(RunAction, { action: operationLogAction(mode), runId, label: "Logs", onClick: () => handleRunAction(runId, operationLogAction(mode)) }),
-            stopAction ? h(RunAction, { ...stopAction, runId, variant: "danger", title: "Requires typing confirm before stopping and opening Destroy.", onClick: () => handleRunAction(runId, stopAction.action) }) : null,
+            stopAction ? h(RunAction, {
+              ...stopAction,
+              runId,
+              variant: "danger",
+              title: mode === "downstream"
+                ? "Requires typing stop; management Rancher remains ready."
+                : "Requires typing confirm before stopping and opening Destroy.",
+              onClick: () => handleRunAction(runId, stopAction.action),
+            }) : null,
           ]),
         ]);
       })),

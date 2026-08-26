@@ -1,5 +1,5 @@
 <template>
-  <div class="grid gap-4">
+  <div class="grid min-w-0 gap-4">
     <!-- Active operation is running teardown -->
     <div
       v-if="cleanupRunning"
@@ -27,15 +27,15 @@
       class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400"
     >
       <div v-if="state.cleanup?.finishedAt && !state.cleanup?.error && !cleanupDismissed" class="text-emerald-800 dark:text-emerald-200">
-        Destroy finished for the selected run. Cluster records were cleared after Terraform destroy succeeded.
+        Destroy finished for the selected run. Cluster records were cleared after downstream cleanup and Terraform destroy succeeded.
       </div>
       <div v-else>No clusters discovered yet.</div>
     </div>
 
     <!-- Cluster groups available -->
-    <div v-else class="grid gap-4">
+    <div v-else class="grid min-w-0 gap-4">
       <!-- Run Slot selection -->
-      <div class="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+      <div class="min-w-0 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
         <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Run slot</div>
         <div class="mt-2 flex flex-wrap gap-2">
           <button
@@ -43,7 +43,7 @@
             :key="group.runKey"
             type="button"
             @click="selectRun(group.runKey)"
-            class="rounded-md border px-3 py-1.5 text-sm font-semibold shadow-sm"
+            class="min-w-0 max-w-full break-words rounded-md border px-3 py-1.5 text-sm font-semibold shadow-sm"
             :class="group.runKey === selectedRunKey ? activeTabClass : inactiveTabClass"
           >
             {{ group.label }}
@@ -54,7 +54,7 @@
       </div>
 
       <!-- HA / Tenant selector -->
-      <div v-if="activeRunGroup && activeRunGroup.has.length" class="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+      <div v-if="activeRunGroup && activeRunGroup.has.length" class="min-w-0 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
         <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
           {{ clusterGroupLabel(groupDeploymentType(activeRunGroup)) }}
         </div>
@@ -64,7 +64,7 @@
             :key="ha.haKey"
             type="button"
             @click="selectHA(ha.haKey)"
-            class="rounded-md border px-3 py-1.5 text-sm font-semibold shadow-sm"
+            class="min-w-0 max-w-full break-words rounded-md border px-3 py-1.5 text-sm font-semibold shadow-sm"
             :class="ha.haKey === selectedHAKey ? activeTabClass : inactiveTabClass"
           >
             {{ haTabLabel(ha) }}
@@ -74,13 +74,13 @@
       </div>
 
       <!-- Cluster cards and pods lists -->
-      <div v-if="activeHA" class="grid gap-4">
+      <div v-if="activeHA" class="grid min-w-0 gap-4">
         <!-- Local/Management Cluster Section -->
-        <div>
+        <div class="min-w-0">
           <div class="mb-2 text-sm font-semibold text-zinc-950 dark:text-zinc-100">
             {{ managementSectionLabel(groupDeploymentType(activeRunGroup)) }}
           </div>
-          <div v-if="activeHA.local">
+          <div v-if="activeHA.local" class="min-w-0">
             <ClusterCard :cluster="activeHA.local" />
           </div>
           <div
@@ -92,11 +92,11 @@
         </div>
 
         <!-- Downstream Clusters Section -->
-        <div v-if="activeHA.local?.deploymentType !== 'linode-docker-cattle'">
+        <div v-if="activeHA.local?.deploymentType !== 'linode-docker-cattle'" class="min-w-0">
           <div class="mb-2 text-sm font-semibold text-zinc-950 dark:text-zinc-100">
             {{ activeHA.local?.deploymentType === 'hosted-tenant-k3s' ? 'Imported cluster records' : 'Downstream clusters' }}
           </div>
-          <div v-if="activeHA.downstreams.length" class="grid gap-4">
+          <div v-if="activeHA.downstreams.length" class="grid min-w-0 gap-4">
             <ClusterCard
               v-for="downstream in activeHA.downstreams"
               :key="downstream.id"

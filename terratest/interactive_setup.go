@@ -326,6 +326,26 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 		})
 	})
 
+	mux.HandleFunc(interactiveSetupPath(basePath, "/api/linode-catalog"), func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		catalog, err := collectLinodeCatalog(ctx, &http.Client{Timeout: 15 * time.Second}, linodeCatalogDefaultAPIBaseURL, linodeAccessToken())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusPreconditionFailed)
+			return
+		}
+		writeJSON(w, catalog)
+	})
+
 	mux.HandleFunc(interactiveSetupPath(basePath, "/api/gpu-price"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
 			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
@@ -741,12 +761,19 @@ func decodePreflightConfigUpdateRequest(r *http.Request) (settings.PreflightConf
 	for _, key := range settings.EditableTFVarKeys {
 		tfVars[key] = r.FormValue("tfVars." + key)
 	}
+	var downstreamLinodePlans []settings.LinodeDownstreamPlan
+	if rawPlans := strings.TrimSpace(r.FormValue("downstreamLinodePlans")); rawPlans != "" {
+		if err := json.Unmarshal([]byte(rawPlans), &downstreamLinodePlans); err != nil {
+			return settings.PreflightConfigUpdate{}, fmt.Errorf("invalid downstream Linode plans: %w", err)
+		}
+	}
 
 	return settings.PreflightConfigUpdate{
 		DeploymentType:           r.FormValue("deploymentType"),
 		Mode:                     r.FormValue("mode"),
 		Versions:                 r.Form["versions"],
 		AgentImages:              r.Form["agentImages"],
+		DownstreamLinodePlans:    downstreamLinodePlans,
 		HelmCommands:             r.Form["helmCommands"],
 		K8SVersions:              r.Form["k8sVersions"],
 		InstallerSHA256s:         r.Form["installerSHA256s"],

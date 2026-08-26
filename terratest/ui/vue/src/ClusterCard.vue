@@ -5,7 +5,10 @@
     <div class="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2 text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
-          <span>{{ cluster.name }} <span v-if="cluster.version" class="text-zinc-500 dark:text-zinc-400">({{ cluster.version }})</span></span>
+          <span>{{ cluster.name }}</span>
+          <span v-if="cluster.version" class="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-semibold text-zinc-600 dark:border-white/10 dark:bg-white/[0.05] dark:text-zinc-300">
+            {{ isDownstream ? 'Kubernetes version' : 'Requested Rancher' }} {{ cluster.version }}
+          </span>
           <span class="inline-flex items-center rounded-md bg-zinc-100 px-2 py-1 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">
             {{ isDownstream ? 'Downstream' : (isHostedTenant ? 'Host' : (isLinodeDocker ? 'Linode Docker' : 'Local')) }}
           </span>
@@ -56,7 +59,7 @@
     </div>
 
     <!-- Collapsible Detailed Meta Panel -->
-    <div v-if="!isClusterCollapsed" class="mt-4 border-t border-zinc-100 pt-4 dark:border-white/5">
+    <div v-if="!isClusterCollapsed" class="mt-4 min-w-0 border-t border-zinc-100 pt-4 dark:border-white/5">
       <div class="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <!-- Rancher URL -->
         <div class="min-w-0">
@@ -126,6 +129,13 @@
         </div>
       </div>
 
+      <DeployedImageDetails
+        :key="cluster.id"
+        :cluster="cluster"
+        :pods="pods"
+        :deployment-details="cluster.deploymentDetails || null"
+      />
+
       <!-- Leader tracking summary -->
       <div v-if="!isLinodeDocker" class="mt-4 border-t border-zinc-100 pt-4 dark:border-white/5">
         <div v-if="currentLeader" class="text-sm text-zinc-600 dark:text-zinc-400">
@@ -175,7 +185,7 @@
       </div>
 
       <!-- Pods Table List -->
-      <div v-if="!isLinodeDocker && !cluster.provisioning" class="mt-4 border-t border-zinc-100 pt-4 dark:border-white/5">
+      <div v-if="!isLinodeDocker && !cluster.provisioning" class="mt-4 min-w-0 border-t border-zinc-100 pt-4 dark:border-white/5">
         <div class="flex items-center justify-between gap-3">
           <div class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">Pods <span class="text-zinc-500 dark:text-zinc-400">{{ pods.length }}</span></div>
           <button type="button" @click="togglePods" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">
@@ -266,6 +276,7 @@ import {
 import {
   podsFor,
 } from "../../static/control_panel_utils.js";
+import DeployedImageDetails from "./DeployedImageDetails.vue";
 
 const props = defineProps({
   cluster: {

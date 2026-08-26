@@ -5,7 +5,8 @@
         <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Destroy Slots</h2>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
           Destroy one slot immediately, select several slots for a sequential batch, or explicitly destroy all recorded slots.
-          A slot record is removed only after its Terraform destroy succeeds; failures remain available to retry.
+          For an HA slot, any recorded Linode downstream clusters are deleted first; if none exist, cleanup proceeds directly to AWS management Terraform destroy.
+          AWS management Terraform destroy starts only after downstream deletion succeeds. A slot record is removed only after the complete cleanup succeeds; failures remain available to retry.
         </p>
       </div>
       <div :class="cleanupStatusClass">
@@ -42,7 +43,7 @@
               {{ selectedCount }} of {{ runs.length }} slot{{ runs.length === 1 ? '' : 's' }} selected
             </div>
             <div class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-              Bulk destroys run one slot at a time and continue past failures. Other lifecycle actions stay locked until the batch finishes.
+              Bulk cleanup runs one slot at a time and continues past failures. Each HA slot deletes recorded Linode downstreams first, then its AWS management infrastructure. Other lifecycle actions stay locked until the batch finishes.
             </div>
           </div>
           <div class="flex flex-wrap gap-2 xl:justify-end">
@@ -109,7 +110,7 @@
                 type="button"
                 @click="handleStopBatch"
                 :disabled="batchStopLocked"
-                :title="batchStopLocked ? 'The stop request is already being processed.' : 'Interrupt the current Terraform destroy and preserve every queued slot.'"
+                :title="batchStopLocked ? 'The stop request is already being processed.' : 'Interrupt the current downstream-deletion or Terraform-destroy phase and preserve every queued slot.'"
                 :class="batchStopLocked ? disabledCompactButtonClass : stopBatchButtonClass"
               >
                 <span v-if="batchStopPending" class="spinner mr-2 !h-3.5 !w-3.5 !border-2"></span>
@@ -154,14 +155,14 @@
           v-else-if="!runs.length"
           class="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400"
         >
-          No recorded run slots found. There is nothing for Terraform destroy to target from this panel.
+          No recorded run slots found. There is nothing for downstream cleanup or Terraform destroy to target from this panel.
         </div>
 
         <div
           v-if="selectedRunId && !selectedCount"
           class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-100"
         >
-          Selected run {{ selectedRunId }}. Destroy is typed-confirmed and uses the recorded Terraform target for that slot.
+          Selected run {{ selectedRunId }}. Cleanup is typed-confirmed, deletes any recorded Linode downstreams first, then uses the recorded Terraform target for that slot.
         </div>
 
         <article

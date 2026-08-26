@@ -42,6 +42,7 @@ func isCloudPanelOperation(operation panelOperationName) bool {
 	switch operation {
 	case panelOperationSetup,
 		panelOperationReadiness,
+		panelOperationDownstream,
 		panelOperationCleanup,
 		panelOperationLinodeSetup,
 		panelOperationLinodeCleanup,
@@ -100,6 +101,7 @@ func (p *localControlPanel) startCleanupBatch(runIDs []string) error {
 	for _, operation := range []panelOperationName{
 		panelOperationSetup,
 		panelOperationReadiness,
+		panelOperationDownstream,
 		panelOperationCleanup,
 		panelOperationLinodeSetup,
 		panelOperationLinodeCleanup,
@@ -107,13 +109,10 @@ func (p *localControlPanel) startCleanupBatch(runIDs []string) error {
 	} {
 		op := p.operationLocked(operation)
 		if operation != panelOperationCleanupBatch && op.Running && op.PID > 0 && !processAlive(op.PID) {
-			now := time.Now()
-			op.Running = false
-			op.PID = 0
-			op.FinishedAt = &now
-			op.UpdatedAt = &now
-			op.Error = "operation process exited before reporting completion"
-			op.Output = append(op.Output, "[control-panel] Operation process exited before reporting completion; status marked stale.")
+			p.markOperationStaleLocked(operation, op,
+				"operation process exited before reporting completion",
+				"[control-panel] Operation process exited before reporting completion; status marked stale.",
+			)
 			p.persistOperationsLocked()
 		}
 		if op.Running {

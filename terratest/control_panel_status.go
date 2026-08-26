@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/spf13/viper"
 )
 
@@ -50,27 +51,31 @@ type LocalWorkspaceRunState struct {
 }
 
 type LocalWorkspaceRunRecord struct {
-	RunID                 string    `json:"runId"`
-	SlotID                string    `json:"slotId"`
-	SlotName              string    `json:"slotName"`
-	Status                string    `json:"status"`
-	CreatedAt             time.Time `json:"createdAt"`
-	UpdatedAt             time.Time `json:"updatedAt"`
-	TotalHAs              int       `json:"totalHAs"`
-	AWSPrefix             string    `json:"awsPrefix,omitempty"`
-	Route53FQDN           string    `json:"route53Fqdn,omitempty"`
-	Owner                 string    `json:"owner,omitempty"`
-	CustomHostnamePrefix  string    `json:"customHostnamePrefix,omitempty"`
-	DeploymentType        string    `json:"deploymentType,omitempty"`
-	RancherVersions       []string  `json:"rancherVersions,omitempty"`
-	GPUWorkerEnabled      bool      `json:"gpuWorkerEnabled,omitempty"`
-	GPUWorkerInstanceType string    `json:"gpuWorkerInstanceType,omitempty"`
-	TerraformBackend      string    `json:"terraformBackend"`
-	TerraformModuleDir    string    `json:"terraformModuleDir,omitempty"`
-	TerraformStatePath    string    `json:"terraformStatePath,omitempty"`
-	TerraformDataDir      string    `json:"terraformDataDir,omitempty"`
-	HAOutputRoot          string    `json:"haOutputRoot"`
-	SharedPaths           []string  `json:"sharedPaths"`
+	RunID                 string                          `json:"runId"`
+	SlotID                string                          `json:"slotId"`
+	SlotName              string                          `json:"slotName"`
+	Status                string                          `json:"status"`
+	CreatedAt             time.Time                       `json:"createdAt"`
+	UpdatedAt             time.Time                       `json:"updatedAt"`
+	TotalHAs              int                             `json:"totalHAs"`
+	AWSPrefix             string                          `json:"awsPrefix,omitempty"`
+	Route53FQDN           string                          `json:"route53Fqdn,omitempty"`
+	Owner                 string                          `json:"owner,omitempty"`
+	CustomHostnamePrefix  string                          `json:"customHostnamePrefix,omitempty"`
+	DeploymentType        string                          `json:"deploymentType,omitempty"`
+	RancherVersions       []string                        `json:"rancherVersions,omitempty"`
+	DownstreamLinodePlans []settings.LinodeDownstreamPlan `json:"downstreamLinodePlans,omitempty"`
+	DownstreamStatus      string                          `json:"downstreamStatus,omitempty"`
+	DownstreamError       string                          `json:"downstreamError,omitempty"`
+	DownstreamUpdatedAt   *time.Time                      `json:"downstreamUpdatedAt,omitempty"`
+	GPUWorkerEnabled      bool                            `json:"gpuWorkerEnabled,omitempty"`
+	GPUWorkerInstanceType string                          `json:"gpuWorkerInstanceType,omitempty"`
+	TerraformBackend      string                          `json:"terraformBackend"`
+	TerraformModuleDir    string                          `json:"terraformModuleDir,omitempty"`
+	TerraformStatePath    string                          `json:"terraformStatePath,omitempty"`
+	TerraformDataDir      string                          `json:"terraformDataDir,omitempty"`
+	HAOutputRoot          string                          `json:"haOutputRoot"`
+	SharedPaths           []string                        `json:"sharedPaths"`
 }
 
 type LocalWorkspaceCheck struct {
@@ -179,6 +184,7 @@ func InspectLocalWorkspace(repoRoot string) (LocalWorkspaceStatus, error) {
 		Operations: map[string]LocalWorkspaceOperation{
 			string(panelOperationSetup):         localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationSetup, activeRunIDs)),
 			string(panelOperationReadiness):     localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs)),
+			string(panelOperationDownstream):    localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationDownstream, activeRunIDs)),
 			string(panelOperationCleanup):       localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs)),
 			string(panelOperationLinodeSetup):   localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationLinodeSetup, activeRunIDs)),
 			string(panelOperationLinodeCleanup): localWorkspaceOperation(panel.snapshotOperationForRuns(panelOperationLinodeCleanup, activeRunIDs)),
@@ -263,6 +269,10 @@ func localWorkspaceRunRecord(record panelRunRecord) LocalWorkspaceRunRecord {
 		CustomHostnamePrefix:  record.CustomHostnamePrefix,
 		DeploymentType:        record.DeploymentType,
 		RancherVersions:       append([]string(nil), record.RancherVersions...),
+		DownstreamLinodePlans: append([]settings.LinodeDownstreamPlan(nil), record.DownstreamLinodePlans...),
+		DownstreamStatus:      record.DownstreamStatus,
+		DownstreamError:       record.DownstreamError,
+		DownstreamUpdatedAt:   record.DownstreamUpdatedAt,
 		GPUWorkerEnabled:      record.GPUWorkerEnabled,
 		GPUWorkerInstanceType: record.GPUWorkerInstanceType,
 		TerraformBackend:      record.TerraformBackend,

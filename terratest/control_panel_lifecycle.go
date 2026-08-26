@@ -17,6 +17,8 @@ import (
 
 const packagedLifecycleBinaryEnv = "RANCHER_RUNWAY_LIFECYCLE_BIN"
 
+const panelDownstreamLinodePlansEnv = "RANCHER_RUNWAY_DOWNSTREAM_LINODE_PLANS"
+
 type panelLifecycleInvocation struct {
 	path    string
 	args    []string
@@ -28,6 +30,7 @@ func newPanelOperations() map[panelOperationName]*panelOperationState {
 	return map[panelOperationName]*panelOperationState{
 		panelOperationSetup:         {},
 		panelOperationReadiness:     {},
+		panelOperationDownstream:    {},
 		panelOperationCleanup:       {},
 		panelOperationLinodeSetup:   {},
 		panelOperationLinodeCleanup: {},
@@ -41,6 +44,7 @@ func allPanelOperationNames() []panelOperationName {
 	return []panelOperationName{
 		panelOperationSetup,
 		panelOperationReadiness,
+		panelOperationDownstream,
 		panelOperationCleanup,
 		panelOperationLinodeSetup,
 		panelOperationLinodeCleanup,
@@ -56,6 +60,8 @@ func parsePanelOperationName(value string) (panelOperationName, bool) {
 		return panelOperationSetup, true
 	case "readiness":
 		return panelOperationReadiness, true
+	case "downstream":
+		return panelOperationDownstream, true
 	case "cleanup":
 		return panelOperationCleanup, true
 	case "linodesetup":
@@ -82,7 +88,7 @@ func conflictingPanelOperationNames(operation panelOperationName) []panelOperati
 	case panelOperationK3DLab:
 		return []panelOperationName{panelOperationK3DLab}
 	default:
-		return []panelOperationName{panelOperationSetup, panelOperationReadiness, panelOperationCleanup}
+		return []panelOperationName{panelOperationSetup, panelOperationReadiness, panelOperationDownstream, panelOperationCleanup}
 	}
 }
 
@@ -121,6 +127,12 @@ func (p *localControlPanel) startReadiness() error {
 	if record.RunID != "" {
 		spec.RunID = record.RunID
 	}
+	if deployment == deploymentTypeHARKE2 && record.RunID != "" {
+		runID := record.RunID
+		spec.AfterSuccess = func() {
+			p.startConfiguredDownstreamsAfterReadiness(runID)
+		}
+	}
 	return p.startPanelCommand(spec)
 }
 
@@ -149,6 +161,76 @@ func readinessCommandSpec(deployment string) panelCommandSpec {
 		StartLine:   "[control-panel] Waiting for Rancher and rancher-webhook readiness via go test -run ^TestHAWaitReady$",
 		SuccessLine: "[control-panel] Readiness checks completed successfully",
 	}
+}
+
+func (p *localControlPanel) startConfiguredDownstreamsAfterReadiness(runID string) {
+	record, ok := p.readRunRecord(runID)
+	if !ok || !runRecordHasEnabledDownstreamPlans(record) ||
+		record.DownstreamStatus == panelDownstreamStatusRunning || record.DownstreamStatus == panelDownstreamStatusReady {
+		return
+	}
+	if err := p.startConfiguredDownstreamsForRun(runID); err != nil {
+		p.updateRunDownstreamStatus(runID, panelDownstreamStatusFailed, err.Error())
+		p.appendOperationOutput(panelOperationDownstream, "[control-panel] Downstream provisioning was not started automatically: "+err.Error())
+	}
+}
+
+func (p *localControlPanel) startConfiguredDownstreamsForRun(runID string) error {
+	runID = safeRunPathSegment(runID)
+	if runID == "" || runID == "unknown" {
+		return fmt.Errorf("downstream provisioning requires a recorded run id")
+	}
+	record, ok := p.readRunRecord(runID)
+	if !ok {
+		return fmt.Errorf("downstream provisioning requires a recorded run: %s", runID)
+	}
+	if recordDeploymentType(record, nil) != deploymentTypeHARKE2 {
+		return fmt.Errorf("configured Linode downstream provisioning is only supported for ha-rke2 management runs")
+	}
+	if record.Status != "ready" {
+		return fmt.Errorf("management Rancher run %s must be ready before downstream provisioning", runID)
+	}
+	if !runRecordHasEnabledDownstreamPlans(record) {
+		return fmt.Errorf("run %s has no enabled Linode downstream plans", runID)
+	}
+	if p.operationRunning(panelOperationDownstream) || record.DownstreamStatus == panelDownstreamStatusRunning {
+		return fmt.Errorf("downstream provisioning is already running")
+	}
+	if record.DownstreamStatus == panelDownstreamStatusReady {
+		return fmt.Errorf("run %s downstream provisioning is already complete", runID)
+	}
+
+	enabledCount := enabledDownstreamPlanCount(record)
+	err := p.startPanelCommand(panelCommandSpec{
+		Operation:   panelOperationDownstream,
+		DisplayName: "downstream provisioning",
+		TestName:    "TestHAProvisionConfiguredLinodeDownstreams",
+		Timeout:     "35m",
+		RunID:       record.RunID,
+		StartLine: fmt.Sprintf(
+			"[control-panel] Provisioning %d configured Linode downstream cluster(s) after management readiness",
+			enabledCount,
+		),
+		SuccessLine: "[control-panel] Configured Linode downstream provisioning completed successfully",
+	})
+	if err != nil {
+		p.updateRunDownstreamStatus(runID, panelDownstreamStatusFailed, err.Error())
+	}
+	return err
+}
+
+func runRecordHasEnabledDownstreamPlans(record panelRunRecord) bool {
+	return enabledDownstreamPlanCount(record) > 0
+}
+
+func enabledDownstreamPlanCount(record panelRunRecord) int {
+	count := 0
+	for _, plan := range record.DownstreamLinodePlans {
+		if plan.Enabled {
+			count++
+		}
+	}
+	return count
 }
 
 func (p *localControlPanel) readinessDeploymentType() (string, panelRunRecord, map[string]string) {
@@ -247,7 +329,7 @@ func (p *localControlPanel) startCleanupForRunWithBatch(runID string, batchChild
 		Operation:   operation,
 		DisplayName: "cleanup",
 		TestName:    "TestHACleanup",
-		Timeout:     "30m",
+		Timeout:     "60m",
 		RunID:       record.RunID,
 		StartLine:   fmt.Sprintf("[control-panel] Starting canonical cleanup for run %s via go test -run ^TestHACleanup$", record.RunID),
 		SuccessLine: "[control-panel] Cleanup completed successfully",
@@ -296,6 +378,8 @@ func (p *localControlPanel) abortOperation(operation panelOperationName, runID s
 	pid := op.PID
 	if operation == panelOperationSteveLab {
 		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for %s run %s. Local k3d cluster and run files may need cleanup.", operation, op.RunID))
+	} else if operation == panelOperationDownstream {
+		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for downstream provisioning run %s. The ready management Rancher and run record will be preserved; partial downstream resources remain recorded for retry or destroy.", op.RunID))
 	} else {
 		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for %s run %s. Terraform state and run records will be preserved.", operation, op.RunID))
 	}
@@ -368,6 +452,8 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 	}
 	if spec.Operation == panelOperationSetup || spec.Operation == panelOperationLinodeSetup {
 		p.createCurrentRunRecord(runID, now)
+	} else if spec.Operation == panelOperationDownstream {
+		p.updateRunDownstreamStatus(runID, panelDownstreamStatusRunning, "")
 	}
 	p.persistOperationsLocked()
 
@@ -476,6 +562,7 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 	var runRancherVersions []string
 	var runAWSPrefix string
 	var runRoute53FQDN string
+	var runDownstreamLinodePlansJSON string
 
 	p.mu.Lock()
 	op := p.operationLocked(operation)
@@ -502,6 +589,9 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 			runRancherVersions = record.RancherVersions
 			runAWSPrefix = record.AWSPrefix
 			runRoute53FQDN = record.Route53FQDN
+			if data, err := json.Marshal(record.DownstreamLinodePlans); err == nil {
+				runDownstreamLinodePlansJSON = string(data)
+			}
 		}
 	}
 	if !recordLoaded && haOutputRoot == "" {
@@ -517,6 +607,9 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 			runRancherVersions = record.RancherVersions
 			runAWSPrefix = record.AWSPrefix
 			runRoute53FQDN = record.Route53FQDN
+			if data, err := json.Marshal(record.DownstreamLinodePlans); err == nil {
+				runDownstreamLinodePlansJSON = string(data)
+			}
 		}
 	}
 
@@ -554,7 +647,25 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 	if strings.TrimSpace(runRoute53FQDN) != "" {
 		env = append(env, runRoute53FQDNEnv+"="+runRoute53FQDN)
 	}
+	if operation == panelOperationDownstream {
+		if runDownstreamLinodePlansJSON == "" {
+			runDownstreamLinodePlansJSON = "[]"
+		}
+		env = panelEnvWithValue(env, panelDownstreamLinodePlansEnv, runDownstreamLinodePlansJSON)
+	}
 	return env
+}
+
+func panelEnvWithValue(env []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return append(out, prefix+value)
 }
 
 func deploymentTypeForRunEnv(record panelRunRecord) string {
@@ -612,7 +723,7 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 		p.persistOperationsLocked()
 		p.mu.Unlock()
 		if !spec.BatchChild {
-			p.updateRunStatusAfterOperation(spec.Operation, runID, false)
+			p.updateRunStatusAfterOperation(spec.Operation, runID, err)
 		}
 		return
 	}
@@ -624,7 +735,7 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 	p.mu.Unlock()
 
 	if !spec.BatchChild {
-		p.updateRunStatusAfterOperation(spec.Operation, runID, true)
+		p.updateRunStatusAfterOperation(spec.Operation, runID, nil)
 	}
 	if shouldRunAfterSuccess {
 		spec.AfterSuccess()
@@ -649,7 +760,8 @@ func (p *localControlPanel) setOperationPID(operation panelOperationName, pid in
 	}
 }
 
-func (p *localControlPanel) updateRunStatusAfterOperation(operation panelOperationName, runID string, success bool) {
+func (p *localControlPanel) updateRunStatusAfterOperation(operation panelOperationName, runID string, operationErr error) {
+	success := operationErr == nil
 	switch operation {
 	case panelOperationSetup, panelOperationLinodeSetup:
 		if success {
@@ -663,6 +775,16 @@ func (p *localControlPanel) updateRunStatusAfterOperation(operation panelOperati
 			return
 		}
 		p.updateRunRecordStatus(runID, "readiness_failed")
+	case panelOperationDownstream:
+		if success {
+			p.updateRunDownstreamStatus(runID, panelDownstreamStatusReady, "")
+			return
+		}
+		errorMessage := "downstream provisioning failed; management Rancher remains ready"
+		if operationErr != nil {
+			errorMessage = operationErr.Error()
+		}
+		p.updateRunDownstreamStatus(runID, panelDownstreamStatusFailed, errorMessage)
 	case panelOperationCleanup, panelOperationLinodeCleanup:
 		if success {
 			p.removeRunRecord(runID)
@@ -688,13 +810,11 @@ func (p *localControlPanel) anyOperationRunningLocked() bool {
 	for _, name := range allPanelOperationNames() {
 		op := p.operationLocked(name)
 		if name != panelOperationCleanupBatch && op.Running && op.PID > 0 && !processAlive(op.PID) {
-			now := time.Now()
-			op.Running = false
-			op.PID = 0
-			op.FinishedAt = &now
-			op.UpdatedAt = &now
-			op.Error = "operation process exited before reporting completion"
-			op.Output = append(op.Output, "[control-panel] Operation process exited before reporting completion; status marked stale.")
+			p.markOperationStaleLocked(name, op,
+				"operation process exited before reporting completion",
+				"[control-panel] Operation process exited before reporting completion; status marked stale.",
+			)
+			p.persistOperationsLocked()
 			continue
 		}
 		if op.Running {
@@ -708,13 +828,11 @@ func (p *localControlPanel) conflictingOperationRunningLocked(operation panelOpe
 	for _, name := range conflictingPanelOperationNames(operation) {
 		op := p.operationLocked(name)
 		if op.Running && op.PID > 0 && !processAlive(op.PID) {
-			now := time.Now()
-			op.Running = false
-			op.PID = 0
-			op.FinishedAt = &now
-			op.UpdatedAt = &now
-			op.Error = "operation process exited before reporting completion"
-			op.Output = append(op.Output, "[control-panel] Operation process exited before reporting completion; status marked stale.")
+			p.markOperationStaleLocked(name, op,
+				"operation process exited before reporting completion",
+				"[control-panel] Operation process exited before reporting completion; status marked stale.",
+			)
+			p.persistOperationsLocked()
 			continue
 		}
 		if op.Running {
@@ -817,32 +935,41 @@ func (p *localControlPanel) loadPersistedOperations(markStaleRunning bool) {
 }
 
 func (p *localControlPanel) markStaleRunningOperationsLocked() {
-	now := time.Now()
 	for _, name := range allPanelOperationNames() {
 		op := p.operationLocked(name)
 		if !op.Running {
 			continue
 		}
 		if name == panelOperationCleanupBatch {
-			op.Running = false
-			op.PID = 0
-			op.FinishedAt = &now
-			op.UpdatedAt = &now
-			op.Error = "panel restarted before the cleanup batch reported completion"
-			op.Output = append(op.Output, "[control-panel] Panel restarted before the cleanup batch reported completion; queued run records were preserved.")
+			p.markOperationStaleLocked(name, op,
+				"panel restarted before the cleanup batch reported completion",
+				"[control-panel] Panel restarted before the cleanup batch reported completion; queued run records were preserved.",
+			)
 			continue
 		}
 		if op.PID > 0 && processAlive(op.PID) {
+			now := time.Now()
 			op.Output = append(op.Output, "[control-panel] Reattached to the still-running lifecycle worker after panel restart.")
 			op.UpdatedAt = &now
 			continue
 		}
-		op.Running = false
-		op.PID = 0
-		op.FinishedAt = &now
-		op.UpdatedAt = &now
-		op.Error = "panel restarted before this operation reported completion"
-		op.Output = append(op.Output, "[control-panel] Panel restarted before this operation reported completion; status marked stale.")
+		p.markOperationStaleLocked(name, op,
+			"panel restarted before this operation reported completion",
+			"[control-panel] Panel restarted before this operation reported completion; status marked stale.",
+		)
+	}
+}
+
+func (p *localControlPanel) markOperationStaleLocked(name panelOperationName, op *panelOperationState, errorMessage, outputLine string) {
+	now := time.Now()
+	op.Running = false
+	op.PID = 0
+	op.FinishedAt = &now
+	op.UpdatedAt = &now
+	op.Error = errorMessage
+	op.Output = append(op.Output, outputLine)
+	if name == panelOperationDownstream {
+		p.updateRunDownstreamStatus(op.RunID, panelDownstreamStatusFailed, errorMessage)
 	}
 }
 

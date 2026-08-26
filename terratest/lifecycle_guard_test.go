@@ -33,3 +33,12 @@ func TestIsExplicitLifecycleRunRejectsBroadPatterns(t *testing.T) {
 		}
 	}
 }
+
+func TestIsExplicitLifecycleRunAllowsConfiguredDownstreamExactPattern(t *testing.T) {
+	if !isExplicitLifecycleRun("^TestHAProvisionConfiguredLinodeDownstreams$", "TestHAProvisionConfiguredLinodeDownstreams") {
+		t.Fatal("expected exact configured downstream pattern to pass the lifecycle guard")
+	}
+	if isExplicitLifecycleRun("TestHAProvision.*", "TestHAProvisionConfiguredLinodeDownstreams") {
+		t.Fatal("expected pattern matching legacy and configured provisioning tests to be rejected as broad")
+	}
+}

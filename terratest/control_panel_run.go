@@ -16,6 +16,13 @@ import (
 
 const defaultRunSlotID = "default"
 
+const (
+	panelDownstreamStatusPending = "downstream_pending"
+	panelDownstreamStatusRunning = "downstream_running"
+	panelDownstreamStatusReady   = "downstream_ready"
+	panelDownstreamStatusFailed  = "downstream_failed"
+)
+
 type panelWorkspaceState struct {
 	Mode                     string           `json:"mode"`
 	SlotID                   string           `json:"slotId"`
@@ -30,29 +37,33 @@ type panelWorkspaceState struct {
 }
 
 type panelRunRecord struct {
-	RunID                 string    `json:"runId"`
-	SlotID                string    `json:"slotId"`
-	SlotName              string    `json:"slotName"`
-	Status                string    `json:"status"`
-	DeploymentType        string    `json:"deploymentType,omitempty"`
-	CreatedAt             time.Time `json:"createdAt"`
-	UpdatedAt             time.Time `json:"updatedAt"`
-	TotalHAs              int       `json:"totalHAs"`
-	AWSPrefix             string    `json:"awsPrefix,omitempty"`
-	Route53FQDN           string    `json:"route53Fqdn,omitempty"`
-	Owner                 string    `json:"owner,omitempty"`
-	CustomHostnamePrefix  string    `json:"customHostnamePrefix,omitempty"`
-	RancherVersions       []string  `json:"rancherVersions,omitempty"`
-	GPUWorkerEnabled      bool      `json:"gpuWorkerEnabled,omitempty"`
-	GPUWorkerInstanceType string    `json:"gpuWorkerInstanceType,omitempty"`
-	TerraformBackend      string    `json:"terraformBackend"`
-	TerraformModuleDir    string    `json:"terraformModuleDir,omitempty"`
-	TerraformStatePath    string    `json:"terraformStatePath,omitempty"`
-	TerraformDataDir      string    `json:"terraformDataDir,omitempty"`
-	HAOutputRoot          string    `json:"haOutputRoot"`
-	RunFolderPath         string    `json:"runFolderPath,omitempty"`
-	RunFolderExists       bool      `json:"runFolderExists"`
-	SharedPaths           []string  `json:"sharedPaths"`
+	RunID                 string                          `json:"runId"`
+	SlotID                string                          `json:"slotId"`
+	SlotName              string                          `json:"slotName"`
+	Status                string                          `json:"status"`
+	DeploymentType        string                          `json:"deploymentType,omitempty"`
+	CreatedAt             time.Time                       `json:"createdAt"`
+	UpdatedAt             time.Time                       `json:"updatedAt"`
+	TotalHAs              int                             `json:"totalHAs"`
+	AWSPrefix             string                          `json:"awsPrefix,omitempty"`
+	Route53FQDN           string                          `json:"route53Fqdn,omitempty"`
+	Owner                 string                          `json:"owner,omitempty"`
+	CustomHostnamePrefix  string                          `json:"customHostnamePrefix,omitempty"`
+	RancherVersions       []string                        `json:"rancherVersions,omitempty"`
+	DownstreamLinodePlans []settings.LinodeDownstreamPlan `json:"downstreamLinodePlans,omitempty"`
+	DownstreamStatus      string                          `json:"downstreamStatus,omitempty"`
+	DownstreamError       string                          `json:"downstreamError,omitempty"`
+	DownstreamUpdatedAt   *time.Time                      `json:"downstreamUpdatedAt,omitempty"`
+	GPUWorkerEnabled      bool                            `json:"gpuWorkerEnabled,omitempty"`
+	GPUWorkerInstanceType string                          `json:"gpuWorkerInstanceType,omitempty"`
+	TerraformBackend      string                          `json:"terraformBackend"`
+	TerraformModuleDir    string                          `json:"terraformModuleDir,omitempty"`
+	TerraformStatePath    string                          `json:"terraformStatePath,omitempty"`
+	TerraformDataDir      string                          `json:"terraformDataDir,omitempty"`
+	HAOutputRoot          string                          `json:"haOutputRoot"`
+	RunFolderPath         string                          `json:"runFolderPath,omitempty"`
+	RunFolderExists       bool                            `json:"runFolderExists"`
+	SharedPaths           []string                        `json:"sharedPaths"`
 }
 
 type localArtifactCleanupResult struct {
@@ -199,6 +210,11 @@ func (p *localControlPanel) createCurrentRunRecord(runID string, now time.Time) 
 	}
 	gpuWorker := settings.CurrentGPUWorkerConfig()
 	gpuWorkerEnabled := deploymentType() == deploymentTypeHARKE2 && gpuWorker.Enabled
+	downstreamPlans := settings.CurrentLinodeDownstreamPlans(p.totalHAs)
+	downstreamStatus := ""
+	if deploymentType() == deploymentTypeHARKE2 && settings.AnyLinodeDownstreamPlanEnabled(downstreamPlans) {
+		downstreamStatus = panelDownstreamStatusPending
+	}
 	record := panelRunRecord{
 		RunID:                 runID,
 		SlotID:                slotID,
@@ -213,6 +229,8 @@ func (p *localControlPanel) createCurrentRunRecord(runID string, now time.Time) 
 		Owner:                 settings.OwnerLabel(),
 		CustomHostnamePrefix:  customHostnamePrefix,
 		RancherVersions:       requestedRancherVersionsForRunRecord(p.totalHAs),
+		DownstreamLinodePlans: append([]settings.LinodeDownstreamPlan(nil), downstreamPlans...),
+		DownstreamStatus:      downstreamStatus,
 		GPUWorkerEnabled:      gpuWorkerEnabled,
 		GPUWorkerInstanceType: gpuWorker.InstanceType,
 		TerraformBackend:      terraformBackendLabelForRun(runID, statePath),
@@ -241,6 +259,22 @@ func (p *localControlPanel) updateRunRecordStatus(runID string, status string) {
 	record.Status = status
 	record.UpdatedAt = time.Now()
 	p.writeCurrentRunRecord(record)
+}
+
+func (p *localControlPanel) updateRunDownstreamStatus(runID, status, errorMessage string) {
+	record, ok := p.readRunRecord(runID)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	record.DownstreamStatus = status
+	record.DownstreamError = strings.TrimSpace(errorMessage)
+	record.DownstreamUpdatedAt = &now
+	record.UpdatedAt = now
+	p.writeRunRecord(record)
+	if current, currentOK := p.readCurrentRunRecord(); currentOK && sameRunID(current.RunID, record.RunID) {
+		p.writeCurrentRunRecord(record)
+	}
 }
 
 func (p *localControlPanel) removeCurrentRunRecord() {

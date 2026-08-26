@@ -1,6 +1,9 @@
 package test
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +13,111 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRunKubectlContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := runKubectlContext(ctx, "/tmp/unused-kubeconfig", "version"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("runKubectlContext error = %v, want context cancellation", err)
+	}
+}
+
+func TestPodViewFromKubectlPodIncludesDeclaredAndRuntimeImages(t *testing.T) {
+	var pod kubectlPod
+	err := json.Unmarshal([]byte(`{
+  "metadata": {
+    "namespace": "cattle-system",
+    "name": "rancher-7dbf7b7d5f-abcde",
+    "creationTimestamp": "2026-08-25T20:00:00Z"
+  },
+  "spec": {
+    "nodeName": "ip-10-0-0-10",
+    "containers": [
+      {
+        "name": "rancher",
+        "image": "stgregistry.suse.com/rancher/rancher:v2.15.1-rc1"
+      }
+    ]
+  },
+  "status": {
+    "phase": "Running",
+    "containerStatuses": [
+      {
+        "name": "rancher",
+        "image": "stgregistry.suse.com/rancher/rancher:v2.15.1-rc1",
+        "imageID": "docker-pullable://stgregistry.suse.com/rancher/rancher@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "ready": true,
+        "restartCount": 2,
+        "state": {}
+      }
+    ]
+  }
+}`), &pod)
+	if err != nil {
+		t.Fatalf("failed to decode kubectl pod fixture: %v", err)
+	}
+
+	view := podViewFromKubectlPod(pod, "Leader")
+	if view.Ready != "1/1" || view.Status != "Running" || view.Restarts != 2 {
+		t.Fatalf("unexpected pod readiness summary: %#v", view)
+	}
+	if !view.Leader || view.LeaderLabel != "Leader" {
+		t.Fatalf("expected leader metadata, got %#v", view)
+	}
+	if len(view.Images) != 1 {
+		t.Fatalf("expected one Rancher image, got %#v", view.Images)
+	}
+	image := view.Images[0]
+	if image.Name != "rancher" || image.Image != "stgregistry.suse.com/rancher/rancher:v2.15.1-rc1" {
+		t.Fatalf("unexpected declared image metadata: %#v", image)
+	}
+	if image.ImageID != "docker-pullable://stgregistry.suse.com/rancher/rancher@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || !image.Ready {
+		t.Fatalf("unexpected runtime image metadata: %#v", image)
+	}
+}
+
+func TestPodViewFromKubectlPodOmitsUnrelatedImages(t *testing.T) {
+	var pod kubectlPod
+	err := json.Unmarshal([]byte(`{
+  "metadata": {"namespace": "default", "name": "demo"},
+  "spec": {"containers": [{"name": "app", "image": "example.com/team/app:v1"}]},
+  "status": {"phase": "Pending"}
+}`), &pod)
+	if err != nil {
+		t.Fatalf("failed to decode kubectl pod fixture: %v", err)
+	}
+	view := podViewFromKubectlPod(pod, "")
+	if len(view.Images) != 0 {
+		t.Fatalf("expected unrelated images to stay out of deployment metadata, got %#v", view.Images)
+	}
+}
+
+func TestIsRancherComponentImageTargetsVersionedComponents(t *testing.T) {
+	tests := []struct {
+		name      string
+		pod       string
+		container string
+		image     string
+		want      bool
+	}{
+		{name: "server", pod: "rancher-abc", container: "rancher", image: "custom.example/team/rancher:v2.15.1", want: true},
+		{name: "webhook", pod: "rancher-webhook-abc", container: "rancher-webhook", image: "custom.example/team/custom:v1", want: true},
+		{name: "agent", pod: "cattle-cluster-agent-abc", container: "cluster-register", image: "registry.rancher.com/rancher/rancher-agent:v2.15.1", want: true},
+		{name: "registry port", pod: "custom", container: "custom", image: "registry.example:5000/team/rancher-webhook:v0.11.1", want: true},
+		{name: "webhook pod sidecar", pod: "rancher-webhook-abc", container: "istio-proxy", image: "docker.io/istio/proxyv2:1.27.0", want: false},
+		{name: "mirrored system image", pod: "kube-system", container: "metrics-server", image: "rancher/mirrored-metrics-server:v0.7.2", want: false},
+		{name: "unrelated webhook", pod: "admission-webhook", container: "webhook", image: "example.com/team/admission:v1", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isRancherComponentImage(test.pod, test.container, test.image); got != test.want {
+				t.Fatalf("isRancherComponentImage(%q, %q, %q) = %v, want %v", test.pod, test.container, test.image, got, test.want)
+			}
+		})
+	}
+}
 
 func TestControlPanelKubeconfigNames(t *testing.T) {
 	if got := localClusterID(2); got != "ha-2-local" {

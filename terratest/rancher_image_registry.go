@@ -177,9 +177,15 @@ func newPreferredRancherImageLookupService() *imageLookupService {
 }
 
 func inspectRancherImageReferenceWithService(ctx context.Context, service *imageLookupService, reference string) (rancherImageProvenance, bool, error) {
+	platform := "linux/amd64"
+	if parsed, parseErr := service.parseReference(reference, true); parseErr == nil && parsed.tag != "" {
+		if architecture, _ := imageLookupTagArchitecture(parsed.tag); architecture != "" && architecture != "multi" && architecture != "unknown" {
+			platform = "linux/" + architecture
+		}
+	}
 	response, err := service.Inspect(ctx, imageLookupInspectRequest{
 		Reference:        reference,
-		Platform:         "linux/amd64",
+		Platform:         platform,
 		IncludeBuildYAML: false,
 		SkipTagMetadata:  true,
 	})

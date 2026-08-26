@@ -60,6 +60,7 @@ type localControlPanel struct {
 
 	rancherTokens             map[int]string
 	downstreamKubeconfigCache map[string]string
+	clusterSnapshot           map[string]clusterView
 }
 
 type ControlPanelServerOptions struct {
@@ -94,6 +95,7 @@ type panelState struct {
 	Workspace     panelWorkspaceState       `json:"workspace"`
 	Setup         panelOperationSnapshot    `json:"setup"`
 	Readiness     panelOperationSnapshot    `json:"readiness"`
+	Downstream    panelOperationSnapshot    `json:"downstream"`
 	LinodeSetup   panelOperationSnapshot    `json:"linodeSetup"`
 	LinodeCleanup panelOperationSnapshot    `json:"linodeCleanup"`
 	Steve         steveLabPanelState        `json:"steve"`
@@ -169,16 +171,28 @@ type clusterView struct {
 }
 
 type podView struct {
-	Namespace   string `json:"namespace,omitempty"`
-	Name        string `json:"name"`
-	Ready       string `json:"ready"`
-	Status      string `json:"status"`
-	Restarts    int    `json:"restarts"`
-	Age         string `json:"age"`
-	Node        string `json:"node,omitempty"`
-	Containers  string `json:"containers"`
-	Leader      bool   `json:"leader"`
-	LeaderLabel string `json:"leaderLabel,omitempty"`
+	Namespace   string               `json:"namespace,omitempty"`
+	Name        string               `json:"name"`
+	Ready       string               `json:"ready"`
+	Status      string               `json:"status"`
+	Restarts    int                  `json:"restarts"`
+	Age         string               `json:"age"`
+	Node        string               `json:"node,omitempty"`
+	Containers  string               `json:"containers"`
+	Images      []containerImageView `json:"images,omitempty"`
+	Leader      bool                 `json:"leader"`
+	LeaderLabel string               `json:"leaderLabel,omitempty"`
+}
+
+// containerImageView keeps both the image requested by the workload and the
+// immutable runtime image ID reported by Kubernetes. The control panel uses
+// the latter to inspect the exact artifact that is running even when the
+// declared tag is mutable.
+type containerImageView struct {
+	Name    string `json:"name"`
+	Image   string `json:"image"`
+	ImageID string `json:"imageId,omitempty"`
+	Ready   bool   `json:"ready"`
 }
 
 type panelOperationSnapshot struct {
@@ -198,6 +212,7 @@ type panelOperationName string
 const (
 	panelOperationSetup         panelOperationName = "setup"
 	panelOperationReadiness     panelOperationName = "readiness"
+	panelOperationDownstream    panelOperationName = "downstream"
 	panelOperationCleanup       panelOperationName = "cleanup"
 	panelOperationLinodeSetup   panelOperationName = "linodeSetup"
 	panelOperationLinodeCleanup panelOperationName = "linodeCleanup"
@@ -252,7 +267,8 @@ type kubectlPod struct {
 	Spec struct {
 		NodeName   string `json:"nodeName"`
 		Containers []struct {
-			Name string `json:"name"`
+			Name  string `json:"name"`
+			Image string `json:"image"`
 		} `json:"containers"`
 		InitContainers []struct {
 			Name string `json:"name"`
@@ -263,6 +279,8 @@ type kubectlPod struct {
 		Reason            string `json:"reason"`
 		ContainerStatuses []struct {
 			Name         string `json:"name"`
+			Image        string `json:"image"`
+			ImageID      string `json:"imageID"`
 			Ready        bool   `json:"ready"`
 			RestartCount int    `json:"restartCount"`
 			State        struct {
@@ -375,6 +393,7 @@ func newLocalControlPanelWithNetwork(totalHAs int, bindNetwork bool) (*localCont
 		operations:                newPanelOperations(),
 		rancherTokens:             map[int]string{},
 		downstreamKubeconfigCache: map[string]string{},
+		clusterSnapshot:           map[string]clusterView{},
 	}
 	panel.setupEditor = panel.newSetupEditor()
 	panel.loadPersistedOperations(true)
@@ -389,6 +408,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/static/", p.handleControlPanelStaticAsset)
 	mux.HandleFunc("/api/preflight", p.handlePreflight)
 	mux.HandleFunc("/api/state", p.handleState)
+	mux.HandleFunc("/api/clusters/details", p.handleClusterDeploymentDetails)
 	mux.HandleFunc("/api/images/search", p.handleImageLookupSearch)
 	mux.HandleFunc("/api/images/inspect", p.handleImageLookupInspect)
 	mux.HandleFunc("/api/images/build-yaml/source", p.handleImageLookupSourceBuildYAML)
@@ -423,6 +443,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/k3d/kubeconfig/save", p.handleK3DLabKubeconfigSave)
 	mux.HandleFunc("/api/k3d/output/clear", p.handleK3DLabOutputClear)
 	mux.HandleFunc("/api/readiness", p.handleReadiness)
+	mux.HandleFunc("/api/downstream/retry", p.handleDownstreamRetry)
 	mux.HandleFunc("/api/cleanup", p.handleCleanup)
 	mux.HandleFunc("/api/costs/reset", p.handleCostLedgerReset)
 	mux.HandleFunc("/api/local-artifacts/clean", p.handleLocalArtifactsClean)
@@ -1183,6 +1204,36 @@ func (p *localControlPanel) handleReadiness(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, map[string]string{"status": "readiness started"})
 }
 
+func (p *localControlPanel) handleDownstreamRetry(w http.ResponseWriter, r *http.Request) {
+	if !p.authorizedLocalAction(r) {
+		http.Error(w, "invalid control panel token", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		RunID   string `json:"runId"`
+		Confirm string `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "retry downstream" {
+		http.Error(w, "typed confirmation must equal retry downstream", http.StatusBadRequest)
+		return
+	}
+	if err := p.startConfiguredDownstreamsForRun(req.RunID); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+
+	writeJSON(w, map[string]string{"status": "downstream provisioning started"})
+}
+
 func (p *localControlPanel) handleAbortOperation(w http.ResponseWriter, r *http.Request) {
 	if !p.authorizedLocalAction(r) {
 		http.Error(w, "invalid control panel token", http.StatusForbidden)
@@ -1209,7 +1260,7 @@ func (p *localControlPanel) handleAbortOperation(w http.ResponseWriter, r *http.
 
 	operation, validOperation := parsePanelOperationName(req.Operation)
 	if !validOperation {
-		http.Error(w, "operation must be setup, readiness, cleanup, linodeSetup, linodeCleanup, cleanupBatch, steveLab, or k3dLab", http.StatusBadRequest)
+		http.Error(w, "operation must be setup, readiness, downstream, cleanup, linodeSetup, linodeCleanup, cleanupBatch, steveLab, or k3dLab", http.StatusBadRequest)
 		return
 	}
 
@@ -1407,6 +1458,7 @@ func (p *localControlPanel) buildState() panelState {
 		activeRunIDs[safeRunPathSegment(record.RunID)] = true
 	}
 	clusters := p.discoverClusters()
+	p.rememberClusterSnapshot(clusters)
 	return panelState{
 		Panel: panelSessionState{
 			SessionID:            p.sessionID,
@@ -1419,6 +1471,7 @@ func (p *localControlPanel) buildState() panelState {
 		Workspace:     workspace,
 		Setup:         p.snapshotOperationForRuns(panelOperationSetup, activeRunIDs),
 		Readiness:     p.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs),
+		Downstream:    p.snapshotOperationForRuns(panelOperationDownstream, activeRunIDs),
 		LinodeSetup:   p.snapshotOperationForRuns(panelOperationLinodeSetup, activeRunIDs),
 		LinodeCleanup: p.snapshotOperationForRuns(panelOperationLinodeCleanup, activeRunIDs),
 		Steve:         p.steveLabPanelState(false),
@@ -1443,12 +1496,10 @@ func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, ac
 
 	op := p.operationLocked(name)
 	if op.Running && op.PID > 0 && !processAlive(op.PID) {
-		now := time.Now()
-		op.Running = false
-		op.FinishedAt = &now
-		op.UpdatedAt = &now
-		op.Error = "operation process exited before reporting completion"
-		op.Output = append(op.Output, "[control-panel] Operation process exited before reporting completion; status marked stale.")
+		p.markOperationStaleLocked(name, op,
+			"operation process exited before reporting completion",
+			"[control-panel] Operation process exited before reporting completion; status marked stale.",
+		)
 		p.persistOperationsLocked()
 	}
 	recentCleanup := (name == panelOperationCleanup || name == panelOperationLinodeCleanup) && op.FinishedAt != nil && op.Error == "" && time.Since(*op.FinishedAt) < time.Hour
@@ -1566,7 +1617,7 @@ func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clus
 	if len(versions) == 0 {
 		versions = readRequestedRancherVersionsForPanel(p.totalHAs)
 	}
-	downstreamRecords, _ := readDownstreamOutputRecords()
+	downstreamRecords, _ := readDownstreamOutputRecordsForRun(record.RunID)
 	recordsByHA := downstreamRecordsByHA(downstreamRecords)
 	setupRunning := p.operationRunning(panelOperationSetup)
 	readinessRunning := p.operationRunning(panelOperationReadiness)
@@ -1931,7 +1982,7 @@ func (p *localControlPanel) discoverDownstreamClusters(local clusterView, record
 			Type:                "downstream",
 			HAIndex:             local.HAIndex,
 			Name:                item.Name,
-			Version:             record.K3SVersion,
+			Version:             record.KubernetesVersion,
 			RancherURL:          local.RancherURL,
 			Namespace:           item.Namespace,
 			ManagementClusterID: item.ManagementClusterID,
@@ -1982,7 +2033,7 @@ func downstreamClustersFromRecords(local clusterView, records []downstreamOutput
 			Type:                "downstream",
 			HAIndex:             local.HAIndex,
 			Name:                record.ClusterName,
-			Version:             record.K3SVersion,
+			Version:             record.KubernetesVersion,
 			RancherURL:          local.RancherURL,
 			Namespace:           record.Namespace,
 			ManagementClusterID: record.ManagementClusterID,
@@ -2253,44 +2304,7 @@ func fetchPods(kubeconfigPath, namespace string) ([]podView, error) {
 
 	pods := make([]podView, 0)
 	for _, item := range list.Items {
-		totalContainers := len(item.Spec.Containers)
-		readyContainers := 0
-		restarts := 0
-		status := item.Status.Phase
-		for _, containerStatus := range item.Status.ContainerStatuses {
-			if containerStatus.Ready {
-				readyContainers++
-			}
-			restarts += containerStatus.RestartCount
-			if containerStatus.State.Waiting.Reason != "" {
-				status = containerStatus.State.Waiting.Reason
-			}
-			if containerStatus.State.Terminated.Reason != "" {
-				status = containerStatus.State.Terminated.Reason
-			}
-		}
-		if item.Status.Reason != "" {
-			status = item.Status.Reason
-		}
-
-		containerNames := make([]string, 0, len(item.Spec.Containers))
-		for _, container := range item.Spec.Containers {
-			containerNames = append(containerNames, container.Name)
-		}
-
-		leaderLabel := leaderLabels[item.Metadata.Name]
-		pods = append(pods, podView{
-			Namespace:   item.Metadata.Namespace,
-			Name:        item.Metadata.Name,
-			Ready:       fmt.Sprintf("%d/%d", readyContainers, totalContainers),
-			Status:      status,
-			Restarts:    restarts,
-			Age:         humanDurationSince(item.Metadata.CreationTimestamp),
-			Node:        item.Spec.NodeName,
-			Containers:  strings.Join(containerNames, ", "),
-			Leader:      leaderLabel != "",
-			LeaderLabel: leaderLabel,
-		})
+		pods = append(pods, podViewFromKubectlPod(item, leaderLabels[item.Metadata.Name]))
 	}
 
 	sort.Slice(pods, func(i, j int) bool {
@@ -2298,6 +2312,96 @@ func fetchPods(kubeconfigPath, namespace string) ([]podView, error) {
 	})
 
 	return pods, nil
+}
+
+func podViewFromKubectlPod(item kubectlPod, leaderLabel string) podView {
+	totalContainers := len(item.Spec.Containers)
+	readyContainers := 0
+	restarts := 0
+	status := item.Status.Phase
+	containerStatusByName := make(map[string]struct {
+		Image   string
+		ImageID string
+		Ready   bool
+	}, len(item.Status.ContainerStatuses))
+	for _, containerStatus := range item.Status.ContainerStatuses {
+		if containerStatus.Ready {
+			readyContainers++
+		}
+		restarts += containerStatus.RestartCount
+		if containerStatus.State.Waiting.Reason != "" {
+			status = containerStatus.State.Waiting.Reason
+		}
+		if containerStatus.State.Terminated.Reason != "" {
+			status = containerStatus.State.Terminated.Reason
+		}
+		containerStatusByName[containerStatus.Name] = struct {
+			Image   string
+			ImageID string
+			Ready   bool
+		}{
+			Image:   strings.TrimSpace(containerStatus.Image),
+			ImageID: strings.TrimSpace(containerStatus.ImageID),
+			Ready:   containerStatus.Ready,
+		}
+	}
+	if item.Status.Reason != "" {
+		status = item.Status.Reason
+	}
+
+	containerNames := make([]string, 0, len(item.Spec.Containers))
+	images := make([]containerImageView, 0, len(item.Spec.Containers))
+	for _, container := range item.Spec.Containers {
+		containerNames = append(containerNames, container.Name)
+		containerStatus := containerStatusByName[container.Name]
+		image := strings.TrimSpace(container.Image)
+		if image == "" {
+			image = containerStatus.Image
+		}
+		if !isRancherComponentImage(item.Metadata.Name, container.Name, image) {
+			continue
+		}
+		images = append(images, containerImageView{
+			Name:    container.Name,
+			Image:   image,
+			ImageID: containerStatus.ImageID,
+			Ready:   containerStatus.Ready,
+		})
+	}
+
+	return podView{
+		Namespace:   item.Metadata.Namespace,
+		Name:        item.Metadata.Name,
+		Ready:       fmt.Sprintf("%d/%d", readyContainers, totalContainers),
+		Status:      status,
+		Restarts:    restarts,
+		Age:         humanDurationSince(item.Metadata.CreationTimestamp),
+		Node:        item.Spec.NodeName,
+		Containers:  strings.Join(containerNames, ", "),
+		Images:      images,
+		Leader:      leaderLabel != "",
+		LeaderLabel: leaderLabel,
+	}
+}
+
+func isRancherComponentImage(_ string, containerName, image string) bool {
+	containerName = strings.ToLower(strings.TrimSpace(containerName))
+	if containerName == "rancher" || strings.Contains(containerName, "rancher-webhook") {
+		return true
+	}
+
+	reference := strings.ToLower(strings.TrimSpace(image))
+	if separator := strings.Index(reference, "@"); separator >= 0 {
+		reference = reference[:separator]
+	}
+	lastSlash := strings.LastIndex(reference, "/")
+	if separator := strings.LastIndex(reference, ":"); separator > lastSlash {
+		reference = reference[:separator]
+	}
+	if lastSlash = strings.LastIndex(reference, "/"); lastSlash >= 0 {
+		reference = reference[lastSlash+1:]
+	}
+	return reference == "rancher" || reference == "rancher-webhook" || reference == "rancher-agent"
 }
 
 func discoverLeaderLabels(kubeconfigPath string) map[string]string {
@@ -2347,9 +2451,20 @@ func humanDurationSince(ts time.Time) string {
 }
 
 func runKubectl(kubeconfigPath string, args ...string) (string, error) {
-	cmd := exec.Command("kubectl", append([]string{"--kubeconfig", kubeconfigPath, "--request-timeout=5s"}, args...)...)
+	return runKubectlContext(context.Background(), kubeconfigPath, args...)
+}
+
+func runKubectlContext(ctx context.Context, kubeconfigPath string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, "kubectl", append([]string{"--kubeconfig", kubeconfigPath, "--request-timeout=5s"}, args...)...)
+	cmd.WaitDelay = time.Second
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("kubectl %s stopped: %w", strings.Join(args, " "), ctxErr)
+		}
 		return "", fmt.Errorf("kubectl %s failed: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 	return string(output), nil

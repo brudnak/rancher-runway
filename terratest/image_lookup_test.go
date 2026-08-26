@@ -440,6 +440,111 @@ func TestImageLookupPrimeTargetNarrowingAndValidation(t *testing.T) {
 	}
 }
 
+func TestImageLookupRecentDaysValidationAndExplicitDefaultsStayBounded(t *testing.T) {
+	service := &imageLookupService{}
+	_, defaults, err := service.searchParameters(imageLookupSearchRequest{
+		Registry:     "stgregistry.suse.com",
+		Repository:   "rancher/rancher",
+		Channel:      "all",
+		Architecture: "all",
+		PrimeHead:    "all",
+		HeadKind:     "all",
+		PairStatus:   "all",
+		SortBy:       "natural",
+		SortOrder:    "desc",
+	})
+	if err != nil {
+		t.Fatalf("explicit default parameters: %v", err)
+	}
+	if defaults.fullScan {
+		t.Fatalf("UI-supplied default filters unexpectedly enabled a full registry scan: %#v", defaults)
+	}
+	_, bounded, err := service.searchParameters(imageLookupSearchRequest{
+		Registry:   "stgregistry.suse.com",
+		Repository: "rancher/rancher",
+		SortBy:     "version",
+		ScanMode:   "bounded",
+	})
+	if err != nil {
+		t.Fatalf("bounded parameters: %v", err)
+	}
+	if bounded.scanMode != "bounded" || bounded.fullScan {
+		t.Fatalf("bounded version sort unexpectedly enabled a full scan: %#v", bounded)
+	}
+	for _, sortBy := range []string{"version", "uploaded"} {
+		_, globallySorted, err := service.searchParameters(imageLookupSearchRequest{
+			Registry:   "stgregistry.suse.com",
+			Repository: "rancher/rancher",
+			SortBy:     sortBy,
+		})
+		if err != nil {
+			t.Fatalf("auto %s sort parameters: %v", sortBy, err)
+		}
+		if !globallySorted.fullScan {
+			t.Fatalf("auto %s sort did not retain complete-scan semantics: %#v", sortBy, globallySorted)
+		}
+	}
+	_, complete, err := service.searchParameters(imageLookupSearchRequest{
+		Registry:   "stgregistry.suse.com",
+		Repository: "rancher/rancher",
+		ScanMode:   "complete",
+	})
+	if err != nil {
+		t.Fatalf("complete parameters: %v", err)
+	}
+	if complete.scanMode != "complete" || !complete.fullScan {
+		t.Fatalf("complete scan parameters = %#v", complete)
+	}
+
+	_, recent, err := service.searchParameters(imageLookupSearchRequest{
+		Registry:   "stgregistry.suse.com",
+		Repository: "rancher/rancher",
+		RecentDays: 30,
+		ScanMode:   "bounded",
+	})
+	if err != nil {
+		t.Fatalf("recent parameters: %v", err)
+	}
+	if recent.recentDays != 30 || recent.scanMode != "bounded" || !recent.fullScan {
+		t.Fatalf("recent parameters = %#v", recent)
+	}
+
+	if _, _, err := service.searchParameters(imageLookupSearchRequest{
+		Registry:   "stgregistry.suse.com",
+		Repository: "rancher/rancher",
+		ScanMode:   "quickish",
+	}); err == nil {
+		t.Fatalf("invalid scanMode was not rejected: %v", err)
+	}
+
+	for _, recentDays := range []int{-1, imageLookupMaxRecentDays + 1} {
+		if _, _, err := service.searchParameters(imageLookupSearchRequest{
+			Registry:   "stgregistry.suse.com",
+			Repository: "rancher/rancher",
+			RecentDays: recentDays,
+		}); err == nil || !strings.Contains(err.Error(), "recentDays") {
+			t.Fatalf("recentDays=%d was not rejected: %v", recentDays, err)
+		}
+	}
+}
+
+func TestImageLookupRecentFilterUsesOnlyKnownEvidence(t *testing.T) {
+	cutoff := time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC)
+	tags := []imageLookupTag{
+		{Name: "pair-recent", PairCompletedAt: imageLookupFormatTime(cutoff.Add(time.Hour)), CreatedAt: imageLookupFormatTime(cutoff.Add(-24 * time.Hour))},
+		{Name: "upload-at-cutoff", UploadedAt: imageLookupFormatTime(cutoff)},
+		{Name: "created-old", CreatedAt: imageLookupFormatTime(cutoff.Add(-time.Nanosecond))},
+		{Name: "unknown"},
+	}
+	filtered, excluded, unknown := imageLookupFilterRecentTags(tags, cutoff)
+	if got, want := []string{filtered[0].Name, filtered[1].Name}, []string{"pair-recent", "upload-at-cutoff"}; !slices.Equal(got, want) {
+		t.Fatalf("recent evidence filter = %v, want %v", got, want)
+	}
+	if excluded != 1 || unknown != 1 {
+		t.Fatalf("recent filter accounting: excluded=%d unknown=%d", excluded, unknown)
+	}
+}
+
 func TestImageLookupInspectPrimeHeadProvenanceClassification(t *testing.T) {
 	service := &imageLookupService{}
 	sha := strings.Repeat("c", 40)
@@ -843,6 +948,53 @@ func TestImageLookupPrimePatchSelectorVerifiesAndRanksCompletePairs(t *testing.T
 	}
 }
 
+func TestImageLookupRecentDaysFiltersVerifiedPrimePairsByCompletionEvidence(t *testing.T) {
+	registryServer := httptest.NewServer(registry.New(registry.Logger(log.New(io.Discard, "", 0))))
+	defer registryServer.Close()
+
+	searchedAt := time.Date(2026, time.August, 25, 12, 0, 0, 0, time.UTC)
+	recentSHA := strings.Repeat("1", 40)
+	oldSHA := strings.Repeat("2", 40)
+	recentTag := "v2.15.1-" + recentSHA + "-head"
+	oldTag := "v2.15.1-" + oldSHA + "-head"
+	recentServerTime := searchedAt.Add(-5 * 24 * time.Hour)
+	recentAgentTime := recentServerTime.Add(time.Hour)
+	oldServerTime := searchedAt.Add(-20 * 24 * time.Hour)
+	oldAgentTime := oldServerTime.Add(time.Hour)
+	pushImageLookupPrimeFixture(t, registryServer, "rancher/rancher", recentTag, recentSHA, recentServerTime)
+	pushImageLookupPrimeFixture(t, registryServer, "rancher/rancher-agent", recentTag, recentSHA, recentAgentTime)
+	pushImageLookupPrimeFixture(t, registryServer, "rancher/rancher", oldTag, oldSHA, oldServerTime)
+	pushImageLookupPrimeFixture(t, registryServer, "rancher/rancher-agent", oldTag, oldSHA, oldAgentTime)
+
+	service := newImageLookupRewritingTestService(t, registryServer, "")
+	service.now = func() time.Time { return searchedAt }
+	result, err := service.Search(context.Background(), imageLookupSearchRequest{
+		Registry:   "all",
+		Repository: "rancher/rancher",
+		Query:      "v2.15.1-head",
+		PairStatus: "verified",
+		RecentDays: 10,
+		Limit:      200,
+	})
+	if err != nil {
+		t.Fatalf("recent Prime pair search: %v", err)
+	}
+	wantCutoff := searchedAt.Add(-10 * 24 * time.Hour)
+	if result.RecentDays != 10 || result.RecentCutoff != imageLookupFormatTime(wantCutoff) || !result.SearchedAt.Equal(searchedAt) {
+		t.Fatalf("recent response window = %#v", result)
+	}
+	if len(result.Groups) != 1 {
+		t.Fatalf("recent Prime groups = %d, want 1", len(result.Groups))
+	}
+	group := result.Groups[0]
+	if group.Matched != 1 || len(group.Tags) != 1 || group.RecentExcludedCount != 1 || group.UnknownTimestampCount != 0 || group.VerifiedPrimeHeadCount != 1 {
+		t.Fatalf("recent Prime accounting = %#v", group)
+	}
+	if got := group.Tags[0]; got.Name != recentTag || got.PairCompletedAt != imageLookupFormatTime(recentAgentTime) || got.CreatedAt != imageLookupFormatTime(recentServerTime) {
+		t.Fatalf("recent Prime result = %#v", got)
+	}
+}
+
 func TestImageLookupExactArchitecturePrimeHeadVerifiesFullTagPair(t *testing.T) {
 	var tagListRequests atomic.Int32
 	registryHandler := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
@@ -858,8 +1010,8 @@ func TestImageLookupExactArchitecturePrimeHeadVerifiesFullTagPair(t *testing.T) 
 	tag := "v2.15.1-" + sha + "-head-arm64"
 	serverTime := time.Date(2026, time.August, 24, 9, 0, 0, 0, time.UTC)
 	agentTime := serverTime.Add(30 * time.Minute)
-	pushImageLookupPrimeFixture(t, registryServer, "rancher/rancher", tag, sha, serverTime)
-	pushImageLookupPrimeFixture(t, registryServer, "rancher/rancher-agent", tag, sha, agentTime)
+	pushImageLookupPrimeIndexFixture(t, registryServer, "rancher/rancher", tag, sha, serverTime)
+	pushImageLookupPrimeIndexFixture(t, registryServer, "rancher/rancher-agent", tag, sha, agentTime)
 
 	service := newImageLookupRewritingTestService(t, registryServer, "")
 	result, err := service.Search(context.Background(), imageLookupSearchRequest{
@@ -1213,12 +1365,18 @@ func TestImageLookupSearchStopsWhenResultLimitIsCollected(t *testing.T) {
 		Registry:   imageLookupTestServerHost(t, registryServer),
 		Repository: "rancher/rancher",
 		Limit:      2,
+		SortBy:     "version",
+		SortOrder:  "desc",
+		ScanMode:   "bounded",
 	})
 	if err != nil {
 		t.Fatalf("Search with result limit: %v", err)
 	}
 	if tagListRequests.Load() != 1 {
 		t.Fatalf("tag-list requests = %d, want 1", tagListRequests.Load())
+	}
+	if result.ScanMode != "bounded" || result.SortBy != "version" {
+		t.Fatalf("bounded search response = %#v", result)
 	}
 	group := result.Groups[0]
 	if group.Scanned != 2 || group.Matched != 2 || !group.Truncated || len(group.Tags) != 2 {
@@ -2118,6 +2276,50 @@ func pushImageLookupSourceFixture(t *testing.T, server *httptest.Server, tag str
 
 func pushImageLookupPrimeFixture(t *testing.T, server *httptest.Server, repository, tag, ossRevision string, created time.Time) {
 	t.Helper()
+	image := newImageLookupPrimeFixtureImage(t, repository, tag, ossRevision, created)
+	referenceText := imageLookupTestServerHost(t, server) + "/" + repository + ":" + tag
+	reference, err := name.NewTag(referenceText, name.StrictValidation, name.Insecure)
+	if err != nil {
+		t.Fatalf("parse Prime fixture reference: %v", err)
+	}
+	if err := remote.Write(reference, image,
+		remote.WithTransport(server.Client().Transport),
+		remote.WithAuth(authn.Anonymous),
+	); err != nil {
+		t.Fatalf("push Prime fixture image: %v", err)
+	}
+}
+
+func pushImageLookupPrimeIndexFixture(t *testing.T, server *httptest.Server, repository, tag, ossRevision string, created time.Time) {
+	t.Helper()
+	architecture, _ := imageLookupTagArchitecture(tag)
+	if architecture == "multi" {
+		architecture = "amd64"
+	}
+	image := newImageLookupPrimeFixtureImage(t, repository, tag, ossRevision, created)
+	index := mutate.AppendManifests(empty.Index, mutate.IndexAddendum{
+		Add: image,
+		Descriptor: v1.Descriptor{Platform: &v1.Platform{
+			OS:           "linux",
+			Architecture: architecture,
+		}},
+	})
+	index = mutate.IndexMediaType(index, types.OCIImageIndex)
+	referenceText := imageLookupTestServerHost(t, server) + "/" + repository + ":" + tag
+	reference, err := name.NewTag(referenceText, name.StrictValidation, name.Insecure)
+	if err != nil {
+		t.Fatalf("parse Prime index fixture reference: %v", err)
+	}
+	if err := remote.WriteIndex(reference, index,
+		remote.WithTransport(server.Client().Transport),
+		remote.WithAuth(authn.Anonymous),
+	); err != nil {
+		t.Fatalf("push Prime fixture image index: %v", err)
+	}
+}
+
+func newImageLookupPrimeFixtureImage(t *testing.T, repository, tag, ossRevision string, created time.Time) v1.Image {
+	t.Helper()
 	architecture, _ := imageLookupTagArchitecture(tag)
 	if architecture == "multi" {
 		architecture = "amd64"
@@ -2138,17 +2340,7 @@ func pushImageLookupPrimeFixture(t *testing.T, server *httptest.Server, reposito
 	if err != nil {
 		t.Fatalf("write Prime fixture config: %v", err)
 	}
-	referenceText := imageLookupTestServerHost(t, server) + "/" + repository + ":" + tag
-	reference, err := name.NewTag(referenceText, name.StrictValidation, name.Insecure)
-	if err != nil {
-		t.Fatalf("parse Prime fixture reference: %v", err)
-	}
-	if err := remote.Write(reference, image,
-		remote.WithTransport(server.Client().Transport),
-		remote.WithAuth(authn.Anonymous),
-	); err != nil {
-		t.Fatalf("push Prime fixture image: %v", err)
-	}
+	return image
 }
 
 func newImageLookupRewritingTestService(t *testing.T, server *httptest.Server, failPath string) *imageLookupService {

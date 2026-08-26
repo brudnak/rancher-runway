@@ -68,22 +68,23 @@ func normalizeOwnerNamePart(value string) string {
 }
 
 type EditablePreflightConfig struct {
-	Distro                   string            `json:"distro"`
-	PreferredImageRegistries []string          `json:"preferredImageRegistries"`
-	BootstrapPassword        string            `json:"bootstrapPassword"`
-	WebhookImage             string            `json:"webhookImage"`
-	PreloadImages            bool              `json:"preloadImages"`
-	ServerCount              int               `json:"serverCount"`
-	GPUWorker                GPUWorkerConfig   `json:"gpuWorker"`
-	DeploymentType           string            `json:"deploymentType"`
-	HostedRDSPassword        string            `json:"hostedRDSPassword"`
-	HostedEC2InstanceType    string            `json:"hostedEC2InstanceType"`
-	LinodeDockerHub          string            `json:"linodeDockerHub"`
-	LinodeCustomImage        string            `json:"linodeCustomImage"`
-	LinodeSSHRootPassword    string            `json:"linodeSSHRootPassword"`
-	UserFirstName            string            `json:"userFirstName"`
-	UserLastName             string            `json:"userLastName"`
-	TFVars                   map[string]string `json:"tfVars"`
+	Distro                   string                 `json:"distro"`
+	PreferredImageRegistries []string               `json:"preferredImageRegistries"`
+	BootstrapPassword        string                 `json:"bootstrapPassword"`
+	WebhookImage             string                 `json:"webhookImage"`
+	PreloadImages            bool                   `json:"preloadImages"`
+	ServerCount              int                    `json:"serverCount"`
+	GPUWorker                GPUWorkerConfig        `json:"gpuWorker"`
+	DeploymentType           string                 `json:"deploymentType"`
+	HostedRDSPassword        string                 `json:"hostedRDSPassword"`
+	HostedEC2InstanceType    string                 `json:"hostedEC2InstanceType"`
+	LinodeDockerHub          string                 `json:"linodeDockerHub"`
+	LinodeCustomImage        string                 `json:"linodeCustomImage"`
+	LinodeSSHRootPassword    string                 `json:"linodeSSHRootPassword"`
+	UserFirstName            string                 `json:"userFirstName"`
+	UserLastName             string                 `json:"userLastName"`
+	TFVars                   map[string]string      `json:"tfVars"`
+	DownstreamLinodePlans    []LinodeDownstreamPlan `json:"downstreamLinodePlans"`
 }
 
 type GPUWorkerConfig struct {
@@ -201,7 +202,23 @@ func CurrentEditablePreflightConfig() EditablePreflightConfig {
 		UserFirstName:            OwnerFirstName(),
 		UserLastName:             OwnerLastName(),
 		TFVars:                   tfVars,
+		DownstreamLinodePlans:    CurrentLinodeDownstreamPlans(len(currentConfiguredRancherVersions())),
 	}
+}
+
+func currentConfiguredRancherVersions() []string {
+	versions := viper.GetStringSlice("rancher.versions")
+	if len(versions) > 0 {
+		return versions
+	}
+	if strings.TrimSpace(viper.GetString("rancher.version")) != "" {
+		return []string{viper.GetString("rancher.version")}
+	}
+	total := viper.GetInt("total_has")
+	if total < 1 {
+		total = 1
+	}
+	return make([]string, total)
 }
 
 func NormalizePreflightConfigUpdate(update *PreflightConfigUpdate) error {

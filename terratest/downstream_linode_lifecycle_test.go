@@ -1,45 +1,27 @@
 package test
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	goversion "github.com/hashicorp/go-version"
+	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/spf13/viper"
 )
-
-const (
-	defaultLinodeRegion       = "us-ord"
-	defaultLinodeInstanceType = "g6-standard-2"
-	defaultLinodeImage        = "linode/ubuntu22.04"
-)
-
-type downstreamProvisioningConfig struct {
-	ClusterName  string
-	MachineName  string
-	SecretName   string
-	Namespace    string
-	Region       string
-	InstanceType string
-	Image        string
-	K3SVersion   string
-	LinodeToken  string
-}
 
 type provisioningClusterStatus struct {
 	Metadata struct {
@@ -70,39 +52,94 @@ func TestHAProvisionLinodeDownstream(t *testing.T) {
 	requireExplicitLifecycleTest(t, "TestHAProvisionLinodeDownstream")
 	setupConfig(t)
 
-	linodeToken := strings.TrimSpace(os.Getenv("LINODE_TOKEN"))
+	linodeToken := linodeAccessToken()
 	if linodeToken == "" {
-		t.Skip("LINODE_TOKEN is not set; skipping Linode downstream provisioning")
+		t.Skip("Linode access token is not configured; skipping Linode downstream provisioning")
 	}
+
+	totalHAs := viper.GetInt("total_has")
+	plans, err := legacyLinodeDownstreamPlans(totalHAs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisionConfiguredLinodeDownstreamPlans(t, plans, linodeToken)
+}
+
+func TestHAProvisionConfiguredLinodeDownstreams(t *testing.T) {
+	requireExplicitLifecycleTest(t, "TestHAProvisionConfiguredLinodeDownstreams")
+	setupConfig(t)
 
 	totalHAs := viper.GetInt("total_has")
 	if totalHAs < 1 {
 		t.Fatal("total_has must be at least 1")
 	}
+	plans, err := configuredLinodeDownstreamPlans(totalHAs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !settings.AnyLinodeDownstreamPlanEnabled(plans) {
+		t.Skip("no downstream Linode plans are enabled")
+	}
+	linodeToken := linodeAccessToken()
+	if linodeToken == "" {
+		t.Fatal("Linode access token is required for enabled downstream Linode plans")
+	}
+	provisionConfiguredLinodeDownstreamPlans(t, plans, linodeToken)
+}
 
+func provisionConfiguredLinodeDownstreamPlans(t *testing.T, plans []settings.LinodeDownstreamPlan, linodeToken string) {
+	t.Helper()
+	work, err := determineDownstreamProvisioningWork(
+		plans,
+		readDownstreamOutputRecord,
+		downstreamManagementKubeconfigPath,
+		getProvisioningClusterStatus,
+	)
+	if err != nil {
+		t.Fatalf("Downstream reuse preflight failed before mutation: %v", err)
+	}
+	if len(work) == 0 {
+		log.Printf("[downstream] All enabled downstream clusters are already active; nothing to provision")
+		return
+	}
+
+	plansNeedingMutation, err := downstreamPlansForProvisioningWork(len(plans), work)
+	if err != nil {
+		t.Fatalf("Downstream provisioning work preflight failed before mutation: %v", err)
+	}
+	catalogTimeout := durationFromEnv("LINODE_CATALOG_TIMEOUT", 45*time.Second)
+	catalogCtx, cancelCatalog := context.WithTimeout(context.Background(), catalogTimeout)
+	defer cancelCatalog()
+	catalog, err := collectLinodeCatalog(catalogCtx, &http.Client{Timeout: 15 * time.Second}, linodeCatalogDefaultAPIBaseURL, linodeToken)
+	if err != nil {
+		t.Fatalf("Linode provider catalog preflight failed before downstream mutation: %v", err)
+	}
+	if err := validateLinodeDownstreamPlansAgainstCatalog(plansNeedingMutation, catalog); err != nil {
+		t.Fatalf("Linode provider plan preflight failed before downstream mutation: %v", err)
+	}
+
+	totalHAs := len(plans)
 	terraformOptions := getTerraformOptions(t, totalHAs)
 	outputs := getTerraformOutputs(t, terraformOptions)
 	if len(outputs) == 0 {
 		t.Fatal("No outputs received from terraform")
 	}
 
-	runID := strings.TrimSpace(os.Getenv("GITHUB_RUN_ID"))
-	if runID == "" {
-		runID = strings.TrimSpace(os.Getenv("SIGNOFF_RUN_ID"))
-	}
+	runID := downstreamProvisioningRunID()
 	namePrefix := strings.TrimSpace(os.Getenv("LINODE_CLUSTER_PREFIX"))
 	namePrefix = downstreamClusterNamePrefix(namePrefix, runID)
 
 	timeout := durationFromEnv("LINODE_DOWNSTREAM_TIMEOUT", 15*time.Minute)
 	var wg sync.WaitGroup
 	errCh := make(chan error, totalHAs)
-	for i := 1; i <= totalHAs; i++ {
-		instanceNum := i
+	for _, item := range work {
+		item := item
+		instanceNum := item.InstanceNum
 		haOutputs := getHAOutputs(instanceNum, outputs)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := provisionLinodeDownstreamForHA(instanceNum, haOutputs, linodeToken, namePrefix, runID, timeout); err != nil {
+			if err := provisionLinodeDownstreamForHA(instanceNum, haOutputs, item.Plan, item.Existing, linodeToken, namePrefix, runID, timeout); err != nil {
 				errCh <- err
 			}
 		}()
@@ -120,21 +157,100 @@ func TestHAProvisionLinodeDownstream(t *testing.T) {
 	}
 }
 
-func provisionLinodeDownstreamForHA(instanceNum int, haOutputs TerraformOutputs, linodeToken, namePrefix, runID string, timeout time.Duration) error {
+type downstreamProvisioningWorkItem struct {
+	InstanceNum int
+	Plan        settings.LinodeDownstreamPlan
+	Existing    *downstreamOutputRecord
+}
+
+type downstreamOutputRecordReader func(haIndex int) (downstreamOutputRecord, bool, error)
+type downstreamKubeconfigPathResolver func(instanceNum int) (string, error)
+
+func determineDownstreamProvisioningWork(plans []settings.LinodeDownstreamPlan, readRecord downstreamOutputRecordReader, resolveKubeconfig downstreamKubeconfigPathResolver, getStatus provisioningClusterStatusGetter) ([]downstreamProvisioningWorkItem, error) {
+	if readRecord == nil {
+		return nil, fmt.Errorf("downstream output record reader must not be nil")
+	}
+	if resolveKubeconfig == nil {
+		return nil, fmt.Errorf("downstream kubeconfig resolver must not be nil")
+	}
+
+	work := make([]downstreamProvisioningWorkItem, 0, len(plans))
+	for index, plan := range plans {
+		if !plan.Enabled {
+			continue
+		}
+		instanceNum := index + 1
+		kubeconfigPath, err := resolveKubeconfig(instanceNum)
+		if err != nil {
+			return nil, fmt.Errorf("resolve management kubeconfig for HA %d: %w", instanceNum, err)
+		}
+		existing, found, err := readRecord(instanceNum)
+		if err != nil {
+			return nil, fmt.Errorf("read downstream output record for HA %d: %w", instanceNum, err)
+		}
+
+		item := downstreamProvisioningWorkItem{InstanceNum: instanceNum, Plan: plan}
+		if found {
+			reusable, err := reusableActiveDownstreamRecord(existing, kubeconfigPath, getStatus)
+			if err != nil {
+				return nil, fmt.Errorf("cannot safely verify recorded downstream cluster %s for HA %d: %w", existing.ClusterName, instanceNum, err)
+			}
+			if reusable {
+				log.Printf("[downstream][ha-%d] Reusing already-active recorded cluster %s (%s)", instanceNum, existing.ClusterName, existing.ManagementClusterID)
+				continue
+			}
+			existingCopy := existing
+			item.Existing = &existingCopy
+		}
+		work = append(work, item)
+	}
+	return work, nil
+}
+
+func downstreamPlansForProvisioningWork(planCount int, work []downstreamProvisioningWorkItem) ([]settings.LinodeDownstreamPlan, error) {
+	if planCount < 0 {
+		return nil, fmt.Errorf("downstream plan count must not be negative")
+	}
+	plans := make([]settings.LinodeDownstreamPlan, planCount)
+	seen := make(map[int]struct{}, len(work))
+	for _, item := range work {
+		if item.InstanceNum < 1 || item.InstanceNum > planCount {
+			return nil, fmt.Errorf("downstream provisioning work references HA %d outside plan range 1-%d", item.InstanceNum, planCount)
+		}
+		if _, exists := seen[item.InstanceNum]; exists {
+			return nil, fmt.Errorf("downstream provisioning work contains duplicate HA %d", item.InstanceNum)
+		}
+		seen[item.InstanceNum] = struct{}{}
+		plan := item.Plan
+		plan.Enabled = true
+		plans[item.InstanceNum-1] = plan
+	}
+	return plans, nil
+}
+
+func downstreamManagementKubeconfigPath(instanceNum int) (string, error) {
+	kubeconfigPath := filepath.Join(haInstanceDir(instanceNum), "kube_config.yaml")
+	if _, err := os.Stat(kubeconfigPath); err != nil {
+		return "", fmt.Errorf("kubeconfig not available at %s: %w", kubeconfigPath, err)
+	}
+	return kubeconfigPath, nil
+}
+
+func provisionLinodeDownstreamForHA(instanceNum int, haOutputs TerraformOutputs, plan settings.LinodeDownstreamPlan, existing *downstreamOutputRecord, linodeToken, namePrefix, runID string, timeout time.Duration) (provisionErr error) {
 	kubeconfigPath := filepath.Join(haInstanceDir(instanceNum), "kube_config.yaml")
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		return fmt.Errorf("kubeconfig not available for HA %d at %s: %w", instanceNum, kubeconfigPath, err)
 	}
 
-	if err := ensureLinodeNodeDriverActive(kubeconfigPath); err != nil {
-		return err
+	if existing != nil {
+		log.Printf("[downstream][ha-%d] Cleaning recorded cluster %s before provisioning retry", instanceNum, existing.ClusterName)
+		if err := deleteLinodeDownstream(*existing, durationFromEnv("LINODE_DOWNSTREAM_DELETE_TIMEOUT", 20*time.Minute)); err != nil {
+			return fmt.Errorf("cannot safely retry HA %d while recorded downstream cluster %s remains: %w", instanceNum, existing.ClusterName, err)
+		}
 	}
 
 	suffix := randomHex(4)
-	clusterName := dnsLabel(fmt.Sprintf("%s-ha%d-%s", namePrefix, instanceNum, suffix))
-	if runID != "" {
-		clusterName = dnsLabel(fmt.Sprintf("%s-%s-ha%d-%s", namePrefix, shortRunID(runID), instanceNum, suffix))
-	}
+	clusterName := downstreamClusterName(namePrefix, runID, instanceNum, suffix)
 
 	adminToken, err := createRancherAdminToken(haOutputs.RancherURL, viper.GetString("rancher.bootstrap_password"))
 	if err != nil {
@@ -143,44 +259,66 @@ func provisionLinodeDownstreamForHA(instanceNum int, haOutputs TerraformOutputs,
 	if err := configureRancherServerURL(haOutputs.RancherURL, adminToken); err != nil {
 		return err
 	}
-	k3sVersion, err := resolveK3SDefaultVersion(haOutputs.RancherURL, adminToken)
+	kubernetesVersion, err := resolveDownstreamKubernetesVersion(haOutputs.RancherURL, adminToken, plan.Distribution, plan.KubernetesVersion)
 	if err != nil {
 		return err
 	}
 
 	cfg := downstreamProvisioningConfig{
-		ClusterName:  clusterName,
-		SecretName:   dnsLabel("cc-" + clusterName),
-		Namespace:    defaultLinodeNamespace,
-		Region:       envOrDefaultTrimmed("LINODE_REGION", defaultLinodeRegion),
-		InstanceType: envOrDefaultTrimmed("LINODE_INSTANCE_TYPE", defaultLinodeInstanceType),
-		Image:        envOrDefaultTrimmed("LINODE_IMAGE", defaultLinodeImage),
-		K3SVersion:   k3sVersion,
-		LinodeToken:  linodeToken,
+		ClusterName:       clusterName,
+		MachineName:       dnsLabel("nc-" + clusterName + "-pool1"),
+		SecretName:        dnsLabel("cc-" + clusterName),
+		Namespace:         defaultLinodeNamespace,
+		Distribution:      strings.ToLower(strings.TrimSpace(plan.Distribution)),
+		KubernetesVersion: kubernetesVersion,
+		Region:            strings.TrimSpace(plan.Region),
+		InstanceType:      strings.TrimSpace(plan.InstanceType),
+		Image:             strings.TrimSpace(plan.Image),
+		LinodeToken:       linodeToken,
+	}
+	record := downstreamOutputRecordFromConfig(instanceNum, cfg, haOutputs)
+	if err := writeDownstreamProvisioningPhase(&record, "planned", ""); err != nil {
+		return err
+	}
+	defer func() {
+		if provisionErr == nil {
+			return
+		}
+		safeError := redactDownstreamProvisioningError(provisionErr, linodeToken, adminToken)
+		if err := writeDownstreamProvisioningPhase(&record, "failed", safeError); err != nil {
+			provisionErr = errors.Join(provisionErr, fmt.Errorf("failed to persist downstream failure state: %w", err))
+		}
+	}()
+
+	log.Printf("[downstream][ha-%d] Creating one-node Linode %s cluster %s on %s (%s, %s, %s)",
+		instanceNum, strings.ToUpper(cfg.Distribution), cfg.ClusterName, clickableURL(haOutputs.RancherURL), cfg.KubernetesVersion, cfg.Region, cfg.InstanceType)
+
+	if err := ensureLinodeNodeDriverActive(kubeconfigPath); err != nil {
+		return err
 	}
 
-	log.Printf("[downstream][ha-%d] Creating one-node Linode K3s cluster %s on %s (%s, %s, %s)",
-		instanceNum, cfg.ClusterName, clickableURL(haOutputs.RancherURL), cfg.K3SVersion, cfg.Region, cfg.InstanceType)
-
 	if err := kubectlApply(kubeconfigPath, renderLinodeCredentialSecretManifest(cfg)); err != nil {
+		return err
+	}
+	if err := writeDownstreamProvisioningPhase(&record, "credential-created", ""); err != nil {
 		return err
 	}
 
 	machineName, err := createLinodeMachineConfig(haOutputs.RancherURL, adminToken, cfg)
 	if err != nil {
-		_ = runKubectlDirect(kubeconfigPath, "delete", "secret", cfg.SecretName, "-n", "cattle-global-data", "--ignore-not-found=true")
 		return err
 	}
 	cfg.MachineName = machineName
+	record.MachineConfig = machineName
 	log.Printf("[downstream][ha-%d] Created Linode machine config %s", instanceNum, cfg.MachineName)
-
-	if err := kubectlApply(kubeconfigPath, renderLinodeDownstreamClusterManifest(cfg)); err != nil {
-		_ = runKubectlDirect(kubeconfigPath, "delete", "linodeconfig.rke-machine-config.cattle.io", cfg.MachineName, "-n", cfg.Namespace, "--ignore-not-found=true")
-		_ = runKubectlDirect(kubeconfigPath, "delete", "secret", cfg.SecretName, "-n", "cattle-global-data", "--ignore-not-found=true")
+	if err := writeDownstreamProvisioningPhase(&record, "machine-config-created", ""); err != nil {
 		return err
 	}
 
-	if err := writeDownstreamOutputs(instanceNum, cfg, haOutputs, ""); err != nil {
+	if err := kubectlApply(kubeconfigPath, renderLinodeDownstreamClusterManifest(cfg)); err != nil {
+		return err
+	}
+	if err := writeDownstreamProvisioningPhase(&record, "provisioning", ""); err != nil {
 		return err
 	}
 
@@ -195,15 +333,52 @@ func provisionLinodeDownstreamForHA(instanceNum int, haOutputs TerraformOutputs,
 	if managementClusterID == "" {
 		return fmt.Errorf("downstream cluster %s is active but status.clusterName is empty", cfg.ClusterName)
 	}
-	if _, err := writeDownstreamKubeconfig(instanceNum, cfg, haOutputs, managementClusterID); err != nil {
+	record.ManagementClusterID = managementClusterID
+	if err := writeDownstreamProvisioningPhase(&record, "active-pending-artifacts", ""); err != nil {
 		return err
 	}
-	if err := writeDownstreamOutputs(instanceNum, cfg, haOutputs, managementClusterID); err != nil {
+	if _, err := writeDownstreamKubeconfig(instanceNum, cfg, haOutputs, adminToken, managementClusterID); err != nil {
+		return err
+	}
+	if err := writeDownstreamEnvironment(instanceNum, cfg, haOutputs, adminToken); err != nil {
+		return err
+	}
+	if err := writeDownstreamProvisioningPhase(&record, "active", ""); err != nil {
 		return err
 	}
 
 	log.Printf("[downstream][ha-%d] Linode downstream cluster %s is active", instanceNum, cfg.ClusterName)
 	return nil
+}
+
+type provisioningClusterStatusGetter func(kubeconfigPath, namespace, clusterName string) (provisioningClusterStatus, error)
+
+func reusableActiveDownstreamRecord(record downstreamOutputRecord, kubeconfigPath string, getStatus provisioningClusterStatusGetter) (bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(record.Phase), "active") {
+		return false, nil
+	}
+	if getStatus == nil {
+		return false, fmt.Errorf("provisioning cluster status getter must not be nil")
+	}
+	status, err := getStatus(kubeconfigPath, record.Namespace, record.ClusterName)
+	if err != nil {
+		if provisioningClusterNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !strings.EqualFold(strings.TrimSpace(status.Status.Phase), "active") && !status.Status.Ready {
+		return false, fmt.Errorf("record is active but live cluster phase is %q and ready=%t", status.Status.Phase, status.Status.Ready)
+	}
+	recordedManagementID := strings.TrimSpace(record.ManagementClusterID)
+	liveManagementID := strings.TrimSpace(status.Status.ClusterName)
+	if recordedManagementID == "" || liveManagementID == "" {
+		return false, fmt.Errorf("active downstream record or live cluster is missing its management cluster id")
+	}
+	if recordedManagementID != liveManagementID {
+		return false, fmt.Errorf("management cluster id changed from %q to %q", recordedManagementID, liveManagementID)
+	}
+	return true, nil
 }
 
 func ensureLinodeNodeDriverActive(kubeconfigPath string) error {
@@ -263,6 +438,23 @@ func TestHADeleteLinodeDownstream(t *testing.T) {
 	}
 
 	timeout := durationFromEnv("LINODE_DOWNSTREAM_DELETE_TIMEOUT", 20*time.Minute)
+	if err := cleanupDownstreamOutputRecords(records, timeout, deleteLinodeDownstream); err != nil {
+		t.Fatalf("Linode downstream cleanup failed:\n%v", err)
+	}
+}
+
+func cleanupRecordedLinodeDownstreams(timeout time.Duration) error {
+	records, err := readDownstreamOutputRecords()
+	if err != nil {
+		return err
+	}
+	return cleanupDownstreamOutputRecords(records, timeout, deleteLinodeDownstream)
+}
+
+func cleanupDownstreamOutputRecords(records []downstreamOutputRecord, timeout time.Duration, deleteRecord func(downstreamOutputRecord, time.Duration) error) error {
+	if deleteRecord == nil {
+		return fmt.Errorf("downstream cleanup function must not be nil")
+	}
 	var wg sync.WaitGroup
 	errCh := make(chan error, len(records))
 	for _, record := range records {
@@ -270,8 +462,8 @@ func TestHADeleteLinodeDownstream(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := deleteLinodeDownstream(record, timeout); err != nil {
-				errCh <- err
+			if err := deleteRecord(record, timeout); err != nil {
+				errCh <- fmt.Errorf("HA %d cluster %s: %w", record.HAIndex, record.ClusterName, err)
 			}
 		}()
 	}
@@ -279,16 +471,29 @@ func TestHADeleteLinodeDownstream(t *testing.T) {
 	wg.Wait()
 	close(errCh)
 
-	var failures []string
+	var failures []error
 	for err := range errCh {
-		failures = append(failures, err.Error())
+		failures = append(failures, err)
 	}
-	if len(failures) > 0 {
-		t.Fatalf("Linode downstream cleanup failed:\n%s", strings.Join(failures, "\n"))
-	}
+	return errors.Join(failures...)
 }
 
-func deleteLinodeDownstream(record downstreamOutputRecord, timeout time.Duration) error {
+func deleteLinodeDownstream(record downstreamOutputRecord, timeout time.Duration) (cleanupErr error) {
+	if record.Namespace == "" {
+		record.Namespace = defaultLinodeNamespace
+	}
+	if err := writeDownstreamProvisioningPhase(&record, "deleting", ""); err != nil {
+		return fmt.Errorf("persist deleting phase: %w", err)
+	}
+	defer func() {
+		if cleanupErr == nil {
+			return
+		}
+		if err := writeDownstreamProvisioningPhase(&record, "cleanup-failed", redactDownstreamProvisioningError(cleanupErr)); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("persist cleanup failure: %w", err))
+		}
+	}()
+
 	kubeconfigPath := filepath.Join(haInstanceDir(record.HAIndex), "kube_config.yaml")
 	if _, err := os.Stat(kubeconfigPath); err != nil {
 		return fmt.Errorf("kubeconfig not available for HA %d at %s: %w", record.HAIndex, kubeconfigPath, err)
@@ -304,15 +509,19 @@ func deleteLinodeDownstream(record downstreamOutputRecord, timeout time.Duration
 
 	if record.MachineConfig != "" {
 		if err := runKubectlDirect(kubeconfigPath, "delete", "linodeconfig.rke-machine-config.cattle.io", record.MachineConfig, "-n", record.Namespace, "--ignore-not-found=true"); err != nil {
-			log.Printf("[downstream][ha-%d] Warning: failed to delete Linode machine config %s: %v", record.HAIndex, record.MachineConfig, err)
+			return fmt.Errorf("delete Linode machine config %s: %w", record.MachineConfig, err)
 		}
 	}
 	if record.SecretName != "" {
 		if err := runKubectlDirect(kubeconfigPath, "delete", "secret", record.SecretName, "-n", "cattle-global-data", "--ignore-not-found=true"); err != nil {
-			log.Printf("[downstream][ha-%d] Warning: failed to delete Linode credential secret %s: %v", record.HAIndex, record.SecretName, err)
+			return fmt.Errorf("delete Linode credential secret %s: %w", record.SecretName, err)
 		}
 	}
 
+	if err := removeDownstreamOutputArtifactsForRun(record.RunID, record.HAIndex); err != nil {
+		return err
+	}
+	log.Printf("[downstream][ha-%d] Removed downstream output records for %s", record.HAIndex, record.ClusterName)
 	return nil
 }
 
@@ -321,7 +530,7 @@ func waitForProvisioningClusterDeleted(kubeconfigPath, namespace, clusterName st
 	for time.Now().Before(deadline) {
 		_, err := getProvisioningClusterStatus(kubeconfigPath, namespace, clusterName)
 		if err != nil {
-			if strings.Contains(err.Error(), "NotFound") || strings.Contains(err.Error(), "not found") {
+			if provisioningClusterNotFound(err) {
 				log.Printf("[downstream] Cluster %s deleted", clusterName)
 				return nil
 			}
@@ -334,239 +543,12 @@ func waitForProvisioningClusterDeleted(kubeconfigPath, namespace, clusterName st
 	return fmt.Errorf("timed out after %s waiting for downstream cluster %s deletion", timeout, clusterName)
 }
 
-func resolveK3SDefaultVersion(rancherURL, bearerToken string) (string, error) {
-	if explicit := strings.TrimSpace(os.Getenv("K3S_VERSION")); explicit != "" {
-		version := normalizeK3SVersion(explicit)
-		log.Printf("[downstream] Using explicit K3s version %s", version)
-		return version, nil
-	}
-
-	version, err := latestK3SReleaseVersionFromRancherMetadata(rancherURL, bearerToken)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve provisionable K3s version: %w", err)
-	}
-	return version, nil
-}
-
-func latestK3SReleaseVersionFromRancherMetadata(rancherURL, bearerToken string) (string, error) {
-	rancherURL = strings.TrimRight(clickableURL(rancherURL), "/")
-	if strings.TrimSpace(bearerToken) == "" {
-		return "", fmt.Errorf("bearer token must not be empty")
-	}
-
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		},
-	}
-
-	serverVersion, err := rancherServerVersion(client, rancherURL, bearerToken)
-	if err != nil {
-		return "", err
-	}
-	releases, err := k3sReleasesFromRancherMetadataConfig(client, rancherURL, bearerToken, serverVersion)
-	if err != nil {
-		return "", err
-	}
-	version, err := selectLatestK3SReleaseVersion(releases, serverVersion)
-	if err != nil {
-		return "", err
-	}
-	log.Printf("[downstream] Selected K3s version %s for Rancher server version %s", version, serverVersion)
-	return version, nil
-}
-
-func k3sReleasesFromRancherMetadataConfig(client *http.Client, rancherURL, bearerToken, serverVersion string) ([]k3sRelease, error) {
-	var setting struct {
-		Value   string `json:"value"`
-		Default string `json:"default"`
-	}
-	if err := getRancherJSON(client, rancherURL+"/v3/settings/rke-metadata-config", bearerToken, &setting); err != nil {
-		return nil, fmt.Errorf("failed to read rke-metadata-config setting: %w", err)
-	}
-
-	metadataConfig := strings.TrimSpace(setting.Value)
-	if metadataConfig == "" {
-		metadataConfig = strings.TrimSpace(setting.Default)
-	}
-	if metadataConfig == "" {
-		return nil, fmt.Errorf("rke-metadata-config setting was empty")
-	}
-
-	var config struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal([]byte(metadataConfig), &config); err != nil {
-		return nil, fmt.Errorf("failed to parse rke-metadata-config setting: %w", err)
-	}
-	if strings.TrimSpace(config.URL) == "" {
-		return nil, fmt.Errorf("rke-metadata-config did not include a url")
-	}
-	log.Printf("[downstream] Reading K3s releases from Rancher KDM metadata %s", config.URL)
-
-	releases, err := fetchK3SReleasesFromMetadataURL(client, config.URL)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := selectLatestK3SReleaseVersion(releases, serverVersion); err == nil {
-		return releases, nil
-	}
-
-	candidateURL := kdmMetadataURLForRancherVersion(serverVersion)
-	if candidateURL == "" || candidateURL == config.URL {
-		return releases, nil
-	}
-	log.Printf("[downstream] Rancher KDM metadata %s has no provisionable K3s versions for %s; checking %s", config.URL, serverVersion, candidateURL)
-	candidateReleases, err := fetchK3SReleasesFromMetadataURL(client, candidateURL)
-	if err != nil {
-		return releases, nil
-	}
-	if _, err := selectLatestK3SReleaseVersion(candidateReleases, serverVersion); err != nil {
-		return releases, nil
-	}
-	return nil, fmt.Errorf("Rancher KDM metadata %s has no provisionable K3s versions for %s, but %s does; Rancher also needs working /v1-k3s-release/releases and /v1-rke2-release/releases endpoints before downstream provisioning can proceed", config.URL, serverVersion, candidateURL)
-}
-
-func fetchK3SReleasesFromMetadataURL(client *http.Client, metadataURL string) ([]k3sRelease, error) {
-	req, err := http.NewRequest(http.MethodGet, metadataURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch KDM metadata %s: %w", metadataURL, err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("KDM metadata %s returned HTTP %d: %s", metadataURL, resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var metadata struct {
-		K3S struct {
-			Releases []k3sRelease `json:"releases"`
-		} `json:"k3s"`
-	}
-	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse KDM metadata %s: %w", metadataURL, err)
-	}
-	return metadata.K3S.Releases, nil
-}
-
-func kdmMetadataURLForRancherVersion(rancherVersion string) string {
-	version, err := parseRancherVersion(rancherVersion)
-	if err != nil {
-		return ""
-	}
-	segments := version.Segments64()
-	if len(segments) < 2 {
-		return ""
-	}
-	return fmt.Sprintf("https://releases.rancher.com/kontainer-driver-metadata/dev-v%d.%d/data.json", segments[0], segments[1])
-}
-
-func rancherServerVersion(client *http.Client, rancherURL, bearerToken string) (string, error) {
-	var setting struct {
-		Value   string `json:"value"`
-		Default string `json:"default"`
-	}
-	if err := getRancherJSON(client, rancherURL+"/v3/settings/server-version", bearerToken, &setting); err != nil {
-		return "", fmt.Errorf("failed to read server-version setting: %w", err)
-	}
-
-	version := strings.TrimSpace(setting.Value)
-	if version == "" {
-		version = strings.TrimSpace(setting.Default)
-	}
-	if version == "" {
-		return "", fmt.Errorf("server-version setting was empty")
-	}
-	return normalizeVersion(version), nil
-}
-
-type k3sRelease struct {
-	Version                 string                 `json:"version"`
-	MinChannelServerVersion string                 `json:"minChannelServerVersion"`
-	MaxChannelServerVersion string                 `json:"maxChannelServerVersion"`
-	ServerArgs              map[string]interface{} `json:"serverArgs"`
-	AgentArgs               map[string]interface{} `json:"agentArgs"`
-}
-
-func selectLatestK3SReleaseVersion(releases []k3sRelease, rancherVersion string) (string, error) {
-	serverVersion, err := parseRancherVersion(rancherVersion)
-	if err != nil {
-		return "", err
-	}
-
-	var selectedVersion *goversion.Version
-	selectedOriginal := ""
-	withArgsCount := 0
-	compatibleCount := 0
-
-	for _, release := range releases {
-		version := normalizeK3SVersion(release.Version)
-		if version == "" || release.ServerArgs == nil || release.AgentArgs == nil {
-			continue
-		}
-		withArgsCount++
-		if !k3sReleaseSupportsRancherVersion(release, serverVersion) {
-			continue
-		}
-		compatibleCount++
-		parsed, err := parseRancherVersion(version)
-		if err != nil {
-			continue
-		}
-		if selectedVersion == nil || selectedVersion.LessThan(parsed) || (selectedVersion.Equal(parsed) && version > selectedOriginal) {
-			selectedVersion = parsed
-			selectedOriginal = version
-		}
-	}
-
-	if selectedOriginal == "" {
-		return "", fmt.Errorf("Rancher K3s release list did not contain any provisionable versions for Rancher %s (total releases=%d, releases with server/agent args=%d, compatible releases=%d)", rancherVersion, len(releases), withArgsCount, compatibleCount)
-	}
-	return selectedOriginal, nil
-}
-
-func k3sReleaseSupportsRancherVersion(release k3sRelease, serverVersion *goversion.Version) bool {
-	minVersion, err := parseRancherVersion(release.MinChannelServerVersion)
-	if err != nil {
+func provisioningClusterNotFound(err error) bool {
+	if err == nil {
 		return false
 	}
-	maxVersion, err := parseRancherVersion(release.MaxChannelServerVersion)
-	if err != nil {
-		return false
-	}
-	return !serverVersion.LessThan(minVersion) && !maxVersion.LessThan(serverVersion)
-}
-
-func parseRancherVersion(version string) (*goversion.Version, error) {
-	version = strings.TrimSpace(version)
-	if version == "" {
-		return nil, fmt.Errorf("version must not be empty")
-	}
-	parsed, err := goversion.NewVersion(strings.TrimPrefix(version, "v"))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse version %q: %w", version, err)
-	}
-	return parsed, nil
-}
-
-func normalizeK3SVersion(version string) string {
-	return normalizeVersion(version)
-}
-
-func normalizeVersion(version string) string {
-	version = strings.TrimSpace(version)
-	if version == "" || strings.HasPrefix(version, "v") {
-		return version
-	}
-	return "v" + version
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "notfound") || strings.Contains(message, "not found")
 }
 
 func createLinodeMachineConfig(rancherURL, bearerToken string, cfg downstreamProvisioningConfig) (string, error) {
@@ -596,127 +578,6 @@ func createLinodeMachineConfig(rancherURL, bearerToken string, cfg downstreamPro
 		return parts[len(parts)-1], nil
 	}
 	return "", fmt.Errorf("Rancher LinodeConfig response did not include a machine config name")
-}
-
-func linodeMachineConfigPayload(cfg downstreamProvisioningConfig) map[string]interface{} {
-	return map[string]interface{}{
-		"image":        cfg.Image,
-		"instanceType": cfg.InstanceType,
-		"interfaces":   []interface{}{},
-		"metadata": map[string]interface{}{
-			"annotations":  map[string]string{},
-			"generateName": fmt.Sprintf("nc-%s-pool1-", cfg.ClusterName),
-			"labels":       map[string]string{},
-			"namespace":    cfg.Namespace,
-		},
-		"region": cfg.Region,
-		"type":   "rke-machine-config.cattle.io.linodeconfig",
-	}
-}
-
-func renderLinodeCredentialSecretManifest(cfg downstreamProvisioningConfig) string {
-	return fmt.Sprintf(`apiVersion: v1
-kind: Secret
-metadata:
-  name: %s
-  namespace: cattle-global-data
-  annotations:
-    field.cattle.io/name: %s
-type: Opaque
-stringData:
-  linodecredentialConfig-token: %s
-`,
-		yamlScalar(cfg.SecretName),
-		yamlScalar(cfg.SecretName),
-		yamlScalar(cfg.LinodeToken),
-	)
-}
-
-func renderLinodeDownstreamClusterManifest(cfg downstreamProvisioningConfig) string {
-	return fmt.Sprintf(`apiVersion: provisioning.cattle.io/v1
-kind: Cluster
-metadata:
-  name: %s
-  namespace: %s
-spec:
-  cloudCredentialSecretName: %s
-  kubernetesVersion: %s
-  defaultPodSecurityAdmissionConfigurationTemplateName: ""
-  localClusterAuthEndpoint:
-    enabled: false
-  rkeConfig:
-    chartValues: {}
-    dataDirectories:
-      systemAgent: ""
-      provisioning: ""
-      k8sDistro: ""
-    etcd:
-      disableSnapshots: false
-      s3: null
-      snapshotRetention: 5
-      snapshotScheduleCron: "0 */5 * * *"
-    machineGlobalConfig:
-      disable-apiserver: false
-      disable-cloud-controller: false
-      disable-controller-manager: false
-      disable-etcd: false
-      disable-kube-proxy: false
-      disable-network-policy: false
-      disable-scheduler: false
-      etcd-expose-metrics: false
-      etcd-s3-bucket-lookup-type: auto
-      ingress-controller: traefik
-      secrets-encryption: false
-      secrets-encryption-provider: aescbc
-    machineSelectorConfig:
-    - config:
-        docker: false
-        protect-kernel-defaults: false
-        selinux: false
-    networking: {}
-    registries:
-      configs: {}
-      mirrors: {}
-    machinePools:
-    - name: pool1
-      controlPlaneRole: true
-      etcdRole: true
-      workerRole: true
-      quantity: 1
-      drainBeforeDelete: true
-      labels: {}
-      unhealthyNodeTimeout: "0m"
-      machineConfigRef:
-        kind: LinodeConfig
-        name: %s
-    upgradeStrategy:
-      controlPlaneConcurrency: "1"
-      controlPlaneDrainOptions:
-        deleteEmptyDirData: true
-        disableEviction: false
-        enabled: false
-        force: false
-        gracePeriod: -1
-        ignoreDaemonSets: true
-        skipWaitForDeleteTimeoutSeconds: 0
-        timeout: 120
-      workerConcurrency: "1"
-      workerDrainOptions:
-        deleteEmptyDirData: true
-        disableEviction: false
-        enabled: false
-        force: false
-        gracePeriod: -1
-        ignoreDaemonSets: true
-        skipWaitForDeleteTimeoutSeconds: 0
-        timeout: 120
-`,
-		yamlScalar(cfg.ClusterName),
-		yamlScalar(cfg.Namespace),
-		yamlScalar("cattle-global-data:"+cfg.SecretName),
-		yamlScalar(cfg.K3SVersion),
-		yamlScalar(cfg.MachineName),
-	)
 }
 
 func waitForProvisioningClusterActive(kubeconfigPath, namespace, clusterName string, timeout time.Duration) error {
@@ -859,62 +720,70 @@ func summarizeProvisioningClusterStatus(status provisioningClusterStatus) string
 	return strings.Join(parts, "; ")
 }
 
-func writeDownstreamOutputs(instanceNum int, cfg downstreamProvisioningConfig, haOutputs TerraformOutputs, managementClusterID string) error {
-	outputDir := automationOutputDir()
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return err
+func downstreamOutputRecordFromConfig(instanceNum int, cfg downstreamProvisioningConfig, haOutputs TerraformOutputs) downstreamOutputRecord {
+	record := downstreamOutputRecord{
+		RunID:             downstreamOutputRunID(os.Getenv(runIDEnv)),
+		HAIndex:           instanceNum,
+		RancherHost:       clickableURL(haOutputs.RancherURL),
+		ClusterName:       cfg.ClusterName,
+		KubeconfigPath:    downstreamKubeconfigPath(instanceNum),
+		Distribution:      cfg.Distribution,
+		KubernetesVersion: cfg.KubernetesVersion,
+		LinodeRegion:      cfg.Region,
+		LinodeType:        cfg.InstanceType,
+		LinodeImage:       cfg.Image,
+		MachineConfig:     cfg.MachineName,
+		SecretName:        cfg.SecretName,
+		Namespace:         cfg.Namespace,
 	}
+	if strings.EqualFold(cfg.Distribution, "k3s") {
+		record.K3SVersion = cfg.KubernetesVersion
+	}
+	return record
+}
 
-	envPath := filepath.Join(outputDir, fmt.Sprintf("downstream-ha-%d.env", instanceNum))
-	adminToken, err := createRancherAdminToken(haOutputs.RancherURL, viper.GetString("rancher.bootstrap_password"))
-	if err != nil {
-		return err
+func writeDownstreamProvisioningPhase(record *downstreamOutputRecord, phase, errorMessage string) error {
+	record.Phase = strings.TrimSpace(phase)
+	record.Error = strings.TrimSpace(errorMessage)
+	return writeDownstreamOutputRecord(*record)
+}
+
+func redactDownstreamProvisioningError(err error, secrets ...string) string {
+	if err == nil {
+		return ""
 	}
-	if err := configureRancherServerURL(haOutputs.RancherURL, adminToken); err != nil {
+	message := err.Error()
+	for _, secret := range secrets {
+		if secret = strings.TrimSpace(secret); secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
+	}
+	const maxErrorLength = 4000
+	if len(message) > maxErrorLength {
+		message = message[:maxErrorLength] + "…"
+	}
+	return message
+}
+
+func writeDownstreamEnvironment(instanceNum int, cfg downstreamProvisioningConfig, haOutputs TerraformOutputs, adminToken string) error {
+	if strings.TrimSpace(adminToken) == "" {
+		return fmt.Errorf("Rancher admin token must not be empty")
+	}
+	envPath := downstreamOutputPathForRun(os.Getenv(runIDEnv), fmt.Sprintf("downstream-ha-%d.env", instanceNum))
+	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
 		return err
 	}
 	envContent := fmt.Sprintf("RANCHER_HOST=%s\nRANCHER_ADMIN_TOKEN=%s\nCLUSTER_NAME=%s\n", rancherTestsHost(haOutputs.RancherURL), adminToken, cfg.ClusterName)
-	if err := os.WriteFile(envPath, []byte(envContent), 0o600); err != nil {
-		return err
-	}
-
-	jsonPath := filepath.Join(outputDir, fmt.Sprintf("downstream-ha-%d.json", instanceNum))
-	payload := map[string]string{
-		"rancher_host":          clickableURL(haOutputs.RancherURL),
-		"cluster_name":          cfg.ClusterName,
-		"management_cluster_id": managementClusterID,
-		"kubeconfig_path":       downstreamKubeconfigPath(instanceNum),
-		"secret_name":           cfg.SecretName,
-		"namespace":             cfg.Namespace,
-		"k3s_version":           cfg.K3SVersion,
-		"linode_region":         cfg.Region,
-		"linode_type":           cfg.InstanceType,
-		"linode_image":          cfg.Image,
-		"machine_config":        cfg.MachineName,
-	}
-	payloadWithIndex := map[string]interface{}{}
-	for key, value := range payload {
-		payloadWithIndex[key] = value
-	}
-	payloadWithIndex["ha_index"] = instanceNum
-	data, err := json.MarshalIndent(payloadWithIndex, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(jsonPath, append(data, '\n'), 0o600)
+	return os.WriteFile(envPath, []byte(envContent), 0o600)
 }
 
 func downstreamKubeconfigPath(instanceNum int) string {
-	return automationOutputPath(fmt.Sprintf("downstream-ha-%d.kubeconfig", instanceNum))
+	return downstreamOutputPathForRun(os.Getenv(runIDEnv), fmt.Sprintf("downstream-ha-%d.kubeconfig", instanceNum))
 }
 
-func writeDownstreamKubeconfig(instanceNum int, cfg downstreamProvisioningConfig, haOutputs TerraformOutputs, managementClusterID string) (string, error) {
-	if err := os.MkdirAll(automationOutputDir(), 0o755); err != nil {
-		return "", err
-	}
+func writeDownstreamKubeconfig(instanceNum int, cfg downstreamProvisioningConfig, haOutputs TerraformOutputs, adminToken, managementClusterID string) (string, error) {
 	kubeconfigPath := downstreamKubeconfigPath(instanceNum)
-	adminToken, err := createRancherAdminToken(haOutputs.RancherURL, viper.GetString("rancher.bootstrap_password"))
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(kubeconfigPath), 0o755); err != nil {
 		return "", err
 	}
 	kubeconfig, err := generateRancherKubeconfig(haOutputs.RancherURL, adminToken, managementClusterID)
@@ -937,17 +806,6 @@ func kubectlApply(kubeconfigPath, manifest string) error {
 		return fmt.Errorf("kubectl apply failed: %w", err)
 	}
 	return nil
-}
-
-func yamlScalar(value string) string {
-	return strconv.Quote(value)
-}
-
-func envOrDefaultTrimmed(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func randomHex(byteCount int) string {
@@ -1000,4 +858,37 @@ func downstreamClusterNamePrefix(explicitPrefix, runID string) string {
 		return "gha"
 	}
 	return "rancher-runway"
+}
+
+func downstreamProvisioningRunID() string {
+	for _, environmentName := range []string{"GITHUB_RUN_ID", "SIGNOFF_RUN_ID", runIDEnv} {
+		if value := strings.TrimSpace(os.Getenv(environmentName)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func downstreamClusterName(prefix, runID string, haIndex int, uniqueSuffix string) string {
+	tail := fmt.Sprintf("ha%d-%s", haIndex, uniqueSuffix)
+	if strings.TrimSpace(runID) != "" {
+		tail = shortRunID(runID) + "-" + tail
+	}
+	tail = dnsLabel(tail)
+	prefix = dnsLabel(prefix)
+	const maxClusterNameLength = 53
+	availablePrefixLength := maxClusterNameLength - len(tail) - 1
+	if availablePrefixLength <= 0 {
+		if len(tail) > maxClusterNameLength {
+			tail = strings.Trim(tail[len(tail)-maxClusterNameLength:], "-")
+		}
+		return tail
+	}
+	if len(prefix) > availablePrefixLength {
+		prefix = strings.Trim(prefix[:availablePrefixLength], "-")
+	}
+	if prefix == "" {
+		return tail
+	}
+	return prefix + "-" + tail
 }

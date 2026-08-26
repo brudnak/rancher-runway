@@ -27,7 +27,7 @@
     <form
       class="rounded-2xl border border-zinc-200/80 bg-zinc-50/70 p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.025] sm:p-5"
       :aria-busy="searchLoading ? 'true' : 'false'"
-      @submit.prevent="searchImages"
+      @submit.prevent="submitImageSearch"
     >
       <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-12">
         <label class="grid gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300 xl:col-span-3">
@@ -54,13 +54,13 @@
         </label>
 
         <label class="grid gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300 xl:col-span-4">
-          <span>Tag, selector, SHA, or full reference <span class="font-normal text-zinc-400">(optional)</span></span>
+          <span>Tag, patch, selector, SHA, or full reference <span class="font-normal text-zinc-400">(optional)</span></span>
           <input
             v-model.trim="query"
             type="search"
             autocomplete="off"
             :disabled="searchLoading"
-            placeholder="v2.15.1-head, v2.15.1-SHA-head, or registry/image:tag"
+            placeholder="2.15.1, v2.15.1-head, SHA, or registry/image:tag"
             class="h-11 w-full rounded-xl border border-zinc-200 bg-white px-3.5 text-sm font-semibold text-zinc-900 outline-none placeholder:font-normal placeholder:text-zinc-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 dark:border-white/10 dark:bg-zinc-900 dark:text-white dark:placeholder:text-zinc-500"
             @input="syncQuickFilterFromQuery($event.target.value)"
           />
@@ -117,7 +117,16 @@
           <span class="ml-1">{{ lookupHint }}</span>
         </div>
         <button
-          v-if="directInspectReference"
+          v-if="primePatchSuggestion"
+          type="button"
+          :disabled="searchLoading"
+          class="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-violet-300 bg-white px-3 font-bold text-violet-800 hover:bg-violet-50 disabled:opacity-55 dark:border-violet-500/30 dark:bg-white/[0.05] dark:text-violet-200 dark:hover:bg-violet-500/10"
+          @click="findPrimePatchHeads"
+        >
+          Find {{ primePatchSuggestion }} builds
+        </button>
+        <button
+          v-else-if="directInspectReference"
           type="button"
           :disabled="inspectLoading"
           class="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 font-bold text-emerald-800 hover:bg-emerald-50 disabled:opacity-55 dark:border-emerald-500/30 dark:bg-white/[0.05] dark:text-emerald-200 dark:hover:bg-emerald-500/10"
@@ -148,9 +157,40 @@
             </button>
           </div>
         </fieldset>
-        <p class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-          Prime heads are patch-qualified staging builds. Use a moving selector to discover verified immutable server/agent candidates.
-        </p>
+        <div class="flex min-w-0 flex-col gap-2 sm:items-end">
+          <div class="flex flex-wrap gap-2">
+            <label
+              class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-bold text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300"
+              title="Show only unsuffixed base tags, hiding tags such as -linux-amd64 and -linux-arm64."
+            >
+              <input
+                type="checkbox"
+                class="h-3.5 w-3.5 rounded border-zinc-300 text-emerald-500 accent-emerald-500"
+                :checked="architectureFilter === 'multi'"
+                :disabled="searchLoading"
+                @change="setBaseTagsOnly($event.target.checked)"
+              />
+              <span>Base tags only</span>
+            </label>
+            <label
+              class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-bold text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300"
+              title="Limit results to images with a reliable upload, creation, or verified-pair completion time in the last 30 days. Undated images are excluded."
+            >
+              <input
+                v-model="recentOnly"
+                type="checkbox"
+                class="h-3.5 w-3.5 rounded border-zinc-300 text-emerald-500 accent-emerald-500"
+                :disabled="searchLoading"
+                @change="handleRecentOnlyChange($event.target.checked)"
+              />
+              <span>Last 30 days</span>
+            </label>
+          </div>
+          <p class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
+            <template v-if="recentOnly">Uses known timestamps and may require a complete registry scan; undated images are excluded.</template>
+            <template v-else>Enter a patch such as 2.15.1 to get a fast verified Prime-head lookup.</template>
+          </p>
+        </div>
       </div>
 
       <div class="mt-4 grid gap-3 border-t border-zinc-200/70 pt-4 dark:border-white/10 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
@@ -200,7 +240,7 @@
       </div>
 
       <div class="mt-3 flex flex-col gap-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
-        <span>Filters refine loaded rows immediately; Search applies supported filters at the registry lookup so matches beyond the current 200-tag page can be considered.</span>
+        <span>Filters refine loaded rows immediately; Search applies supported filters at the registry lookup so matches beyond the current 200-tag page can be considered.<template v-if="recentOnly"> Images without reliable dates are excluded.</template></span>
         <button v-if="activeAdvancedFilterCount" type="button" :disabled="searchLoading" class="shrink-0 font-bold text-emerald-700 hover:underline dark:text-emerald-300" @click="resetAdvancedFilters">
           Reset {{ activeAdvancedFilterCount }} filter{{ activeAdvancedFilterCount === 1 ? "" : "s" }}
         </button>
@@ -254,6 +294,7 @@
                   aria-label="Sort image tags"
                   @change="handleResultSortChange"
                 >
+                  <option value="fast">Fast · first matching tags</option>
                   <option value="pair-rank">Verified pair completion rank (when available)</option>
                   <option value="version-desc">Version / tag ↓</option>
                   <option value="version-asc">Version / tag ↑</option>
@@ -308,7 +349,15 @@
               {{ group.error }}
             </div>
             <div v-if="group.truncated" class="border-b border-amber-200 bg-amber-50/70 px-4 py-2.5 text-xs font-semibold leading-5 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-              Results were truncated by the registry scan or 200-result limit. Add a release line, patch, or SHA to narrow discovery. Tag/SHA order is not build chronology; only verified pair completion time establishes the latest complete Prime-head pair.
+              <template v-if="searchResponse?.scanMode === 'bounded'">
+                Fast mode returned the first matching registry tags up to the 200-row limit, not a global newest or version order. Recent-date and verified-pair checks may scan farther for correctness. Choose an explicit sort for complete global ordering, or add a patch or SHA to narrow the search.
+              </template>
+              <template v-else-if="searchResponse?.scanMode === 'complete'">
+                The selected global sort was applied to all scanned matches, but the registry scan or 200-row result limit truncated this view. Add a release line, patch, or SHA to narrow the result set.
+              </template>
+              <template v-else>
+                Results were truncated by the registry scan or 200-row limit. Add a release line, patch, or SHA to narrow the result set.
+              </template>
             </div>
 
             <div v-if="group.visibleTags.length" class="overflow-x-auto">
@@ -786,7 +835,8 @@ const architectureFilter = ref("all");
 const versionLineFilter = ref("");
 const commitFilter = ref("");
 const pairStatusFilter = ref("all");
-const resultSort = ref("version-desc");
+const recentOnly = ref(false);
+const resultSort = ref("fast");
 const resultSortTouched = ref(false);
 
 const selectedReference = ref("");
@@ -817,6 +867,7 @@ watch([
   versionLineFilter,
   commitFilter,
   pairStatusFilter,
+  recentOnly,
 ], () => {
   if (!searchLoading.value) searchError.value = "";
 });
@@ -879,6 +930,20 @@ const applyQuickFilter = filter => {
   }
 };
 
+const rerunCompletedSearch = () => {
+  if (searched.value && !searchLoading.value && searchResponse.value) void searchImages();
+};
+
+const setBaseTagsOnly = checked => {
+  architectureFilter.value = checked ? "multi" : "all";
+  rerunCompletedSearch();
+};
+
+const handleRecentOnlyChange = checked => {
+  recentOnly.value = checked === true;
+  rerunCompletedSearch();
+};
+
 const resetAdvancedFilters = () => {
   primeHeadFilter.value = "all";
   headKindFilter.value = "all";
@@ -886,6 +951,7 @@ const resetAdvancedFilters = () => {
   versionLineFilter.value = "";
   commitFilter.value = "";
   pairStatusFilter.value = "all";
+  recentOnly.value = false;
   if (quickFilter.value === "prime-head") {
     quickFilter.value = "head";
     query.value = "head";
@@ -899,6 +965,7 @@ const activeAdvancedFilterCount = computed(() => [
   Boolean(versionLineFilter.value.trim()),
   Boolean(commitFilter.value.trim()),
   pairStatusFilter.value !== "all",
+  recentOnly.value,
 ].filter(Boolean).length);
 
 const stripReferenceScheme = value => String(value || "")
@@ -924,6 +991,15 @@ const parseFullReferenceInput = value => {
 
 const queryReferenceDetails = computed(() => parseFullReferenceInput(query.value));
 const querySelector = computed(() => String(queryReferenceDetails.value?.selector || query.value || "").trim());
+const primePatchSuggestion = computed(() => {
+  if (queryReferenceDetails.value) return "";
+  const queryMatch = querySelector.value.match(/^v?(\d+\.\d+\.\d+)$/i);
+  const versionMatch = (quickFilter.value === "prime-head" || primeHeadFilter.value === "only")
+    ? versionLineFilter.value.trim().match(/^v?(\d+\.\d+\.\d+)$/i)
+    : null;
+  const patch = queryMatch?.[1] || versionMatch?.[1] || "";
+  return patch ? `v${patch}-head` : "";
+});
 const isPrimeMovingSelectorInput = computed(() => primeMovingTagPattern.test(querySelector.value));
 const isImmutablePrimeHeadInput = computed(() => primeImmutableTagPattern.test(querySelector.value));
 const selectedLookupBase = computed(() => {
@@ -945,26 +1021,33 @@ const directInspectReference = computed(() => {
 });
 const searchButtonLabel = computed(() => searchLoading.value
   ? "Searching"
-  : isPrimeMovingSelectorInput.value
-    ? "Discover candidates"
-    : "Search"
+  : primePatchSuggestion.value
+    ? "Find Prime builds"
+    : isPrimeMovingSelectorInput.value
+      ? "Discover candidates"
+      : "Search"
 );
-const lookupHintTitle = computed(() => isPrimeMovingSelectorInput.value
-  ? "Moving Prime selector detected."
-  : directInspectReference.value
-    ? "Exact reference detected."
-    : "Direct lookup supported."
+const lookupHintTitle = computed(() => primePatchSuggestion.value
+  ? "Patch version detected."
+  : isPrimeMovingSelectorInput.value
+    ? "Moving Prime selector detected."
+    : directInspectReference.value
+      ? "Exact reference detected."
+      : "Direct lookup supported."
 );
 const lookupHint = computed(() => {
+  if (primePatchSuggestion.value) {
+    return `Use ${primePatchSuggestion.value} to discover and rank its immutable staging server/agent pairs instead of scanning every head tag.`;
+  }
   if (isPrimeMovingSelectorInput.value) {
     return "A patch alias often has no literal manifest. Discovery expands it to immutable staging tags and, when available, ranks verified server/agent pairs by pair completion time.";
   }
   if (directInspectReference.value) {
     return "Search looks up the exact repository tag or digest; Inspect reads that reference immediately without depending on a tag-list result.";
   }
-  return "Paste a full image:tag or image@sha256 reference to inspect it directly. Prime forms are vX.Y.Z-head (moving selector) and vX.Y.Z-SHA-head (immutable build).";
+  return "Enter a patch such as 2.15.1 for a one-click Prime lookup, or paste a full image:tag or image@sha256 reference to inspect it directly.";
 });
-const lookupHintClass = computed(() => isPrimeMovingSelectorInput.value
+const lookupHintClass = computed(() => primePatchSuggestion.value || isPrimeMovingSelectorInput.value
   ? "border-violet-200 bg-violet-50/70 text-violet-800 dark:border-violet-500/25 dark:bg-violet-500/10 dark:text-violet-200"
   : directInspectReference.value
     ? "border-emerald-200 bg-emerald-50/70 text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-200"
@@ -972,7 +1055,29 @@ const lookupHintClass = computed(() => isPrimeMovingSelectorInput.value
 );
 
 const inspectExactInput = () => {
-  if (directInspectReference.value) void inspectReference(directInspectReference.value);
+  if (!directInspectReference.value) return;
+  const inferredPlatform = inspectPlatformFromReference(directInspectReference.value);
+  if (inferredPlatform) inspectPlatform.value = inferredPlatform;
+  void inspectReference(directInspectReference.value);
+};
+
+const findPrimePatchHeads = () => {
+  if (!primePatchSuggestion.value) return;
+  query.value = primePatchSuggestion.value;
+  quickFilter.value = "prime-head";
+  primeHeadFilter.value = "only";
+  headKindFilter.value = "all";
+  registry.value = "stgregistry.suse.com";
+  if (imageFamily.value === "rancher/rancher-webhook") imageFamily.value = "all";
+  void searchImages();
+};
+
+const submitImageSearch = () => {
+  if (primePatchSuggestion.value) {
+    findPrimePatchHeads();
+    return;
+  }
+  void searchImages();
 };
 
 const groups = computed(() => (
@@ -1180,6 +1285,7 @@ const sortVisibleTags = (tags, group) => {
   const visible = tags
     .map(tag => deriveTagMetadata(tag, group))
     .filter(tag => tagMatchesQuickFilter(tag) && tagMatchesAdvancedFilters(tag));
+  if (resultSort.value === "fast") return visible;
   return visible
     .map((tag, index) => ({ tag, index }))
     .sort((left, right) => {
@@ -1236,6 +1342,8 @@ const displayGroups = computed(() => groups.value.map(group => {
 const visibleTagCount = computed(() => displayGroups.value.reduce((total, group) => total + group.visibleTags.length, 0));
 const totalMatched = computed(() => groups.value.reduce((total, group) => total + Number(group?.matched || 0), 0));
 const totalScanned = computed(() => groups.value.reduce((total, group) => total + Number(group?.scanned || 0), 0));
+const totalRecentExcluded = computed(() => groups.value.reduce((total, group) => total + Number(group?.recentExcludedCount || 0), 0));
+const totalUnknownTimestamps = computed(() => groups.value.reduce((total, group) => total + Number(group?.unknownTimestampCount || 0), 0));
 const failedGroupCount = computed(() => groups.value.filter(group => group?.error).length);
 const visiblePrimeHeadCount = computed(() => displayGroups.value.reduce((total, group) => (
   total + group.visibleTags.filter(tag => tag.isPrimeHead).length
@@ -1266,8 +1374,19 @@ const resultSummary = computed(() => {
 
 const scanSummary = computed(() => {
   const pieces = [`${totalScanned.value} tag${totalScanned.value === 1 ? "" : "s"} scanned`];
+  if (recentOnly.value) pieces.push("complete date-evidence scan");
+  else if (searchResponse.value?.scanMode === "bounded") pieces.push("fast bounded registry order");
+  if (searchResponse.value?.scanMode === "complete") pieces.push("complete global ordering");
   if (quickFilter.value !== "all") pieces.push(`${quickFilterLabel.value} filter active`);
   if (activeAdvancedFilterCount.value) pieces.push(`${activeAdvancedFilterCount.value} detailed filter${activeAdvancedFilterCount.value === 1 ? "" : "s"}`);
+  if (recentOnly.value) {
+    const cutoff = String(searchResponse.value?.recentCutoff || "").trim();
+    const cutoffDate = cutoff ? new Date(cutoff) : null;
+    const cutoffLabel = cutoffDate && !Number.isNaN(cutoffDate.getTime()) ? cutoffDate.toLocaleString() : cutoff;
+    pieces.push(cutoffLabel ? `30-day cutoff ${cutoffLabel}` : "last 30 days");
+    if (totalRecentExcluded.value) pieces.push(`${totalRecentExcluded.value} older excluded`);
+    if (totalUnknownTimestamps.value) pieces.push(`${totalUnknownTimestamps.value} undated excluded`);
+  }
   if (searchResponse.value?.aliasFallbackExpanded) pieces.push("selector expanded with compatibility fallback");
   if (searchResponse.value?.legacyRequestFallback) pieces.push("legacy API compatibility mode");
   if (visiblePrimeHeadCount.value) pieces.push(`${visiblePrimeHeadCount.value} Prime-head candidate${visiblePrimeHeadCount.value === 1 ? "" : "s"}`);
@@ -1667,22 +1786,23 @@ const normalizeCustomRepository = value => String(value || "")
 
 const resultSortRequest = pairLookupEligible => {
   switch (resultSort.value) {
+  case "fast": return { scanMode: "bounded", sortBy: "natural", sortOrder: "desc" };
   case "pair-rank": return pairLookupEligible
-    ? { sortBy: "pair-completed", sortOrder: "desc" }
-    : { sortBy: "natural", sortOrder: "desc" };
-  case "uploaded-desc": return { sortBy: "uploaded", sortOrder: "desc" };
-  case "uploaded-asc": return { sortBy: "uploaded", sortOrder: "asc" };
-  case "version-asc": return { sortBy: "version", sortOrder: "asc" };
-  case "version-desc": return { sortBy: "version", sortOrder: "desc" };
-  case "tag-desc": return { sortBy: "tag", sortOrder: "desc" };
-  case "tag-asc": return { sortBy: "tag", sortOrder: "asc" };
-  default: return { sortBy: "natural", sortOrder: "desc" };
+    ? { scanMode: "complete", sortBy: "pair-completed", sortOrder: "desc" }
+    : { scanMode: "complete", sortBy: "natural", sortOrder: "desc" };
+  case "uploaded-desc": return { scanMode: "complete", sortBy: "uploaded", sortOrder: "desc" };
+  case "uploaded-asc": return { scanMode: "complete", sortBy: "uploaded", sortOrder: "asc" };
+  case "version-asc": return { scanMode: "complete", sortBy: "version", sortOrder: "asc" };
+  case "version-desc": return { scanMode: "complete", sortBy: "version", sortOrder: "desc" };
+  case "tag-desc": return { scanMode: "complete", sortBy: "tag", sortOrder: "desc" };
+  case "tag-asc": return { scanMode: "complete", sortBy: "tag", sortOrder: "asc" };
+  default: return { scanMode: "bounded", sortBy: "natural", sortOrder: "desc" };
   }
 };
 
 const searchImages = async () => {
   if (!resultSortTouched.value) {
-    resultSort.value = isPrimeMovingSelectorInput.value ? "pair-rank" : "version-desc";
+    resultSort.value = isPrimeMovingSelectorInput.value ? "pair-rank" : "fast";
   }
   if ((isPrimeMovingSelectorInput.value || isImmutablePrimeHeadInput.value)
     && !queryReferenceDetails.value
@@ -1772,6 +1892,8 @@ const searchImages = async () => {
       versionLine: normalizedVersionLine,
       commit: normalizedCommit,
       pairStatus: pairLookupEligible && pairStatusFilter.value === "verified" ? "verified" : "all",
+      recentDays: recentOnly.value ? 30 : 0,
+      scanMode: sortRequest.scanMode,
       sortBy: sortRequest.sortBy,
       sortOrder: sortRequest.sortOrder,
     };
@@ -1868,9 +1990,24 @@ const tagReference = (group, tag) => {
   return tag?.name && base ? `${base}:${tag.name}` : base;
 };
 
+const inspectPlatformFromReference = reference => {
+  const selector = parseFullReferenceInput(reference)?.selector || String(reference || "").trim();
+  if (!selector || /^sha256:[0-9a-f]{64}$/i.test(selector)) return "";
+  const explicitOS = selector.match(/(?:^|[-_.])(linux|windows)[-_.](amd64|arm64|s390x|ppc64le|386|arm)(?:[-_.](v\d+))?$/i);
+  if (explicitOS) {
+    return [explicitOS[1].toLowerCase(), explicitOS[2].toLowerCase(), explicitOS[3]?.toLowerCase()].filter(Boolean).join("/");
+  }
+  const bareArchitecture = selector.match(/(?:^|[-_.])(amd64|arm64|s390x|ppc64le|386|arm)(?:[-_.](v\d+))?$/i);
+  if (!bareArchitecture) return "";
+  return ["linux", bareArchitecture[1].toLowerCase(), bareArchitecture[2]?.toLowerCase()].filter(Boolean).join("/");
+};
+
 const inspectTag = (group, tag) => {
   const reference = tagReference(group, tag);
-  if (reference) inspectReference(reference);
+  if (!reference) return;
+  const inferredPlatform = inspectPlatformFromReference(tag?.name) || inspectPlatformFromReference(reference);
+  if (inferredPlatform) inspectPlatform.value = inferredPlatform;
+  inspectReference(reference);
 };
 
 const inspectPlatformImage = item => {
