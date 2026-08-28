@@ -8,26 +8,27 @@ import (
 )
 
 type TerraformOutputs struct {
-	ServerCount           int
-	ServerIPs             []string
-	ServerPrivateIPs      []string
-	Server1IP             string
-	Server2IP             string
-	Server3IP             string
-	Server4IP             string
-	Server5IP             string
-	Server1PrivateIP      string
-	Server2PrivateIP      string
-	Server3PrivateIP      string
-	Server4PrivateIP      string
-	Server5PrivateIP      string
-	LoadBalancerDNS       string
-	RancherURL            string
-	GPUWorkerIP           string
-	GPUWorkerPrivateIP    string
-	GPUWorkerInstanceType string
-	GPUWorkerAMI          string
-	GPUWorkerSubnetID     string
+	ServerCount             int
+	ServerIPs               []string
+	ServerPrivateIPs        []string
+	Server1IP               string
+	Server2IP               string
+	Server3IP               string
+	Server4IP               string
+	Server5IP               string
+	Server1PrivateIP        string
+	Server2PrivateIP        string
+	Server3PrivateIP        string
+	Server4PrivateIP        string
+	Server5PrivateIP        string
+	LoadBalancerDNS         string
+	LoadBalancerSourceCIDRs []string
+	RancherURL              string
+	GPUWorkerIP             string
+	GPUWorkerPrivateIP      string
+	GPUWorkerInstanceType   string
+	GPUWorkerAMI            string
+	GPUWorkerSubnetID       string
 }
 
 type RancherResolvedPlan struct {

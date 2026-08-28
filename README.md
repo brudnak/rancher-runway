@@ -355,6 +355,10 @@ you are most likely to care about:
   DNS label.
 - `rke2.server_count` chooses 1, 3, or 5 RKE2 server nodes for each AWS Rancher
   management cluster.
+- `rke2.ingress_controller` defaults to `traefik` and is written explicitly to
+  every RKE2 server. Traefik requires RKE2 `v1.30.3+rke2r1` or newer.
+  `ingress-nginx` remains available only as a legacy override through RKE2 1.36;
+  Runway rejects it on community RKE2 1.37 and newer.
 - `gpu_worker.enabled` can add a worker-only GPU EC2 node per Rancher cluster.
   This is off by default because GPU instances can become expensive.
 - `linode.access_token` or `LINODE_TOKEN` supplies the Linode API token for

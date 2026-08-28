@@ -1009,6 +1009,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 	}
 	if hostedTenant || linodeDocker {
 		if rke2Node := mappingValue(root, "rke2"); rke2Node != nil {
+			deleteMappingKey(rke2Node, "ingress_controller")
 			deleteMappingKey(rke2Node, "preload_images")
 			deleteMappingKey(rke2Node, "server_count")
 			if len(rke2Node.Content) == 0 {
@@ -1098,6 +1099,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("tf_vars.aws_ec2_instance_type", update.HostedEC2InstanceType)
 		viper.Set("rke2.preload_images", false)
 		viper.Set("rke2.server_count", 0)
+		viper.Set("rke2.ingress_controller", "")
 		viper.Set("gpu_worker.enabled", false)
 	}
 	if linodeDocker {
@@ -1105,6 +1107,7 @@ func updateAutoModeConfigFile(configPath string, update settings.PreflightConfig
 		viper.Set("linode.ssh_root_password", update.LinodeSSHRootPassword)
 		viper.Set("rke2.preload_images", false)
 		viper.Set("rke2.server_count", 0)
+		viper.Set("rke2.ingress_controller", "")
 		viper.Set("gpu_worker.enabled", false)
 	}
 	viper.Set(settings.CustomHostnameConfigKey, customHostnamePrefix)

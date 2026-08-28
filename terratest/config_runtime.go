@@ -101,6 +101,9 @@ func getTerraformOptions(t *testing.T, totalHAs int) *terraform.Options {
 			if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
 				t.Fatalf("RKE2 server layout preflight failed: %v", err)
 			}
+			if err := settings.ValidateRKE2IngressControllerConfig(); err != nil {
+				t.Fatalf("RKE2 ingress preflight failed: %v", err)
+			}
 		}
 	}
 	if isLinodeDockerDeployment() {
@@ -461,6 +464,7 @@ func maskTerraformOutputs(outputs map[string]string) {
 		}
 		if strings.HasSuffix(key, "_ip") ||
 			strings.HasSuffix(key, "_ips") ||
+			strings.HasSuffix(key, "_cidrs") ||
 			strings.HasSuffix(key, "_private_ip") ||
 			strings.HasSuffix(key, "_private_ips") ||
 			strings.HasSuffix(key, "_aws_lb") {
@@ -472,26 +476,27 @@ func maskTerraformOutputs(outputs map[string]string) {
 func getHAOutputs(instanceNum int, outputs map[string]string) TerraformOutputs {
 	prefix := fmt.Sprintf("ha_%d", instanceNum)
 	haOutputs := TerraformOutputs{
-		ServerCount:           parseTerraformIntOutput(outputs[fmt.Sprintf("%s_server_count", prefix)]),
-		ServerIPs:             parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_ips", prefix)]),
-		ServerPrivateIPs:      parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_private_ips", prefix)]),
-		Server1IP:             outputs[fmt.Sprintf("%s_server1_ip", prefix)],
-		Server2IP:             outputs[fmt.Sprintf("%s_server2_ip", prefix)],
-		Server3IP:             outputs[fmt.Sprintf("%s_server3_ip", prefix)],
-		Server4IP:             outputs[fmt.Sprintf("%s_server4_ip", prefix)],
-		Server5IP:             outputs[fmt.Sprintf("%s_server5_ip", prefix)],
-		Server1PrivateIP:      outputs[fmt.Sprintf("%s_server1_private_ip", prefix)],
-		Server2PrivateIP:      outputs[fmt.Sprintf("%s_server2_private_ip", prefix)],
-		Server3PrivateIP:      outputs[fmt.Sprintf("%s_server3_private_ip", prefix)],
-		Server4PrivateIP:      outputs[fmt.Sprintf("%s_server4_private_ip", prefix)],
-		Server5PrivateIP:      outputs[fmt.Sprintf("%s_server5_private_ip", prefix)],
-		LoadBalancerDNS:       outputs[fmt.Sprintf("%s_aws_lb", prefix)],
-		RancherURL:            outputs[fmt.Sprintf("%s_rancher_url", prefix)],
-		GPUWorkerIP:           outputs[fmt.Sprintf("%s_gpu_worker_ip", prefix)],
-		GPUWorkerPrivateIP:    outputs[fmt.Sprintf("%s_gpu_worker_private_ip", prefix)],
-		GPUWorkerInstanceType: outputs[fmt.Sprintf("%s_gpu_worker_instance_type", prefix)],
-		GPUWorkerAMI:          outputs[fmt.Sprintf("%s_gpu_worker_ami", prefix)],
-		GPUWorkerSubnetID:     outputs[fmt.Sprintf("%s_gpu_worker_subnet_id", prefix)],
+		ServerCount:             parseTerraformIntOutput(outputs[fmt.Sprintf("%s_server_count", prefix)]),
+		ServerIPs:               parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_ips", prefix)]),
+		ServerPrivateIPs:        parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_server_private_ips", prefix)]),
+		Server1IP:               outputs[fmt.Sprintf("%s_server1_ip", prefix)],
+		Server2IP:               outputs[fmt.Sprintf("%s_server2_ip", prefix)],
+		Server3IP:               outputs[fmt.Sprintf("%s_server3_ip", prefix)],
+		Server4IP:               outputs[fmt.Sprintf("%s_server4_ip", prefix)],
+		Server5IP:               outputs[fmt.Sprintf("%s_server5_ip", prefix)],
+		Server1PrivateIP:        outputs[fmt.Sprintf("%s_server1_private_ip", prefix)],
+		Server2PrivateIP:        outputs[fmt.Sprintf("%s_server2_private_ip", prefix)],
+		Server3PrivateIP:        outputs[fmt.Sprintf("%s_server3_private_ip", prefix)],
+		Server4PrivateIP:        outputs[fmt.Sprintf("%s_server4_private_ip", prefix)],
+		Server5PrivateIP:        outputs[fmt.Sprintf("%s_server5_private_ip", prefix)],
+		LoadBalancerDNS:         outputs[fmt.Sprintf("%s_aws_lb", prefix)],
+		LoadBalancerSourceCIDRs: parseTerraformCSVOutput(outputs[fmt.Sprintf("%s_load_balancer_source_cidrs", prefix)]),
+		RancherURL:              outputs[fmt.Sprintf("%s_rancher_url", prefix)],
+		GPUWorkerIP:             outputs[fmt.Sprintf("%s_gpu_worker_ip", prefix)],
+		GPUWorkerPrivateIP:      outputs[fmt.Sprintf("%s_gpu_worker_private_ip", prefix)],
+		GPUWorkerInstanceType:   outputs[fmt.Sprintf("%s_gpu_worker_instance_type", prefix)],
+		GPUWorkerAMI:            outputs[fmt.Sprintf("%s_gpu_worker_ami", prefix)],
+		GPUWorkerSubnetID:       outputs[fmt.Sprintf("%s_gpu_worker_subnet_id", prefix)],
 	}
 	if len(haOutputs.ServerIPs) == 0 {
 		haOutputs.ServerIPs = nonEmptyStrings(haOutputs.Server1IP, haOutputs.Server2IP, haOutputs.Server3IP, haOutputs.Server4IP, haOutputs.Server5IP)
@@ -511,6 +516,9 @@ func maskHAOutputs(haOutputs TerraformOutputs) {
 		maskGitHubActionsValue(value)
 	}
 	for _, value := range haOutputs.ServerPrivateIPs {
+		maskGitHubActionsValue(value)
+	}
+	for _, value := range haOutputs.LoadBalancerSourceCIDRs {
 		maskGitHubActionsValue(value)
 	}
 	maskGitHubActionsValue(haOutputs.Server1IP)

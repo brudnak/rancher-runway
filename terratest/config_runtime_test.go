@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/spf13/viper"
 )
 
@@ -44,6 +45,9 @@ func TestPanelStarterToolConfigCreatesAutoModeTemplate(t *testing.T) {
 	if got := viper.GetInt("total_has"); got != 1 {
 		t.Fatalf("expected total_has 1, got %d", got)
 	}
+	if got := settings.CurrentRKE2IngressController(); got != settings.RKE2IngressControllerTraefik {
+		t.Fatalf("expected starter config to select Traefik, got %q", got)
+	}
 	if got := viper.GetString("tf_vars.aws_prefix"); got != "" {
 		t.Fatalf("expected blank aws_prefix, got %q", got)
 	}
@@ -58,6 +62,29 @@ func TestPanelStarterToolConfigCreatesAutoModeTemplate(t *testing.T) {
 	}
 	if !strings.Contains(item.Detail, "tf_vars.aws_prefix") {
 		t.Fatalf("expected missing aws_prefix in detail, got %q", item.Detail)
+	}
+}
+
+func TestPanelSetupConfigPreflightRejectsUnsupportedRKE2IngressController(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("deployment.type", "ha-rke2")
+	viper.Set("rancher.mode", "auto")
+	viper.Set("rancher.version", "2.13-head")
+	viper.Set("rancher.bootstrap_password", "change-me-now")
+	viper.Set("rke2.ingress_controller", "none")
+	viper.Set("total_has", 1)
+	viper.Set("user.first_name", "Ada")
+	viper.Set("user.last_name", "Lovelace")
+	viper.Set("tf_vars.aws_prefix", "atb")
+	for _, key := range []string{"aws_vpc", "aws_subnet_a", "aws_subnet_b", "aws_subnet_c", "aws_ami", "aws_subnet_id", "aws_security_group_id", "aws_pem_key_name", "aws_route53_fqdn"} {
+		viper.Set("tf_vars."+key, "configured")
+	}
+
+	panel := &localControlPanel{configPath: "tool-config.yml"}
+	item := panel.checkSetupConfigState()
+	if item.Status != "error" || !strings.Contains(item.Detail, "rke2.ingress_controller") {
+		t.Fatalf("expected unsupported RKE2 ingress controller to block setup, got %#v", item)
 	}
 }
 
@@ -85,6 +112,18 @@ func TestPanelStarterToolConfigDoesNotOverwriteExistingConfig(t *testing.T) {
 	}
 	if string(data) != existing {
 		t.Fatalf("expected existing config to remain unchanged, got %q", string(data))
+	}
+}
+
+func TestGetHAOutputsParsesLoadBalancerSourceCIDRs(t *testing.T) {
+	outputs := map[string]string{
+		"ha_1_server_ips":                 "203.0.113.10",
+		"ha_1_load_balancer_source_cidrs": "10.0.1.0/24,10.0.2.0/24,10.0.3.0/24",
+	}
+
+	got := getHAOutputs(1, outputs)
+	if joined := strings.Join(got.LoadBalancerSourceCIDRs, ","); joined != outputs["ha_1_load_balancer_source_cidrs"] {
+		t.Fatalf("unexpected ALB source CIDRs %q", joined)
 	}
 }
 

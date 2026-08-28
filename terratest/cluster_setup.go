@@ -4,14 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/spf13/viper"
 )
 
@@ -20,6 +23,24 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 
 	haDir := haInstanceDir(instanceNum)
 	haOutputs := getHAOutputs(instanceNum, outputs)
+	if err := settings.ValidateRKE2IngressControllerConfig(); err != nil {
+		return err
+	}
+	ingressController := settings.CurrentRKE2IngressController()
+	rke2K8sVersion := viper.GetString("k8s.version")
+	if resolvedPlan != nil {
+		rke2K8sVersion = resolvedPlan.RecommendedRKE2Version
+	}
+	if err := validateRKE2IngressControllerVersion(rke2K8sVersion, ingressController); err != nil {
+		return fmt.Errorf("incompatible RKE2 ingress configuration: %w", err)
+	}
+	if _, _, err := rke2IngressConfigManifest(ingressController, haOutputs.LoadBalancerSourceCIDRs); err != nil {
+		return fmt.Errorf("invalid RKE2 ingress configuration: %w", err)
+	}
+	ingressDaemonSetName, err := rke2IngressDaemonSetName(ingressController)
+	if err != nil {
+		return err
+	}
 	serverIPs := haOutputs.ServerIPs
 	if len(serverIPs) == 0 {
 		return fmt.Errorf("no RKE2 server IPs found for HA %d", instanceNum)
@@ -55,10 +76,10 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 	}
 	helmCommand = rancherHelmCommandForHA(helmCommand, haOutputs.RancherURL)
 
-	CreateInstallScript(helmCommand, haDir)
+	CreateInstallScript(helmCommand, haDir, ingressDaemonSetName)
 
 	log.Printf("Setting up first server node with IP %s", serverIPs[0])
-	err = setupFirstServerNode(serverIPs[0], haOutputs, resolvedPlan)
+	err = setupFirstServerNode(serverIPs[0], haOutputs, ingressController, resolvedPlan)
 	if err != nil {
 		return fmt.Errorf("failed to setup first server node: %w", err)
 	}
@@ -80,7 +101,7 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 			defer wg.Done()
 
 			log.Printf("Setting up server node %d with IP %s", nodeNum, ip)
-			err := setupAdditionalServerNode(ip, token, haOutputs, resolvedPlan)
+			err := setupAdditionalServerNode(ip, token, haOutputs, ingressController, resolvedPlan)
 			if err != nil {
 				setupErrMutex.Lock()
 				setupErr = fmt.Errorf("failed to setup server node %d: %w", nodeNum, err)
@@ -95,7 +116,7 @@ func setupHAInstance(t *testing.T, instanceNum int, outputs map[string]string, r
 			defer wg.Done()
 
 			log.Printf("Setting up GPU worker node with IP %s", ip)
-			if err := setupGPUWorkerNode(ip, token, haOutputs, resolvedPlan); err != nil {
+			if err := setupGPUWorkerNode(ip, token, haOutputs, ingressController, resolvedPlan); err != nil {
 				setupErrMutex.Lock()
 				setupErr = fmt.Errorf("failed to setup GPU worker node: %w", err)
 				setupErrMutex.Unlock()
@@ -273,7 +294,23 @@ func rke2ConfigListLines(values []string) string {
 	return strings.Join(lines, "\n")
 }
 
-func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *RancherResolvedPlan) error {
+func rke2FirstServerConfigContent(haOutputs TerraformOutputs, ingressController string) string {
+	return fmt.Sprintf("tls-san:\n%s\ningress-controller: %s", rke2ConfigListLines(rke2TLSSANs(haOutputs)), ingressController)
+}
+
+func rke2AdditionalServerConfigContent(firstServerIP, token string, haOutputs TerraformOutputs, ingressController string) string {
+	return fmt.Sprintf(`server: https://%s:9345
+token: %s
+tls-san:
+%s
+ingress-controller: %s`,
+		firstServerIP,
+		token,
+		rke2ConfigListLines(rke2TLSSANs(haOutputs)),
+		ingressController)
+}
+
+func setupFirstServerNode(ip string, haOutputs TerraformOutputs, ingressController string, resolvedPlan *RancherResolvedPlan) error {
 	maskGitHubActionsValue(ip)
 	log.Printf("[setupFirstServerNode] Starting setup for IP %s", ip)
 	rke2K8sVersion := viper.GetString("k8s.version")
@@ -291,7 +328,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 	}
 	log.Printf("[setupFirstServerNode] Config directory created")
 
-	configContent := fmt.Sprintf("tls-san:\n%s", rke2ConfigListLines(rke2TLSSANs(haOutputs)))
+	configContent := rke2FirstServerConfigContent(haOutputs, ingressController)
 
 	if githubActions() {
 		log.Printf("[setupFirstServerNode] Creating config file with %d TLS SAN entries", len(rke2TLSSANs(haOutputs)))
@@ -331,16 +368,22 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 		log.Printf("[setupFirstServerNode] Images directory created")
 
 		log.Printf("[setupFirstServerNode] Downloading and validating RKE2 images (this may take a few minutes)...")
-		cmd = buildRKE2ImagesDownloadCommand(rke2K8sVersion)
-		output, err = RunCommand(cmd, ip)
+		imagesDownloadCommand, commandErr := buildRKE2ImagesDownloadCommand(rke2K8sVersion, ingressController)
+		if commandErr != nil {
+			return fmt.Errorf("failed to prepare RKE2 image downloads: %w", commandErr)
+		}
+		output, err = RunCommand(imagesDownloadCommand, ip)
 		if err != nil {
 			log.Printf("[setupFirstServerNode] FAILED to download/validate images: %v", err)
 			return fmt.Errorf("failed to download/validate RKE2 images: %w", err)
 		}
 		log.Printf("[setupFirstServerNode] Images downloaded and checksum validated successfully")
 
-		cmd = "sudo mv /tmp/rke2-images.linux-amd64.tar.zst /var/lib/rancher/rke2/agent/images/"
-		if err := runRemoteSetupStep("setupFirstServerNode/move-images", ip, cmd); err != nil {
+		imagesMoveCommand, commandErr := buildRKE2ImagesMoveCommand(rke2K8sVersion, ingressController)
+		if commandErr != nil {
+			return fmt.Errorf("failed to prepare RKE2 image preload: %w", commandErr)
+		}
+		if err := runRemoteSetupStep("setupFirstServerNode/move-images", ip, imagesMoveCommand); err != nil {
 			log.Printf("[setupFirstServerNode] FAILED to move images: %v", err)
 			return fmt.Errorf("failed to move images: %w", err)
 		}
@@ -368,7 +411,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, resolvedPlan *R
 		log.Printf("[setupFirstServerNode] No Docker Hub credentials provided, skipping registries.yaml creation")
 	}
 
-	if err := configureRKE2IngressForExternalTLS(ip); err != nil {
+	if err := configureRKE2IngressForExternalTLS(ip, ingressController, haOutputs.LoadBalancerSourceCIDRs); err != nil {
 		return fmt.Errorf("failed to configure RKE2 ingress for external TLS: %w", err)
 	}
 
@@ -573,8 +616,13 @@ func yamlJSONString(value string) string {
 	return string(quoted)
 }
 
-func configureRKE2IngressForExternalTLS(ip string) error {
-	log.Printf("[rke2-ingress] Enabling forwarded headers for external TLS termination on %s", ip)
+func configureRKE2IngressForExternalTLS(ip, ingressController string, loadBalancerSourceCIDRs []string) error {
+	log.Printf("[rke2-ingress] Configuring %s forwarded-header trust for external TLS termination on %s", ingressController, ip)
+
+	manifestFileName, manifest, err := rke2IngressConfigManifest(ingressController, loadBalancerSourceCIDRs)
+	if err != nil {
+		return err
+	}
 
 	cmd := "sudo mkdir -p /var/lib/rancher/rke2/server/manifests"
 	if err := runRemoteSetupStep("rke2-ingress/create-manifests-dir", ip, cmd); err != nil {
@@ -582,8 +630,7 @@ func configureRKE2IngressForExternalTLS(ip string) error {
 		return fmt.Errorf("failed to create manifests directory: %w", err)
 	}
 
-	manifest := rke2IngressNginxConfigManifest()
-	cmd = fmt.Sprintf("sudo bash -c 'cat > /var/lib/rancher/rke2/server/manifests/rke2-ingress-nginx-config.yaml << EOL\n%s\nEOL'", manifest)
+	cmd = fmt.Sprintf("sudo bash -c 'cat > /var/lib/rancher/rke2/server/manifests/%s << EOL\n%s\nEOL'", manifestFileName, manifest)
 	if err := runRemoteSetupStep("rke2-ingress/write-config", ip, cmd); err != nil {
 		log.Printf("[rke2-ingress] FAILED to write forwarded headers config on %s: %v", ip, err)
 		return fmt.Errorf("failed to write rke2 ingress config: %w", err)
@@ -592,8 +639,81 @@ func configureRKE2IngressForExternalTLS(ip string) error {
 	return nil
 }
 
-func rke2IngressNginxConfigManifest() string {
-	return `apiVersion: helm.cattle.io/v1
+func rke2IngressConfigManifest(ingressController string, loadBalancerSourceCIDRs []string) (string, string, error) {
+	trustedCIDRs, err := normalizeTrustedCIDRs(loadBalancerSourceCIDRs)
+	if err != nil {
+		return "", "", err
+	}
+	if len(trustedCIDRs) == 0 {
+		return "", "", fmt.Errorf("no ALB subnet CIDRs were available for RKE2 ingress forwarded-header trust")
+	}
+
+	switch ingressController {
+	case settings.RKE2IngressControllerTraefik:
+		return "rke2-traefik-config.yaml", rke2TraefikConfigManifest(trustedCIDRs), nil
+	case settings.RKE2IngressControllerNginx:
+		return "rke2-ingress-nginx-config.yaml", rke2IngressNginxConfigManifest(trustedCIDRs), nil
+	default:
+		return "", "", fmt.Errorf("unsupported RKE2 ingress controller %q", ingressController)
+	}
+}
+
+func rke2IngressDaemonSetName(ingressController string) (string, error) {
+	switch ingressController {
+	case settings.RKE2IngressControllerTraefik:
+		return "rke2-traefik", nil
+	case settings.RKE2IngressControllerNginx:
+		return "rke2-ingress-nginx-controller", nil
+	default:
+		return "", fmt.Errorf("unsupported RKE2 ingress controller %q", ingressController)
+	}
+}
+
+func normalizeTrustedCIDRs(values []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values))
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ALB subnet CIDR %q: %w", value, err)
+		}
+		canonical := prefix.Masked().String()
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		normalized = append(normalized, canonical)
+	}
+	sort.Strings(normalized)
+	return normalized, nil
+}
+
+func rke2TraefikConfigManifest(trustedCIDRs []string) string {
+	var manifest strings.Builder
+	manifest.WriteString(`apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    ports:
+      web:
+        forwardedHeaders:
+          insecure: false
+          trustedIPs:`)
+	for _, cidr := range trustedCIDRs {
+		fmt.Fprintf(&manifest, "\n            - %q", cidr)
+	}
+	return manifest.String()
+}
+
+func rke2IngressNginxConfigManifest(trustedCIDRs []string) string {
+	return fmt.Sprintf(`apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
   name: rke2-ingress-nginx
@@ -602,10 +722,11 @@ spec:
   valuesContent: |-
     controller:
       config:
-        use-forwarded-headers: "true"`
+        use-forwarded-headers: "true"
+        proxy-real-ip-cidr: %q`, strings.Join(trustedCIDRs, ","))
 }
 
-func setupAdditionalServerNode(ip, token string, haOutputs TerraformOutputs, resolvedPlan *RancherResolvedPlan) error {
+func setupAdditionalServerNode(ip, token string, haOutputs TerraformOutputs, ingressController string, resolvedPlan *RancherResolvedPlan) error {
 	rke2K8sVersion := viper.GetString("k8s.version")
 	expectedInstallerSHA256 := viper.GetString("rke2.install_script_sha256")
 	if resolvedPlan != nil {
@@ -623,13 +744,7 @@ func setupAdditionalServerNode(ip, token string, haOutputs TerraformOutputs, res
 	if len(haOutputs.ServerIPs) > 0 {
 		firstServerIP = haOutputs.ServerIPs[0]
 	}
-	configContent := fmt.Sprintf(`server: https://%s:9345
-token: %s
-tls-san:
-%s`,
-		firstServerIP,
-		token,
-		rke2ConfigListLines(rke2TLSSANs(haOutputs)))
+	configContent := rke2AdditionalServerConfigContent(firstServerIP, token, haOutputs, ingressController)
 
 	cmd = fmt.Sprintf("sudo bash -c 'cat > /etc/rancher/rke2/config.yaml << EOL\n%s\nEOL'", configContent)
 	if err := runRemoteSetupStep("setupAdditionalServerNode/write-config", ip, cmd); err != nil {
@@ -648,15 +763,21 @@ tls-san:
 		}
 
 		log.Printf("[setupAdditionalServerNode] Downloading and validating RKE2 images for %s...", ip)
-		cmd = buildRKE2ImagesDownloadCommand(rke2K8sVersion)
-		_, err = RunCommand(cmd, ip)
+		imagesDownloadCommand, commandErr := buildRKE2ImagesDownloadCommand(rke2K8sVersion, ingressController)
+		if commandErr != nil {
+			return fmt.Errorf("failed to prepare RKE2 image downloads: %w", commandErr)
+		}
+		_, err = RunCommand(imagesDownloadCommand, ip)
 		if err != nil {
 			log.Printf("[setupAdditionalServerNode] FAILED to download/validate images: %v", err)
 			return fmt.Errorf("failed to download/validate RKE2 images: %w", err)
 		}
 
-		cmd = "sudo mv /tmp/rke2-images.linux-amd64.tar.zst /var/lib/rancher/rke2/agent/images/"
-		if err := runRemoteSetupStep("setupAdditionalServerNode/move-images", ip, cmd); err != nil {
+		imagesMoveCommand, commandErr := buildRKE2ImagesMoveCommand(rke2K8sVersion, ingressController)
+		if commandErr != nil {
+			return fmt.Errorf("failed to prepare RKE2 image preload: %w", commandErr)
+		}
+		if err := runRemoteSetupStep("setupAdditionalServerNode/move-images", ip, imagesMoveCommand); err != nil {
 			log.Printf("[setupAdditionalServerNode] FAILED to move images: %v", err)
 			return fmt.Errorf("failed to move images: %w", err)
 		}
@@ -680,7 +801,7 @@ tls-san:
 		log.Printf("[setupAdditionalServerNode] No Docker Hub credentials provided, skipping registries.yaml creation for %s", ip)
 	}
 
-	if err := configureRKE2IngressForExternalTLS(ip); err != nil {
+	if err := configureRKE2IngressForExternalTLS(ip, ingressController, haOutputs.LoadBalancerSourceCIDRs); err != nil {
 		return fmt.Errorf("failed to configure RKE2 ingress for external TLS: %w", err)
 	}
 
@@ -724,7 +845,7 @@ tls-san:
 	return fmt.Errorf("timeout waiting for RKE2 to initialize on %s", ip)
 }
 
-func setupGPUWorkerNode(ip, token string, haOutputs TerraformOutputs, resolvedPlan *RancherResolvedPlan) error {
+func setupGPUWorkerNode(ip, token string, haOutputs TerraformOutputs, ingressController string, resolvedPlan *RancherResolvedPlan) error {
 	rke2K8sVersion := viper.GetString("k8s.version")
 	expectedInstallerSHA256 := viper.GetString("rke2.install_script_sha256")
 	if resolvedPlan != nil {
@@ -768,13 +889,19 @@ node-label:
 			return fmt.Errorf("failed to create images directory: %w", err)
 		}
 
-		cmd = buildRKE2ImagesDownloadCommand(rke2K8sVersion)
-		if _, err := RunCommand(cmd, ip); err != nil {
+		imagesDownloadCommand, commandErr := buildRKE2ImagesDownloadCommand(rke2K8sVersion, ingressController)
+		if commandErr != nil {
+			return fmt.Errorf("failed to prepare RKE2 image downloads: %w", commandErr)
+		}
+		if _, err := RunCommand(imagesDownloadCommand, ip); err != nil {
 			return fmt.Errorf("failed to download/validate RKE2 images: %w", err)
 		}
 
-		cmd = "sudo mv /tmp/rke2-images.linux-amd64.tar.zst /var/lib/rancher/rke2/agent/images/"
-		if err := runRemoteSetupStep("setupGPUWorkerNode/move-images", ip, cmd); err != nil {
+		imagesMoveCommand, commandErr := buildRKE2ImagesMoveCommand(rke2K8sVersion, ingressController)
+		if commandErr != nil {
+			return fmt.Errorf("failed to prepare RKE2 image preload: %w", commandErr)
+		}
+		if err := runRemoteSetupStep("setupGPUWorkerNode/move-images", ip, imagesMoveCommand); err != nil {
 			return fmt.Errorf("failed to move images: %w", err)
 		}
 	}

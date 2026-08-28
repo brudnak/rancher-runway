@@ -205,6 +205,7 @@ func renderToolConfig(cfg renderConfig, lane signoffLane) string {
   auto_approve: %t
 
 rke2:
+  ingress_controller: traefik
   preload_images: %t
   server_count: %d
 

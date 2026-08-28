@@ -102,6 +102,9 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 		if err := settings.ValidateRKE2ServerCountConfig(); err != nil {
 			blockers = append(blockers, err.Error())
 		}
+		if err := settings.ValidateRKE2IngressControllerConfig(); err != nil {
+			blockers = append(blockers, err.Error())
+		}
 	}
 	if isHostedTenantK3SDeployment() {
 		if password := hostedTenantRDSPassword(); password == "" {

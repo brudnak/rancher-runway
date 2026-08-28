@@ -271,26 +271,27 @@ module "hosted_tenant" {
 output "ha_details" {
   value = {
     for idx, instance in module.ha : "ha_${idx}" => {
-      server_count             = instance.server_count
-      server_ips               = instance.server_ips
-      server_private_ips       = instance.server_private_ips
-      server1_ip               = instance.server1_ip
-      server2_ip               = instance.server2_ip
-      server3_ip               = instance.server3_ip
-      server4_ip               = instance.server4_ip
-      server5_ip               = instance.server5_ip
-      server1_private_ip       = instance.server1_private_ip
-      server2_private_ip       = instance.server2_private_ip
-      server3_private_ip       = instance.server3_private_ip
-      server4_private_ip       = instance.server4_private_ip
-      server5_private_ip       = instance.server5_private_ip
-      aws_lb                   = instance.aws_lb
-      rancher_url              = instance.rancher_url
-      gpu_worker_ip            = instance.gpu_worker_ip
-      gpu_worker_private_ip    = instance.gpu_worker_private_ip
-      gpu_worker_instance_type = instance.gpu_worker_instance_type
-      gpu_worker_ami           = instance.gpu_worker_ami
-      gpu_worker_subnet_id     = instance.gpu_worker_subnet_id
+      server_count               = instance.server_count
+      server_ips                 = instance.server_ips
+      server_private_ips         = instance.server_private_ips
+      server1_ip                 = instance.server1_ip
+      server2_ip                 = instance.server2_ip
+      server3_ip                 = instance.server3_ip
+      server4_ip                 = instance.server4_ip
+      server5_ip                 = instance.server5_ip
+      server1_private_ip         = instance.server1_private_ip
+      server2_private_ip         = instance.server2_private_ip
+      server3_private_ip         = instance.server3_private_ip
+      server4_private_ip         = instance.server4_private_ip
+      server5_private_ip         = instance.server5_private_ip
+      aws_lb                     = instance.aws_lb
+      load_balancer_source_cidrs = instance.load_balancer_source_cidrs
+      rancher_url                = instance.rancher_url
+      gpu_worker_ip              = instance.gpu_worker_ip
+      gpu_worker_private_ip      = instance.gpu_worker_private_ip
+      gpu_worker_instance_type   = instance.gpu_worker_instance_type
+      gpu_worker_ami             = instance.gpu_worker_ami
+      gpu_worker_subnet_id       = instance.gpu_worker_subnet_id
     }
   }
   sensitive = true
@@ -313,26 +314,27 @@ output "hosted_tenant_details" {
 output "flat_outputs" {
   value = merge(concat([
     for idx, instance in module.ha : {
-      "ha_${idx}_server_count"             = tostring(instance.server_count)
-      "ha_${idx}_server_ips"               = join(",", instance.server_ips)
-      "ha_${idx}_server_private_ips"       = join(",", instance.server_private_ips)
-      "ha_${idx}_server1_ip"               = instance.server1_ip
-      "ha_${idx}_server2_ip"               = instance.server2_ip
-      "ha_${idx}_server3_ip"               = instance.server3_ip
-      "ha_${idx}_server4_ip"               = instance.server4_ip
-      "ha_${idx}_server5_ip"               = instance.server5_ip
-      "ha_${idx}_server1_private_ip"       = instance.server1_private_ip
-      "ha_${idx}_server2_private_ip"       = instance.server2_private_ip
-      "ha_${idx}_server3_private_ip"       = instance.server3_private_ip
-      "ha_${idx}_server4_private_ip"       = instance.server4_private_ip
-      "ha_${idx}_server5_private_ip"       = instance.server5_private_ip
-      "ha_${idx}_aws_lb"                   = instance.aws_lb
-      "ha_${idx}_rancher_url"              = instance.rancher_url
-      "ha_${idx}_gpu_worker_ip"            = instance.gpu_worker_ip
-      "ha_${idx}_gpu_worker_private_ip"    = instance.gpu_worker_private_ip
-      "ha_${idx}_gpu_worker_instance_type" = instance.gpu_worker_instance_type
-      "ha_${idx}_gpu_worker_ami"           = instance.gpu_worker_ami
-      "ha_${idx}_gpu_worker_subnet_id"     = instance.gpu_worker_subnet_id
+      "ha_${idx}_server_count"               = tostring(instance.server_count)
+      "ha_${idx}_server_ips"                 = join(",", instance.server_ips)
+      "ha_${idx}_server_private_ips"         = join(",", instance.server_private_ips)
+      "ha_${idx}_server1_ip"                 = instance.server1_ip
+      "ha_${idx}_server2_ip"                 = instance.server2_ip
+      "ha_${idx}_server3_ip"                 = instance.server3_ip
+      "ha_${idx}_server4_ip"                 = instance.server4_ip
+      "ha_${idx}_server5_ip"                 = instance.server5_ip
+      "ha_${idx}_server1_private_ip"         = instance.server1_private_ip
+      "ha_${idx}_server2_private_ip"         = instance.server2_private_ip
+      "ha_${idx}_server3_private_ip"         = instance.server3_private_ip
+      "ha_${idx}_server4_private_ip"         = instance.server4_private_ip
+      "ha_${idx}_server5_private_ip"         = instance.server5_private_ip
+      "ha_${idx}_aws_lb"                     = instance.aws_lb
+      "ha_${idx}_load_balancer_source_cidrs" = join(",", instance.load_balancer_source_cidrs)
+      "ha_${idx}_rancher_url"                = instance.rancher_url
+      "ha_${idx}_gpu_worker_ip"              = instance.gpu_worker_ip
+      "ha_${idx}_gpu_worker_private_ip"      = instance.gpu_worker_private_ip
+      "ha_${idx}_gpu_worker_instance_type"   = instance.gpu_worker_instance_type
+      "ha_${idx}_gpu_worker_ami"             = instance.gpu_worker_ami
+      "ha_${idx}_gpu_worker_subnet_id"       = instance.gpu_worker_subnet_id
     }
     ], [
     for idx, instance in module.hosted_tenant : {

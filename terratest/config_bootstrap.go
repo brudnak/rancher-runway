@@ -19,6 +19,7 @@ deployment:
   type: ha-rke2
 
 rke2:
+  ingress_controller: traefik
   server_count: 3
   preload_images: true
 

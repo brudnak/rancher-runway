@@ -98,10 +98,16 @@ variable "common_tags" {
 }
 
 locals {
-  resource_name_prefix = var.aws_prefix
-  dns_label            = trimspace(var.custom_hostname_prefix) != "" ? trimspace(var.custom_hostname_prefix) : local.resource_name_prefix
-  target_group_prefix  = substr(local.resource_name_prefix, 0, 28)
-  domain_name          = "${local.dns_label}.${var.aws_route53_fqdn}"
+  resource_name_prefix       = var.aws_prefix
+  dns_label                  = trimspace(var.custom_hostname_prefix) != "" ? trimspace(var.custom_hostname_prefix) : local.resource_name_prefix
+  target_group_prefix        = substr(local.resource_name_prefix, 0, 28)
+  domain_name                = "${local.dns_label}.${var.aws_route53_fqdn}"
+  load_balancer_source_cidrs = sort([for subnet in data.aws_subnet.load_balancer : subnet.cidr_block])
+}
+
+data "aws_subnet" "load_balancer" {
+  for_each = toset([var.aws_subnet_a, var.aws_subnet_b, var.aws_subnet_c])
+  id       = each.value
 }
 
 resource "aws_instance" "aws_instance" {
@@ -173,6 +179,7 @@ resource "aws_lb_target_group" "aws_lb_target_group_80" {
   health_check {
     protocol          = "HTTP"
     port              = "traffic-port"
+    matcher           = "200-499"
     healthy_threshold = 3
     interval          = 10
   }
@@ -317,6 +324,11 @@ output "server5_private_ip" {
 
 output "aws_lb" {
   value = aws_lb.aws_lb.dns_name
+}
+
+output "load_balancer_source_cidrs" {
+  description = "IPv4 CIDRs of the ALB subnets that may supply trusted forwarded headers."
+  value       = local.load_balancer_source_cidrs
 }
 
 output "rancher_url" {

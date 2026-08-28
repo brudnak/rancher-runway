@@ -46,6 +46,7 @@ func TestUpdateAutoModeConfigFileRewritesVersionsAndTotalHAs(t *testing.T) {
   bootstrap_password: "admin"
 total_has: 1
 rke2:
+  ingress_controller: traefik
   preload_images: false
   server_count: 5
 tf_vars:
@@ -360,6 +361,7 @@ func TestUpdateAutoModeConfigFileWritesEditableConfig(t *testing.T) {
   bootstrap_password: "old"
   webhook_image: "registry.example.com/rancher/rancher-webhook:old"
 rke2:
+  ingress_controller: traefik
   preload_images: false
 total_has: 1
 tf_vars:
@@ -432,6 +434,9 @@ tf_vars:
 	}
 	if parsed.RKE2["preload_images"] != true {
 		t.Fatalf("expected rke2.preload_images=true, got %#v", parsed.RKE2["preload_images"])
+	}
+	if parsed.RKE2["ingress_controller"] != "traefik" {
+		t.Fatalf("expected advanced RKE2 ingress setting to be preserved, got %#v", parsed.RKE2)
 	}
 	if parsed.User["first_name"] != "Ada" || parsed.User["last_name"] != "Lovelace" {
 		t.Fatalf("expected user owner fields to be updated, got %#v", parsed.User)
@@ -587,6 +592,10 @@ rancher:
   mode: auto
   versions:
     - "2.14-head"
+rke2:
+  ingress_controller: traefik
+  preload_images: true
+  server_count: 3
 total_has: 1
 tf_vars:
   aws_region: "us-east-2"

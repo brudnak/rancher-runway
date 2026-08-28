@@ -38,6 +38,7 @@ func TestRenderToolConfigForFreshLane(t *testing.T) {
 	assertContains(t, rendered, `version: "2.14.1-alpha6"`)
 	assertContains(t, rendered, `bootstrap_password: "secret-password"`)
 	assertContains(t, rendered, `auto_approve: true`)
+	assertContains(t, rendered, `ingress_controller: traefik`)
 	assertContains(t, rendered, `server_count: 5`)
 	assertContains(t, rendered, `first_name: "Ada"`)
 	assertContains(t, rendered, `last_name: "Lovelace"`)

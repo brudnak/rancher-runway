@@ -60,6 +60,12 @@ func runHARKE2Setup(t *testing.T) {
 	if err := validateRancherHelmCommandsUseExternalTLS(helmCommands); err != nil {
 		t.Fatalf("Rancher Helm command preflight failed before provisioning infrastructure: %v", err)
 	}
+	if err := settings.ValidateRKE2IngressControllerConfig(); err != nil {
+		t.Fatalf("RKE2 ingress controller preflight failed before provisioning infrastructure: %v", err)
+	}
+	if err := validateResolvedRKE2IngressControllerVersions(resolvedPlans, settings.CurrentRKE2IngressController()); err != nil {
+		t.Fatalf("RKE2 ingress controller preflight failed before provisioning infrastructure: %v", err)
+	}
 
 	if err := validateLocalToolingPreflight(helmCommands); err != nil {
 		t.Fatalf("Local tooling preflight failed before provisioning infrastructure: %v", err)

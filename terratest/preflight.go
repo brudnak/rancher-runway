@@ -15,8 +15,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	goversion "github.com/hashicorp/go-version"
 	"github.com/spf13/viper"
+)
+
+var (
+	rke2TraefikMinimumVersion = goversion.Must(goversion.NewVersion("1.30.3"))
+	rke2TraefikDefaultVersion = goversion.Must(goversion.NewVersion("1.36.0"))
+	rke2NginxRemovalVersion   = goversion.Must(goversion.NewVersion("1.37.0"))
 )
 
 func validateLocalToolingPreflight(helmCommands []string) error {
@@ -867,26 +874,129 @@ func isRKE2InstallerChecksumFailure(stdout, stderr string) bool {
 	return strings.Contains(combinedOutput, "SECURITY ERROR: RKE2 installer checksum validation failed")
 }
 
-func buildRKE2ImagesDownloadCommand(rke2Version string) string {
-	imagesURL := fmt.Sprintf("https://github.com/rancher/rke2/releases/download/%s/rke2-images.linux-amd64.tar.zst", rke2Version)
+func parseRKE2CompatibilityVersion(raw string) (*goversion.Version, error) {
+	normalized, err := normalizeRKE2VersionInput(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid RKE2 version for ingress compatibility: %w", err)
+	}
+	parsed, err := goversion.NewVersion(strings.TrimPrefix(normalized, "v"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid RKE2 version for ingress compatibility %q: %w", raw, err)
+	}
+	return parsed, nil
+}
+
+func validateRKE2IngressControllerVersion(rke2Version, ingressController string) error {
+	parsed, err := parseRKE2CompatibilityVersion(rke2Version)
+	if err != nil {
+		return err
+	}
+
+	switch strings.ToLower(strings.TrimSpace(ingressController)) {
+	case settings.RKE2IngressControllerTraefik:
+		if parsed.LessThan(rke2TraefikMinimumVersion) {
+			return fmt.Errorf("rke2.ingress_controller=traefik requires RKE2 v1.30.3+rke2r1 or newer; use ingress-nginx for %s", rke2Version)
+		}
+		return nil
+	case settings.RKE2IngressControllerNginx:
+		if parsed.GreaterThanOrEqual(rke2NginxRemovalVersion) {
+			return fmt.Errorf("rke2.ingress_controller=ingress-nginx is not available in community RKE2 %s; use traefik", rke2Version)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported RKE2 ingress controller %q", ingressController)
+	}
+}
+
+func validateResolvedRKE2IngressControllerVersions(plans []*RancherResolvedPlan, ingressController string) error {
+	if len(plans) == 0 {
+		return validateRKE2IngressControllerVersion(viper.GetString("k8s.version"), ingressController)
+	}
+	for i, plan := range plans {
+		if plan == nil {
+			return fmt.Errorf("resolved Rancher plan %d is missing", i+1)
+		}
+		if err := validateRKE2IngressControllerVersion(plan.RecommendedRKE2Version, ingressController); err != nil {
+			return fmt.Errorf("resolved Rancher plan %d: %w", i+1, err)
+		}
+	}
+	return nil
+}
+
+func rke2ImageArchiveNames(rke2Version, ingressController string) ([]string, error) {
+	if err := validateRKE2IngressControllerVersion(rke2Version, ingressController); err != nil {
+		return nil, err
+	}
+	parsed, err := parseRKE2CompatibilityVersion(rke2Version)
+	if err != nil {
+		return nil, err
+	}
+
+	archives := []string{"rke2-images.linux-amd64.tar.zst"}
+	switch strings.ToLower(strings.TrimSpace(ingressController)) {
+	case settings.RKE2IngressControllerTraefik:
+		if parsed.LessThan(rke2TraefikDefaultVersion) {
+			archives = append(archives, "rke2-images-traefik.linux-amd64.tar.zst")
+		}
+	case settings.RKE2IngressControllerNginx:
+		if parsed.GreaterThanOrEqual(rke2TraefikDefaultVersion) {
+			archives = append(archives, "rke2-images-ingress-nginx.linux-amd64.tar.zst")
+		}
+	}
+	return archives, nil
+}
+
+func buildRKE2ImagesDownloadCommand(rke2Version, ingressController string) (string, error) {
+	archives, err := rke2ImageArchiveNames(rke2Version, ingressController)
+	if err != nil {
+		return "", err
+	}
 	checksumURL := fmt.Sprintf("https://github.com/rancher/rke2/releases/download/%s/sha256sum-amd64.txt", rke2Version)
+	temporaryPaths := make([]string, 0, len(archives))
+	selectedChecksumPath := "/tmp/rke2-selected-sha256sum.txt"
+	var command strings.Builder
 
-	return fmt.Sprintf(`curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 --max-time 600 -o /tmp/rke2-images.linux-amd64.tar.zst %s
-curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 --max-time 120 -o /tmp/rke2-sha256sum-amd64.txt %s
+	for _, archive := range archives {
+		temporaryPaths = append(temporaryPaths, shellSingleQuote("/tmp/"+archive))
+	}
+	fmt.Fprintf(&command, "rm -f %s /tmp/rke2-sha256sum-amd64.txt %s\n", strings.Join(temporaryPaths, " "), shellSingleQuote(selectedChecksumPath))
+	for _, archive := range archives {
+		archivePath := "/tmp/" + archive
+		imagesURL := fmt.Sprintf("https://github.com/rancher/rke2/releases/download/%s/%s", rke2Version, archive)
+		fmt.Fprintf(&command, "curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 --max-time 600 -o %s %s\n",
+			shellSingleQuote(archivePath), shellSingleQuote(imagesURL))
+	}
+	fmt.Fprintf(&command, "curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 20 --max-time 120 -o /tmp/rke2-sha256sum-amd64.txt %s\n",
+		shellSingleQuote(checksumURL))
 
-if ! (cd /tmp && grep 'rke2-images.linux-amd64.tar.zst' /tmp/rke2-sha256sum-amd64.txt | sha256sum -c -); then
+	for _, archive := range archives {
+		fmt.Fprintf(&command, `
+if ! awk -v archive=%s '$2 == archive || $2 == "*" archive { print; found=1 } END { if (!found) exit 1 }' /tmp/rke2-sha256sum-amd64.txt > %s ||
+   [ ! -s %s ] ||
+   ! (cd /tmp && sha256sum -c %s); then
   echo "############################################################" >&2
   echo "# SECURITY ERROR: RKE2 images checksum validation failed   #" >&2
   echo "# Refusing to use the downloaded images tarball.           #" >&2
   echo "############################################################" >&2
-  rm -f /tmp/rke2-images.linux-amd64.tar.zst /tmp/rke2-sha256sum-amd64.txt
+  rm -f %s /tmp/rke2-sha256sum-amd64.txt %s
   exit 1
 fi
+`, shellSingleQuote(archive), shellSingleQuote(selectedChecksumPath), shellSingleQuote(selectedChecksumPath), shellSingleQuote(selectedChecksumPath), strings.Join(temporaryPaths, " "), shellSingleQuote(selectedChecksumPath))
+	}
+	fmt.Fprintf(&command, "\nrm -f /tmp/rke2-sha256sum-amd64.txt %s", shellSingleQuote(selectedChecksumPath))
+	return command.String(), nil
+}
 
-rm -f /tmp/rke2-sha256sum-amd64.txt`,
-		shellSingleQuote(imagesURL),
-		shellSingleQuote(checksumURL),
-	)
+func buildRKE2ImagesMoveCommand(rke2Version, ingressController string) (string, error) {
+	archives, err := rke2ImageArchiveNames(rke2Version, ingressController)
+	if err != nil {
+		return "", err
+	}
+	temporaryPaths := make([]string, 0, len(archives))
+	for _, archive := range archives {
+		temporaryPaths = append(temporaryPaths, shellSingleQuote("/tmp/"+archive))
+	}
+	return fmt.Sprintf("sudo mv %s /var/lib/rancher/rke2/agent/images/", strings.Join(temporaryPaths, " ")), nil
 }
 
 func buildRKE2InstallCommand(nodeType string, rke2Version string, expectedInstallerSHA256 string) (string, error) {

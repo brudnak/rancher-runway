@@ -131,7 +131,7 @@ func automationOutputPath(name string) string {
 	return filepath.Join(automationOutputDir(), name)
 }
 
-func CreateInstallScript(helmCommand, haDir string) {
+func CreateInstallScript(helmCommand, haDir, ingressDaemonSetName string) {
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
 
@@ -142,41 +142,104 @@ if [ ! -f "kube_config.yaml" ]; then
 fi
 
 # Export KUBECONFIG to point to our kubeconfig file
-export KUBECONFIG=$(pwd)/kube_config.yaml
+export KUBECONFIG="$(pwd)/kube_config.yaml"
 
 # Verify kubectl can connect to the cluster
 echo "Verifying connection to Kubernetes cluster..."
-kubectl cluster-info
-if [ $? -ne 0 ]; then
+if ! kubectl cluster-info; then
   echo "ERROR: Unable to connect to Kubernetes cluster. Check your kubeconfig."
   exit 1
 fi
 
-echo "Waiting for RKE2 ingress admission webhook..."
-for attempt in $(seq 1 60); do
-  admission_endpoint="$(kubectl -n kube-system get endpoints rke2-ingress-nginx-controller-admission -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)"
-  if [ -n "${admission_endpoint}" ]; then
-    echo "RKE2 ingress admission webhook is ready."
+echo "Creating namespace..."
+kubectl create namespace cattle-system --dry-run=client -o yaml | kubectl apply -f -
+
+ingress_daemonset=%s
+
+collect_ingress_diagnostics() {
+  kubectl --request-timeout=20s get ingressclasses.networking.k8s.io -o wide || true
+  kubectl --request-timeout=20s get pods -A -o wide || true
+  kubectl --request-timeout=20s get services,endpointslices.discovery.k8s.io -A -o wide || true
+  kubectl --request-timeout=20s get validatingwebhookconfigurations.admissionregistration.k8s.io -o wide || true
+  kubectl --request-timeout=20s get mutatingwebhookconfigurations.admissionregistration.k8s.io -o wide || true
+  kubectl --request-timeout=20s -n kube-system describe "daemonset/${ingress_daemonset}" || true
+  kubectl --request-timeout=20s get events -A --sort-by=.metadata.creationTimestamp || true
+}
+
+echo "Waiting for the configured RKE2 ingress controller..."
+if ! kubectl -n kube-system wait --for=create "daemonset/${ingress_daemonset}" --timeout=10m; then
+  echo "ERROR: Timed out waiting for RKE2 ingress DaemonSet ${ingress_daemonset} to be created." >&2
+  collect_ingress_diagnostics
+  exit 1
+fi
+if ! kubectl -n kube-system rollout status "daemonset/${ingress_daemonset}" --timeout=10m; then
+  echo "ERROR: RKE2 ingress DaemonSet ${ingress_daemonset} did not roll out." >&2
+  collect_ingress_diagnostics
+  exit 1
+fi
+
+daemonset_status=""
+if ! daemonset_status="$(kubectl -n kube-system get "daemonset/${ingress_daemonset}" --request-timeout=20s -o jsonpath='{.status.desiredNumberScheduled}{" "}{.status.numberAvailable}')"; then
+  echo "ERROR: Unable to verify RKE2 ingress DaemonSet ${ingress_daemonset}." >&2
+  collect_ingress_diagnostics
+  exit 1
+fi
+read -r desired_ingress_pods available_ingress_pods <<<"${daemonset_status}"
+if [[ ! "${desired_ingress_pods}" =~ ^[0-9]+$ || ! "${available_ingress_pods}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: RKE2 ingress DaemonSet ${ingress_daemonset} returned an invalid status: ${daemonset_status}." >&2
+  collect_ingress_diagnostics
+  exit 1
+fi
+if (( desired_ingress_pods < 1 || available_ingress_pods < desired_ingress_pods )); then
+  echo "ERROR: RKE2 ingress DaemonSet ${ingress_daemonset} has ${available_ingress_pods}/${desired_ingress_pods} available pods." >&2
+  collect_ingress_diagnostics
+  exit 1
+fi
+
+echo "Waiting for Kubernetes to accept Ingress resources..."
+ingress_check_output=""
+# Twenty attempts at a 20-second request timeout plus retry delays stays bounded to about ten minutes.
+for ((attempt=1; attempt<=20; attempt++)); do
+  if ingress_check_output="$(kubectl create --request-timeout=20s --dry-run=server -f - 2>&1 <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  generateName: rancher-runway-ingress-readiness-
+  namespace: cattle-system
+spec:
+  rules:
+    - host: rancher-runway-readiness.invalid
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rancher-runway-ingress-readiness
+                port:
+                  number: 80
+EOF
+)"; then
+    echo "Kubernetes Ingress API and admission webhooks are ready."
     break
   fi
-  if [ "${attempt}" -eq 60 ]; then
-    echo "ERROR: Timed out waiting for RKE2 ingress admission webhook endpoints."
-    kubectl -n kube-system get pods -o wide || true
-    kubectl -n kube-system get endpoints rke2-ingress-nginx-controller-admission -o yaml || true
+  if [ "${attempt}" -eq 20 ]; then
+    echo "ERROR: Timed out waiting for Kubernetes to accept Ingress resources." >&2
+    echo "Last server-side Ingress dry-run error:" >&2
+    printf '%%s\n' "${ingress_check_output}" >&2
+    collect_ingress_diagnostics
     exit 1
   fi
+  echo "Ingress admission is not ready (attempt ${attempt}/20); retrying in 10 seconds..."
   sleep 10
 done
 
 helm repo update
 
-echo "Creating namespace..."
-kubectl create namespace cattle-system --dry-run=client -o yaml | kubectl apply -f -
-
 echo "Installing Rancher..."
 %s
 
-echo "Rancher installation complete!"`, helmCommand)
+echo "Rancher installation complete!"`, shellSingleQuote(ingressDaemonSetName), helmCommand)
 
 	absHADir, err := absoluteFromWorkingDir(haDir)
 	if err != nil {

@@ -17,6 +17,11 @@ var PreferredImageRegistryOptions = []string{
 	"docker.io",
 }
 
+const (
+	RKE2IngressControllerTraefik = "traefik"
+	RKE2IngressControllerNginx   = "ingress-nginx"
+)
+
 var EditableTFVarKeys = []string{
 	"aws_region",
 	"aws_prefix",
@@ -118,6 +123,40 @@ func ValidateRKE2ServerCountConfig() error {
 		return nil
 	default:
 		return fmt.Errorf("rke2.server_count must be 1, 3, or 5")
+	}
+}
+
+func CurrentRKE2IngressController() string {
+	controller, _ := configuredRKE2IngressController()
+	return controller
+}
+
+func configuredRKE2IngressController() (string, error) {
+	raw := viper.Get("rke2.ingress_controller")
+	if raw == nil {
+		return RKE2IngressControllerTraefik, nil
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("rke2.ingress_controller must be a string")
+	}
+	controller := strings.ToLower(strings.TrimSpace(value))
+	if controller == "" {
+		return RKE2IngressControllerTraefik, nil
+	}
+	return controller, nil
+}
+
+func ValidateRKE2IngressControllerConfig() error {
+	controller, err := configuredRKE2IngressController()
+	if err != nil {
+		return err
+	}
+	switch controller {
+	case RKE2IngressControllerTraefik, RKE2IngressControllerNginx:
+		return nil
+	default:
+		return fmt.Errorf("rke2.ingress_controller must be traefik or ingress-nginx")
 	}
 }
 
