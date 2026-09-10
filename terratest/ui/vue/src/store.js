@@ -74,6 +74,15 @@ export const dangerConfirm = reactive({
 // Upgrade command warning notice state
 export const upgradeCommandModalOpen = ref(false);
 
+// Manual Linode cleanup warning state
+export const manualLinodeCleanupWarning = reactive({
+  show: false,
+  key: "",
+  source: "cleanup",
+  runId: "",
+  warning: "",
+});
+
 // Toast notice state
 export const notice = reactive({
   show: false,
@@ -422,6 +431,55 @@ export const hidePanelNotice = () => {
     notice.timer = null;
   }
   notice.show = false;
+};
+
+const shownManualLinodeCleanupWarningKeys = new Set();
+
+const completedCleanupWarning = (source, operation) => {
+  const warning = String(operation?.warning || "").trim();
+  if (!warning || operation?.running || !operation?.finishedAt) {
+    return null;
+  }
+  const runIdentity = source === "cleanupBatch"
+    ? (Array.isArray(operation?.runIds) ? operation.runIds.join(",") : "batch")
+    : String(operation?.runId || "unknown-run");
+  return {
+    source,
+    runId: source === "cleanupBatch" ? "" : runIdentity,
+    warning,
+    key: [source, runIdentity, operation.finishedAt, warning].join("|"),
+  };
+};
+
+const maybeShowManualLinodeCleanupWarning = currentState => {
+  const cleanupBatch = currentState?.cleanupBatch || {};
+  const hasBatchContext = Boolean(
+    cleanupBatch.running ||
+    cleanupBatch.startedAt ||
+    cleanupBatch.finishedAt ||
+    (Array.isArray(cleanupBatch.runIds) && cleanupBatch.runIds.length)
+  );
+  const candidate = hasBatchContext
+    ? completedCleanupWarning("cleanupBatch", cleanupBatch)
+    : completedCleanupWarning("cleanup", currentState?.cleanup || {});
+  if (!candidate || shownManualLinodeCleanupWarningKeys.has(candidate.key)) {
+    return;
+  }
+
+  shownManualLinodeCleanupWarningKeys.add(candidate.key);
+  manualLinodeCleanupWarning.key = candidate.key;
+  manualLinodeCleanupWarning.source = candidate.source;
+  manualLinodeCleanupWarning.runId = candidate.runId;
+  manualLinodeCleanupWarning.warning = candidate.warning;
+  manualLinodeCleanupWarning.show = true;
+  document.body.classList.add("overflow-hidden");
+};
+
+export const hideManualLinodeCleanupWarning = () => {
+  manualLinodeCleanupWarning.show = false;
+  if (!logs.show && !dangerConfirm.show && !gpuReminderModalOpen.value && !upgradeCommandModalOpen.value) {
+    document.body.classList.remove("overflow-hidden");
+  }
 };
 
 // Dangerous confirmation modal controller
@@ -860,7 +918,15 @@ export const openCleanupLogs = (linode = false) => {
   const cleanup = linode ? state.value?.linodeCleanup || {} : state.value?.cleanup || {};
   const output = operationOutput(cleanup);
   logs.rawText = output.join("\n");
-  logs.liveState = cleanup.running ? (linode ? "linodeCleanupRunning" : "cleanupRunning") : cleanup.error ? "cleanupError" : cleanup.finishedAt ? "cleanupDone" : "idle";
+  logs.liveState = cleanup.running
+    ? (linode ? "linodeCleanupRunning" : "cleanupRunning")
+    : cleanup.error
+      ? (linode ? "linodeCleanupError" : "cleanupError")
+      : cleanup.warning && cleanup.finishedAt
+        ? "cleanupWarning"
+        : cleanup.finishedAt
+          ? (linode ? "linodeCleanupDone" : "cleanupDone")
+          : "idle";
   renderLogViewer();
   openLogModal();
 };
@@ -868,6 +934,7 @@ export const openCleanupLogs = (linode = false) => {
 const cleanupBatchLiveState = cleanupBatch => {
   if (cleanupBatch?.running) return cleanupBatch.cancelRequested ? "cleanupBatchCanceling" : "cleanupBatchRunning";
   if (cleanupBatch?.error || (Array.isArray(cleanupBatch?.failures) && cleanupBatch.failures.length)) return "cleanupBatchError";
+  if (cleanupBatch?.warning && cleanupBatch?.finishedAt) return "cleanupBatchWarning";
   if (cleanupBatch?.finishedAt) return "cleanupBatchDone";
   return "idle";
 };
@@ -888,6 +955,35 @@ const syncCleanupBatchLogModal = currentState => {
   logs.rawText = operationOutput(cleanupBatch).join("\n");
   logs.liveState = cleanupBatchLiveState(cleanupBatch);
   renderLogViewer();
+};
+
+const syncCleanupLogModal = currentState => {
+  if (!logs.show || !["cleanup", "linodeCleanup"].includes(logs.mode)) return;
+  const linode = logs.mode === "linodeCleanup";
+  const cleanup = linode ? currentState?.linodeCleanup || {} : currentState?.cleanup || {};
+  logs.rawText = operationOutput(cleanup).join("\n");
+  logs.liveState = cleanup.running
+    ? (linode ? "linodeCleanupRunning" : "cleanupRunning")
+    : cleanup.error
+      ? (linode ? "linodeCleanupError" : "cleanupError")
+      : cleanup.warning && cleanup.finishedAt
+        ? "cleanupWarning"
+        : cleanup.finishedAt
+          ? (linode ? "linodeCleanupDone" : "cleanupDone")
+          : "idle";
+  renderLogViewer();
+};
+
+export const reviewManualLinodeCleanupWarning = () => {
+  const source = manualLinodeCleanupWarning.source;
+  hideManualLinodeCleanupWarning();
+  setActiveDestroyTab("slots");
+  setActivePanelTab("destroy");
+  if (source === "cleanupBatch") {
+    openCleanupBatchLogs();
+    return;
+  }
+  openCleanupLogs(false);
 };
 
 const syncDownstreamLogModal = currentState => {
@@ -1142,7 +1238,7 @@ export const stopOperationThenOpenDestroy = async (operation, runId = "") => {
   const label = operation === "setup" ? "setup" : "readiness";
   const confirmed = await requestTypedConfirmation({
     title: `Stop ${label}, then open destroy?`,
-    body: `This requests a stop for the running ${label} process and moves run ${targetRunId || "this slot"} into the Destroy tab. Cleanup still requires its own typed "destroy" confirmation. For an HA run, any recorded Linode downstream clusters are deleted first; if none exist, cleanup proceeds directly to AWS management Terraform destroy. AWS destroy will not start if downstream deletion fails.`,
+    body: `This requests a stop for the running ${label} process and moves run ${targetRunId || "this slot"} into the Destroy tab. Cleanup still requires its own typed "destroy" confirmation. For an HA run, cleanup attempts any recorded Linode downstream clusters first, then proceeds to AWS management Terraform destroy. If downstream deletion fails, AWS destroy continues and the panel warns that Linode resources may require manual cleanup.`,
     typedValue: "confirm",
     confirmText: "Stop and open destroy",
     accentText: "Stop before destroy",
@@ -1251,7 +1347,7 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
     title: `Destroy run ${targetRunId}?`,
     body: linodeRun
       ? "This runs Terraform destroy from the selected Linode run state. It deletes the Linode instance and its AWS Route53 record, then removes the run slot only after destroy succeeds."
-      : "Any recorded Linode downstream clusters are deleted first; if none exist, cleanup proceeds directly to Terraform destroy for the AWS management infrastructure. AWS destroy will not start if downstream deletion fails. The run slot is removed only after the complete cleanup succeeds.",
+      : "Cleanup attempts any recorded Linode downstream clusters first, then proceeds to Terraform destroy for the AWS management infrastructure. If downstream deletion fails, AWS destroy still continues and you will be warned that Linode resources may require manual cleanup. The run slot is removed after management Terraform destroy succeeds.",
     typedValue: "destroy",
     confirmText: "Start destroy",
     accentText: linodeRun ? "Linode destroy confirmation" : "Downstream-first destroy confirmation",
@@ -1276,6 +1372,9 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
         ...(state.value?.[modeKey] || {}),
         running: true,
         runId: targetRunId,
+        finishedAt: null,
+        error: "",
+        warning: "",
         output: ["[control-panel] Destroy requested..."],
         startedAt: new Date().toISOString(),
       },
@@ -1309,7 +1408,7 @@ export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRun
     title: all
       ? `Destroy all ${requestedRunIds.length} run slots?`
       : `Destroy ${requestedRunIds.length} selected run slot${requestedRunIds.length === 1 ? "" : "s"}?`,
-    body: `For each HA management run, any recorded Linode downstream clusters are deleted first; when none exist, cleanup proceeds directly to AWS management Terraform destroy. A downstream deletion failure prevents AWS destroy for that run. Linode Docker slots use their recorded Linode and Route53 Terraform destroy. Cleanup runs sequentially for this fixed set: ${targetSummary}. Successful slots are removed; failed slots stay recorded and the batch continues with the remaining targets.`,
+    body: `For each HA management run, cleanup attempts any recorded Linode downstream clusters first, then proceeds to AWS management Terraform destroy even if downstream deletion fails. Any remaining Linode resources are reported for manual cleanup. Linode Docker slots use their recorded Linode and Route53 Terraform destroy. Cleanup runs sequentially for this fixed set: ${targetSummary}. Slots whose management Terraform destroy succeeds are removed; Terraform failures stay recorded and the batch continues with the remaining targets.`,
     typedValue: confirmationText,
     confirmText: all ? "Destroy all slots" : "Destroy selected slots",
     accentText: all ? "Destroy every recorded slot" : "Bulk destroy confirmation",
@@ -1364,6 +1463,7 @@ export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRun
         startedAt: acceptedBatch.startedAt || startedAt,
         finishedAt: acceptedBatch.finishedAt || null,
         error: acceptedBatch.error || "",
+        warning: acceptedBatch.warning || "",
         output: Array.isArray(acceptedBatch.output) && acceptedBatch.output.length
           ? acceptedBatch.output
           : [`[control-panel] Destroy batch accepted for ${currentTargets.length} run slot${currentTargets.length === 1 ? "" : "s"}.`],
@@ -1543,7 +1643,9 @@ export const refresh = async () => {
 
     dispatchSetupLifecycleState();
     syncCleanupBatchLogModal(fetched);
+    syncCleanupLogModal(fetched);
     syncDownstreamLogModal(fetched);
+    maybeShowManualLinodeCleanupWarning(fetched);
 
     if (pendingAbortOperation.value && !fetched?.[pendingAbortOperation.value]?.running) {
       pendingAbortOperation.value = "";

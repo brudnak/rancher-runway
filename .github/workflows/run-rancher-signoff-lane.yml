@@ -198,6 +198,7 @@ jobs:
           go build -o "$RUNNER_TEMP/render-tool-config" ./automation/render-tool-config
           go build -o "$RUNNER_TEMP/render-signoff-report" ./automation/render-signoff-report
           go build -o "$RUNNER_TEMP/verify-webhook-signing" ./automation/verify-webhook-signing
+          go build -o "$RUNNER_TEMP/qase-report-input-tool" ./automation/qase-report-input
 
       - name: Generate sign-off plan
         env:
@@ -808,15 +809,17 @@ jobs:
             package="$2"
             test_run="$3"
             junit="$4"
-            conclusion="$5"
+            go_json="$5"
+            conclusion="$6"
             tmp="$(mktemp)"
             jq \
               --arg suite "$suite" \
               --arg package "$package" \
               --arg test_run "$test_run" \
               --arg junit "$junit" \
+              --arg go_json "$go_json" \
               --arg conclusion "$conclusion" \
-              '. + [{suite: $suite, package: $package, test_run: $test_run, junit: $junit, conclusion: $conclusion}]' \
+              '. + [{suite: $suite, package: $package, test_run: $test_run, junit: $junit, go_json: $go_json, conclusion: $conclusion}]' \
               "$results_tmp" > "$tmp"
             mv "$tmp" "$results_tmp"
           }
@@ -893,14 +896,17 @@ jobs:
             esac
 
             junit="$GITHUB_WORKSPACE/test-results/${junit_name}.xml"
+            go_json="$GITHUB_WORKSPACE/test-results/${junit_name}.json"
             suite_log="$GITHUB_WORKSPACE/test-results/${junit_name}.log"
             echo "Running rancher/tests $package -run $test_run against cluster $CLUSTER_NAME"
             run_suite() {
+              rm -f -- "$junit" "$go_json"
               (
                 cd "$tests_dir"
                 env -i "${external_env[@]}" "$go_bin/gotestsum" \
                   --format standard-verbose \
                   --junitfile "$junit" \
+                  --jsonfile "$go_json" \
                   -- \
                   -v "${timeout_args[@]}" -tags="$tags" "$package" -run "$test_run" 2>&1 | tee "$suite_log"
                 exit "${PIPESTATUS[0]}"
@@ -932,7 +938,13 @@ jobs:
               conclusion="failure"
               failed=1
             fi
-            append_result "$test_run" "$package" "$test_run" "test-results/${junit_name}.xml" "$conclusion"
+            append_result \
+              "$test_run" \
+              "$package" \
+              "$test_run" \
+              "test-results/${junit_name}.xml" \
+              "test-results/${junit_name}.json" \
+              "$conclusion"
           done
 
           jq -n \
@@ -1270,5 +1282,44 @@ jobs:
             echo "- Downstream webhook override outcome: \`${{ steps.downstream_webhook.outcome }}\`"
             echo "- Upgrade outcome: \`${{ steps.upgrade.outcome }}\`"
             echo "- Rancher tests outcome: \`${{ steps.rancher_tests.outcome }}\`"
-            echo "- Cleanup requested: \`${{ steps.render_config.outcome == 'success' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && (inputs.lane == 'framework-regression' || steps.downstream.outcome == 'success') && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+              echo "- Cleanup requested: \`${{ steps.render_config.outcome == 'success' && (inputs.keep_infra_on_failure == false || (steps.setup.outcome == 'success' && steps.ready.outcome == 'success' && (inputs.lane == 'framework-regression' || steps.downstream.outcome == 'success') && (inputs.lane != 'webhook-upgrade' || steps.upgrade.outcome == 'success') && (inputs.lane != 'webhook-candidate-on-previous' || (steps.local_webhook.outcome == 'success' && steps.downstream_webhook.outcome == 'success')) && (inputs.run_rancher_tests == false || steps.rancher_tests.outcome == 'success'))) }}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare Qase report input
+        id: prepare_qase_report
+        if: ${{ success() }}
+        env:
+          QASE_REPORTING_ENABLED: ${{ inputs.run_rancher_tests }}
+          QASE_REPORT_LANE: ${{ inputs.lane }}
+          QASE_REPORT_SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          QASE_REPORT_TESTS_REF: ${{ github.event.inputs.rancher_tests_ref || vars.RANCHER_TESTS_REF || 'main' }}
+        run: |
+          set -euo pipefail
+
+          resolved_version="$TARGET_RANCHER_VERSION"
+          if [ -s signoff-plan.json ]; then
+            planned_version="$(jq -r '.resolved_target_version // .target_version // empty' signoff-plan.json)"
+            if [ -n "$planned_version" ]; then
+              resolved_version="$planned_version"
+            fi
+          fi
+
+          "$RUNNER_TEMP/qase-report-input-tool" \
+            -mode prepare \
+            -enabled "$QASE_REPORTING_ENABLED" \
+            -lane "$QASE_REPORT_LANE" \
+            -rancher-version "$resolved_version" \
+            -source-run-url "$QASE_REPORT_SOURCE_URL" \
+            -rancher-tests-ref "$QASE_REPORT_TESTS_REF" \
+            -results-manifest automation-output/rancher-test-results.json \
+            -workspace "$GITHUB_WORKSPACE" \
+            -output-dir "$RUNNER_TEMP/qase-report-input"
+
+      - name: Upload Qase report input
+        if: ${{ steps.prepare_qase_report.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: qase-report-${{ github.run_id }}
+          path: ${{ runner.temp }}/qase-report-input
+          if-no-files-found: error
+          retention-days: 1

@@ -26,8 +26,16 @@
       v-else-if="!items.length"
       class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400"
     >
-      <div v-if="state.cleanup?.finishedAt && !state.cleanup?.error && !cleanupDismissed" class="text-emerald-800 dark:text-emerald-200">
-        Destroy finished for the selected run. Cluster records were cleared after downstream cleanup and Terraform destroy succeeded.
+      <div
+        v-if="state.cleanup?.finishedAt && !state.cleanup?.error && !cleanupDismissed"
+        :class="cleanupWarning ? 'text-amber-800 dark:text-amber-200' : 'text-emerald-800 dark:text-emerald-200'"
+      >
+        <template v-if="cleanupWarning">
+          AWS management destroy finished for the selected run, but downstream Linode cleanup did not. The remaining Linode resources require manual cleanup.
+        </template>
+        <template v-else>
+          Destroy finished for the selected run. Downstream cleanup and management Terraform destroy both succeeded.
+        </template>
       </div>
       <div v-else>No clusters discovered yet.</div>
     </div>
@@ -137,11 +145,12 @@ const inactiveTabClass = "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-5
 const items = computed(() => clusterItems(state.value));
 const workspace = computed(() => state.value?.workspace || {});
 const cleanupRunning = computed(() => Boolean(state.value?.cleanup?.running || state.value?.linodeCleanup?.running));
+const cleanupWarning = computed(() => String(state.value?.cleanup?.warning || "").trim());
 
 const cleanupDismissed = computed(() => {
   const cleanup = state.value?.cleanup || {};
   if (!cleanup || cleanup.running || (!cleanup.finishedAt && !cleanup.error)) return false;
-  const key = [cleanup.runId || "unknown", cleanup.finishedAt || "", cleanup.error || ""].join("|");
+  const key = [cleanup.runId || "unknown", cleanup.finishedAt || "", cleanup.error || "", cleanup.warning || ""].join("|");
   return Boolean(key && dismissedCleanupResultKey.value === key);
 });
 const dismissedCleanupResultKey = ref("");

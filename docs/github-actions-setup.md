@@ -78,6 +78,21 @@ these fields, so a missing protected value fails closed instead of appearing in
 the runner-generated environment header. The values are scoped to the trusted
 steps that need them rather than being inherited by the whole job.
 
+## Repository Actions Secret
+
+Add this repository-level Actions secret before enabling direct
+`rancher/tests` runs:
+
+| Secret | Required | Purpose |
+| --- | --- | --- |
+| `QASE_AUTOMATION_TOKEN` | yes when `run_rancher_tests=true` | Token for the shared automation-services Qase account. It is exposed only to the final reporting step in the follow-up reporting workflow. |
+
+The sign-off workflow never receives this token. A separate `workflow_run`
+workflow can read it only after the complete `Run Rancher Sign-Off Lane`
+workflow finishes successfully. A failed or cancelled sign-off run does not
+create a Qase run and does not send any result to Qase. Runs with
+`run_rancher_tests=false` also skip Qase.
+
 When migrating an existing environment, copy the protected configuration
 variables to secrets before deploying these workflows. After the updated
 workflows have completed one validation run, delete the legacy variables; they
@@ -106,6 +121,7 @@ Only non-sensitive runner tuning remains in `rancher-signoff` variables:
 | `signoff-plan.yml` | no, but it can dispatch the runner | Manual plan generation from `signoff-targets.json` or a single head/prerelease input. Dispatch suppresses an identical active lane. It also skips a previously successful immutable target unless `rerun_successful_lanes=true`; mutable `head`, `vX.Y-head`, and `vX.Y.Z-head` aliases are always reconsidered after the active run finishes. |
 | `bootstrap-terraform-state.yml` | yes, only when `apply=true` | Creates or updates the persistent S3/DynamoDB backend. |
 | `run-rancher-signoff-lane.yml` | yes | Runs one Rancher sign-off lane, optionally with Linode downstreams and direct `rancher/tests` suite runs, then cleans up. |
+| `report-successful-signoff-to-qase.yml` | no | Runs only after a fully successful sign-off workflow and reports its sanitized Go test results to Qase with reporter-v2. |
 
 ## First Live Run
 
@@ -128,6 +144,10 @@ After environments, secrets, and variables are configured:
    disabled for Rancher 2.11 and older and VAI enabled for Rancher 2.12 and
    newer. Downstream webhook lanes run webhook security settings for Rancher
    2.14 and newer when the actual Rancher chart should contain those settings.
+   Add the repository secret `QASE_AUTOMATION_TOKEN` first. Successful runs are
+   titled `[frameworks][<resolved-version>][<lane title>]` in Qase; for example,
+   `v2.16.2-abcdef0-head` becomes
+   `[frameworks][2.16.2.abcdef0][Frameworks Regression]`.
 6. For normal use, edit `signoff-targets.json` with the head builds or
    prereleases you care about and run `Plan Rancher Sign-Off` manually with
    `dispatch_runs=true`.
@@ -210,6 +230,11 @@ audit a mutable-head run. Upgrade lanes resolve the previous stable install in
 the upgrade phase.
 The receipt omits live Rancher URLs, kubeconfigs, generated environment files,
 raw Terraform outputs, copied logs, and the unsanitized resolution files.
+
+After a successful lane, it also uploads a one-day Qase handoff artifact. The
+handoff contains only a small metadata allowlist and Go test run/pass/skip
+events. Test output and stack traces are removed before upload. The follow-up
+workflow validates the handoff again before it receives the Qase token.
 
 It does not upload:
 

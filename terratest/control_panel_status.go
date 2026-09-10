@@ -118,6 +118,7 @@ type LocalWorkspaceOperation struct {
 	StartedAt   *time.Time `json:"startedAt,omitempty"`
 	FinishedAt  *time.Time `json:"finishedAt,omitempty"`
 	Error       string     `json:"error,omitempty"`
+	Warning     string     `json:"warning,omitempty"`
 	RunID       string     `json:"runId,omitempty"`
 	Command     string     `json:"command,omitempty"`
 	UpdatedAt   *time.Time `json:"updatedAt,omitempty"`
@@ -359,6 +360,7 @@ func localWorkspaceOperation(operation panelOperationSnapshot) LocalWorkspaceOpe
 		StartedAt:   operation.StartedAt,
 		FinishedAt:  operation.FinishedAt,
 		Error:       operation.Error,
+		Warning:     operation.Warning,
 		RunID:       operation.RunID,
 		Command:     operation.Command,
 		UpdatedAt:   operation.UpdatedAt,

@@ -5,8 +5,8 @@
         <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Destroy Slots</h2>
         <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
           Destroy one slot immediately, select several slots for a sequential batch, or explicitly destroy all recorded slots.
-          For an HA slot, any recorded Linode downstream clusters are deleted first; if none exist, cleanup proceeds directly to AWS management Terraform destroy.
-          AWS management Terraform destroy starts only after downstream deletion succeeds. A slot record is removed only after the complete cleanup succeeds; failures remain available to retry.
+          For an HA slot, cleanup attempts any recorded Linode downstream clusters first, then proceeds to AWS management Terraform destroy even if downstream deletion fails.
+          The panel warns when Linode resources may require manual cleanup. A slot record is removed after management Terraform destroy succeeds; Terraform failures remain available to retry.
         </p>
       </div>
       <div :class="cleanupStatusClass">
@@ -43,7 +43,7 @@
               {{ selectedCount }} of {{ runs.length }} slot{{ runs.length === 1 ? '' : 's' }} selected
             </div>
             <div class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-              Bulk cleanup runs one slot at a time and continues past failures. Each HA slot deletes recorded Linode downstreams first, then its AWS management infrastructure. Other lifecycle actions stay locked until the batch finishes.
+              Bulk cleanup runs one slot at a time and continues past failures. Each HA slot attempts recorded Linode downstreams first, then destroys its AWS management infrastructure even when downstream cleanup needs manual follow-up. Other lifecycle actions stay locked until the batch finishes.
             </div>
           </div>
           <div class="flex flex-wrap gap-2 xl:justify-end">
@@ -101,6 +101,9 @@
                 <span v-if="cleanupBatch.cancelRequested" class="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700 dark:bg-amber-500/15 dark:text-amber-300">
                   Cancel requested
                 </span>
+                <span v-else-if="batchWarning" class="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">
+                  Manual Linode cleanup
+                </span>
               </div>
               <p class="mt-1 text-sm leading-6 opacity-80">{{ batchSummary }}</p>
             </div>
@@ -141,6 +144,25 @@
               <span class="ml-1 break-words opacity-80">— {{ failure.error || 'Destroy failed' }}</span>
             </div>
           </div>
+          <div v-if="batchWarning" class="mt-4 rounded-lg border border-amber-300/70 bg-white/65 px-3 py-3 text-sm dark:border-amber-500/30 dark:bg-black/15">
+            <div class="font-semibold">Manual Linode cleanup required</div>
+            <div class="mt-1 whitespace-pre-wrap break-words opacity-85">{{ batchWarning }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-if="cleanupWarningVisible"
+        id="cleanupWarning"
+        class="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-950 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100"
+        role="status"
+      >
+        <div class="text-sm font-semibold">Manual Linode cleanup required</div>
+        <p class="mt-1 text-sm leading-6">
+          AWS management destroy continued after downstream deletion failed. The Linode resources below may still be running and generating charges.
+        </p>
+        <div class="mt-2 whitespace-pre-wrap break-words rounded-lg border border-amber-200/80 bg-white/60 px-3 py-2 text-sm dark:border-amber-500/25 dark:bg-black/15">
+          {{ activeCleanupWarning }}
         </div>
       </div>
 
@@ -162,7 +184,7 @@
           v-if="selectedRunId && !selectedCount"
           class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-100"
         >
-          Selected run {{ selectedRunId }}. Cleanup is typed-confirmed, deletes any recorded Linode downstreams first, then uses the recorded Terraform target for that slot.
+          Selected run {{ selectedRunId }}. Cleanup is typed-confirmed, attempts any recorded Linode downstreams first, then uses the recorded Terraform target for that slot even if downstream cleanup needs manual follow-up.
         </div>
 
         <article
@@ -405,6 +427,7 @@ const inactiveTabClass = "rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc
 
 const runs = computed(() => Array.isArray(state.value?.workspace?.runs) ? state.value.workspace.runs : []);
 const cleanupBatch = computed(() => state.value?.cleanupBatch || {});
+const batchWarning = computed(() => String(cleanupBatch.value?.warning || "").trim());
 const batchRunIds = computed(() => Array.isArray(cleanupBatch.value?.runIds) ? cleanupBatch.value.runIds : []);
 const batchCompletedRunIds = computed(() => Array.isArray(cleanupBatch.value?.completedRunIds) ? cleanupBatch.value.completedRunIds : []);
 const batchFailures = computed(() => Array.isArray(cleanupBatch.value?.failures)
@@ -431,6 +454,7 @@ const batchVisible = computed(() => Boolean(
   cleanupBatch.value?.startedAt ||
   cleanupBatch.value?.finishedAt ||
   cleanupBatch.value?.error ||
+  batchWarning.value ||
   batchRunIds.value.length ||
   batchFailures.value.length
 ));
@@ -438,6 +462,7 @@ const batchHeading = computed(() => {
   if (cleanupBatch.value?.running) return cleanupBatch.value.cancelRequested ? "Stopping destroy batch" : "Destroy batch running";
   if (batchFailures.value.length) return "Destroy batch finished with failures";
   if (cleanupBatch.value?.error) return "Destroy batch stopped with an error";
+  if (batchWarning.value) return "AWS destroy completed with a Linode warning";
   if (cleanupBatch.value?.finishedAt) return "Destroy batch completed";
   return "Destroy batch";
 });
@@ -452,6 +477,9 @@ const batchSummary = computed(() => {
   if (cleanupBatch.value?.error) {
     return `${batchCompletedRunIds.value.length} succeeded and ${batchFailures.value.length} failed. ${cleanupBatch.value.error}`;
   }
+  if (batchWarning.value) {
+    return `${batchCompletedRunIds.value.length} management destroy${batchCompletedRunIds.value.length === 1 ? "" : "s"} succeeded, but one or more downstream Linode clusters require manual cleanup.`;
+  }
   return `${batchCompletedRunIds.value.length} succeeded and ${batchFailures.value.length} failed${cleanupBatch.value?.finishedAt ? `; finished ${timeLabel(cleanupBatch.value.finishedAt)}` : ""}.`;
 });
 const batchPanelClass = computed(() => cleanupBatch.value?.running
@@ -460,7 +488,9 @@ const batchPanelClass = computed(() => cleanupBatch.value?.running
     : "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100"
   : batchFailures.value.length || cleanupBatch.value?.error
     ? "border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-100"
-    : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-100");
+    : batchWarning.value
+      ? "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100"
+      : "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-100");
 const selectedCount = computed(() => selectedCleanupRunIds.value.length);
 const allRunsSelected = computed(() => runs.value.length > 0 && runs.value.every(run =>
   selectedCleanupRunIds.value.some(runId => sameRunKey(runId, run?.runId))
@@ -468,12 +498,13 @@ const allRunsSelected = computed(() => runs.value.length > 0 && runs.value.every
 const bulkActionsLocked = computed(() => cleanupSelectionLocked.value);
 const activeCleanup = computed(() => {
   const linodeCleanup = state.value?.linodeCleanup || {};
-  if (linodeCleanup.running || linodeCleanup.finishedAt || linodeCleanup.error) {
+  if (linodeCleanup.running || linodeCleanup.finishedAt || linodeCleanup.error || linodeCleanup.warning) {
     return linodeCleanup;
   }
   return state.value?.cleanup || {};
 });
 const cleanupOutput = computed(() => Array.isArray(activeCleanup.value?.output) ? activeCleanup.value.output : []);
+const activeCleanupWarning = computed(() => String(activeCleanup.value?.warning || "").trim());
 
 const sameRunKey = (left, right) => String(left || "").trim() === String(right || "").trim();
 const runIsLinodeDocker = run => run?.deploymentType === "linode-docker-cattle";
@@ -587,12 +618,20 @@ const cleanupResultKey = cleanup => {
     cleanup.runId || "unknown-run",
     cleanup.finishedAt || "unfinished",
     cleanup.error || "ok",
+    cleanup.warning || "no-warning",
   ].join("|");
 };
 const cleanupDismissed = computed(() => {
   const key = cleanupResultKey(activeCleanup.value);
   return Boolean(key && dismissedCleanupResultKey.value === key);
 });
+const cleanupWarningVisible = computed(() => Boolean(
+  !batchVisible.value &&
+  !activeCleanup.value?.running &&
+  activeCleanup.value?.finishedAt &&
+  activeCleanupWarning.value &&
+  !cleanupDismissed.value
+));
 const extractCleanupLineValue = (output, label) => {
   const line = output.find(item => item.includes(label));
   return line ? line.slice(line.indexOf(label) + label.length).trim() : "";
@@ -651,11 +690,13 @@ const bulkActionTitle = mode => {
 const cleanupStatusTone = computed(() => {
   if (cleanupBatch.value?.running || cleanupBatchStarting.value) return "running";
   if (batchVisible.value && (batchFailures.value.length || cleanupBatch.value?.error)) return "error";
+  if (batchVisible.value && batchWarning.value) return "warning";
   if (batchVisible.value && cleanupBatch.value?.finishedAt) return "success";
   const cleanup = activeCleanup.value;
   if (cleanup?.running) return "running";
-  if (cleanup?.finishedAt && !cleanup?.error && !cleanupDismissed.value) return "success";
   if (cleanup?.error && !cleanupDismissed.value) return "error";
+  if (cleanup?.finishedAt && activeCleanupWarning.value && !cleanupDismissed.value) return "warning";
+  if (cleanup?.finishedAt && !cleanup?.error && !cleanupDismissed.value) return "success";
   return "idle";
 });
 
@@ -670,6 +711,9 @@ const cleanupStatusLabel = computed(() => {
   if (batchVisible.value && (batchFailures.value.length || cleanupBatch.value?.error)) {
     return `Batch finished: ${batchCompletedRunIds.value.length} succeeded, ${batchFailures.value.length} failed`;
   }
+  if (batchVisible.value && batchWarning.value) {
+    return "AWS destroy finished; manual Linode cleanup required";
+  }
   if (batchVisible.value && cleanupBatch.value?.finishedAt) {
     return `Batch finished: ${batchCompletedRunIds.value.length} succeeded`;
   }
@@ -677,11 +721,14 @@ const cleanupStatusLabel = computed(() => {
   if (cleanup?.running) {
     return `Destroy running${cleanup.runId ? ` for ${cleanup.runId}` : ""}${cleanup.startedAt ? ` since ${new Date(cleanup.startedAt).toLocaleTimeString()}` : ""}`;
   }
-  if (cleanup?.finishedAt && !cleanup?.error && !cleanupDismissed.value) {
-    return `Destroy finished successfully at ${new Date(cleanup.finishedAt).toLocaleTimeString()}`;
-  }
   if (cleanup?.error && !cleanupDismissed.value) {
     return "Destroy finished with error";
+  }
+  if (cleanup?.finishedAt && activeCleanupWarning.value && !cleanupDismissed.value) {
+    return "AWS destroy finished; manual Linode cleanup required";
+  }
+  if (cleanup?.finishedAt && !cleanup?.error && !cleanupDismissed.value) {
+    return `Destroy finished successfully at ${new Date(cleanup.finishedAt).toLocaleTimeString()}`;
   }
   return "Idle";
 });
@@ -690,6 +737,7 @@ const cleanupStatusClass = computed(() => {
   const tones = {
     running: "inline-flex items-center justify-center rounded-full bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300",
     success: "inline-flex items-center justify-center rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
+    warning: "inline-flex items-center justify-center rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-200",
     error: "inline-flex items-center justify-center rounded-full bg-rose-100 px-3 py-1.5 text-xs font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
     idle: "inline-flex items-center justify-center rounded-full bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300",
   };

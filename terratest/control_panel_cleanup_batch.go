@@ -28,6 +28,7 @@ type panelCleanupBatchSnapshot struct {
 	StartedAt       *time.Time                 `json:"startedAt,omitempty"`
 	FinishedAt      *time.Time                 `json:"finishedAt,omitempty"`
 	Error           string                     `json:"error,omitempty"`
+	Warning         string                     `json:"warning,omitempty"`
 	Output          []string                   `json:"output"`
 	RunIDs          []string                   `json:"runIds"`
 	CompletedRunIDs []string                   `json:"completedRunIds"`
@@ -231,6 +232,9 @@ func (p *localControlPanel) finishCleanupBatch() {
 	case len(batch.Failures) > 0:
 		batch.Error = fmt.Sprintf("cleanup batch finished with %d failure(s) out of %d run(s)", len(batch.Failures), len(batch.RunIDs))
 		batch.Output = appendBatchOutput(batch.Output, "[control-panel] Cleanup batch finished with errors; failed run records were preserved")
+	case strings.TrimSpace(batch.Warning) != "":
+		batch.Error = ""
+		batch.Output = appendBatchOutput(batch.Output, "[control-panel] Cleanup batch completed with warnings")
 	default:
 		batch.Error = ""
 		batch.Output = appendBatchOutput(batch.Output, "[control-panel] Cleanup batch completed successfully")
@@ -271,6 +275,7 @@ func (p *localControlPanel) snapshotCleanupBatch() panelCleanupBatchSnapshot {
 		StartedAt:       batch.StartedAt,
 		FinishedAt:      batch.FinishedAt,
 		Error:           batch.Error,
+		Warning:         batch.Warning,
 		Output:          output,
 		RunIDs:          runIDs,
 		CompletedRunIDs: completed,
@@ -308,6 +313,13 @@ func (p *localControlPanel) mirrorCleanupBatchOutputLocked(operation panelOperat
 		return
 	}
 	batch.Output = appendBatchOutput(batch.Output, line)
+	if warning := cleanupWarningFromOutputLine(line); warning != "" {
+		warningRunID := safeRunPathSegment(runID)
+		if warningRunID != "" && warningRunID != "unknown" {
+			warning = fmt.Sprintf("Run %s: %s", warningRunID, warning)
+		}
+		batch.Warning = appendPanelWarning(batch.Warning, warning)
+	}
 	batch.UpdatedAt = &now
 }
 

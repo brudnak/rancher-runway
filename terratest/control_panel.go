@@ -201,6 +201,7 @@ type panelOperationSnapshot struct {
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	Error      string     `json:"error,omitempty"`
+	Warning    string     `json:"warning,omitempty"`
 	Output     []string   `json:"output"`
 	RunID      string     `json:"runId,omitempty"`
 	Command    string     `json:"command,omitempty"`
@@ -227,6 +228,7 @@ type panelOperationState struct {
 	StartedAt  *time.Time
 	FinishedAt *time.Time
 	Error      string
+	Warning    string
 	Output     []string
 	RunID      string
 	Command    string
@@ -1502,8 +1504,10 @@ func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, ac
 		)
 		p.persistOperationsLocked()
 	}
-	recentCleanup := (name == panelOperationCleanup || name == panelOperationLinodeCleanup) && op.FinishedAt != nil && op.Error == "" && time.Since(*op.FinishedAt) < time.Hour
-	if activeRunIDs != nil && !op.Running && op.RunID != "" && !activeRunIDs[safeRunPathSegment(op.RunID)] && !recentCleanup {
+	cleanupOperation := name == panelOperationCleanup || name == panelOperationLinodeCleanup
+	recentCleanup := cleanupOperation && op.FinishedAt != nil && op.Error == "" && time.Since(*op.FinishedAt) < time.Hour
+	retainedCleanupWarning := cleanupOperation && op.FinishedAt != nil && strings.TrimSpace(op.Warning) != ""
+	if activeRunIDs != nil && !op.Running && op.RunID != "" && !activeRunIDs[safeRunPathSegment(op.RunID)] && !recentCleanup && !retainedCleanupWarning {
 		return panelOperationSnapshot{Output: []string{}}
 	}
 	outputCopy := append([]string(nil), op.Output...)
@@ -1516,6 +1520,7 @@ func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, ac
 		StartedAt:  op.StartedAt,
 		FinishedAt: op.FinishedAt,
 		Error:      op.Error,
+		Warning:    op.Warning,
 		Output:     outputCopy,
 		RunID:      op.RunID,
 		Command:    op.Command,

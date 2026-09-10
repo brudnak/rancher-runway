@@ -442,6 +442,7 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 	op.StartedAt = &now
 	op.FinishedAt = nil
 	op.Error = ""
+	op.Warning = ""
 	op.RunID = runID
 	op.Command = command
 	op.UpdatedAt = &now
@@ -695,6 +696,9 @@ func (p *localControlPanel) appendOperationOutput(operation panelOperationName, 
 	op.Output = append(op.Output, line)
 	if len(op.Output) > 500 {
 		op.Output = append([]string(nil), op.Output[len(op.Output)-500:]...)
+	}
+	if warning := cleanupWarningFromOutputLine(line); warning != "" {
+		op.Warning = appendPanelWarning(op.Warning, warning)
 	}
 	now := time.Now()
 	op.UpdatedAt = &now
@@ -976,7 +980,7 @@ func (p *localControlPanel) markOperationStaleLocked(name panelOperationName, op
 func (p *localControlPanel) clearCompletedCleanupSuccessLocked() {
 	for _, name := range []panelOperationName{panelOperationCleanup, panelOperationLinodeCleanup} {
 		op := p.operationLocked(name)
-		if op.Running || op.FinishedAt == nil || strings.TrimSpace(op.Error) != "" {
+		if op.Running || op.FinishedAt == nil || strings.TrimSpace(op.Error) != "" || strings.TrimSpace(op.Warning) != "" {
 			continue
 		}
 		*op = panelOperationState{}

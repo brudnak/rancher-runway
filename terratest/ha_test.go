@@ -151,51 +151,61 @@ func TestHACleanup(t *testing.T) {
 
 	totalHAs := configuredRancherInstanceCount()
 	downstreamDeleteTimeout := durationFromEnv("LINODE_DOWNSTREAM_DELETE_TIMEOUT", 20*time.Minute)
-	if err := cleanupRecordedLinodeDownstreams(downstreamDeleteTimeout); err != nil {
-		t.Fatalf("Downstream cleanup failed; management Rancher infrastructure will not be destroyed: %v", err)
-	}
-	if err := validateSecretEnvironment(); err != nil {
-		t.Fatalf("Secret environment preflight failed before cleanup: %v", err)
-	}
-
-	terraformOptions := getTerraformOptions(t, totalHAs)
-	// Cleanup may run after the checkout moved, so keep the recorded backend without migrating state.
-	terraformOptions.Reconfigure = true
-	terraform.Init(t, terraformOptions)
-
 	var costEstimate *cleanupCostEstimate
-	outputs, outputsErr := getTerraformOutputsE(t, terraformOptions)
-	if isLinodeDockerDeployment() {
-		log.Printf("[cleanup] Skipping AWS runtime cost estimate for Linode Docker Rancher run")
-	} else if outputsErr != nil {
-		log.Printf("[cleanup] Terraform outputs unavailable before destroy, likely no infrastructure was applied yet: %v", outputsErr)
-		var estimateErr error
-		costEstimate, estimateErr = estimateCurrentRunCostFromRecordedAWSResources()
-		if estimateErr != nil {
-			log.Printf("[cleanup] Could not estimate AWS cost from recorded resources before destroy: %v", estimateErr)
-		}
-	} else {
-		var estimateErr error
-		costEstimate, estimateErr = estimateCurrentRunCost(totalHAs, outputs)
-		if estimateErr != nil {
-			log.Printf("[cleanup] Could not estimate AWS cost before destroy: %v", estimateErr)
-		}
-	}
-	if _, err := terraform.DestroyE(t, terraformOptions); err != nil {
-		t.Fatalf("Terraform destroy failed: %v", err)
-	}
+	if _, err := runCleanupDestroyPhases(
+		func() error {
+			return cleanupRecordedLinodeDownstreams(downstreamDeleteTimeout)
+		},
+		func() error {
+			if err := validateSecretEnvironment(); err != nil {
+				return fmt.Errorf("Secret environment preflight failed before cleanup: %w", err)
+			}
 
-	if isLinodeDockerDeployment() {
-		log.Printf("[cleanup] Linode Docker run destroyed; no local HA kubeconfigs to remove")
-	} else if isHostedTenantK3SDeployment() {
-		cleanupHostedTenantInstances(totalHAs)
-	} else {
-		for i := 1; i <= totalHAs; i++ {
-			cleanupHAInstance(i)
-		}
+			terraformOptions := getTerraformOptions(t, totalHAs)
+			// Cleanup may run after the checkout moved, so keep the recorded backend without migrating state.
+			terraformOptions.Reconfigure = true
+			if _, err := terraform.InitE(t, terraformOptions); err != nil {
+				return fmt.Errorf("Terraform init failed before cleanup: %w", err)
+			}
+
+			outputs, outputsErr := getTerraformOutputsE(t, terraformOptions)
+			if isLinodeDockerDeployment() {
+				log.Printf("[cleanup] Skipping AWS runtime cost estimate for Linode Docker Rancher run")
+			} else if outputsErr != nil {
+				log.Printf("[cleanup] Terraform outputs unavailable before destroy, likely no infrastructure was applied yet: %v", outputsErr)
+				var estimateErr error
+				costEstimate, estimateErr = estimateCurrentRunCostFromRecordedAWSResources()
+				if estimateErr != nil {
+					log.Printf("[cleanup] Could not estimate AWS cost from recorded resources before destroy: %v", estimateErr)
+				}
+			} else {
+				var estimateErr error
+				costEstimate, estimateErr = estimateCurrentRunCost(totalHAs, outputs)
+				if estimateErr != nil {
+					log.Printf("[cleanup] Could not estimate AWS cost before destroy: %v", estimateErr)
+				}
+			}
+			if _, err := terraform.DestroyE(t, terraformOptions); err != nil {
+				return fmt.Errorf("Terraform destroy failed: %w", err)
+			}
+			return nil
+		},
+		func() {
+			if isLinodeDockerDeployment() {
+				log.Printf("[cleanup] Linode Docker run destroyed; no local HA kubeconfigs to remove")
+			} else if isHostedTenantK3SDeployment() {
+				cleanupHostedTenantInstances(totalHAs)
+			} else {
+				for i := 1; i <= totalHAs; i++ {
+					cleanupHAInstance(i)
+				}
+			}
+			cleanupTerraformFiles()
+			cleanupAutomationOutput()
+		},
+	); err != nil {
+		t.Fatal(err)
 	}
-	cleanupTerraformFiles()
-	cleanupAutomationOutput()
 
 	if costEstimate != nil {
 		logCleanupCostEstimate(costEstimate)

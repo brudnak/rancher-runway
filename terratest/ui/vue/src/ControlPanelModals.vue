@@ -1,4 +1,53 @@
 <template>
+  <!-- Manual Linode Cleanup Warning Modal -->
+  <div
+    v-if="manualLinodeCleanupWarning.show"
+    id="manualLinodeCleanupWarningModal"
+    class="fixed inset-0 z-[80] flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-sm dark:bg-zinc-950/85"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="manualLinodeCleanupWarningTitle"
+    aria-describedby="manualLinodeCleanupWarningBody"
+  >
+    <section class="w-full max-w-2xl overflow-hidden rounded-2xl border border-amber-300 bg-white shadow-2xl shadow-zinc-950/25 dark:border-amber-500/35 dark:bg-zinc-900 dark:shadow-black/60">
+      <div class="border-b border-amber-200 bg-amber-50/70 px-6 py-5 dark:border-amber-500/20 dark:bg-amber-500/10">
+        <div class="mb-3 inline-flex rounded-full bg-amber-100 px-3 py-1.5 text-xs font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-200">
+          Cloud resources need attention
+        </div>
+        <h2 id="manualLinodeCleanupWarningTitle" class="text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
+          Manual Linode cleanup required
+        </h2>
+        <p id="manualLinodeCleanupWarningBody" class="mt-2 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
+          Cleanup could not fully remove the recorded downstream Linode clusters. AWS management destroy continued, but affected Linode resources may still be running and generating charges. Review the warning below and delete any remaining resources manually in Linode.
+        </p>
+      </div>
+      <div class="px-6 py-5">
+        <div v-if="manualLinodeCleanupWarning.runId" class="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+          Run {{ manualLinodeCleanupWarning.runId }}
+        </div>
+        <div class="whitespace-pre-wrap break-words rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100">
+          {{ manualLinodeCleanupWarning.warning }}
+        </div>
+      </div>
+      <div class="flex flex-wrap justify-end gap-3 border-t border-zinc-200 px-6 py-4 dark:border-white/10">
+        <button
+          type="button"
+          @click="reviewManualLinodeCleanupWarning"
+          class="rounded-lg border border-amber-300 bg-white px-4 py-2.5 text-sm font-semibold text-amber-900 shadow-sm hover:bg-amber-50 dark:border-amber-500/35 dark:bg-amber-500/10 dark:text-amber-100 dark:hover:bg-amber-500/20"
+        >
+          Review cleanup logs
+        </button>
+        <button
+          type="button"
+          @click="hideManualLinodeCleanupWarning"
+          class="rounded-lg bg-amber-500 px-4 py-2.5 text-sm font-semibold text-zinc-950 shadow-sm shadow-amber-500/20 hover:bg-amber-400"
+        >
+          I understand
+        </button>
+      </div>
+    </section>
+  </div>
+
   <!-- GPU Reminder Modal -->
   <div
     v-if="gpuReminderModalOpen"
@@ -282,6 +331,7 @@ import {
   logs,
   dangerConfirm,
   upgradeCommandModalOpen,
+  manualLinodeCleanupWarning,
   notice,
   hideGPUReminderModal,
   stopStream,
@@ -289,6 +339,8 @@ import {
   downloadLogs,
   closeDangerConfirm,
   submitDangerConfirm,
+  hideManualLinodeCleanupWarning,
+  reviewManualLinodeCleanupWarning,
   hidePanelNotice,
   setActivePanelTab,
   setActiveDestroyTab,
@@ -347,7 +399,7 @@ const logModalSubtitle = computed(() => {
   if (logs.mode === "readiness") return state.value?.readiness?.command || "go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest";
   if (logs.mode === "downstream") return state.value?.downstream?.command || "go test -v -run ^TestHAProvisionConfiguredLinodeDownstreams$ -timeout 35m -count=1 ./terratest";
   if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") return "go test -v -run ^TestHACleanup$ -timeout 60m -count=1 ./terratest";
-  if (logs.mode === "cleanupBatch") return "Deletes recorded Linode downstreams before each HA run's Terraform destroy and continues past individual slot failures";
+  if (logs.mode === "cleanupBatch") return "Attempts recorded Linode downstream cleanup before each HA run's Terraform destroy; AWS destroy continues when Linode cleanup needs manual follow-up";
   return `${logs.namespace} • ${logs.clusterId} • ${logs.mode === "live" ? "live stream" : "tail snapshot"}`;
 });
 
@@ -369,6 +421,7 @@ const liveLogStateLabel = computed(() => {
     downstreamError: "Downstream provisioning failed; management remains ready",
     cleanupRunning: "Destroy running",
     cleanupDone: "Destroy completed",
+    cleanupWarning: "AWS destroy completed; manual Linode cleanup required",
     cleanupError: "Destroy failed",
     linodeSetupRunning: "Linode setup running",
     linodeSetupDone: "Linode setup completed",
@@ -379,6 +432,7 @@ const liveLogStateLabel = computed(() => {
     cleanupBatchRunning: "Destroy batch running",
     cleanupBatchCanceling: "Destroy batch stopping",
     cleanupBatchDone: "Destroy batch completed",
+    cleanupBatchWarning: "Destroy batch completed; manual Linode cleanup required",
     cleanupBatchError: "Destroy batch finished with failures",
   };
   return states[logs.liveState] || "Idle";
@@ -402,6 +456,7 @@ const liveLogStateIconClass = computed(() => {
     downstreamError: "bg-rose-500",
     cleanupRunning: "bg-sky-500 animate-pulse",
     cleanupDone: "bg-emerald-500",
+    cleanupWarning: "bg-amber-500",
     cleanupError: "bg-rose-500",
     linodeSetupRunning: "bg-sky-500 animate-pulse",
     linodeSetupDone: "bg-emerald-500",
@@ -412,6 +467,7 @@ const liveLogStateIconClass = computed(() => {
     cleanupBatchRunning: "bg-sky-500 animate-pulse",
     cleanupBatchCanceling: "bg-amber-500 animate-pulse",
     cleanupBatchDone: "bg-emerald-500",
+    cleanupBatchWarning: "bg-amber-500",
     cleanupBatchError: "bg-rose-500",
   };
   return `h-2.5 w-2.5 rounded-full ${states[logs.liveState] || "bg-zinc-400"}`;
@@ -435,6 +491,7 @@ const liveLogStateContainerClass = computed(() => {
     downstreamError: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
     cleanupRunning: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
     cleanupDone: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
+    cleanupWarning: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-200",
     cleanupError: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
     linodeSetupRunning: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
     linodeSetupDone: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
@@ -445,6 +502,7 @@ const liveLogStateContainerClass = computed(() => {
     cleanupBatchRunning: "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300",
     cleanupBatchCanceling: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300",
     cleanupBatchDone: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300",
+    cleanupBatchWarning: "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-200",
     cleanupBatchError: "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300",
   };
   return `mt-3 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold ${states[logs.liveState] || states.idle}`;
@@ -545,6 +603,10 @@ watch(() => logEntries.value.length, () => {
 // Escape key listener for modals
 const handleKeyDown = event => {
   if (event.key === "Escape") {
+    if (manualLinodeCleanupWarning.show) {
+      hideManualLinodeCleanupWarning();
+      return;
+    }
     if (upgradeCommandModalOpen.value) {
       upgradeCommandModalOpen.value = false;
     }
