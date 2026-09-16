@@ -61,18 +61,115 @@ concurrency:
 
 jobs:
   plan-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: write
       contents: read
-    uses: ./.github/workflows/signoff-plan.yml
-    with:
-      rancher_version: ${{ inputs.rancher_version }}
-      previous_rancher_version: ${{ inputs.previous_rancher_version }}
-      webhook_image: ${{ inputs.webhook_image }}
-      signing_policy: ${{ inputs.signing_policy }}
-      dispatch_runs: ${{ inputs.dispatch_runs }}
-      max_parallel_lanes: ${{ inputs.max_parallel_lanes }}
-      rerun_successful_lanes: ${{ inputs.rerun_successful_lanes }}
-      rke2_server_count: ${{ inputs.rke2_server_count }}
-      lane_filter: framework-regression
-    secrets: inherit
+    steps:
+      - name: Dispatch regression-only planner
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_RANCHER_VERSION: ${{ inputs.rancher_version }}
+          INPUT_PREVIOUS_RANCHER_VERSION: ${{ inputs.previous_rancher_version }}
+          INPUT_WEBHOOK_IMAGE: ${{ inputs.webhook_image }}
+          INPUT_SIGNING_POLICY: ${{ inputs.signing_policy }}
+          INPUT_DISPATCH_RUNS: ${{ inputs.dispatch_runs }}
+          INPUT_MAX_PARALLEL_LANES: ${{ inputs.max_parallel_lanes }}
+          INPUT_RERUN_SUCCESSFUL_LANES: ${{ inputs.rerun_successful_lanes }}
+          INPUT_RKE2_SERVER_COUNT: ${{ inputs.rke2_server_count }}
+        run: |
+          set -euo pipefail
+
+          payload="$(jq -n \
+            --arg ref "$REF_NAME" \
+            --arg rancher_version "$INPUT_RANCHER_VERSION" \
+            --arg previous_rancher_version "$INPUT_PREVIOUS_RANCHER_VERSION" \
+            --arg webhook_image "$INPUT_WEBHOOK_IMAGE" \
+            --arg signing_policy "$INPUT_SIGNING_POLICY" \
+            --arg dispatch_runs "$INPUT_DISPATCH_RUNS" \
+            --arg max_parallel_lanes "$INPUT_MAX_PARALLEL_LANES" \
+            --arg rerun_successful_lanes "$INPUT_RERUN_SUCCESSFUL_LANES" \
+            --arg rke2_server_count "$INPUT_RKE2_SERVER_COUNT" \
+            '{
+              ref: $ref,
+              return_run_details: true,
+              inputs: {
+                signing_policy: $signing_policy,
+                dispatch_runs: $dispatch_runs,
+                max_parallel_lanes: $max_parallel_lanes,
+                rerun_successful_lanes: $rerun_successful_lanes,
+                rke2_server_count: $rke2_server_count,
+                lane_filter: "framework-regression"
+              }
+            }
+            | if $rancher_version != "" then .inputs.rancher_version = $rancher_version else . end
+            | if $previous_rancher_version != "" then .inputs.previous_rancher_version = $previous_rancher_version else . end
+            | if $webhook_image != "" then .inputs.webhook_image = $webhook_image else . end')"
+
+          dispatch_response="$(gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/signoff-plan.yml/dispatches" \
+            --input - <<<"$payload")"
+
+          plan_run_id="$(jq -r '.workflow_run_id // empty' <<<"$dispatch_response")"
+          plan_run_url="$(jq -r '.html_url // empty' <<<"$dispatch_response")"
+          if ! [[ "$plan_run_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Workflow dispatch did not return a valid run id." >&2
+            exit 1
+          fi
+          if [ -z "$plan_run_id" ] || [ -z "$plan_run_url" ]; then
+            echo "Workflow dispatch did not return the planner URL." >&2
+            exit 1
+          fi
+
+          echo "run_id=$plan_run_id" >> "$GITHUB_OUTPUT"
+          echo "run_url=$plan_run_url" >> "$GITHUB_OUTPUT"
+          echo "Dispatched regression-only planner: $plan_run_url"
+
+      - name: Wait for regression-only planner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_RUN_ID: ${{ steps.dispatch.outputs.run_id }}
+        run: |
+          set -euo pipefail
+
+          previous_status=""
+          for _ in {1..165}; do
+            plan_run="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$PLAN_RUN_ID")"
+            status="$(jq -r '.status' <<<"$plan_run")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$plan_run")"
+            if [ "$status" != "$previous_status" ]; then
+              echo "Regression-only planner status: $status"
+              previous_status="$status"
+            fi
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" != "success" ]; then
+                echo "Regression-only planner concluded with '$conclusion'." >&2
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "Timed out waiting for the regression-only planner." >&2
+          exit 1
+
+      - name: Write summary
+        if: ${{ always() && steps.dispatch.outputs.run_url != '' }}
+        run: |
+          {
+            echo "## Regression-only sign-off plan"
+            echo ""
+            echo "Planner run: ${{ steps.dispatch.outputs.run_url }}"
+            echo ""
+            echo "Only the \`framework-regression\` lane is eligible for dispatch."
+          } >> "$GITHUB_STEP_SUMMARY"

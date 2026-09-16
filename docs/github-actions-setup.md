@@ -119,7 +119,7 @@ Only non-sensitive runner tuning remains in `rancher-signoff` variables:
 | Workflow | Creates cloud resources | Notes |
 | --- | --- | --- |
 | `signoff-plan.yml` | no, but it can dispatch the runner | Manual plan generation from `signoff-targets.json` or a single head/prerelease input. Dispatch suppresses an identical active lane. It also skips a previously successful immutable target unless `rerun_successful_lanes=true`; mutable `head`, `vX.Y-head`, and `vX.Y.Z-head` aliases are always reconsidered after the active run finishes. |
-| `plan-rancher-regression.yml` | no, but it can dispatch the runner | Manual regression-only entry point. It uses the same target resolution and duplicate suppression as the full planner, but dispatches only `framework-regression`. A fully successful child run reports to Qase automatically. |
+| `plan-rancher-regression.yml` | no, but it can dispatch the runner | Manual regression-only entry point. It launches and waits for the standard planner with a locked `framework-regression` filter, retaining the same target resolution and duplicate suppression. A fully successful child run reports to Qase automatically. |
 | `bootstrap-terraform-state.yml` | yes, only when `apply=true` | Creates or updates the persistent S3/DynamoDB backend. |
 | `run-rancher-signoff-lane.yml` | yes | Runs one Rancher sign-off lane, optionally with Linode downstreams and direct `rancher/tests` suite runs, then cleans up. |
 | `report-successful-signoff-to-qase.yml` | no | Runs only after a fully successful sign-off workflow and reports its sanitized Go test results to Qase with reporter-v2. |

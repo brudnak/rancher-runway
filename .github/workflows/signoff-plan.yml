@@ -54,55 +54,8 @@ on:
         description: Active Run Rancher Sign-Off Lane run id to ignore when this planner was woken by that runner.
         required: false
         type: string
-  workflow_call:
-    inputs:
-      rancher_version:
-        description: Optional target. Blank uses signoff-targets.json.
-        required: false
-        default: ""
-        type: string
-      previous_rancher_version:
-        description: Previous Rancher release. Blank resolves automatically.
-        required: false
-        default: ""
-        type: string
-      webhook_image:
-        description: Candidate webhook image. Blank discovers it from the target build.
-        required: false
-        default: ""
-        type: string
-      signing_policy:
-        description: Signing policy to apply.
-        required: false
-        default: auto
-        type: string
-      dispatch_runs:
-        description: Dispatch uncovered lanes after planning.
-        required: false
-        default: true
-        type: boolean
-      max_parallel_lanes:
-        description: Maximum active sign-off lane runners to allow.
-        required: false
-        default: 4
-        type: number
-      rerun_successful_lanes:
-        description: Re-dispatch successful immutable lanes.
-        required: false
-        default: false
-        type: boolean
-      rke2_server_count:
-        description: RKE2 server nodes per HA for dispatched lane runners.
-        required: false
-        default: "3"
-        type: string
-      ignore_active_runner_id:
-        description: Active lane runner id to ignore.
-        required: false
-        default: ""
-        type: string
       lane_filter:
-        description: Optional exact lane name to dispatch from the generated plan.
+        description: Internal exact lane filter used by the regression-only launcher. Leave blank for a full sign-off.
         required: false
         default: ""
         type: string
