@@ -20,6 +20,7 @@ jobs:
         github.event.workflow_run.head_repository.full_name == github.repository
       }}
     runs-on: ubuntu-latest
+    environment: rancher-signoff
     timeout-minutes: 30
     steps:
       - name: Checkout repository

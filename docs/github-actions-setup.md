@@ -78,20 +78,20 @@ these fields, so a missing protected value fails closed instead of appearing in
 the runner-generated environment header. The values are scoped to the trusted
 steps that need them rather than being inherited by the whole job.
 
-## Repository Actions Secret
+## Qase Environment Secret
 
-Add this repository-level Actions secret before enabling direct
-`rancher/tests` runs:
+Add this Actions secret to the existing `rancher-signoff` environment before
+enabling direct `rancher/tests` runs:
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
 | `QASE_AUTOMATION_TOKEN` | yes when `run_rancher_tests=true` | Token for the shared automation-services Qase account. It is exposed only to the final reporting step in the follow-up reporting workflow. |
 
 The sign-off workflow never receives this token. A separate `workflow_run`
-workflow can read it only after the complete `Run Rancher Sign-Off Lane`
-workflow finishes successfully. A failed or cancelled sign-off run does not
-create a Qase run and does not send any result to Qase. Runs with
-`run_rancher_tests=false` also skip Qase.
+job enters the `rancher-signoff` environment and reads it only after the
+complete `Run Rancher Sign-Off Lane` workflow finishes successfully. A failed
+or cancelled sign-off run does not create a Qase run and does not send any
+result to Qase. Runs with `run_rancher_tests=false` also skip Qase.
 
 When migrating an existing environment, copy the protected configuration
 variables to secrets before deploying these workflows. After the updated
@@ -145,7 +145,8 @@ After environments, secrets, and variables are configured:
    disabled for Rancher 2.11 and older and VAI enabled for Rancher 2.12 and
    newer. Downstream webhook lanes run webhook security settings for Rancher
    2.14 and newer when the actual Rancher chart should contain those settings.
-   Add the repository secret `QASE_AUTOMATION_TOKEN` first. Successful runs are
+   Add the `QASE_AUTOMATION_TOKEN` secret to the `rancher-signoff` environment
+   first. Successful runs are
    titled `[frameworks][<resolved-version>][<lane title>]` in Qase; for example,
    `v2.16.2-abcdef0-head` becomes
    `[frameworks][2.16.2.abcdef0][Frameworks Regression]`.

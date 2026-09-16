@@ -11,9 +11,10 @@ type regressionPlannerWorkflow struct {
 	Name        string            `yaml:"name"`
 	Permissions map[string]string `yaml:"permissions"`
 	Jobs        map[string]struct {
-		Uses    string                 `yaml:"uses"`
-		With    map[string]interface{} `yaml:"with"`
-		Secrets string                 `yaml:"secrets"`
+		Uses        string                 `yaml:"uses"`
+		With        map[string]interface{} `yaml:"with"`
+		Secrets     string                 `yaml:"secrets"`
+		Permissions map[string]string      `yaml:"permissions"`
 	} `yaml:"jobs"`
 }
 
@@ -41,6 +42,12 @@ func TestRegressionPlannerWrapsSharedPlannerWithFixedLane(t *testing.T) {
 	}
 	if job.Uses != "./.github/workflows/signoff-plan.yml" {
 		t.Fatalf("reusable workflow = %q", job.Uses)
+	}
+	if got := job.Permissions["actions"]; got != "write" {
+		t.Fatalf("reusable caller actions permission = %q, want write", got)
+	}
+	if got := job.Permissions["contents"]; got != "read" {
+		t.Fatalf("reusable caller contents permission = %q, want read", got)
 	}
 	if got := qaseStringValue(job.With["lane_filter"]); got != "framework-regression" {
 		t.Fatalf("lane_filter = %q, want framework-regression", got)

@@ -31,9 +31,10 @@ type qaseWorkflowRunTrigger struct {
 }
 
 type qaseJob struct {
-	If    string            `yaml:"if"`
-	Env   map[string]string `yaml:"env"`
-	Steps []qaseStep        `yaml:"steps"`
+	If          string            `yaml:"if"`
+	Environment string            `yaml:"environment"`
+	Env         map[string]string `yaml:"env"`
+	Steps       []qaseStep        `yaml:"steps"`
 }
 
 type qaseStep struct {
@@ -126,6 +127,9 @@ func TestQaseReportWorkflowPinsReporterAndKeepsSecretAtFinalBoundary(t *testing.
 	raw := readWorkflowSource(t, qaseReportWorkflowName)
 	workflow := readQaseWorkflowContract(t, qaseReportWorkflowName)
 	_, job := onlyQaseWorkflowJob(t, workflow)
+	if job.Environment != "rancher-signoff" {
+		t.Fatalf("Qase report environment = %q, want rancher-signoff", job.Environment)
+	}
 
 	download := qaseStepByName(t, job, "Download Qase report input")
 	assertImmutableQaseAction(t, download.Uses, "actions/download-artifact")
@@ -165,7 +169,7 @@ func TestQaseReportWorkflowPinsReporterAndKeepsSecretAtFinalBoundary(t *testing.
 	}
 	secretExpression := "${{ secrets.QASE_AUTOMATION_TOKEN }}"
 	if got := finalStep.Env["QASE_AUTOMATION_TOKEN"]; got != secretExpression {
-		t.Fatalf("final Qase step token env = %q, want repository secret", got)
+		t.Fatalf("final Qase step token env = %q, want environment secret", got)
 	}
 	if got := strings.Count(raw, secretExpression); got != 1 {
 		t.Fatalf("Qase token secret reference count = %d, want exactly 1", got)
