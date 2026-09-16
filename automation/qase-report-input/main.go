@@ -239,6 +239,22 @@ func prepare(opts options, enabled bool) error {
 			}
 		}
 
+		// reporter-v2 indexes results globally by the final slash-delimited test
+		// name. Nested tests can legitimately reuse a dynamic leaf (for example,
+		// the same Pod_<name> beneath several VAI checks). Validate the complete
+		// stream first, then omit every identity behind an ambiguous leaf. Keeping
+		// any one of them would let reporter-v2 silently attach an arbitrary result
+		// to that name.
+		if _, err := validateEventLifecycles(events, true); err != nil {
+			return err
+		}
+		var omittedLeaves []string
+		events, omittedLeaves = omitAmbiguousReporterLeaves(events)
+		if len(omittedLeaves) != 0 {
+			fmt.Fprintf(os.Stderr, "qase-report-input: omitted %d ambiguous reporter-v2 leaf name(s)\n",
+				len(omittedLeaves))
+		}
+
 		count, _, err := validateEventSet(events, true)
 		if err != nil {
 			return err
@@ -579,11 +595,13 @@ func validateResultIdentity(event resultEvent) error {
 }
 
 func validateEventSet(events []resultEvent, requireTerminal bool) (int, map[string][]string, error) {
-	states := make(map[string]resultState)
+	terminalCount, err := validateEventLifecycles(events, requireTerminal)
+	if err != nil {
+		return 0, nil, err
+	}
+
 	leaves := make(map[string]string)
 	leavesByPackageSet := make(map[string]map[string]struct{})
-	terminalCount := 0
-
 	for _, event := range events {
 		identity := event.Package + "\x00" + event.Test
 		leaf := leafName(event.Test)
@@ -592,42 +610,12 @@ func validateEventSet(events []resultEvent, requireTerminal bool) (int, map[stri
 		}
 		leaves[leaf] = identity
 
-		state := states[identity]
-		switch event.Action {
-		case "run":
-			if state.run {
-				return 0, nil, fmt.Errorf("duplicate run event for %q", event.Test)
-			}
-			if state.terminal != "" {
-				return 0, nil, fmt.Errorf("run event follows terminal event for %q", event.Test)
-			}
-			state.run = true
-		case "pass", "skip":
-			if !state.run {
-				return 0, nil, fmt.Errorf("terminal event has no preceding run for %q", event.Test)
-			}
-			if state.terminal != "" {
-				return 0, nil, fmt.Errorf("duplicate terminal event for %q", event.Test)
-			}
-			state.terminal = event.Action
-			terminalCount++
+		if event.Action == "pass" || event.Action == "skip" {
 			if leavesByPackageSet[event.Package] == nil {
 				leavesByPackageSet[event.Package] = make(map[string]struct{})
 			}
 			leavesByPackageSet[event.Package][leaf] = struct{}{}
-		default:
-			return 0, nil, fmt.Errorf("forbidden result action %q", event.Action)
 		}
-		states[identity] = state
-	}
-
-	for identity, state := range states {
-		if state.run && state.terminal == "" {
-			return 0, nil, fmt.Errorf("run event has no terminal event for %q", identity)
-		}
-	}
-	if requireTerminal && terminalCount == 0 {
-		return 0, nil, errors.New("report contains no terminal pass or skip results")
 	}
 
 	leavesByPackage := make(map[string][]string, len(leavesByPackageSet))
@@ -638,6 +626,81 @@ func validateEventSet(events []resultEvent, requireTerminal bool) (int, map[stri
 		sort.Strings(leavesByPackage[pkg])
 	}
 	return terminalCount, leavesByPackage, nil
+}
+
+func validateEventLifecycles(events []resultEvent, requireTerminal bool) (int, error) {
+	states := make(map[string]resultState)
+	terminalCount := 0
+
+	for _, event := range events {
+		identity := event.Package + "\x00" + event.Test
+		state := states[identity]
+		switch event.Action {
+		case "run":
+			if state.run {
+				return 0, fmt.Errorf("duplicate run event for %q", event.Test)
+			}
+			if state.terminal != "" {
+				return 0, fmt.Errorf("run event follows terminal event for %q", event.Test)
+			}
+			state.run = true
+		case "pass", "skip":
+			if !state.run {
+				return 0, fmt.Errorf("terminal event has no preceding run for %q", event.Test)
+			}
+			if state.terminal != "" {
+				return 0, fmt.Errorf("duplicate terminal event for %q", event.Test)
+			}
+			state.terminal = event.Action
+			terminalCount++
+		default:
+			return 0, fmt.Errorf("forbidden result action %q", event.Action)
+		}
+		states[identity] = state
+	}
+
+	for identity, state := range states {
+		if state.run && state.terminal == "" {
+			return 0, fmt.Errorf("run event has no terminal event for %q", identity)
+		}
+	}
+	if requireTerminal && terminalCount == 0 {
+		return 0, errors.New("report contains no terminal pass or skip results")
+	}
+	return terminalCount, nil
+}
+
+func omitAmbiguousReporterLeaves(events []resultEvent) ([]resultEvent, []string) {
+	identitiesByLeaf := make(map[string]map[string]struct{})
+	for _, event := range events {
+		leaf := leafName(event.Test)
+		if identitiesByLeaf[leaf] == nil {
+			identitiesByLeaf[leaf] = make(map[string]struct{})
+		}
+		identity := event.Package + "\x00" + event.Test
+		identitiesByLeaf[leaf][identity] = struct{}{}
+	}
+
+	ambiguous := make(map[string]struct{})
+	var omittedLeaves []string
+	for leaf, identities := range identitiesByLeaf {
+		if len(identities) > 1 {
+			ambiguous[leaf] = struct{}{}
+			omittedLeaves = append(omittedLeaves, leaf)
+		}
+	}
+	sort.Strings(omittedLeaves)
+	if len(omittedLeaves) == 0 {
+		return events, nil
+	}
+
+	filtered := make([]resultEvent, 0, len(events))
+	for _, event := range events {
+		if _, omit := ambiguous[leafName(event.Test)]; !omit {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered, omittedLeaves
 }
 
 func leafName(test string) string {

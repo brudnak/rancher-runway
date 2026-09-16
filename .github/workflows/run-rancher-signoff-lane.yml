@@ -90,7 +90,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Validate protected configuration
@@ -1319,7 +1319,77 @@ jobs:
         if: ${{ steps.prepare_qase_report.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: qase-report-${{ github.run_id }}
+          name: qase-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/qase-report-input
           if-no-files-found: error
           retention-days: 1
+
+  dispatch-qase-report:
+    name: Dispatch successful lane report
+    needs: run-lane
+    if: ${{ needs.run-lane.result == 'success' && inputs.run_rancher_tests == true }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch verified Qase reporting
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_REF: ${{ github.ref_name }}
+          SOURCE_RUN_ID: ${{ github.run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if ! [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Source workflow run ID is invalid." >&2
+            exit 1
+          fi
+          if ! [[ "$SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Source workflow run attempt is invalid." >&2
+            exit 1
+          fi
+          if ! [[ "$SOURCE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Source workflow commit SHA is invalid." >&2
+            exit 1
+          fi
+
+          payload="$(jq -n \
+            --arg ref "$SOURCE_REF" \
+            --arg source_run_id "$SOURCE_RUN_ID" \
+            --arg source_run_attempt "$SOURCE_RUN_ATTEMPT" \
+            --arg source_head_sha "$SOURCE_HEAD_SHA" \
+            '{
+              ref: $ref,
+              return_run_details: true,
+              inputs: {
+                source_run_id: $source_run_id,
+                source_run_attempt: $source_run_attempt,
+                source_head_sha: $source_head_sha
+              }
+            }')"
+
+          dispatch_response="$(gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/report-successful-signoff-to-qase.yml/dispatches" \
+            --input - <<<"$payload")"
+
+          report_run_id="$(jq -r '.workflow_run_id // empty' <<<"$dispatch_response")"
+          report_run_url="$(jq -r '.html_url // empty' <<<"$dispatch_response")"
+          if ! [[ "$report_run_id" =~ ^[1-9][0-9]*$ ]] || [ -z "$report_run_url" ]; then
+            echo "Qase workflow dispatch did not return a valid run." >&2
+            exit 1
+          fi
+
+          echo "Qase reporter dispatched: $report_run_url"
+          {
+            echo "## Qase reporting"
+            echo ""
+            echo "Reporter workflow: $report_run_url"
+            echo ""
+            echo "The reporter will independently verify this workflow's final conclusion before contacting Qase."
+          } >> "$GITHUB_STEP_SUMMARY"

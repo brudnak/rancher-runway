@@ -22,17 +22,24 @@ type qaseWorkflowContract struct {
 }
 
 type qaseWorkflowTriggers struct {
-	WorkflowRun qaseWorkflowRunTrigger `yaml:"workflow_run"`
+	WorkflowDispatch qaseWorkflowDispatchTrigger `yaml:"workflow_dispatch"`
 }
 
-type qaseWorkflowRunTrigger struct {
-	Workflows []string `yaml:"workflows"`
-	Types     []string `yaml:"types"`
+type qaseWorkflowDispatchTrigger struct {
+	Inputs map[string]qaseWorkflowInput `yaml:"inputs"`
+}
+
+type qaseWorkflowInput struct {
+	Required bool   `yaml:"required"`
+	Type     string `yaml:"type"`
 }
 
 type qaseJob struct {
 	If          string            `yaml:"if"`
+	Needs       string            `yaml:"needs"`
+	RunsOn      string            `yaml:"runs-on"`
 	Environment string            `yaml:"environment"`
+	Permissions map[string]string `yaml:"permissions"`
 	Env         map[string]string `yaml:"env"`
 	Steps       []qaseStep        `yaml:"steps"`
 }
@@ -56,6 +63,10 @@ func TestLaneWorkflowPublishesQaseInputOnlyAfterSuccess(t *testing.T) {
 
 	workflow := readQaseWorkflowContract(t, workflowName)
 	job := qaseWorkflowJob(t, workflow, "run-lane")
+	checkout := qaseStepByName(t, job, "Checkout repository")
+	if got := qaseStringValue(checkout.With["ref"]); got != "${{ github.sha }}" {
+		t.Errorf("source lane checkout ref = %q, want immutable workflow SHA", got)
+	}
 	runTests := qaseStepByName(t, job, "Run Rancher tests")
 	if !strings.Contains(runTests.Run, `"$go_bin/gotestsum"`) {
 		t.Fatal("Run Rancher tests no longer invokes gotestsum through the isolated tool path")
@@ -92,49 +103,134 @@ func TestLaneWorkflowPublishesQaseInputOnlyAfterSuccess(t *testing.T) {
 		}
 	}
 	assertImmutableQaseAction(t, upload.Uses, "actions/upload-artifact")
-	if got := qaseStringValue(upload.With["name"]); got != "qase-report-${{ github.run_id }}" {
-		t.Errorf("Qase artifact name = %q, want workflow-run-scoped name", got)
+	if got := qaseStringValue(upload.With["name"]); got != "qase-report-${{ github.run_id }}-${{ github.run_attempt }}" {
+		t.Errorf("Qase artifact name = %q, want workflow-run-attempt-scoped name", got)
 	}
 	if got := qaseStringValue(upload.With["retention-days"]); got != "1" {
 		t.Errorf("Qase artifact retention-days = %q, want 1", got)
 	}
-}
 
-func TestQaseReportWorkflowRunsOnlyForSuccessfulLocalDispatches(t *testing.T) {
-	workflow := readQaseWorkflowContract(t, qaseReportWorkflowName)
-	trigger := workflow.On.WorkflowRun
-	if len(trigger.Workflows) != 1 || trigger.Workflows[0] != "Run Rancher Sign-Off Lane" {
-		t.Fatalf("workflow_run workflows = %#v, want only Run Rancher Sign-Off Lane", trigger.Workflows)
+	dispatchJob := qaseWorkflowJob(t, workflow, "dispatch-qase-report")
+	if dispatchJob.Needs != "run-lane" {
+		t.Fatalf("Qase dispatch needs = %q, want run-lane", dispatchJob.Needs)
 	}
-	if len(trigger.Types) != 1 || trigger.Types[0] != "completed" {
-		t.Fatalf("workflow_run types = %#v, want only completed", trigger.Types)
-	}
-
-	_, job := onlyQaseWorkflowJob(t, workflow)
-	condition := compactQaseExpression(job.If)
+	condition := compactQaseExpression(dispatchJob.If)
 	for _, required := range []string{
-		"github.event.workflow_run.conclusion == 'success'",
-		"github.event.workflow_run.event == 'workflow_dispatch'",
-		"github.event.workflow_run.head_repository.full_name == github.repository",
+		"needs.run-lane.result == 'success'",
+		"inputs.run_rancher_tests == true",
 	} {
 		if !strings.Contains(condition, required) {
-			t.Errorf("Qase report job condition omits %q: %q", required, job.If)
+			t.Errorf("Qase dispatch condition omits %q: %q", required, dispatchJob.If)
 		}
+	}
+	if got := dispatchJob.Permissions["actions"]; got != "write" {
+		t.Errorf("Qase dispatch actions permission = %q, want write", got)
+	}
+	if dispatchJob.Environment != "" {
+		t.Fatalf("Qase dispatch unexpectedly enters environment %q", dispatchJob.Environment)
+	}
+	dispatch := qaseStepByName(t, dispatchJob, "Dispatch verified Qase reporting")
+	if got := dispatch.Env["GH_TOKEN"]; got != "${{ github.token }}" {
+		t.Fatalf("Qase dispatch GH_TOKEN = %q, want github.token", got)
+	}
+	for _, marker := range []string{
+		"return_run_details: true",
+		"source_run_id: $source_run_id",
+		"source_run_attempt: $source_run_attempt",
+		"source_head_sha: $source_head_sha",
+		"actions/workflows/report-successful-signoff-to-qase.yml/dispatches",
+		".workflow_run_id",
+		".html_url",
+	} {
+		if !strings.Contains(dispatch.Run, marker) {
+			t.Errorf("Qase dispatch step omits %q", marker)
+		}
+	}
+	if strings.Contains(dispatch.Run, "actions/runs/$SOURCE_RUN_ID") || strings.Contains(dispatch.Run, "sleep ") {
+		t.Fatal("source workflow must dispatch and finish instead of waiting for its reporter")
+	}
+}
+
+func TestQaseReportWorkflowVerifiesACompletedSuccessfulLocalSource(t *testing.T) {
+	raw := readWorkflowSource(t, qaseReportWorkflowName)
+	workflow := readQaseWorkflowContract(t, qaseReportWorkflowName)
+	if strings.Contains(raw, "workflow_run:") {
+		t.Fatal("Qase reporter retains the GITHUB_TOKEN-suppressed workflow_run trigger")
+	}
+	inputs := workflow.On.WorkflowDispatch.Inputs
+	if len(inputs) != 3 {
+		t.Fatalf("workflow_dispatch input count = %d, want 3", len(inputs))
+	}
+	for _, name := range []string{"source_run_id", "source_run_attempt", "source_head_sha"} {
+		input, ok := inputs[name]
+		if !ok {
+			t.Errorf("workflow_dispatch input %q is missing", name)
+			continue
+		}
+		if !input.Required || input.Type != "string" {
+			t.Errorf("workflow_dispatch input %q = %#v, want required string", name, input)
+		}
+	}
+
+	validate := qaseWorkflowJob(t, workflow, "validate-source")
+	if validate.Environment != "" {
+		t.Fatalf("source validation unexpectedly enters environment %q", validate.Environment)
+	}
+	if got := validate.Permissions["actions"]; got != "read" {
+		t.Errorf("source validation actions permission = %q, want read", got)
+	}
+	validation := qaseStepByName(t, validate, "Wait for and validate source conclusion")
+	for _, required := range []string{
+		`[ "$REPORT_ACTOR" != "github-actions[bot]" ]`,
+		"actions/runs/$REPORT_RUN_ID/attempts/$previous_attempt",
+		`[ "$previous_conclusion" = "success" ]`,
+		"actions/runs/$SOURCE_RUN_ID",
+		`[ "$actual_id" != "$SOURCE_RUN_ID" ]`,
+		`[ "$actual_attempt" != "$SOURCE_RUN_ATTEMPT" ]`,
+		`[ "$actual_sha" != "$SOURCE_HEAD_SHA" ]`,
+		`[ "$actual_repository" != "$GITHUB_REPOSITORY" ]`,
+		`[ "$actual_head_repository" != "$GITHUB_REPOSITORY" ]`,
+		`[ "$actual_event" != "workflow_dispatch" ]`,
+		`[ "$actual_path" != ".github/workflows/run-rancher-signoff-lane.yml" ]`,
+		`[ "$actual_conclusion" != "success" ]`,
+	} {
+		if !strings.Contains(validation.Run, required) {
+			t.Errorf("source validation omits %q", required)
+		}
+	}
+
+	report := qaseWorkflowJob(t, workflow, "report")
+	if report.Needs != "validate-source" {
+		t.Fatalf("Qase report needs = %q, want validate-source", report.Needs)
 	}
 }
 
 func TestQaseReportWorkflowPinsReporterAndKeepsSecretAtFinalBoundary(t *testing.T) {
 	raw := readWorkflowSource(t, qaseReportWorkflowName)
 	workflow := readQaseWorkflowContract(t, qaseReportWorkflowName)
-	_, job := onlyQaseWorkflowJob(t, workflow)
+	job := qaseWorkflowJob(t, workflow, "report")
 	if job.Environment != "rancher-signoff" {
 		t.Fatalf("Qase report environment = %q, want rancher-signoff", job.Environment)
 	}
+	if got := job.Permissions["actions"]; got != "read" {
+		t.Errorf("Qase report actions permission = %q, want read", got)
+	}
 
+	checkout := qaseStepByName(t, job, "Checkout repository")
+	if got := qaseStringValue(checkout.With["ref"]); got != "${{ inputs.source_head_sha }}" {
+		t.Errorf("Qase checkout ref = %q, want verified source SHA", got)
+	}
 	download := qaseStepByName(t, job, "Download Qase report input")
 	assertImmutableQaseAction(t, download.Uses, "actions/download-artifact")
-	if got := qaseStringValue(download.With["name"]); got != "qase-report-${{ github.event.workflow_run.id }}" {
-		t.Errorf("downloaded Qase artifact name = %q, want source workflow run ID", got)
+	if got := qaseStringValue(download.With["name"]); got != "qase-report-${{ inputs.source_run_id }}-${{ inputs.source_run_attempt }}" {
+		t.Errorf("downloaded Qase artifact name = %q, want source run and attempt", got)
+	}
+	if got := qaseStringValue(download.With["run-id"]); got != "${{ inputs.source_run_id }}" {
+		t.Errorf("downloaded Qase artifact run-id = %q, want validated source run", got)
+	}
+	setupGo := qaseStepByName(t, job, "Set up Go")
+	if got := qaseStringValue(setupGo.With["cache"]); got != "false" {
+		t.Errorf("Qase setup-go cache = %q, want false", got)
 	}
 
 	downloadReporter := qaseStepByName(t, job, "Download pinned reporter-v2 source")
@@ -192,7 +288,7 @@ func TestQaseReportWorkflowPinsReporterAndKeepsSecretAtFinalBoundary(t *testing.
 
 func TestQaseReportWorkflowVerifiesInputAndFailsClosedOnReporterProblems(t *testing.T) {
 	workflow := readQaseWorkflowContract(t, qaseReportWorkflowName)
-	_, job := onlyQaseWorkflowJob(t, workflow)
+	job := qaseWorkflowJob(t, workflow, "report")
 
 	buildTools := qaseStepByName(t, job, "Build Qase report tools")
 	if !strings.Contains(buildTools.Run, `go build -o "$RUNNER_TEMP/qase-tools/qase-report-input" ./automation/qase-report-input`) {
@@ -221,6 +317,9 @@ func TestQaseReportWorkflowVerifiesInputAndFailsClosedOnReporterProblems(t *test
 	}
 	if got := report.Env["EXPECTED_RESULT_COUNT"]; got != "${{ steps.qase_input.outputs.result_count }}" {
 		t.Errorf("EXPECTED_RESULT_COUNT = %q, want verified helper result count", got)
+	}
+	if got := report.Env["BUILD_URL"]; got != "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ inputs.source_run_id }}" {
+		t.Errorf("BUILD_URL = %q, want validated source workflow URL", got)
 	}
 	for _, marker := range []string{
 		"reporter.log",
@@ -255,17 +354,6 @@ func qaseWorkflowJob(t *testing.T, workflow qaseWorkflowContract, name string) q
 		t.Fatalf("job %q not found", name)
 	}
 	return job
-}
-
-func onlyQaseWorkflowJob(t *testing.T, workflow qaseWorkflowContract) (string, qaseJob) {
-	t.Helper()
-	if len(workflow.Jobs) != 1 {
-		t.Fatalf("workflow %q has %d jobs, want exactly 1", workflow.Name, len(workflow.Jobs))
-	}
-	for name, job := range workflow.Jobs {
-		return name, job
-	}
-	panic("unreachable")
 }
 
 func qaseStepByName(t *testing.T, job qaseJob, name string) qaseStep {

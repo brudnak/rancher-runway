@@ -1,45 +1,164 @@
 name: Report Successful Rancher Sign-Off to Qase
+run-name: Qase report for run ${{ inputs.source_run_id }} attempt ${{ inputs.source_run_attempt }}
 
 on:
-  workflow_run:
-    workflows:
-      - Run Rancher Sign-Off Lane
-    types:
-      - completed
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Run Rancher Sign-Off Lane workflow run ID to verify after completion.
+        required: true
+        type: string
+      source_run_attempt:
+        description: Exact source workflow run attempt that produced the artifact.
+        required: true
+        type: string
+      source_head_sha:
+        description: Exact source workflow commit SHA.
+        required: true
+        type: string
 
 permissions:
   actions: read
   contents: read
 
 jobs:
+  validate-source:
+    name: Validate successful source workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for and validate source conclusion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_ACTOR: ${{ github.actor }}
+          REPORT_RUN_ID: ${{ github.run_id }}
+          REPORT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_RUN_ATTEMPT: ${{ inputs.source_run_attempt }}
+          SOURCE_HEAD_SHA: ${{ inputs.source_head_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$REPORT_ACTOR" != "github-actions[bot]" ]; then
+            echo "Qase reports may only start from the source workflow's built-in token dispatch." >&2
+            exit 1
+          fi
+          if ! [[ "$REPORT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || \
+             ! [[ "$REPORT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Reporter workflow identity is invalid." >&2
+            exit 1
+          fi
+          if [ "$REPORT_RUN_ATTEMPT" -gt 1 ]; then
+            previous_attempt="$((REPORT_RUN_ATTEMPT - 1))"
+            previous_report="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$REPORT_RUN_ID/attempts/$previous_attempt")"
+            previous_conclusion="$(jq -r '.conclusion // empty' <<<"$previous_report")"
+            if [ "$previous_conclusion" = "success" ]; then
+              echo "The previous reporter attempt already succeeded; refusing a duplicate Qase run." >&2
+              exit 1
+            fi
+            echo "Retrying reporter after previous conclusion '${previous_conclusion:-unknown}'."
+          fi
+          if ! [[ "$SOURCE_RUN_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Source workflow run ID is invalid." >&2
+            exit 1
+          fi
+          if ! [[ "$SOURCE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Source workflow run attempt is invalid." >&2
+            exit 1
+          fi
+          if ! [[ "$SOURCE_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Source workflow commit SHA is invalid." >&2
+            exit 1
+          fi
+
+          source_run=""
+          previous_status=""
+          for _ in {1..120}; do
+            source_run="$(gh api \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")"
+            status="$(jq -r '.status // empty' <<<"$source_run")"
+            if [ "$status" != "$previous_status" ]; then
+              echo "Source workflow status: ${status:-unknown}"
+              previous_status="$status"
+            fi
+            if [ "$status" = "completed" ]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [ "$(jq -r '.status // empty' <<<"$source_run")" != "completed" ]; then
+            echo "Timed out waiting for the source workflow to complete." >&2
+            exit 1
+          fi
+
+          actual_id="$(jq -r '.id | tostring' <<<"$source_run")"
+          actual_attempt="$(jq -r '.run_attempt | tostring' <<<"$source_run")"
+          actual_sha="$(jq -r '.head_sha // empty' <<<"$source_run")"
+          actual_event="$(jq -r '.event // empty' <<<"$source_run")"
+          actual_path="$(jq -r '.path // empty' <<<"$source_run")"
+          actual_repository="$(jq -r '.repository.full_name // empty' <<<"$source_run")"
+          actual_head_repository="$(jq -r '.head_repository.full_name // empty' <<<"$source_run")"
+          actual_conclusion="$(jq -r '.conclusion // empty' <<<"$source_run")"
+
+          if [ "$actual_id" != "$SOURCE_RUN_ID" ] || \
+             [ "$actual_attempt" != "$SOURCE_RUN_ATTEMPT" ] || \
+             [ "$actual_sha" != "$SOURCE_HEAD_SHA" ]; then
+            echo "Source workflow identity does not match the dispatched report." >&2
+            exit 1
+          fi
+          if [ "$actual_repository" != "$GITHUB_REPOSITORY" ] || \
+             [ "$actual_head_repository" != "$GITHUB_REPOSITORY" ]; then
+            echo "Source workflow is not a local repository run." >&2
+            exit 1
+          fi
+          if [ "$actual_event" != "workflow_dispatch" ] || \
+             [ "$actual_path" != ".github/workflows/run-rancher-signoff-lane.yml" ]; then
+            echo "Source is not a dispatched Rancher sign-off lane workflow." >&2
+            exit 1
+          fi
+          if [ "$actual_conclusion" != "success" ]; then
+            echo "Source workflow concluded with '$actual_conclusion'; nothing will be sent to Qase." >&2
+            exit 1
+          fi
+
+          echo "Verified successful source workflow run $SOURCE_RUN_ID attempt $SOURCE_RUN_ATTEMPT."
+
   report:
-    if: >-
-      ${{
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'workflow_dispatch' &&
-        github.event.workflow_run.head_repository.full_name == github.repository
-      }}
+    needs: validate-source
     runs-on: ubuntu-latest
     environment: rancher-signoff
     timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
+          ref: ${{ inputs.source_head_sha }}
           persist-credentials: false
 
       - name: Download Qase report input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: qase-report-${{ github.event.workflow_run.id }}
+          name: qase-report-${{ inputs.source_run_id }}-${{ inputs.source_run_attempt }}
           path: ${{ runner.temp }}/qase-report-input
           github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ inputs.source_run_id }}
 
       - name: Set up Go
         uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Build Qase report tools
         run: |
@@ -97,7 +216,7 @@ jobs:
           TEST_RUN_NAME: ${{ steps.qase_input.outputs.test_run_name }}
           QASE_TEST_RUN_COMPLETE: "true"
           QASE_SCHEMA_PREFIX: runway
-          BUILD_URL: ${{ github.event.workflow_run.html_url }}
+          BUILD_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ inputs.source_run_id }}
           EXPECTED_RESULT_COUNT: ${{ steps.qase_input.outputs.result_count }}
         run: |
           set -euo pipefail

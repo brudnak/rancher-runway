@@ -87,11 +87,16 @@ enabling direct `rancher/tests` runs:
 | --- | --- | --- |
 | `QASE_AUTOMATION_TOKEN` | yes when `run_rancher_tests=true` | Token for the shared automation-services Qase account. It is exposed only to the final reporting step in the follow-up reporting workflow. |
 
-The sign-off workflow never receives this token. A separate `workflow_run`
-job enters the `rancher-signoff` environment and reads it only after the
-complete `Run Rancher Sign-Off Lane` workflow finishes successfully. A failed
-or cancelled sign-off run does not create a Qase run and does not send any
-result to Qase. Runs with `run_rancher_tests=false` also skip Qase.
+The sign-off lane never receives this token. Its final success-gated job uses
+GitHub's built-in token to dispatch the follow-up reporter and then exits. The
+reporter independently waits for GitHub to mark the complete source workflow
+successful and verifies its repository, workflow path, run ID, attempt, and
+commit before entering the `rancher-signoff` environment. Only its final step
+reads the Qase token. A failed or cancelled sign-off run does not create a Qase
+run and does not send any result to Qase. Runs with
+`run_rancher_tests=false` also skip Qase. Direct manual dispatches and reruns
+of an already successful reporter are rejected to avoid duplicate Qase runs;
+a failed reporter attempt can be retried.
 
 When migrating an existing environment, copy the protected configuration
 variables to secrets before deploying these workflows. After the updated
@@ -122,7 +127,7 @@ Only non-sensitive runner tuning remains in `rancher-signoff` variables:
 | `plan-rancher-regression.yml` | no, but it can dispatch the runner | Manual regression-only entry point. It launches and waits for the standard planner with a locked `framework-regression` filter, retaining the same target resolution and duplicate suppression. A fully successful child run reports to Qase automatically. |
 | `bootstrap-terraform-state.yml` | yes, only when `apply=true` | Creates or updates the persistent S3/DynamoDB backend. |
 | `run-rancher-signoff-lane.yml` | yes | Runs one Rancher sign-off lane, optionally with Linode downstreams and direct `rancher/tests` suite runs, then cleans up. |
-| `report-successful-signoff-to-qase.yml` | no | Runs only after a fully successful sign-off workflow and reports its sanitized Go test results to Qase with reporter-v2. |
+| `report-successful-signoff-to-qase.yml` | no | Internal dispatch target. It verifies that the exact source sign-off workflow has fully completed successfully, then reports its sanitized Go test results to Qase with reporter-v2. |
 
 ## First Live Run
 
@@ -238,10 +243,13 @@ the upgrade phase.
 The receipt omits live Rancher URLs, kubeconfigs, generated environment files,
 raw Terraform outputs, copied logs, and the unsanitized resolution files.
 
-After a successful lane, it also uploads a one-day Qase handoff artifact. The
-handoff contains only a small metadata allowlist and Go test run/pass/skip
-events. Test output and stack traces are removed before upload. The follow-up
-workflow validates the handoff again before it receives the Qase token.
+After a successful lane, it also uploads a one-day, run-attempt-scoped Qase
+handoff artifact. The handoff contains only a small metadata allowlist and Go
+test run/pass/skip events. Test output and stack traces are removed before
+upload. Ambiguous nested leaves that reporter-v2 cannot uniquely represent are
+omitted while their distinct parent tests remain. The follow-up workflow first
+verifies the source workflow's final success and then validates the handoff
+again before it receives the Qase token.
 
 It does not upload:
 

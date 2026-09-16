@@ -268,10 +268,10 @@ func TestPrepareRejectsUnsafeResultStreams(t *testing.T) {
 			want: "run event contains Elapsed",
 		},
 		{
-			name: "leaf collision",
-			stream: validEventStream(chartsPackage, "TestSuiteOne/SameLeaf") +
+			name: "malformed ambiguous leaf",
+			stream: eventLine("run", chartsPackage, "TestSuiteOne/SameLeaf", "") +
 				validEventStream(chartsPackage, "TestSuiteTwo/SameLeaf"),
-			want: "leaf name collision",
+			want: "no terminal event",
 		},
 	}
 
@@ -284,6 +284,82 @@ func TestPrepareRejectsUnsafeResultStreams(t *testing.T) {
 			assertErrorContains(t, err, test.want)
 		})
 	}
+}
+
+func TestPrepareOmitsAmbiguousReporterLeavesAndPreservesParents(t *testing.T) {
+	workspace := t.TempDir()
+	stream := validEventStream(chartsPackage, "TestSuite/CheckDBFilesExist") +
+		validEventStream(chartsPackage, "TestSuite/CheckDBFilesExist/Pod_rancher-dynamic") +
+		validEventStream(chartsPackage, "TestSuite/CheckSecretInDB") +
+		validEventStream(chartsPackage, "TestSuite/CheckSecretInDB/Pod_rancher-dynamic")
+	mustWrite(t, filepath.Join(workspace, "result.json"), stream)
+	manifestPath := writeManifest(t, workspace, []manifestResult{{GoJSON: "result.json", Conclusion: "success"}})
+	opts := validPrepareOptions(t, workspace, manifestPath)
+
+	if err := prepare(opts, true); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+
+	var gotMetadata metadata
+	if err := json.Unmarshal(mustRead(t, filepath.Join(opts.outputDir, metadataName)), &gotMetadata); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if gotMetadata.ResultCount != 2 {
+		t.Fatalf("result count = %d, want the two unambiguous parent results", gotMetadata.ResultCount)
+	}
+
+	resultsData := mustRead(t, filepath.Join(opts.outputDir, resultsName))
+	if bytes.Contains(resultsData, []byte("Pod_rancher-dynamic")) {
+		t.Fatalf("ambiguous reporter leaf survived sanitization: %s", resultsData)
+	}
+	for _, parent := range []string{"CheckDBFilesExist", "CheckSecretInDB"} {
+		if !bytes.Contains(resultsData, []byte(parent)) {
+			t.Errorf("parent result %q was omitted: %s", parent, resultsData)
+		}
+	}
+	if lines := nonemptyLines(resultsData); len(lines) != 4 {
+		t.Fatalf("got %d sanitized events, want run/pass for two parents: %s", len(lines), resultsData)
+	}
+
+	reporterRoot := filepath.Join(t.TempDir(), "tests")
+	mustMkdirAll(t, filepath.Join(reporterRoot, "validation", "charts"))
+	if err := verify(options{inputDir: opts.outputDir, reporterRoot: reporterRoot}); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	var schema []schemaSuite
+	schemaPath := filepath.Join(reporterRoot, "validation", "charts", "schemas", "runway_schemas.yaml")
+	if err := json.Unmarshal(mustRead(t, schemaPath), &schema); err != nil {
+		t.Fatalf("decode generated schema: %v", err)
+	}
+	if len(schema) != 1 || len(schema[0].Cases) != 2 {
+		t.Fatalf("unexpected schema: %#v", schema)
+	}
+	gotTitles := []string{schema[0].Cases[0].Title, schema[0].Cases[1].Title}
+	wantTitles := []string{"CheckDBFilesExist", "CheckSecretInDB"}
+	if !reflect.DeepEqual(gotTitles, wantTitles) {
+		t.Fatalf("schema titles = %v, want %v", gotTitles, wantTitles)
+	}
+}
+
+func TestVerifyRejectsAmbiguousReporterLeaves(t *testing.T) {
+	artifactDir := makeValidArtifact(t)
+	resultsPath := filepath.Join(artifactDir, resultsName)
+	file, err := os.OpenFile(resultsPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(validEventStream(chartsPackage, "OtherSuite/TestCase")); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reporterRoot := filepath.Join(t.TempDir(), "tests")
+	mustMkdirAll(t, filepath.Join(reporterRoot, "validation", "charts"))
+	err = verify(options{inputDir: artifactDir, reporterRoot: reporterRoot})
+	assertErrorContains(t, err, "leaf name collision")
 }
 
 func TestVerifyRejectsTampering(t *testing.T) {
