@@ -1,5 +1,5 @@
 name: Plan Rancher Sign-Off
-run-name: ${{ github.event.inputs.rancher_version && format('Plan Rancher Sign-Off {0}', github.event.inputs.rancher_version) || 'Plan Rancher Sign-Off repo targets' }}
+run-name: ${{ inputs.rancher_version && format('Plan Rancher Sign-Off {0}', inputs.rancher_version) || 'Plan Rancher Sign-Off repo targets' }}
 
 on:
   workflow_dispatch:
@@ -54,6 +54,58 @@ on:
         description: Active Run Rancher Sign-Off Lane run id to ignore when this planner was woken by that runner.
         required: false
         type: string
+  workflow_call:
+    inputs:
+      rancher_version:
+        description: Optional target. Blank uses signoff-targets.json.
+        required: false
+        default: ""
+        type: string
+      previous_rancher_version:
+        description: Previous Rancher release. Blank resolves automatically.
+        required: false
+        default: ""
+        type: string
+      webhook_image:
+        description: Candidate webhook image. Blank discovers it from the target build.
+        required: false
+        default: ""
+        type: string
+      signing_policy:
+        description: Signing policy to apply.
+        required: false
+        default: auto
+        type: string
+      dispatch_runs:
+        description: Dispatch uncovered lanes after planning.
+        required: false
+        default: true
+        type: boolean
+      max_parallel_lanes:
+        description: Maximum active sign-off lane runners to allow.
+        required: false
+        default: 4
+        type: number
+      rerun_successful_lanes:
+        description: Re-dispatch successful immutable lanes.
+        required: false
+        default: false
+        type: boolean
+      rke2_server_count:
+        description: RKE2 server nodes per HA for dispatched lane runners.
+        required: false
+        default: "3"
+        type: string
+      ignore_active_runner_id:
+        description: Active lane runner id to ignore.
+        required: false
+        default: ""
+        type: string
+      lane_filter:
+        description: Optional exact lane name to dispatch from the generated plan.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   actions: write
@@ -86,10 +138,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           AWS_PREFIX: ${{ secrets.AWS_PREFIX }}
-          INPUT_RANCHER_VERSION: ${{ github.event.inputs.rancher_version || '' }}
-          INPUT_PREVIOUS_RANCHER_VERSION: ${{ github.event.inputs.previous_rancher_version || '' }}
-          INPUT_WEBHOOK_IMAGE: ${{ github.event.inputs.webhook_image || '' }}
-          INPUT_SIGNING_POLICY: ${{ github.event.inputs.signing_policy || 'auto' }}
+          INPUT_RANCHER_VERSION: ${{ inputs.rancher_version || '' }}
+          INPUT_PREVIOUS_RANCHER_VERSION: ${{ inputs.previous_rancher_version || '' }}
+          INPUT_WEBHOOK_IMAGE: ${{ inputs.webhook_image || '' }}
+          INPUT_SIGNING_POLICY: ${{ inputs.signing_policy || 'auto' }}
         run: |
           set -euo pipefail
 
@@ -118,15 +170,24 @@ jobs:
       - name: Build dispatch queue
         id: dispatch-queue
         env:
-          DISPATCH_REQUESTED: ${{ github.event.inputs.dispatch_runs == 'true' }}
-          MAX_PARALLEL_LANES: ${{ github.event.inputs.max_parallel_lanes || '4' }}
-          RERUN_SUCCESSFUL_LANES: ${{ github.event.inputs.rerun_successful_lanes == 'true' }}
-          RKE2_SERVER_COUNT: ${{ github.event.inputs.rke2_server_count || '3' }}
-          IGNORE_ACTIVE_RUNNER_ID: ${{ github.event.inputs.ignore_active_runner_id || '' }}
+          DISPATCH_REQUESTED: ${{ inputs.dispatch_runs }}
+          MAX_PARALLEL_LANES: ${{ inputs.max_parallel_lanes || 4 }}
+          RERUN_SUCCESSFUL_LANES: ${{ inputs.rerun_successful_lanes }}
+          RKE2_SERVER_COUNT: ${{ inputs.rke2_server_count || '3' }}
+          IGNORE_ACTIVE_RUNNER_ID: ${{ inputs.ignore_active_runner_id || '' }}
+          LANE_FILTER: ${{ inputs.lane_filter || '' }}
           REF_NAME: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+
+          case "$LANE_FILTER" in
+            ""|framework-regression) ;;
+            *)
+              echo "Unsupported lane filter '$LANE_FILTER'" >&2
+              exit 1
+              ;;
+          esac
 
           mkdir -p automation-output
           jq -c '
@@ -135,6 +196,7 @@ jobs:
 
             [planned as $plan
               | ($plan.lanes // [])[]
+              | select((env.LANE_FILTER == "") or (.name == env.LANE_FILTER))
               | {
                   rancher_version: $plan.target_version,
                   resolved_rancher_version: ($plan.resolved_target_version // $plan.target_version),
@@ -244,6 +306,7 @@ jobs:
             --argjson dispatch_requested "$DISPATCH_REQUESTED" \
             --argjson dispatch_enabled "$dispatch_enabled" \
             --arg dispatch_reason "$dispatch_reason" \
+            --arg lane_filter "$LANE_FILTER" \
             --arg ignored_active_runner_id "$IGNORE_ACTIVE_RUNNER_ID" \
             --argjson rerun_successful_lanes "$RERUN_SUCCESSFUL_LANES" \
             --argjson max_parallel_lanes "$max_parallel_lanes" \
@@ -263,6 +326,7 @@ jobs:
               dispatch_requested: $dispatch_requested,
               dispatch_enabled: $dispatch_enabled,
               dispatch_reason: $dispatch_reason,
+              lane_filter: $lane_filter,
               rerun_successful_lanes: $rerun_successful_lanes,
               max_parallel_lanes: $max_parallel_lanes,
               available_runner_count: $available_runner_count,
@@ -312,6 +376,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REF_NAME: ${{ github.ref_name }}
+          LANE_FILTER: ${{ inputs.lane_filter || '' }}
         run: |
           set -euo pipefail
 
@@ -329,6 +394,11 @@ jobs:
             webhook_image="$(jq -r '.webhook_image' <<<"$item")"
             signing_policy="$(jq -r '.signing_policy' <<<"$item")"
             rke2_server_count="$(jq -r '.rke2_server_count' <<<"$item")"
+
+            if [ -n "$LANE_FILTER" ] && [ "$lane" != "$LANE_FILTER" ]; then
+              echo "Refusing to dispatch lane '$lane'; expected '$LANE_FILTER'" >&2
+              exit 1
+            fi
 
             args=(
               workflow run run-rancher-signoff-lane.yml
@@ -388,9 +458,10 @@ jobs:
             echo ""
             echo "Dispatch requested: \`${{ steps.dispatch-queue.outputs.requested }}\`."
             echo "Dispatch reason: \`${{ steps.dispatch-queue.outputs.reason }}\`."
+            echo "Lane filter: \`${{ inputs.lane_filter || 'all' }}\`."
             echo "Rerun successful lanes: \`${{ steps.dispatch-queue.outputs.rerun_successful_lanes }}\`."
             echo "Max parallel lanes: \`${{ steps.dispatch-queue.outputs.max_parallel_lanes }}\`."
-            echo "RKE2 server count for dispatched lanes: \`${{ github.event.inputs.rke2_server_count || '3' }}\`."
+            echo "RKE2 server count for dispatched lanes: \`${{ inputs.rke2_server_count || '3' }}\`."
             echo "Available runner slots: \`${{ steps.dispatch-queue.outputs.available_runner_count }}\`."
             echo "Active lane runners: \`${{ steps.dispatch-queue.outputs.active_runner_count }}\`."
             echo "Ignored active runner id: \`${{ steps.dispatch-queue.outputs.ignored_active_runner_id }}\`."

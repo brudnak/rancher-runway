@@ -139,6 +139,67 @@ func TestLaneWorkflowUsesParentResolvedTargetWithoutLosingRequestedAlias(t *test
 	}
 }
 
+func TestRegressionPlannerFiltersEveryWebhookLaneBeforeDedupe(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq is required to exercise the workflow's dispatch filter")
+	}
+	workflow := readActionsWorkflow(t, "signoff-plan.yml")
+	queueScript := workflowStepScript(t, workflow, "plan", "Build dispatch queue")
+	lanes := []map[string]interface{}{
+		{"name": "framework-regression"},
+		{"name": "webhook-fresh-install"},
+		{"name": "webhook-upgrade"},
+		{"name": "webhook-candidate-on-previous"},
+	}
+
+	raw, queued := runDispatchQueueFixtureWithLanes(
+		t,
+		queueScript,
+		"v2.16.2-abcdef0-head",
+		"v2.16.2-abcdef0-head",
+		[]map[string]interface{}{},
+		"framework-regression",
+		lanes,
+	)
+	for name, items := range map[string][]map[string]interface{}{"raw": raw, "queued": queued} {
+		if len(items) != 1 {
+			t.Fatalf("%s queue length = %d, want 1: %#v", name, len(items), items)
+		}
+		if got := items[0]["lane"]; got != "framework-regression" {
+			t.Fatalf("%s queue lane = %v, want framework-regression", name, got)
+		}
+	}
+	unfilteredRaw, unfilteredQueued := runDispatchQueueFixtureWithLanes(
+		t,
+		queueScript,
+		"v2.16.2-abcdef0-head",
+		"v2.16.2-abcdef0-head",
+		[]map[string]interface{}{},
+		"",
+		lanes,
+	)
+	if len(unfilteredRaw) != len(lanes) || len(unfilteredQueued) != len(lanes) {
+		t.Fatalf("empty filter changed the full planner: raw=%d queued=%d want=%d", len(unfilteredRaw), len(unfilteredQueued), len(lanes))
+	}
+
+	if !strings.Contains(queueScript, `""|framework-regression)`) {
+		t.Fatal("lane filter allowlist is not restricted to empty or framework-regression")
+	}
+	guardEnd := strings.Index(queueScript, "mkdir -p automation-output")
+	if guardEnd < 0 {
+		t.Fatal("could not isolate lane filter guard")
+	}
+	invalidGuard := exec.Command("bash", "-c", queueScript[:guardEnd])
+	invalidGuard.Env = append(os.Environ(), "LANE_FILTER=webhook-upgrade")
+	if output, err := invalidGuard.CombinedOutput(); err == nil {
+		t.Fatalf("invalid lane filter unexpectedly passed: %s", output)
+	}
+	dispatchScript := workflowStepScript(t, workflow, "plan", "Dispatch selected sign-off lanes")
+	if !strings.Contains(dispatchScript, `if [ -n "$LANE_FILTER" ] && [ "$lane" != "$LANE_FILTER" ]`) {
+		t.Fatal("dispatch step does not revalidate the selected lane against the fixed filter")
+	}
+}
+
 func readActionsWorkflow(t *testing.T, name string) actionsWorkflow {
 	t.Helper()
 	path := filepath.Join("..", "..", ".github", "workflows", name)
@@ -183,6 +244,19 @@ func successfulWorkflowRun(title string) map[string]interface{} {
 
 func runDispatchQueueFixture(t *testing.T, script, requested, resolved string, runs []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}) {
 	t.Helper()
+	return runDispatchQueueFixtureWithLanes(
+		t,
+		script,
+		requested,
+		resolved,
+		runs,
+		"",
+		[]map[string]interface{}{{"name": "framework-regression"}},
+	)
+}
+
+func runDispatchQueueFixtureWithLanes(t *testing.T, script, requested, resolved string, runs []map[string]interface{}, laneFilter string, lanes []map[string]interface{}) ([]map[string]interface{}, []map[string]interface{}) {
+	t.Helper()
 	workdir := t.TempDir()
 	plan := map[string]interface{}{
 		"target_version":          requested,
@@ -190,9 +264,7 @@ func runDispatchQueueFixture(t *testing.T, script, requested, resolved string, r
 		"previous_version":        "v2.14.4",
 		"webhook_image":           "stgregistry.suse.com/rancher/rancher-webhook:v0.10.10-rc.3",
 		"signing_policy_input":    "auto",
-		"lanes": []map[string]interface{}{
-			{"name": "framework-regression"},
-		},
+		"lanes":                   lanes,
 	}
 	writeJSONFixture(t, filepath.Join(workdir, "signoff-plan.json"), plan)
 	runsJSON, err := json.Marshal(runs)
@@ -219,6 +291,7 @@ func runDispatchQueueFixture(t *testing.T, script, requested, resolved string, r
 		"RERUN_SUCCESSFUL_LANES=false",
 		"RKE2_SERVER_COUNT=3",
 		"IGNORE_ACTIVE_RUNNER_ID=",
+		"LANE_FILTER="+laneFilter,
 		"REF_NAME=main",
 		"GH_TOKEN=test-token",
 		"GITHUB_OUTPUT="+filepath.Join(workdir, "github-output"),

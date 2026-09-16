@@ -49,6 +49,8 @@ Current workflow layers:
   Mutable `head`, `vX.Y-head`, and staging-only `vX.Y.Z-head` aliases are
   reconsidered after active runs finish so a successful run against an older
   image does not make the alias permanently stale.
+- `plan-rancher-regression.yml`: manual regression-only planner that reuses the
+  full planner but dispatches only `framework-regression`.
 - `bootstrap-terraform-state.yml`: manual S3/DynamoDB backend bootstrap, plan-only unless `apply=true`.
 - `run-rancher-signoff-lane.yml`: manual sign-off lane runner for
   `framework-regression`, `webhook-fresh-install`, `webhook-upgrade`, or
