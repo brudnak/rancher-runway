@@ -249,9 +249,11 @@ jobs:
             exit "$reporter_status"
           fi
 
+          missing_case_pattern='(^|[[:space:]])level=warning msg="Test case not found in qase: [^"]+"$'
           unexpected_diagnostics="$(
             grep -E 'level=(warning|error|fatal)' "$report_log" \
               | grep -Fv 'Failed to read file: open /app/image-report/image-report.txt' \
+              | grep -Ev "$missing_case_pattern" \
               || true
           )"
           if [ -n "$unexpected_diagnostics" ]; then
@@ -261,7 +263,12 @@ jobs:
           fi
 
           reported_count="$(grep -cF 'Updating run with ' "$report_log" || true)"
-          if [ "$reported_count" -ne "$EXPECTED_RESULT_COUNT" ]; then
-            echo "Qase reporter updated $reported_count result(s); expected $EXPECTED_RESULT_COUNT" >&2
+          missing_count="$(grep -cE "$missing_case_pattern" "$report_log" || true)"
+          if [ "$reported_count" -eq 0 ] || \
+             [ "$((reported_count + missing_count))" -ne "$EXPECTED_RESULT_COUNT" ]; then
+            echo "Qase reporter updated $reported_count result(s), skipped $missing_count missing case(s); expected $EXPECTED_RESULT_COUNT total with at least one update" >&2
             exit 1
+          fi
+          if [ "$missing_count" -gt 0 ]; then
+            echo "::warning::Qase reported $reported_count of $EXPECTED_RESULT_COUNT results; $missing_count test(s) have no matching Qase case. See the missing-case warnings above."
           fi

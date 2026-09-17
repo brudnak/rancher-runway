@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -330,11 +333,62 @@ func TestQaseReportWorkflowVerifiesInputAndFailsClosedOnReporterProblems(t *test
 		`if [ -n "$unexpected_diagnostics" ]`,
 		"grep -cF 'Updating run with '",
 		"EXPECTED_RESULT_COUNT",
-		`if [ "$reported_count" -ne "$EXPECTED_RESULT_COUNT" ]`,
+		`[ "$((reported_count + missing_count))" -ne "$EXPECTED_RESULT_COUNT" ]`,
 	} {
 		if !strings.Contains(report.Run, marker) {
 			t.Errorf("final Qase step omits reporter failure/count check %q", marker)
 		}
+	}
+}
+
+func TestQaseReportStepHandlesMissingCases(t *testing.T) {
+	workflow := readQaseWorkflowContract(t, qaseReportWorkflowName)
+	script := qaseStepByName(t, qaseWorkflowJob(t, workflow, "report"), "Report successful run to Qase").Run
+	const update = "level=info msg=\"Updating run with TestPresent\"\n"
+	const missing = "level=warning msg=\"Test case not found in qase: TestMissing\"\n"
+	for _, test := range []struct {
+		name        string
+		log         string
+		expected    string
+		status      string
+		wantFailure bool
+		wantWarning bool
+	}{
+		{"complete", update, "1", "0", false, false},
+		{"missing case", update + missing, "2", "0", false, true},
+		{"only missing cases", missing, "1", "0", true, false},
+		{"unexplained loss", update + missing, "3", "0", true, false},
+		{"too many results", update + missing, "1", "0", true, false},
+		{"reporter failure", update, "1", "1", true, false},
+		{"unexpected warning", update + "level=warning msg=\"API problem\"\n", "1", "0", true, false},
+		{"error", update + "level=error msg=\"Test case not found in qase: TestMissing\"\n", "2", "0", true, false},
+		{"optional image report", update + "level=warning msg=\"Failed to read file: open /app/image-report/image-report.txt: no such file or directory\"\n", "1", "0", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, dir := range []string{"tests", "qase-report-input"} {
+				if err := os.Mkdir(filepath.Join(root, dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for path, content := range map[string]string{
+				"qase-report-input/results.json": "{}",
+				"tests/qase-reporter-v2":         "#!/bin/bash\nprintf '%s' \"$FAKE_REPORT_LOG\"\nexit \"$FAKE_REPORT_STATUS\"\n",
+			} {
+				if err := os.WriteFile(filepath.Join(root, path), []byte(content), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			command := exec.Command("bash", "-c", script)
+			command.Env = append(os.Environ(), "RUNNER_TEMP="+root, "QASE_AUTOMATION_TOKEN=fake", "EXPECTED_RESULT_COUNT="+test.expected, "FAKE_REPORT_LOG="+test.log, "FAKE_REPORT_STATUS="+test.status)
+			output, err := command.CombinedOutput()
+			if (err != nil) != test.wantFailure {
+				t.Fatalf("error = %v, want failure %v; output: %s", err, test.wantFailure, output)
+			}
+			if got := strings.Contains(string(output), "::warning::Qase reported"); got != test.wantWarning {
+				t.Fatalf("warning = %v, want %v; output: %s", got, test.wantWarning, output)
+			}
+		})
 	}
 }
 
