@@ -573,7 +573,7 @@ jobs:
 
           unset ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL
 
-          env_file="automation-output/downstream-ha-1.env"
+          env_file="automation-output/runs/${HA_RANCHER_RUN_ID:?Run workspace must be initialized}/downstream/downstream-ha-1.env"
           suites=("TestWebhookTestSuite")
           rancher_major="${RANCHER_RELEASE_MAJOR:-}"
           rancher_minor="${RANCHER_RELEASE_MINOR:-}"
