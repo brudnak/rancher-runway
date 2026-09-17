@@ -25,7 +25,6 @@ import (
 const (
 	rancherHelmOperationInstall = "install"
 	rancherHelmOperationUpgrade = "upgrade"
-	rancherHookImageRegistry    = "registry.rancher.com"
 	supportMatrixIndexURL       = "https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/"
 	rancherResolverHTTPTimeout  = 30 * time.Second
 )
@@ -2029,8 +2028,10 @@ func buildAutoHelmCommand(operation, chartRepoAlias, chartVersion, bootstrapPass
 		}, baseSettings[len(baseSettings)-1:]...)...)
 	}
 	if operation == rancherHelmOperationUpgrade {
+		// Keep the hook image registry and tag paired as published by the chart.
+		// Optimus charts can use shell prereleases that do not exist in the
+		// production registry, so overriding only the registry breaks the hook.
 		baseSettings = append(baseSettings[:len(baseSettings)-1], append([]string{
-			"  --set preUpgrade.image.registry=" + rancherHookImageRegistry + " \\",
 			"  --wait \\",
 			"  --wait-for-jobs \\",
 			"  --timeout 30m \\",

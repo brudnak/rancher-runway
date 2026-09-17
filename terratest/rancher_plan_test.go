@@ -1758,7 +1758,6 @@ func TestBuildAutoHelmCommandUpgradeUsesSameResolvedSettings(t *testing.T) {
 		"--set image.tag=v2.14.1-alpha6",
 		"--set 'extraEnv[0].name=CATTLE_AGENT_IMAGE'",
 		"--set 'extraEnv[0].value=stgregistry.suse.com/rancher/rancher-agent:v2.14.1-alpha6'",
-		"--set preUpgrade.image.registry=registry.rancher.com",
 		"--wait",
 		"--wait-for-jobs",
 		"--timeout 30m",
@@ -1776,7 +1775,24 @@ func TestBuildAutoHelmCommandUpgradeUsesSameResolvedSettings(t *testing.T) {
 		t.Fatalf("expected Optimus upgrade command not to include webhook overrides, got:\n%s", command)
 	}
 	if strings.Contains(command, "systemDefaultRegistry=registry.rancher.com") {
-		t.Fatalf("expected only the pre-upgrade hook image registry to be overridden, got:\n%s", command)
+		t.Fatalf("expected Optimus upgrade to preserve the chart registry, got:\n%s", command)
+	}
+}
+
+func TestBuildAutoHelmCommandUpgradePreservesChartHookImages(t *testing.T) {
+	for _, repo := range []string{"optimus-rancher-latest", "optimus-rancher-alpha", "rancher-prime", "rancher-latest"} {
+		t.Run(repo, func(t *testing.T) {
+			command := buildAutoHelmCommand(
+				rancherHelmOperationUpgrade, repo, "2.12.14-a6ee0ee-head", "admin",
+				"stgregistry.suse.com/rancher/rancher", "v2.12.14-a6ee0ee-head",
+				"stgregistry.suse.com/rancher/rancher-agent:v2.12.14-a6ee0ee-head", true,
+			)
+			// The chart pairs its own shell tag with its registry. For example,
+			// v0.5.4-rc.2 is published in staging, not registry.rancher.com.
+			if strings.Contains(command, "preUpgrade.image") {
+				t.Fatalf("upgrade must preserve the chart's hook image defaults, got:\n%s", command)
+			}
+		})
 	}
 }
 
