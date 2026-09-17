@@ -123,6 +123,11 @@ Use the app tabs as the main lifecycle:
 - **Image Lookup** searches Rancher server, agent, and webhook tags across
   Docker Hub and the Rancher/SUSE registries, or inspects a custom image
   repository.
+- **Helm Lab** builds Rancher Helm install/upgrade commands and
+  `values.yaml` from the live Community/Prime chart catalog. It supports
+  published or custom versions, searchable chart values, environment variables,
+  copy/download controls, and configuration links. It starts with Prime/head
+  upgrade defaults and requires internet access to load chart metadata.
 - **PR Image Check** resolves a GitHub pull request commit and checks whether
   Rancher head images across all known registries declare that commit in their
   source ancestry.

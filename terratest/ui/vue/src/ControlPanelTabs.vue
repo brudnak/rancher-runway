@@ -42,6 +42,7 @@ const tabs = [
   { id: "clusters", label: "Clusters" },
   { id: "aws", label: "AWS Inventory" },
   { id: "images", label: "Image Lookup" },
+  { id: "helm", label: "Helm Lab" },
   { id: "pr-builds", label: "PR Image Check" },
   { id: "destroy", label: "Destroy" },
   { id: "settings", label: "Settings" },

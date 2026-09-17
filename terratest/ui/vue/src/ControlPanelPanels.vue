@@ -1,4 +1,7 @@
 <template>
+  <section v-if="helmOpened" v-show="activeTab === 'helm'" class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 text-zinc-900 shadow-sm dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-100 sm:p-5">
+    <HelmLabPanel />
+  </section>
   <section
     v-show="activeTab === 'runs'"
     class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20 sm:p-5"
@@ -90,6 +93,8 @@
 </template>
 
 <script setup>
+import { ref, watch } from "vue";
+import HelmLabPanel from "./HelmLabPanel.vue";
 import { activeTab, refreshStatus, openLogModal } from "./store.js";
 import AwsInventoryPanel from "./AwsInventoryPanel.vue";
 import ClustersPanel from "./ClustersPanel.vue";
@@ -101,4 +106,6 @@ import PreflightPanel from "./PreflightPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";
 import SteveLabPanel from "./SteveLabPanel.vue";
 import WorkspaceRunsPanel from "./WorkspaceRunsPanel.vue";
+const helmOpened = ref(false);
+watch(activeTab, tab => { if (tab === "helm") helmOpened.value = true; }, { immediate: true });
 </script>

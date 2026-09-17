@@ -196,3 +196,17 @@ details[open] > summary .setup-log-toggle-open {
   color: white;
   border-color: rgb(16 185 129);
 }
+
+/* Native Helm Lab controls. */
+.helmlab { color: inherit; }
+.helmlab label { display: block; font-size: .875rem; }
+.helmlab input, .helmlab select, .helmlab textarea { display: block; width: 100%; min-width: 0; margin-top: .35rem; border: 1px solid #a1a1aa66; border-radius: .5rem; padding: .55rem .7rem; background: transparent; color: inherit; }
+.helmlab select option { color: #18181b; background: white; }
+.helmlab button { border: 1px solid #a1a1aa66; border-radius: .5rem; padding: .35rem .65rem; font-size: .75rem; }
+.helmlab button:hover { background: #10b98122; }
+.helmlab button:focus-visible, .helmlab input:focus-visible, .helmlab textarea:focus-visible, .helmlab select:focus-visible { outline: 2px solid #10b981; outline-offset: 2px; }
+.helmlab .help { display: block; margin-top: .4rem; font-size: .75rem; line-height: 1.6; color: #71717a; overflow-wrap: anywhere; }
+.dark .helmlab .help { color: #a1a1aa; }
+.helmlab .value-field { border-bottom: 1px solid #a1a1aa33; padding-bottom: 1rem; }
+.helmlab .output-card { border: 1px solid #a1a1aa44; border-radius: .75rem; padding: 1rem; min-width: 0; }
+.helmlab pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .75rem; line-height: 1.7; }
