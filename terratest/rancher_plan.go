@@ -2027,6 +2027,15 @@ func buildAutoHelmCommand(operation, chartRepoAlias, chartVersion, bootstrapPass
 			"  --set 'extraEnv[0].value=" + helmImages.agentImage + "' \\",
 		}, baseSettings[len(baseSettings)-1:]...)...)
 	}
+	if helmImages.runtimeSystemDefaultRegistry != "" {
+		// A blank chart value omits CATTLE_SYSTEM_DEFAULT_REGISTRY, which leaves
+		// Rancher's previous database value intact on upgrade. Override it at
+		// runtime without changing the chart's hook or audit image registries.
+		baseSettings = append(baseSettings[:len(baseSettings)-1], append([]string{
+			"  --set 'extraEnv[1].name=CATTLE_SYSTEM_DEFAULT_REGISTRY' \\",
+			"  --set-string " + shellQuoteHelmSetString("extraEnv[1].value", helmImages.runtimeSystemDefaultRegistry) + " \\",
+		}, baseSettings[len(baseSettings)-1:]...)...)
+	}
 	if operation == rancherHelmOperationUpgrade {
 		// Keep the hook image registry and tag paired as published by the chart.
 		// Optimus charts can use shell prereleases that do not exist in the
@@ -2137,13 +2146,14 @@ func rancherWebhookValuesJSON(image string) (string, error) {
 }
 
 type helmImageSettings struct {
-	clearSystemDefaultRegistry bool
-	rancherImage               string
-	rancherImageTag            string
-	imageRegistry              string
-	imageRepository            string
-	imageTag                   string
-	agentImage                 string
+	clearSystemDefaultRegistry   bool
+	runtimeSystemDefaultRegistry string
+	rancherImage                 string
+	rancherImageTag              string
+	imageRegistry                string
+	imageRepository              string
+	imageTag                     string
+	agentImage                   string
 }
 
 func normalizeHelmImageSettings(chartRepoAlias, rancherImage, rancherImageTag, agentImage string, useRancherImageFields bool) helmImageSettings {
@@ -2166,18 +2176,21 @@ func normalizeHelmImageSettings(chartRepoAlias, rancherImage, rancherImageTag, a
 		settings.rancherImageTag = rancherImageTag
 	}
 
-	agentRegistry, _, agentOK := splitRegistryRepository(settings.agentImage)
-	// Internal Rancher validation docs for Optimus alpha/head/RC builds pass
-	// staging Rancher and agent image refs directly. Newer charts express the
-	// Rancher server image via image.* fields, but the intent is the same:
-	// staging registry, rancher/rancher repository, requested tag, full staging
-	// CATTLE_AGENT_IMAGE. Only the Prime fallback path needs this pressure valve:
-	// Prime charts default systemDefaultRegistry to registry.rancher.com, which
-	// would otherwise prefix the explicit staging CATTLE_AGENT_IMAGE. Avoid
-	// webhook overrides here; the chart defaults webhook to a string and Helm
-	// warns when we force it into a nested table from --set.
+	agentRegistry, agentRepository, agentOK := splitRegistryRepository(settings.agentImage)
+	// Prime fallback charts default to the production registry. Clear the chart
+	// value when using an agent from another registry, preserving existing hook
+	// image behavior. Optimus charts continue to use their published defaults.
 	if chartRepoAlias == "rancher-prime" && agentOK && agentRegistry != "registry.rancher.com" {
 		settings.clearSystemDefaultRegistry = true
+		serverRegistry, _, _ := splitRegistryRepository(rancherImage)
+		if serverRegistry == "stgregistry.suse.com" && agentRegistry == serverRegistry {
+			// The staging build's system images also live in staging. Set its
+			// runtime registry explicitly to replace a persisted Prime registry,
+			// and let Rancher prefix the relative agent image exactly once.
+			// A custom agent-only registry need not contain other system images.
+			settings.runtimeSystemDefaultRegistry = serverRegistry
+			settings.agentImage = agentRepository
+		}
 	}
 	return settings
 }

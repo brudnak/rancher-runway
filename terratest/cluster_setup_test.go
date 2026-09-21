@@ -179,7 +179,9 @@ func TestResolvedRancherInstallCommandPreservesPrimeHeadPlan(t *testing.T) {
 		"--set image.registry=stgregistry.suse.com",
 		"--set image.repository=rancher/rancher",
 		"--set image.tag=" + headTag,
-		"stgregistry.suse.com/rancher/rancher-agent:" + headTag,
+		"--set 'extraEnv[0].value=rancher/rancher-agent:" + headTag + "'",
+		"--set 'extraEnv[1].name=CATTLE_SYSTEM_DEFAULT_REGISTRY'",
+		"--set-string 'extraEnv[1].value=stgregistry.suse.com'",
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("resolved install command lost %q:\n%s", want, command)

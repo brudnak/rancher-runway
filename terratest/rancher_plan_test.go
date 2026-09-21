@@ -1605,7 +1605,7 @@ func TestBuildAutoHelmCommandsKeepsLegacyOverridesForOldOptimusAlpha(t *testing.
 	}
 }
 
-func TestBuildAutoHelmCommandClearsPrimeDefaultRegistryForStagingFallback(t *testing.T) {
+func TestBuildAutoHelmCommandSetsPrimeStagingRuntimeRegistry(t *testing.T) {
 	command := buildAutoHelmCommand(
 		rancherHelmOperationInstall,
 		"rancher-prime",
@@ -1624,11 +1624,72 @@ func TestBuildAutoHelmCommandClearsPrimeDefaultRegistryForStagingFallback(t *tes
 		"--set image.registry=stgregistry.suse.com",
 		"--set image.repository=rancher/rancher",
 		"--set image.tag=v2.13.5-alpha6",
-		"--set 'extraEnv[0].value=stgregistry.suse.com/rancher/rancher-agent:v2.13.5-alpha6'",
+		"--set 'extraEnv[0].value=rancher/rancher-agent:v2.13.5-alpha6'",
+		"--set 'extraEnv[1].name=CATTLE_SYSTEM_DEFAULT_REGISTRY'",
+		"--set-string 'extraEnv[1].value=stgregistry.suse.com'",
 	}
 	for _, snippet := range expectedSnippets {
 		if !strings.Contains(command, snippet) {
 			t.Fatalf("expected helm command to contain %q, got:\n%s", snippet, command)
+		}
+	}
+}
+
+func TestBuildAutoHelmCommandPrimeStagingUpgradeReplacesPersistedRegistry(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	for _, useImageFields := range []bool{false, true} {
+		t.Run(fmt.Sprintf("image-fields=%t", useImageFields), func(t *testing.T) {
+			command := buildAutoHelmCommand(
+				rancherHelmOperationUpgrade, "rancher-prime", "2.14.5", "admin",
+				"stgregistry.suse.com/rancher/rancher", "v2.14.6-8276843-head",
+				"stgregistry.suse.com/rancher/rancher-agent:v2.14.6-8276843-head", useImageFields,
+			)
+			fields, err := parseHelmCommandFields(command)
+			if err != nil {
+				t.Fatalf("parse generated Helm command: %v", err)
+			}
+			for _, want := range []string{
+				"systemDefaultRegistry=",
+				"extraEnv[0].name=CATTLE_AGENT_IMAGE",
+				"extraEnv[0].value=rancher/rancher-agent:v2.14.6-8276843-head",
+				"extraEnv[1].name=CATTLE_SYSTEM_DEFAULT_REGISTRY",
+				"extraEnv[1].value=stgregistry.suse.com",
+			} {
+				if !slices.Contains(fields, want) {
+					t.Errorf("missing Helm argument %q in:\n%s", want, command)
+				}
+			}
+			// Omitting the runtime registry retains Rancher's old database value;
+			// retaining a qualified agent would cause the new registry to repeat.
+			if strings.Count(command, ".name=CATTLE_SYSTEM_DEFAULT_REGISTRY") != 1 {
+				t.Fatalf("expected exactly one runtime registry override:\n%s", command)
+			}
+			if strings.Contains(command, "extraEnv[0].value=stgregistry.suse.com/") {
+				t.Fatalf("agent must be relative to the runtime registry:\n%s", command)
+			}
+			if useImageFields {
+				for _, want := range []string{"image.registry=stgregistry.suse.com", "image.repository=rancher/rancher", "image.tag=v2.14.6-8276843-head"} {
+					if !slices.Contains(fields, want) {
+						t.Errorf("missing Rancher server image argument %q", want)
+					}
+				}
+			} else if !slices.Contains(fields, "rancherImage=stgregistry.suse.com/rancher/rancher") || !slices.Contains(fields, "rancherImageTag=v2.14.6-8276843-head") {
+				t.Fatalf("legacy server image must remain qualified:\n%s", command)
+			}
+		})
+	}
+}
+
+func TestNormalizeHelmImageSettingsDoesNotPromoteCustomAgentRegistry(t *testing.T) {
+	for _, images := range []struct{ server, agent string }{
+		{"stgregistry.suse.com/rancher/rancher", "custom.example/rancher-agent:test"},
+		{"custom.example/rancher", "stgregistry.suse.com/rancher/rancher-agent:test"},
+		{"custom.example/rancher", "custom.example/rancher-agent:test"},
+	} {
+		settings := normalizeHelmImageSettings("rancher-prime", images.server, "test", images.agent, false)
+		if !settings.clearSystemDefaultRegistry || settings.runtimeSystemDefaultRegistry != "" || settings.agentImage != images.agent {
+			t.Fatalf("custom image behavior changed for %+v: %+v", images, settings)
 		}
 	}
 }
@@ -1966,8 +2027,8 @@ func TestNormalizeHelmImageSettingsLeavesOptimusAlphaOverridesDocShaped(t *testi
 		true,
 	)
 
-	if settings.clearSystemDefaultRegistry {
-		t.Fatal("expected Optimus alpha command not to clear system default registry")
+	if settings.clearSystemDefaultRegistry || settings.runtimeSystemDefaultRegistry != "" {
+		t.Fatal("expected Optimus alpha command not to override system default registry")
 	}
 	if settings.imageRegistry != "stgregistry.suse.com" || settings.imageRepository != "rancher/rancher" || settings.imageTag != "v2.13.5-alpha6" {
 		t.Fatalf("expected staging Rancher image fields, got registry=%q repository=%q tag=%q", settings.imageRegistry, settings.imageRepository, settings.imageTag)
@@ -1986,7 +2047,7 @@ func TestNormalizeHelmImageSettingsLeavesDefaultRegistryForChartDefaultAgent(t *
 		true,
 	)
 
-	if settings.clearSystemDefaultRegistry {
+	if settings.clearSystemDefaultRegistry || settings.runtimeSystemDefaultRegistry != "" {
 		t.Fatal("expected no system default registry override")
 	}
 	if settings.imageRegistry != "registry.rancher.com" || settings.imageRepository != "rancher/rancher" || settings.imageTag != "v2.13.4" {
