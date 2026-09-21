@@ -21,6 +21,9 @@ rancher:
 deployment:
   type: ha-rke2
 
+aws:
+  ssm_ready_timeout: 5m # Optional; RUNWAY_SSM_READY_TIMEOUT overrides this in CI.
+
 rke2:
   ingress_controller: traefik
   # RKE2 server nodes per Rancher cluster: 1 single-server, 3 default HA, or 5 expanded HA.

@@ -40,6 +40,37 @@ For GoLand, configure the package as
 `^TestHaSetup$`, `^TestHAWaitReady$`, `^TestLinodeDockerWaitReady$`,
 `^TestHAControlPanel$`, or `^TestHACleanup$`.
 
+## AWS SSM Readiness
+
+Runway executes EC2 installation commands through AWS Systems Manager (SSM).
+Before each command, it waits up to five minutes for the instance's agent to
+report `Online`. This deadline includes SSM API calls and retries; it is separate
+from the remote command execution timeout.
+
+Override the readiness deadline in `tool-config.yml`:
+
+```yaml
+aws:
+  ssm_ready_timeout: 5m
+```
+
+For CI, `RUNWAY_SSM_READY_TIMEOUT=10m` takes precedence over the YAML setting.
+Both accept positive Go durations such as `5m` or `300s`.
+
+Credential and permission errors stop the wait immediately and retain the AWS
+error. Other API errors are retried until the deadline. A timeout reports the
+last observed registration/PingStatus and any outstanding API error. Check the
+agent startup logs, EC2 instance profile, and outbound HTTPS connectivity to
+the regional SSM endpoints when the API succeeds but the agent stays offline.
+
+The caller needs `ssm:DescribeInstanceInformation`, `ssm:SendCommand`, and
+`ssm:GetCommandInvocation` permissions. These are separate from the EC2 agent's
+instance profile permissions. The command runner reads `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN`; aliases such as
+`AWS_ACCESS_KEY` and `AWS_SECRET_KEY` do not override an OIDC role's exported
+credentials. See [AWS SSM troubleshooting](https://docs.aws.amazon.com/systems-manager/latest/userguide/troubleshooting-ssm-agent.html)
+for instance-side checks.
+
 ## Lower-Level Build Helpers
 
 The top-level app flow should be enough most of the time:

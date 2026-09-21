@@ -16,6 +16,9 @@ deployment:
 k3s:
   preload_images: true
 
+aws:
+  ssm_ready_timeout: 5m # Optional; RUNWAY_SSM_READY_TIMEOUT overrides this in CI.
+
 # Total host + tenant Rancher instances. Instance 1 is the host; instances 2+ are tenants. Supported range: 2-4.
 total_rancher_instances: 3
 

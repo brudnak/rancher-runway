@@ -27,6 +27,9 @@ var (
 )
 
 func validateLocalToolingPreflight(helmCommands []string) error {
+	if _, err := configuredSSMReadyTimeout(); err != nil {
+		return err
+	}
 	log.Printf("[preflight] Validating local tooling before provisioning...")
 
 	requiredCommands := []string{"kubectl", "helm", "terraform"}

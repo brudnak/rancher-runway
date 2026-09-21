@@ -101,43 +101,6 @@ func getInstanceIDFromIP(publicIP string) (string, error) {
 	return instanceID, nil
 }
 
-func waitForSSMAgent(instanceID string, maxSeconds int) error {
-	maskGitHubActionsValue(instanceID)
-	if err := initAWSClients(); err != nil {
-		return err
-	}
-
-	ctx := context.Background()
-	log.Printf("Waiting for SSM agent on %s to be online...", instanceID)
-
-	for i := 0; i < maxSeconds; i++ {
-		input := &ssm.DescribeInstanceInformationInput{
-			Filters: []types.InstanceInformationStringFilter{
-				{
-					Key:    aws.String("InstanceIds"),
-					Values: []string{instanceID},
-				},
-			},
-		}
-
-		result, err := ssmClient.DescribeInstanceInformation(ctx, input)
-		if err == nil && len(result.InstanceInformationList) > 0 {
-			status := result.InstanceInformationList[0].PingStatus
-			if status == types.PingStatusOnline {
-				log.Printf("SSM agent is online for %s", instanceID)
-				return nil
-			}
-		}
-
-		if i%10 == 0 && i > 0 {
-			log.Printf("Still waiting for SSM agent... (%d seconds)", i)
-		}
-		time.Sleep(1 * time.Second)
-	}
-
-	return fmt.Errorf("SSM agent did not come online after %d seconds", maxSeconds)
-}
-
 func runCommandSSM(cmd string, instanceID string) (string, error) {
 	return runCommandSSMWithTimeout(cmd, instanceID, 600, 120)
 }
@@ -241,6 +204,10 @@ func RunCommand(cmd string, pubIP string) (string, error) {
 }
 
 func RunCommandWithTimeout(cmd string, pubIP string, executionTimeoutSeconds int32, maxAttempts int) (string, error) {
+	readyTimeout, err := configuredSSMReadyTimeout()
+	if err != nil {
+		return "", err
+	}
 	maskGitHubActionsValue(pubIP)
 	log.Printf("[RunCommand] Starting command execution for IP %s", pubIP)
 
@@ -249,7 +216,7 @@ func RunCommandWithTimeout(cmd string, pubIP string, executionTimeoutSeconds int
 		return "", fmt.Errorf("failed to get instance ID from IP %s: %w", pubIP, err)
 	}
 
-	if err := waitForSSMAgent(instanceID, 120); err != nil {
+	if err := waitForSSMAgent(instanceID, readyTimeout); err != nil {
 		return "", fmt.Errorf("SSM agent not ready for instance %s: %w", instanceID, err)
 	}
 
