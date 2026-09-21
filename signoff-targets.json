@@ -1,13 +1,19 @@
 {
   "targets": [
     {
-      "rancher_version": "v2.14.6-8276843-head"
+      "rancher_version": "v2.14.6-c307e3a-head"
     },
     {
       "rancher_version": "v2.12.14-1e125b4-head"
     },
     {
       "rancher_version": "v2.11.18-9409959-head"
+    },
+    {
+      "rancher_version": "v2.13.10-c5bae6e-head"
+    },
+    {
+      "rancher_version": "v2.15.2-011b026-head"
     }
   ]
 }
