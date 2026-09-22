@@ -244,7 +244,10 @@ def run(args):
         raise ReleaseError("Workflow did not publish a stable release")
     print(f"Published: {release['html_url']}", flush=True)
     update_tap(tag)
-    print("Install: brew install --cask brudnak/tap/rancher-runway", flush=True)
+    print("Install:\n"
+          "  brew tap hashicorp/tap\n"
+          "  brew trust --formula hashicorp/tap/terraform\n"
+          "  brew install --cask brudnak/tap/rancher-runway", flush=True)
 
 
 def main():

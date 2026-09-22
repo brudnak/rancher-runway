@@ -31,10 +31,17 @@ Homebrew installation for Apple Silicon and Intel macOS uses the project's
 own tap. Once the first release and Cask have been published:
 
 ```bash
+brew tap hashicorp/tap
+brew trust --formula hashicorp/tap/terraform
 brew install --cask brudnak/tap/rancher-runway
 ```
 
-The Cask installs the universal app plus Terraform, Helm 3, and `kubectl`.
+Homebrew requires the Terraform dependency's tap to be added and its formula
+trusted explicitly. These steps follow Homebrew's
+[tap trust instructions](https://docs.brew.sh/Tap-Trust).
+
+The Cask installs the universal app plus Terraform, Helm 3, `kubectl`, and
+GitHub CLI (`gh`).
 Default release builds use ad-hoc signing without Apple notarization, so no
 paid Apple Developer membership is needed to publish them through this tap.
 macOS may require **Open Anyway** on first launch; see [First Run](#first-run).

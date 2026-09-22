@@ -18,8 +18,15 @@ After the `brudnak/homebrew-tap` repository has been created and the first Cask
 has been published:
 
 ```bash
+brew tap hashicorp/tap
+brew trust --formula hashicorp/tap/terraform
 brew install --cask brudnak/tap/rancher-runway
 ```
+
+The first two commands add HashiCorp's tap and trust its Terraform formula.
+Homebrew requires explicit trust for dependencies from non-official taps;
+installing Rancher Runway does not grant trust to Terraform automatically.
+See [Homebrew's tap trust instructions](https://docs.brew.sh/Tap-Trust).
 
 The Cask also installs Terraform, Helm 3, and `kubectl` for the core Rancher
 lifecycle, plus GitHub CLI (`gh`) for Issue Radar and PR Image Check. Sign in once
