@@ -29,7 +29,7 @@
       >
         <span v-if="chip.running" class="spinner !h-3 !w-3 !border-[1.5px]"></span>
         <span>{{ chip.label }}</span>
-        <span class="panel-chip-value">{{ chip.value }}</span>
+        <span class="panel-chip-value" :class="{ 'panel-chip-freshness': chip.key === 'refreshed' }">{{ chip.value }}</span>
       </span>
     </div>
 

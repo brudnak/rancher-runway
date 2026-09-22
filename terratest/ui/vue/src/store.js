@@ -115,7 +115,9 @@ export const activeClusterHAKey = ref("");
 export const setupLaunchPendingUntil = ref(0);
 export const pendingAbortOperation = ref("");
 export const refreshInFlight = ref(false);
+export const manualRefreshInFlight = ref(false);
 export const refreshError = ref("");
+let refreshRequest = null;
 
 // Action trackers (to disable individual buttons when busy)
 export const activeDownloadClusterId = ref("");
@@ -1610,8 +1612,7 @@ export const fetchState = async () => {
   return readJSON(signal => apiFetch("/api/state", { cache: "no-store", signal }), { label: "Status check" });
 };
 
-export const refresh = async () => {
-  if (refreshInFlight.value) return;
+const refreshState = async () => {
   refreshInFlight.value = true;
 
   try {
@@ -1681,10 +1682,24 @@ export const refresh = async () => {
   }
 };
 
-export const refreshChecks = () => {
-  void refresh();
-  void refreshPreflight();
-  dispatchSetupRootEvent("rancher-control-panel-refresh-readiness", {});
+// Reuse a pending poll when a user asks to refresh, without flashing loading
+// controls for automatic checks.
+export const refresh = () => {
+  if (!refreshRequest) {
+    refreshRequest = refreshState().finally(() => { refreshRequest = null; });
+  }
+  return refreshRequest;
+};
+
+export const refreshChecks = async () => {
+  if (manualRefreshInFlight.value) return;
+  manualRefreshInFlight.value = true;
+  try {
+    dispatchSetupRootEvent("rancher-control-panel-refresh-readiness", {});
+    await Promise.all([refresh(), refreshPreflight()]);
+  } finally {
+    manualRefreshInFlight.value = false;
+  }
 };
 
 // Initial state updates and DOM synchronizations

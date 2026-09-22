@@ -79,14 +79,18 @@ even if status loading fails. Hover over a web version badge for the commit
 and build date when available. Unversioned source builds show `v0.0.0-dev`.
 
 Version labels come from the release tag rather than a hardcoded UI version.
-After publishing the source changes, the first minor release can be selected
-explicitly with `make release RELEASE_VERSION=v1.1.0`.
+After publishing source changes, use `make release` for the next patch or
+`make release RELEASE_BUMP=minor` for the next minor. An explicit version can
+be selected with `RELEASE_VERSION` as shown below.
 
 Status, preflight, and Setup readiness requests time out after 30 seconds.
 The header reports failed status checks with a retry action and keeps the last
 successful snapshot visible. **Refresh checks** refreshes all three checks;
 Setup also has its own readiness refresh button. These deadlines apply to
-read-only checks, not provisioning or cleanup operations.
+read-only checks, not provisioning or cleanup operations. Background status
+polls keep the page and Setup controls stable; loading feedback on the Refresh
+button appears only for a requested refresh. Lifecycle changes still update
+safety locks immediately after the next successful status response.
 
 ### First launch
 

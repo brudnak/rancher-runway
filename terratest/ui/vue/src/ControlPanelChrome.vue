@@ -76,10 +76,10 @@
       <button
         type="button"
         @click="refreshChecks"
-        :disabled="refreshInFlight"
-        class="chrome-button chrome-button-primary"
+        :disabled="manualRefreshInFlight"
+        class="chrome-button chrome-button-primary chrome-button-refresh"
       >
-        {{ refreshInFlight ? 'Checking…' : 'Refresh checks' }}
+        {{ manualRefreshInFlight ? 'Checking…' : 'Refresh checks' }}
       </button>
 
       <button
@@ -110,6 +110,7 @@ import {
   refreshChecks,
   refreshError,
   refreshInFlight,
+  manualRefreshInFlight,
   stopPanel,
   lifecycleRunning,
 } from "./store.js";

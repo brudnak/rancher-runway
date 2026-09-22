@@ -93,6 +93,7 @@ let panelBooting = embeddedSetup
 let panelLifecycleBusy = false
 let panelLifecycleMessage = ''
 let panelLifecycleDetail = {}
+let renderedLifecycleKey = ''
 let manualValidationResults = []
 let manualRKE2Recommendations = []
 let planCommandCopies = []
@@ -2952,6 +2953,11 @@ const deploymentLifecycleBusy = detail => {
 }
 
 const setPanelLifecycleState = detail => {
+  // Unchanged polls must not rewrite buttons and fields in the native webview.
+  // Include the selected deployment so switching lanes still applies its locks.
+  const renderKey = JSON.stringify([deploymentType, detail || {}])
+  if (renderKey === renderedLifecycleKey) return
+  renderedLifecycleKey = renderKey
   const previousMessage = panelLifecycleMessage
   panelLifecycleDetail = detail || {}
   panelLifecycleBusy = deploymentLifecycleBusy(panelLifecycleDetail)
