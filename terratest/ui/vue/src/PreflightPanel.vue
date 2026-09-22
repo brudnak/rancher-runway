@@ -38,12 +38,14 @@
           <span class="shrink-0 text-xs uppercase">{{ item.status || "unknown" }}</span>
         </div>
         <div class="mt-1 text-xs leading-5 opacity-90">{{ item.detail || "" }}</div>
+        <AppBuildStamp v-if="item.status !== 'ok'" />
       </div>
     </div>
   </details>
 </template>
 
 <script setup>
+import AppBuildStamp from "./AppBuildStamp.vue";
 import { computed } from "vue";
 import {
   preflight,

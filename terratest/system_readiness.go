@@ -163,7 +163,11 @@ func checkSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessIte
 		return item
 	}
 
-	version := extractToolVersion(tool, string(output))
+	return assessSystemReadinessVersion(tool, extractToolVersion(tool, string(output)))
+}
+
+func assessSystemReadinessVersion(tool systemReadinessToolConfig, version string) systemReadinessItem {
+	item := systemReadinessItem{Name: tool.Name, Recommended: tool.RecommendedVersion, Minimum: tool.MinimumVersion}
 	item.Version = version
 	if version == "" {
 		item.Status = "warning"
@@ -172,7 +176,7 @@ func checkSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessIte
 	}
 	if !toolMajorVersionSupported(tool, version) {
 		item.Status = "error"
-		item.Detail = fmt.Sprintf("Found %s. This repo requires %s major version %d.", version, tool.Name, tool.RequiredMajorVersion)
+		item.Detail = fmt.Sprintf("Found %s. Runway requires %s major version %d.", version, tool.Name, tool.RequiredMajorVersion)
 		return item
 	}
 
@@ -182,14 +186,17 @@ func checkSystemReadinessTool(tool systemReadinessToolConfig) systemReadinessIte
 		return item
 	}
 
-	if tool.RecommendedVersion != "" && compareVersionStrings(version, tool.RecommendedVersion) != 0 {
+	if tool.RecommendedVersion != "" && compareVersionStrings(version, tool.RecommendedVersion) < 0 {
 		item.Status = "warning"
-		item.Detail = fmt.Sprintf("Found %s. Repo baseline is %s; you can try anyway if this version works for your machine.", version, tool.RecommendedVersion)
+		item.Detail = fmt.Sprintf("Found %s. The current baseline is %s; consider updating if you encounter version-related errors.", version, tool.RecommendedVersion)
 		return item
 	}
 
 	item.Status = "ok"
-	item.Detail = fmt.Sprintf("Found %s.", version)
+	item.Detail = fmt.Sprintf("Found %s; meets the version baseline.", version)
+	if tool.Command == "kubectl" {
+		item.Detail += " For each target cluster, use kubectl within one minor version of its Kubernetes API server."
+	}
 	return item
 }
 

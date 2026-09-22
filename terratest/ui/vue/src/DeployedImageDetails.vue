@@ -131,6 +131,7 @@
               <h2 id="deployedImageDetailsTitle" class="mt-1 break-all font-mono text-base font-bold text-zinc-950 dark:text-zinc-50 sm:text-lg">
                 {{ activeImage?.declaredReference || "Container image" }}
               </h2>
+              <AppBuildStamp />
               <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
                 {{ cluster.name }} · {{ activeImage?.pods?.length || 0 }} pod{{ activeImage?.pods?.length === 1 ? "" : "s" }} · {{ activeImage?.readyCount || 0 }}/{{ activeImage?.observations || 0 }} ready
               </p>
@@ -215,6 +216,7 @@
               class="inline-flex min-h-10 w-fit items-center justify-center rounded-xl border border-amber-200 bg-amber-50 px-4 text-xs font-bold text-amber-900 hover:bg-amber-100 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-100"
               @click="inspectDeclaredFallback"
             >Inspect declared tag instead</button>
+            <AppBuildStamp />
           </div>
 
           <div v-else-if="inspection" class="grid gap-4">
@@ -260,6 +262,7 @@
               <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-5">
                 <li v-for="(warning, index) in warnings" :key="`${warning}-${index}`">{{ warning }}</li>
               </ul>
+              <AppBuildStamp />
             </section>
 
             <section v-if="hasConfiguration" class="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/70">
@@ -380,6 +383,7 @@
 </template>
 
 <script setup>
+import AppBuildStamp from "./AppBuildStamp.vue";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { apiFetch } from "./store.js";
 

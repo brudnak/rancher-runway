@@ -2,6 +2,65 @@
 @tailwind components;
 @tailwind utilities;
 
+.app-identity-bar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  min-height: 3.25rem;
+  border-bottom: 1px solid rgb(228 228 231);
+  background: rgb(255 255 255 / 0.96);
+  backdrop-filter: blur(16px);
+}
+.app-identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  max-width: 1744px;
+  min-height: 3.25rem;
+  margin: 0 auto;
+  padding: 0.5rem 2rem;
+}
+.app-identity-name {
+  color: rgb(24 24 27);
+  font-size: 0.875rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+.app-build-stamp {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  width: fit-content;
+  margin-top: 0.5rem;
+  border: 1px solid rgb(228 228 231);
+  border-radius: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  background: rgb(250 250 250);
+  color: rgb(82 82 91);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.app-build-stamp strong { font-weight: 650; }
+.app-identity .app-build-stamp { margin-top: 0; }
+.dark .app-identity-bar {
+  border-color: rgb(255 255 255 / 0.1);
+  background: rgb(24 24 27 / 0.96);
+}
+.dark .app-identity-name { color: rgb(244 244 245); }
+.dark .app-build-stamp {
+  border-color: rgb(255 255 255 / 0.12);
+  background: rgb(39 39 42);
+  color: rgb(212 212 216);
+}
+@media (max-width: 639px) {
+  .app-identity { padding-inline: 1rem; }
+}
+
 .setup-disclosure-icon {
   transition: transform 160ms ease;
 }

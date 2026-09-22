@@ -707,3 +707,6 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/goland,visualstudiocode,sublimetext,vim,emacs,windows,macos,linux,jetbrains+all,jetbrains+iml,node,terraform,terragrunt
+
+# Private configuration backups created by Setup import
+.tool-config-before-import-*.yml

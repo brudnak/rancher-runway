@@ -146,6 +146,38 @@
           </button>{{end}}
         </div>
 
+        <section aria-labelledby="setupWelcomeTitle" class="mb-5 rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm dark:border-emerald-500/20 dark:bg-zinc-900/80">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div class="min-w-0">
+              <h2 id="setupWelcomeTitle" class="text-lg font-semibold">Make this workspace yours</h2>
+              <p class="mt-1 max-w-xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">Bring your existing <code>tool-config.yml</code>, or fill in the setup fields below. Importing saves a backup and does not start a run.</p>
+            </div>
+            <button id="importConfigButton" type="button" class="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50">Import config file</button>
+            <input id="importConfigFile" type="file" accept=".yml,.yaml" class="hidden" aria-label="Choose Runway configuration file" />
+          </div>
+          <div id="configImportStatus" role="status" class="mt-3 hidden rounded-lg border border-zinc-200 p-3 text-sm dark:border-white/10">
+            <p id="configImportMessage" class="break-words"></p>
+            <p class="app-build-stamp mt-2">{{.BuildLabel}}</p>
+          </div>
+          <div id="configImportPreview" class="mt-3 hidden rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm dark:border-emerald-500/20 dark:bg-emerald-500/5">
+            <h3 class="font-semibold">Review configuration import</h3>
+            <p id="configImportSummary" class="mt-2 break-words"></p>
+            <p class="mt-2 leading-6 text-zinc-600 dark:text-zinc-400">This replaces this workspace’s saved configuration and any unsaved form edits. Passwords stay hidden in this preview. Shell credentials, run history, and Terraform state are not imported.</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <button id="applyConfigImport" type="button" class="rounded-lg bg-emerald-600 px-3 py-2 font-semibold text-white disabled:opacity-50">Back up &amp; import</button>
+              <button id="cancelConfigImport" type="button" class="rounded-lg border border-zinc-300 px-3 py-2 dark:border-white/10">Cancel</button>
+            </div>
+            <p class="app-build-stamp mt-2">{{.BuildLabel}}</p>
+          </div>
+          <button id="reloadImportedConfig" type="button" class="mt-3 hidden rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white">Continue with imported config</button>
+          <details id="setupChecklist" class="mt-4 border-t border-zinc-200 pt-4 dark:border-white/10" open>
+            <summary class="cursor-pointer text-sm font-semibold"><span id="setupChecklistSummary">Your setup checklist</span></summary>
+            <p class="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">Choose a missing value to jump to its field. Values are saved when you resolve a plan; provisioning starts only after you approve it.</p>
+            <div id="setupChecklistItems" class="mt-3 flex flex-wrap gap-2"></div>
+            <button id="setupChecklistTools" type="button" class="mt-3 text-sm font-medium text-emerald-700 underline underline-offset-4 dark:text-emerald-400">Check tools &amp; credentials</button>
+          </details>
+        </section>
+
         <form id="setupForm" method="post" action="{{.BasePath}}/submit?token={{.Token}}" hx-post="{{.BasePath}}/submit?token={{.Token}}" hx-trigger="confirmed-submit" hx-swap="none">
           <input id="modeInput" type="hidden" name="mode" value="auto" />
           <input id="deploymentTypeInput" type="hidden" name="deploymentType" value="ha-rke2" />
@@ -582,6 +614,7 @@
                     <span class="advanced-toggle-knob mt-0.5 ml-0.5 block h-5 w-5 rounded-full bg-white shadow-sm transition-transform"></span>
                   </span>
                 </summary>
+                <button id="systemReadinessRefresh" type="button" class="mt-4 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100">Refresh checks</button>
                 <div id="systemReadinessItems" class="mt-5 grid gap-3">
                   <div class="rounded-lg border border-zinc-200 bg-white px-3.5 py-3 text-sm text-zinc-500 dark:border-white/10 dark:bg-zinc-950/30 dark:text-zinc-400">
                     Checking system readiness...
@@ -686,6 +719,7 @@
   <div id="confirmModal" class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto bg-zinc-950/45 p-4 py-10 backdrop-blur-sm dark:bg-zinc-950/80" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalBody">
     <div class="flex max-h-[calc(100vh-5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl shadow-zinc-900/20 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/50">
       <h2 id="confirmModalTitle" class="shrink-0 text-xl font-semibold text-zinc-950 dark:text-zinc-100"></h2>
+      <span class="app-build-stamp">{{.BuildLabel}}</span>
       <p id="confirmModalBody" class="mt-3 min-h-0 overflow-y-auto whitespace-pre-wrap break-words text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-300"></p>
       <div class="mt-6 flex shrink-0 flex-wrap justify-end gap-3">
         <button id="confirmModalCancel" type="button" class="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700">Go back</button>
@@ -700,6 +734,7 @@
         <div>
           <div id="helmValidationModalBadge" class="mb-2 inline-flex rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-semibold text-zinc-700 dark:bg-white/[0.06] dark:text-zinc-200">Helm validation</div>
           <h2 id="helmValidationModalTitle" class="text-xl font-semibold text-zinc-950 dark:text-zinc-100">Helm validation results</h2>
+      <span class="app-build-stamp">{{.BuildLabel}}</span>
           <p id="helmValidationModalSummary" class="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-300"></p>
         </div>
         <button id="helmValidationModalClose" type="button" class="rounded-lg border border-zinc-200 bg-white px-3.5 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700">Close</button>

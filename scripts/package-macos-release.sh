@@ -219,6 +219,7 @@ ditto "${repo_root}/go.mod" "${runtime_stage}/go.mod"
 
 runtime_excludes=(
   --exclude .DS_Store
+  --exclude '.tool-config-before-import-*.yml'
   --exclude .terraform
   --exclude .terraform.lock.hcl
   --exclude automation-output
@@ -256,6 +257,7 @@ helper_architectures="$(lipo -archs "${runtime_stage}/bin/rancher-runway-lifecyc
 
 unexpected_runtime_file="$(find "${runtime_stage}" -type f \( \
   -name 'tool-config.yml' -o \
+  -name '.tool-config-before-import-*.yml' -o \
   -name '*.tfstate' -o \
   -name '*.tfstate.*' -o \
   -name 'terraform.tfvars' -o \

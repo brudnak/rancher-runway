@@ -1,4 +1,5 @@
 <script setup>
+import AppBuildStamp from "./AppBuildStamp.vue";
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { writeTextToClipboard } from './clipboard.js';
 import { apiFetch } from './store.js';
@@ -259,7 +260,7 @@ onBeforeUnmount(() => { clearTimeout(versionTimer); clearTimeout(copyTimer); });
       <div class="hl-title-row"><span class="hl-mark" aria-hidden="true"><HelmLabIcon name="terminal" /></span><div><h2>Helm Lab</h2><p class="hl-muted">Shape your next Rancher release.</p></div></div>
       <div class="hl-header-actions"><button type="button" class="hl-mobile-jump" @click="jumpTo('hl-preview')">View command ↓</button><button type="button" :disabled="loading" @click="load(true)"><HelmLabIcon name="refresh" /> Refresh catalog</button></div>
     </header>
-    <div v-if="notice" class="hl-notice" :class="{ 'hl-alert': noticeIsError }" role="status"><span>{{ notice }}</span><button type="button" aria-label="Dismiss notification" @click="notice = ''">×</button></div>
+    <div v-if="notice" class="hl-notice" :class="{ 'hl-alert': noticeIsError }" role="status"><div><span>{{ notice }}</span><AppBuildStamp /></div><button type="button" aria-label="Dismiss notification" @click="notice = ''">×</button></div>
 
     <div class="hl-summary">
       <div><span class="hl-eyebrow">Target release</span><strong>{{ config.release || 'Untitled release' }} <span class="hl-summary-separator">/</span> {{ config.namespace || 'No namespace' }}</strong></div>
@@ -292,10 +293,10 @@ onBeforeUnmount(() => { clearTimeout(versionTimer); clearTimeout(copyTimer); });
         <section class="hl-card">
           <div class="hl-section-title"><span class="hl-step">02</span><h3>Chart values</h3><span class="hl-count">{{ fields.length }}</span></div>
           <div class="hl-toolbar"><button type="button" :disabled="!chart" title="One replica, rancher.local, admin bootstrap password, and Always pull policy" @click="preset('local')">Local test</button><button type="button" :disabled="!chart" @click="preset('replicas')">3 replicas</button><button type="button" :disabled="!chart" @click="importOpen = !importOpen" :aria-expanded="importOpen">Import YAML</button><span class="hl-toolbar-spacer"></span><button v-if="undo" type="button" @click="undoEdit">Undo</button><button type="button" :disabled="!chart" @click="reset">Reset all</button></div>
-          <div v-if="importOpen" class="hl-import"><div class="hl-row"><label for="hl-import">Paste values.yaml</label><button type="button" @click="fileInput.click()">Choose file</button><input ref="fileInput" class="hl-file-input" type="file" accept=".yaml,.yml,.txt" aria-label="Import values file" @change="readFile"></div><textarea id="hl-import" v-model="importText" rows="7" spellcheck="false" placeholder="hostname: rancher.example.com&#10;replicas: 3" /><p class="hl-help">Replaces the current overrides and environment variables. Only keys supported by this chart are accepted.</p><p v-if="importError" class="hl-error-text" role="alert">{{ importError }}</p><div class="hl-toolbar"><button type="button" class="hl-primary" @click="applyImport">Apply values</button><button type="button" @click="importOpen = false">Cancel</button></div></div>
+          <div v-if="importOpen" class="hl-import"><div class="hl-row"><label for="hl-import">Paste values.yaml</label><button type="button" @click="fileInput.click()">Choose file</button><input ref="fileInput" class="hl-file-input" type="file" accept=".yaml,.yml,.txt" aria-label="Import values file" @change="readFile"></div><textarea id="hl-import" v-model="importText" rows="7" spellcheck="false" placeholder="hostname: rancher.example.com&#10;replicas: 3" /><p class="hl-help">Replaces the current overrides and environment variables. Only keys supported by this chart are accepted.</p><p v-if="importError" class="hl-error-text" role="alert">{{ importError }}<AppBuildStamp /></p><div class="hl-toolbar"><button type="button" class="hl-primary" @click="applyImport">Apply values</button><button type="button" @click="importOpen = false">Cancel</button></div></div>
           <div class="hl-filter"><div class="hl-search-wrap"><HelmLabIcon name="search" /><input v-model="search" type="search" placeholder="Find a value or setting…" aria-label="Search chart values"></div><button type="button" :class="{ 'hl-selected': changedOnly }" :aria-pressed="changedOnly" @click="changedOnly = !changedOnly">Modified {{ changed.length }}</button></div>
           <div v-if="loading" class="hl-empty" role="status"><span class="hl-loading-dot"></span> Loading chart metadata…</div>
-          <div v-else-if="error" class="hl-empty hl-alert" role="alert"><p>{{ error }}</p><button type="button" @click="load(true)">Retry catalog</button></div>
+          <div v-else-if="error" class="hl-empty hl-alert" role="alert"><p>{{ error }}</p><button type="button" @click="load(true)">Retry catalog</button><AppBuildStamp /></div>
           <template v-else-if="chart">
             <div v-if="unknownVersion" class="hl-note">Custom version selected. The editor uses {{ entry.version }} as a reference; verify compatibility with your chart.</div>
             <div v-if="unavailable.length" class="hl-note"><p>This chart does not support: {{ unavailable.join(', ') }}.</p><button type="button" @click="removeUnavailable">Remove unavailable overrides</button></div>
@@ -330,7 +331,7 @@ onBeforeUnmount(() => { clearTimeout(versionTimer); clearTimeout(copyTimer); });
               <div v-else class="hl-code-empty">{{ loading ? 'Resolving chart and values…' : 'Your command will appear here after the settings are valid.' }}</div>
             </div>
           </div>
-          <div v-if="output.error" class="hl-note hl-alert" role="alert">{{ output.error }}<button v-if="firstInvalidField" type="button" @click="focusField(firstInvalidField)">Fix {{ firstInvalidField.path }} →</button></div>
+          <div v-if="output.error" class="hl-note hl-alert" role="alert">{{ output.error }}<button v-if="firstInvalidField" type="button" @click="focusField(firstInvalidField)">Fix {{ firstInvalidField.path }} →</button><AppBuildStamp /></div>
           <template v-if="output.command">
             <div class="hl-output-actions">
               <button type="button" class="hl-primary" @click="copy(outputTab === 'script' ? setupScript : outputTab === 'yaml' ? output.allYaml : output.command)"><HelmLabIcon name="copy" />{{ outputTab === 'script' ? 'Copy full setup' : outputTab === 'yaml' ? 'Copy values YAML' : 'Copy Helm command' }}</button>

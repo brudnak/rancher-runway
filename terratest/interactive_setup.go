@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/buildinfo"
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/brudnak/ha-rancher-rke2/terratest/ui"
 	"github.com/spf13/viper"
@@ -72,6 +73,7 @@ type interactiveSetupState struct {
 
 type interactiveSetupTemplateData struct {
 	Token            string
+	BuildLabel       string
 	BasePath         string
 	ConfigPath       string
 	Embedded         bool
@@ -83,6 +85,7 @@ type interactiveServer struct {
 	configPath string
 
 	mu          sync.Mutex
+	configMu    sync.Mutex
 	phase       interactivePhase
 	logs        []string
 	planText    string
@@ -93,6 +96,7 @@ type interactiveServer struct {
 
 	resultCh        chan interactiveResult
 	responseHandler func(action string, plans []*RancherResolvedPlan) error
+	configImporter  func([]byte, string) (string, error)
 }
 
 func resolveRancherSetup() ([]*RancherResolvedPlan, error) {
@@ -206,8 +210,8 @@ func (s *interactiveServer) registerHandlers(mux *http.ServeMux, initialVersions
 
 func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersions []string, basePath string) {
 	basePath = normalizeInteractiveBasePath(basePath)
-	templateData := interactiveSetupTemplateDataFor(s.token, s.configPath, initialVersions, basePath, false)
 	pageTemplate := template.Must(template.New("interactive-setup").Parse(ui.InteractiveSetupHTML))
+	mux.HandleFunc(interactiveSetupPath(basePath, "/api/import-config"), s.handleConfigImport)
 
 	mux.HandleFunc(interactiveSetupPath(basePath, "/static/interactive_setup.js"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
@@ -235,7 +239,9 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = pageTemplate.Execute(w, templateData)
+		// Read the current config so an import appears immediately after reload.
+		data := interactiveSetupTemplateDataFor(s.token, s.configPath, currentPreflightVersions(), basePath, false)
+		_ = pageTemplate.Execute(w, data)
 	}
 	mux.HandleFunc(interactiveSetupPath(basePath, "/"), handlePage)
 	if basePath != "" {
@@ -400,6 +406,8 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 			return
 		}
 
+		s.configMu.Lock()
+		defer s.configMu.Unlock()
 		readiness := collectSystemReadiness(s.configPath)
 		if !readiness.Ready {
 			http.Error(w, readiness.Summary, http.StatusBadRequest)
@@ -640,6 +648,7 @@ func interactiveSetupTemplateDataFor(token string, configPath string, initialVer
 
 	return interactiveSetupTemplateData{
 		Token:            token,
+		BuildLabel:       buildinfo.Current().AppLabel(),
 		BasePath:         normalizeInteractiveBasePath(basePath),
 		ConfigPath:       configPath,
 		Embedded:         embedded,

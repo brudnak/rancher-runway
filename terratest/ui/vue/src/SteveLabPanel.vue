@@ -30,7 +30,7 @@
             </svg>
           </span>
           <div class="flex-1 text-sm font-semibold leading-5">
-            {{ toast.message }}
+            {{ toast.message }}<AppBuildStamp />
           </div>
         </div>
       </transition-group>
@@ -829,6 +829,7 @@
 </template>
 
 <script setup>
+import AppBuildStamp from "./AppBuildStamp.vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { writeTextToClipboard } from "./clipboard.js";
 import { streamSteveLogs } from "./store.js";

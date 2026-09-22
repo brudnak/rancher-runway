@@ -535,6 +535,13 @@ func migrateRuntimeState(sourceRoot, targetRoot string) error {
 		"tool-config.yml",
 		filepath.Join("terratest", "automation-output"),
 	}
+	configBackups, err := filepath.Glob(filepath.Join(sourceRoot, ".tool-config-before-import-*.yml"))
+	if err != nil {
+		return err
+	}
+	for _, path := range configBackups {
+		paths = append(paths, filepath.Base(path))
+	}
 	for _, moduleRoot := range []string{
 		filepath.Join("modules", "aws"),
 		filepath.Join("modules", "linode-docker-cattle"),
@@ -573,7 +580,7 @@ func migrateRuntimeState(sourceRoot, targetRoot string) error {
 		if err := copyMutablePath(source, target); err != nil {
 			return err
 		}
-		if rel == "tool-config.yml" {
+		if rel == "tool-config.yml" || strings.HasPrefix(rel, ".tool-config-before-import-") {
 			if err := os.Chmod(target, 0o600); err != nil {
 				return err
 			}

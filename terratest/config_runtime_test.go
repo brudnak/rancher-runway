@@ -780,3 +780,21 @@ func TestPrepareTerraformModuleForRunCopiesOnlySourceFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestPanelSetupConfigLinodeDoesNotRequireHiddenAWSFields(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	viper.Set("deployment.type", deploymentTypeLinodeDocker)
+	viper.Set("total_has", 1)
+	viper.Set("rancher.mode", "auto")
+	viper.Set("rancher.version", "2.15-head")
+	viper.Set("rancher.bootstrap_password", "example-password")
+	viper.Set("tf_vars.aws_prefix", "ex")
+	viper.Set("tf_vars.aws_route53_fqdn", "example.test")
+	viper.Set("linode.access_token", "fixture-token")
+	viper.Set("linode.ssh_root_password", "Example-password123!")
+	panel := &localControlPanel{configPath: "tool-config.yml"}
+	if item := panel.checkSetupConfigState(); item.Status != "ok" {
+		t.Fatalf("Linode setup blocked by fields hidden from Setup: %s", item.Detail)
+	}
+}

@@ -738,9 +738,11 @@ func (p *localControlPanel) handleIndex(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", "no-store")
 	_ = page.Execute(w, struct {
 		Token           string
+		Build           buildinfo.Info
 		SetupEditorHTML template.HTML
 	}{
 		Token:           p.token,
+		Build:           buildinfo.Current(),
 		SetupEditorHTML: setupEditorHTML,
 	})
 }

@@ -16,6 +16,14 @@ func (p *localControlPanel) newSetupEditor() *interactiveServer {
 		token:      p.token,
 		configPath: p.configPath,
 		phase:      phaseEditor,
+		configImporter: func(content []byte, revision string) (string, error) {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.anyOperationRunningLocked() {
+				return "", fmt.Errorf("wait for the current operation to finish before importing configuration")
+			}
+			return importToolConfig(p.configPath, content, revision)
+		},
 		responseHandler: func(action string, plans []*RancherResolvedPlan) error {
 			if action != "continue" {
 				return nil

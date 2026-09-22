@@ -81,6 +81,15 @@ func DisplayLine() string {
 	return fmt.Sprintf("%s, commit %s%s", build, info.CommitShort, suffix)
 }
 
+// AppLabel identifies the running binary in screenshots of native dialogs.
+func (info Info) AppLabel() string {
+	modified := ""
+	if info.Modified {
+		modified = "*"
+	}
+	return fmt.Sprintf("Rancher Runway v%s%s · build %s", normalizeVersion(info.Version), modified, normalizeBuildNumber(info.BuildNumber))
+}
+
 func normalizeVersion(value string) string {
 	value = cleanValue(value)
 	if strings.HasPrefix(value, "v") || strings.HasPrefix(value, "V") {

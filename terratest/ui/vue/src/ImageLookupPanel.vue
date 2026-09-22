@@ -250,6 +250,7 @@
     <div v-if="searchError" role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
       <div class="font-bold">Image search failed</div>
       <div class="mt-1 whitespace-pre-wrap break-words">{{ searchError }}</div>
+      <AppBuildStamp />
     </div>
 
     <div class="grid min-w-0 items-start gap-5" :class="detailVisible ? 'xl:grid-cols-[minmax(0,1.45fr)_minmax(23rem,0.85fr)]' : ''">
@@ -499,6 +500,7 @@
           <div v-else-if="inspectError" role="alert" class="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
             <div class="font-bold">Inspection failed</div>
             <div class="mt-1 whitespace-pre-wrap break-words">{{ inspectError }}</div>
+            <AppBuildStamp />
           </div>
 
           <div v-else-if="inspection" class="mt-4 grid gap-4">
@@ -555,6 +557,7 @@
               <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-5">
                 <li v-for="(warning, index) in warnings" :key="`${warning}-${index}`">{{ warning }}</li>
               </ul>
+              <AppBuildStamp />
             </section>
 
             <section v-if="hasConfiguration" class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/70">
@@ -753,6 +756,7 @@
                 <div v-else-if="sourceBuildError" class="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200" role="alert">
                   <div class="font-bold">Declared source fetch failed</div>
                   <div class="mt-0.5 whitespace-pre-wrap break-words">{{ sourceBuildError }}</div>
+                  <AppBuildStamp />
                 </div>
               </div>
 
@@ -783,12 +787,13 @@
       class="pointer-events-none fixed bottom-5 right-5 z-[9999] max-w-sm rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm font-bold text-emerald-800 shadow-xl dark:border-emerald-500/25 dark:bg-zinc-900 dark:text-emerald-200"
       role="status"
     >
-      {{ copyNotice }}
+      {{ copyNotice }}<AppBuildStamp />
     </div>
   </div>
 </template>
 
 <script setup>
+import AppBuildStamp from "./AppBuildStamp.vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { writeTextToClipboard } from "./clipboard.js";
 import { apiFetch } from "./store.js";

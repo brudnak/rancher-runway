@@ -130,6 +130,7 @@
     <div v-if="requestError" role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
       <div class="font-bold">PR image verification failed</div>
       <div class="mt-1 whitespace-pre-wrap break-words">{{ requestError }}</div>
+      <AppBuildStamp />
     </div>
 
     <section v-if="loading" class="grid gap-4" role="status" aria-live="polite">
@@ -204,6 +205,7 @@
         <ul class="mt-2 list-disc space-y-1 pl-5">
           <li v-for="warning in resultWarnings" :key="warning">{{ warning }}</li>
         </ul>
+        <AppBuildStamp />
       </section>
 
       <div class="grid min-w-0 gap-4 lg:grid-cols-2">
@@ -319,6 +321,7 @@
 </template>
 
 <script setup>
+import AppBuildStamp from "./AppBuildStamp.vue";
 import { computed, nextTick, onBeforeUnmount, ref } from "vue";
 import { apiFetch } from "./store.js";
 

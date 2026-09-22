@@ -37,8 +37,8 @@ func TestSystemReadinessRequiresHelm3(t *testing.T) {
 	if helmConfig.RequiredMajorVersion != 3 {
 		t.Fatalf("Helm required major = %d, want 3", helmConfig.RequiredMajorVersion)
 	}
-	if helmConfig.RecommendedVersion != "3.21.3" {
-		t.Fatalf("Helm recommended version = %q, want 3.21.3", helmConfig.RecommendedVersion)
+	if helmConfig.RecommendedVersion != "3.22.0" {
+		t.Fatalf("Helm recommended version = %q, want 3.22.0", helmConfig.RecommendedVersion)
 	}
 }
 
@@ -193,5 +193,24 @@ func TestDeploymentSecretReadinessItemsSkipNonLinodeDeployments(t *testing.T) {
 
 	if items := deploymentSecretReadinessItems(); len(items) != 0 {
 		t.Fatalf("expected non-Linode deployment to skip Linode readiness, got %#v", items)
+	}
+}
+
+func TestSystemReadinessBaselinePolicy(t *testing.T) {
+	tool := systemReadinessToolConfig{Name: "Helm", Command: "helm", MinimumVersion: "3.18.0", RecommendedVersion: "3.22.0", RequiredMajorVersion: 3}
+	for _, tc := range []struct{ version, status string }{
+		{"3.22.0", "ok"}, {"3.22.1", "ok"}, {"3.23.0", "ok"},
+		{"3.21.3", "warning"}, {"3.17.0", "warning"}, {"4.0.0", "error"}, {"", "warning"},
+	} {
+		t.Run(tc.version, func(t *testing.T) {
+			if item := assessSystemReadinessVersion(tool, tc.version); item.Status != tc.status {
+				t.Fatalf("status = %s, want %s: %s", item.Status, tc.status, item.Detail)
+			}
+		})
+	}
+	for _, tool := range loadSystemReadinessConfig().Tools {
+		if item := assessSystemReadinessVersion(tool, tool.RecommendedVersion); item.Status != "ok" {
+			t.Fatalf("configured baseline does not pass: %s: %s", tool.Name, item.Detail)
+		}
 	}
 }

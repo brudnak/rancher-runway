@@ -27,7 +27,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </span>
-          <div class="flex-1 text-sm font-semibold leading-5">{{ toast.message }}</div>
+          <div class="flex-1 text-sm font-semibold leading-5">{{ toast.message }}<AppBuildStamp /></div>
         </div>
       </transition-group>
     </div>
@@ -543,6 +543,7 @@
 </template>
 
 <script setup>
+import AppBuildStamp from "./AppBuildStamp.vue";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { writeTextToClipboard } from "./clipboard.js";
 

@@ -33,6 +33,61 @@ lifecycle, plus GitHub CLI (`gh`) for Issue Radar and PR Image Check. Sign in on
 with `gh auth login` to use GitHub features. Go is embedded in the lifecycle worker and
 is only needed separately for the optional Steve Lab workflow.
 
+### Switching from `make setup`
+
+Both `make setup` and Homebrew default to `/Applications/Rancher Runway.app`.
+If the development copy is present, wait for active operations to finish, quit
+it, and rename it to `Rancher Runway Dev.app` or move it out of Applications
+before installing the Cask. A copy installed with `INSTALL_DIR` on the Desktop
+can remain there. Open the Homebrew copy in Applications to use the release.
+
+Keep the development checkout and its configuration, Terraform state, and run
+records. Development builds use that checkout; packaged releases use a managed
+workspace under `~/Library/Application Support/Rancher Runway`. The first
+release launch does not import development runs. Use the development copy to
+manage those existing runs. Subsequent Homebrew upgrades preserve the managed
+workspace and its state.
+
+To bring over settings, open **Setup → Import config file** in the Homebrew app
+and choose the checkout's `tool-config.yml`. Review the detected sections,
+choose **Back up & import**, then **Continue with imported config**. The app
+keeps a private `.tool-config-before-import-*.yml` backup beside its managed config.
+The source file is unchanged. Backups also survive later app upgrades and can be
+restored with the same importer.
+
+The Setup checklist identifies missing values and opens the matching fields.
+**Tools & credentials** runs the local readiness checks. Importing does not
+resolve a plan or create infrastructure, and is blocked while an operation or
+plan resolution is in progress. This copies settings only; it does not move
+Terraform state, existing runs, or shell credentials.
+
+Readiness uses current baselines and accepts newer versions within the supported
+major rather than requiring an exact match. Helm remains on major 3. See the
+[requirements table](../README.md#requirements) for versions and the kubectl
+client/server compatibility constraint.
+
+Homebrew's [`--adopt` option](https://docs.brew.sh/Manpage#install-options-formulacask-)
+is for matching existing artifacts; a development build should be moved aside
+before installing a release.
+
+### Identifying a build
+
+The app displays its version and build number in a persistent top-left bar,
+warning and confirmation dialogs, error notifications, and native close
+warnings. Metadata is included in the initial page, so it remains available
+even if status loading fails. Hover over a web version badge for the commit
+and build date when available. Unversioned source builds show `v0.0.0-dev`.
+
+Version labels come from the release tag rather than a hardcoded UI version.
+After publishing the source changes, the first minor release can be selected
+explicitly with `make release RELEASE_VERSION=v1.1.0`.
+
+Status, preflight, and Setup readiness requests time out after 30 seconds.
+The header reports failed status checks with a retry action and keeps the last
+successful snapshot visible. **Refresh checks** refreshes all three checks;
+Setup also has its own readiness refresh button. These deadlines apply to
+read-only checks, not provisioning or cleanup operations.
+
 ### First launch
 
 Open Rancher Runway from Applications. If macOS blocks it because the

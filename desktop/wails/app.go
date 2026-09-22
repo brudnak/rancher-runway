@@ -79,7 +79,7 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	_, _ = wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{
 		Type:          wailsruntime.WarningDialog,
 		Title:         title,
-		Message:       message,
+		Message:       message + "\n\n" + buildinfo.Current().AppLabel(),
 		Buttons:       []string{"OK"},
 		DefaultButton: "OK",
 	})
@@ -109,7 +109,7 @@ func (a *App) confirmCloseWithGPUInfrastructure(ctx context.Context, server *har
 	selection, err := wailsruntime.MessageDialog(ctx, wailsruntime.MessageDialogOptions{
 		Type:          wailsruntime.WarningDialog,
 		Title:         title,
-		Message:       message,
+		Message:       message + "\n\n" + buildinfo.Current().AppLabel(),
 		Buttons:       []string{gpuCloseCancelButton, gpuCloseAnywayButton},
 		DefaultButton: gpuCloseCancelButton,
 		CancelButton:  gpuCloseCancelButton,

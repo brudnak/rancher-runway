@@ -17,6 +17,7 @@
         <h2 id="manualLinodeCleanupWarningTitle" class="text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
           Manual Linode cleanup required
         </h2>
+        <AppBuildStamp />
         <p id="manualLinodeCleanupWarningBody" class="mt-2 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
           Cleanup could not fully remove the recorded downstream Linode clusters. AWS management destroy continued, but affected Linode resources may still be running and generating charges. Review the warning below and delete any remaining resources manually in Linode.
         </p>
@@ -62,6 +63,7 @@
       <div class="border-b border-rose-100 px-6 py-5 dark:border-rose-500/20">
         <div class="mb-3 inline-flex rounded-full bg-rose-100 px-3 py-1.5 text-xs font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">Cost reminder</div>
         <h2 id="gpuReminderTitle" class="text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">GPU infrastructure active</h2>
+        <AppBuildStamp />
         <p id="gpuReminderBody" class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">{{ gpuReminderBody }}</p>
       </div>
       <div class="flex flex-wrap justify-end gap-3 px-6 py-4">
@@ -109,6 +111,7 @@
             <h2 id="logModalTitle" class="break-words text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
               {{ logModalTitle }}
             </h2>
+            <AppBuildStamp />
             <p id="logModalSubtitle" class="mt-1 break-words text-sm text-zinc-500 dark:text-zinc-400">
               {{ logModalSubtitle }}
             </p>
@@ -222,6 +225,7 @@
       <h2 id="dangerConfirmTitle" class="text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
         {{ dangerConfirm.title }}
       </h2>
+      <AppBuildStamp />
       <p id="dangerConfirmBody" class="mt-3 text-sm leading-6 text-zinc-600 dark:text-zinc-300">
         {{ dangerConfirm.body }}
       </p>
@@ -272,6 +276,7 @@
       <div class="border-b border-zinc-200 px-6 py-5 dark:border-white/10">
         <div class="mb-3 inline-flex rounded-full bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-700 dark:bg-sky-500/15 dark:text-sky-300">Clipboard ready</div>
         <h2 id="upgradeCommandTitle" class="text-xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Prepared upgrade command copied</h2>
+        <AppBuildStamp />
         <p class="mt-2 text-sm leading-6 text-zinc-600 dark:text-zinc-300">The command is ready to edit before running against the local HA cluster.</p>
       </div>
       <div class="grid gap-3 px-6 py-5 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
@@ -312,6 +317,7 @@
         <div id="panelNoticeBody" class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-300">
           {{ notice.body }}
         </div>
+        <AppBuildStamp />
       </div>
       <button
         type="button"
@@ -325,6 +331,7 @@
 </template>
 
 <script setup>
+import AppBuildStamp from "./AppBuildStamp.vue";
 import { computed, nextTick, ref, watch, onMounted, onUnmounted } from "vue";
 import {
   state,
@@ -333,6 +340,7 @@ import {
   upgradeCommandModalOpen,
   manualLinodeCleanupWarning,
   notice,
+  gpuReminderModalOpen,
   hideGPUReminderModal,
   stopStream,
   closeLogModal,

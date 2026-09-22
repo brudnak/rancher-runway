@@ -80,10 +80,14 @@ const advancedDetailsOpenByDeployment = new Map([
 ])
 let customHostnameEnabled = Boolean(setupData.customHostnameEnabled)
 let customHostname = ''
+let configImportBusy = false
+let pendingConfigImport = null
+let configImportSaved = false
 let submitting = false
 let responseSubmitting = false
 let pendingCompletionShouldContinue = true
 let systemReadiness = null
+let systemReadinessPending = false
 let setupStatePollTimer = null
 let panelBooting = embeddedSetup
 let panelLifecycleBusy = false
@@ -214,6 +218,7 @@ const systemReadinessDetailsEl = byId('systemReadinessDetails')
 const systemReadinessBadgeEl = byId('systemReadinessBadge')
 const systemReadinessSummaryEl = byId('systemReadinessSummary')
 const systemReadinessItemsEl = byId('systemReadinessItems')
+const systemReadinessRefreshEl = byId('systemReadinessRefresh')
 const tfVarInputEls = setupQueryAll('input[data-tf-var]')
 const lockedFieldInputEls = setupQueryAll('input[data-locked-field]')
 const lockToggleEls = setupQueryAll('button[data-lock-toggle]')
@@ -1241,6 +1246,14 @@ const renderSystemReadiness = readiness => {
 }
 
 const loadSystemReadiness = async () => {
+  if (systemReadinessPending) return
+  systemReadinessPending = true
+  if (systemReadinessRefreshEl) {
+    systemReadinessRefreshEl.disabled = true
+    systemReadinessRefreshEl.textContent = 'Checking…'
+  }
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), 30000)
   renderSystemReadiness({
     ready: false,
     summary: 'Checking local tools, config, and required environment.',
@@ -1250,6 +1263,7 @@ const loadSystemReadiness = async () => {
   try {
     const response = await fetch(setupEndpoint(`/api/readiness?token=${encodeURIComponent(token)}`), {
       cache: 'no-store',
+      signal: controller.signal,
       headers: { 'Accept': 'application/json' }
     })
     if (!response.ok) {
@@ -1263,9 +1277,19 @@ const loadSystemReadiness = async () => {
       items: [{
         name: 'System readiness',
         status: 'error',
-        detail: error instanceof Error ? error.message : 'System readiness check failed.'
+        detail: controller.signal.aborted
+          ? 'System readiness did not respond within 30 seconds. Click Refresh checks to retry.'
+          : error instanceof Error ? error.message : 'System readiness check failed.'
       }]
     })
+  } finally {
+    window.clearTimeout(timer)
+    systemReadinessPending = false
+    if (systemReadinessRefreshEl) {
+      systemReadinessRefreshEl.disabled = false
+      systemReadinessRefreshEl.textContent = 'Refresh checks'
+    }
+    renderSetupChecklist()
   }
 }
 
@@ -2446,9 +2470,33 @@ const validateEnabledDownstreamLinodePlans = () => {
   return null
 }
 
+const requiredSetupFields = () => {
+  const fields = [
+    { label: 'Bootstrap password', target: bootstrapPasswordInputEl },
+    { label: 'Run prefix', target: setupQuery('[data-tf-var="aws_prefix"]') },
+    { label: 'Route53 domain', target: setupQuery('[data-tf-var="aws_route53_fqdn"]') }
+  ]
+  if (!isLinodeDockerDeployment()) {
+    fields.push({ label: 'AWS region', target: setupQuery('[data-tf-var="aws_region"]') })
+    fields.push({ label: 'First name', target: userFirstNameInputEl }, { label: 'Last name', target: userLastNameInputEl })
+    for (const [key, label] of [
+      ['aws_vpc', 'VPC'], ['aws_subnet_a', 'Subnet A'], ['aws_subnet_b', 'Subnet B'],
+      ['aws_subnet_c', 'Subnet C'], ['aws_ami', 'Machine image (AMI)'], ['aws_subnet_id', 'Instance subnet'],
+      ['aws_security_group_id', 'Security group'], ['aws_pem_key_name', 'EC2 key pair']
+    ]) fields.push({ label, target: setupQuery(`[data-tf-var="${key}"]`) })
+  }
+  if (isHostedTenantDeployment()) fields.push({ label: 'RDS password', target: hostedRdsPasswordInputEl })
+  if (isLinodeDockerDeployment()) fields.push({ label: 'Root SSH password', target: linodeSshRootPasswordInputEl })
+  return fields
+}
+
+const missingSetupFields = () => requiredSetupFields().filter(field => !String(field.target?.value || '').trim())
+
 const validateSetup = () => {
   const trimmed = normalizedVersions()
   const manualTrimmed = normalizedManualCommands()
+  const missing = missingSetupFields()[0]
+  if (missing) return { message: `${missing.label} is required.`, target: missing.target }
 
   if (setupMode === 'auto' && trimmed.length < 1) {
     return { message: 'At least one HA version is required.', target: rowsEl.querySelector('input[data-index]') }
@@ -2776,7 +2824,11 @@ const resetEmbeddedSetupFlow = () => {
 
 const setSubmittingState = nextSubmitting => {
   submitting = nextSubmitting
-  const actionDisabled = nextSubmitting || panelBooting || panelLifecycleBusy
+  const actionDisabled = nextSubmitting || panelBooting || panelLifecycleBusy || configImportBusy || configImportSaved
+  for (const id of ['importConfigButton', 'applyConfigImport']) {
+    const button = byId(id)
+    if (button) button.disabled = actionDisabled
+  }
   addBtnEl.disabled = actionDisabled
   continueBtnEl.disabled = actionDisabled
   editorCancelBtnEl.disabled = actionDisabled
@@ -3026,7 +3078,7 @@ const prepareSetupSubmit = async event => {
     event.stopPropagation()
   }
 
-  if (submitting) {
+  if (submitting || configImportBusy || configImportSaved) {
     return
   }
 
@@ -3941,6 +3993,137 @@ setupRootEl.addEventListener('htmx:afterRequest', event => {
   stopSetupStatePolling()
 })
 
+const focusSetupField = target => {
+  if (!target) return
+  for (let parent = target.parentElement; parent && parent !== setupRootEl; parent = parent.parentElement) {
+    if (parent.tagName === 'DETAILS') parent.open = true
+  }
+  if (target.readOnly) {
+    const key = target.getAttribute('data-tf-var')
+    if (key) setFieldLocked(key, false)
+    else if (target === hostedRdsPasswordInputEl) setHostedRDSPasswordLocked(false)
+  }
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  target.focus({ preventScroll: true })
+}
+
+const renderSetupChecklist = () => {
+  const items = byId('setupChecklistItems')
+  if (!items) return
+  const missing = missingSetupFields()
+  if (setupMode === 'auto') {
+    normalizedVersions().forEach((version, index) => {
+      if (!version) missing.unshift({ label: `Rancher version ${index + 1}`, target: rowsEl.querySelector(`input[data-index="${index}"]`) })
+    })
+  } else {
+    normalizedManualCommands().forEach((command, index) => {
+      if (!command) missing.unshift({ label: `Helm command ${index + 1}`, target: manualRowsEl.querySelector(`textarea[data-manual-command-index="${index}"]`) })
+      if (!String(k8sVersions[index] || '').trim()) missing.push({ label: `RKE2 version ${index + 1}`, target: manualRowsEl.querySelector(`input[data-k8s-index="${index}"]`) })
+    })
+  }
+  const validation = missing.length ? null : validateSetup()
+  if (validation) missing.push({ label: validation.message, target: validation.target })
+  byId('setupChecklistSummary').textContent = missing.length ? `${missing.length} setup value${missing.length === 1 ? '' : 's'} need attention` : 'Configuration filled in — review your plan next'
+  items.replaceChildren()
+  for (const field of missing) {
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'rounded-lg border border-zinc-200 px-3 py-2 text-left text-xs font-medium text-zinc-700 hover:border-emerald-400 dark:border-white/10 dark:text-zinc-300'
+    button.textContent = field.label
+    button.addEventListener('click', () => focusSetupField(field.target))
+    items.append(button)
+  }
+  const tools = byId('setupChecklistTools')
+  tools.textContent = systemReadiness ? `Tools & credentials: ${systemReadiness.summary}` : 'Check tools & credentials'
+}
+
+const showConfigImportStatus = message => {
+  byId('configImportMessage').textContent = message
+  byId('configImportStatus').classList.remove('hidden')
+}
+
+const requestConfigImport = async payload => {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 30000)
+  try {
+    const response = await fetch(`${setupEndpoint('/api/import-config')}?token=${encodeURIComponent(token)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, cache: 'no-store',
+      body: JSON.stringify(payload), signal: controller.signal
+    })
+    if (!response.ok) throw new Error(await response.text())
+    return await response.json()
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(payload.apply
+      ? 'The import response timed out. Reload Setup to check whether it saved before trying again.'
+      : 'The import preview timed out. Please choose the file again.')
+    throw error
+  } finally { clearTimeout(timer) }
+}
+
+byId('importConfigButton')?.addEventListener('click', () => byId('importConfigFile').click())
+byId('importConfigFile')?.addEventListener('change', async event => {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file || submitting || panelBooting || panelLifecycleBusy || configImportBusy || configImportSaved) return
+  pendingConfigImport = null
+  byId('configImportPreview').classList.add('hidden')
+  configImportBusy = true
+  setSubmittingState(submitting)
+  showConfigImportStatus('Reading configuration…')
+  try {
+    if (!/\.ya?ml$/i.test(file.name) || !file.size || file.size > 1048576) throw new Error('Choose a non-empty .yml or .yaml file smaller than 1 MB.')
+    const yaml = await file.text()
+    const preview = await requestConfigImport({ yaml })
+    pendingConfigImport = { yaml, revision: preview.revision }
+    byId('configImportSummary').textContent = `${file.name} · Detected sections: ${preview.sections.join(', ')}.`
+    byId('configImportStatus').classList.add('hidden')
+    byId('configImportPreview').classList.remove('hidden')
+    byId('applyConfigImport').focus()
+  } catch (error) {
+    showConfigImportStatus(error instanceof Error ? error.message : 'Could not read this config file.')
+  } finally {
+    configImportBusy = false
+    setSubmittingState(submitting)
+  }
+})
+byId('cancelConfigImport')?.addEventListener('click', () => {
+  if (configImportBusy) return
+  pendingConfigImport = null
+  byId('configImportPreview').classList.add('hidden')
+})
+byId('applyConfigImport')?.addEventListener('click', async () => {
+  if (!pendingConfigImport || submitting || panelBooting || panelLifecycleBusy || configImportBusy || configImportSaved) return
+  configImportBusy = true
+  setSubmittingState(submitting)
+  showConfigImportStatus('Backing up and importing configuration…')
+  try {
+    const result = await requestConfigImport({ ...pendingConfigImport, apply: true })
+    configImportSaved = true
+    pendingConfigImport = null
+    byId('configImportPreview').classList.add('hidden')
+    showConfigImportStatus(`Configuration imported. Backup saved beside tool-config.yml as ${result.backup}. Continue to load your settings and rerun the checks.`)
+    byId('reloadImportedConfig').classList.remove('hidden')
+    byId('reloadImportedConfig').focus()
+  } catch (error) {
+    showConfigImportStatus(error instanceof Error ? error.message : 'Could not import configuration.')
+  } finally {
+    configImportBusy = false
+    setSubmittingState(submitting)
+  }
+})
+byId('reloadImportedConfig')?.addEventListener('click', () => window.location.reload())
+byId('setupChecklistTools')?.addEventListener('click', () => {
+  systemReadinessDetailsEl.open = true
+  focusSetupField(systemReadinessDetailsEl)
+  void loadSystemReadiness()
+})
+for (const eventName of ['input', 'change', 'click']) {
+  setupFormEl.addEventListener(eventName, () => queueMicrotask(renderSetupChecklist))
+}
+
+systemReadinessRefreshEl?.addEventListener('click', () => { void loadSystemReadiness() })
+setupRootEl.addEventListener('rancher-control-panel-refresh-readiness', () => { void loadSystemReadiness() })
+
 setupRootEl.addEventListener('rancher-control-panel-booting', event => {
   setPanelBootingState(Boolean(event.detail?.booting))
 })
@@ -3952,6 +4135,7 @@ setupRootEl.addEventListener('rancher-control-panel-lifecycle', event => {
 renderEditableConfig()
 renderDeploymentType()
 renderCustomHostname()
+renderSetupChecklist()
 setPanelBootingState(panelBooting)
 setTheme(currentTheme(), false)
 loadSystemReadiness()

@@ -95,8 +95,10 @@ func (p *localControlPanel) checkSetupConfigState() systemReadinessItem {
 	} else if _, err := settings.NormalizeAWSPrefix(prefix); err != nil {
 		blockers = append(blockers, err.Error())
 	}
-	if err := settings.ValidateOwnerConfig(); err != nil {
-		blockers = append(blockers, err.Error())
+	if !isLinodeDockerDeployment() {
+		if err := settings.ValidateOwnerConfig(); err != nil {
+			blockers = append(blockers, err.Error())
+		}
 	}
 	if !isHostedTenantK3SDeployment() && !isLinodeDockerDeployment() {
 		if err := settings.ValidateRKE2ServerCountConfig(); err != nil {

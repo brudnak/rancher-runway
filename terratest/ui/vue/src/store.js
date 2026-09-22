@@ -1,5 +1,6 @@
 import { ref, reactive, computed, watch } from "vue";
 import { writeTextToClipboard } from "./clipboard.js";
+import { readJSON } from "./read-json.mjs";
 import {
   escapeHtml,
   highlightLogLine,
@@ -22,6 +23,7 @@ export const token = setupData.token || "";
 
 // Shared Reactive State variables
 export const state = ref(window.rancherControlPanelState || {});
+export const appBuild = computed(() => state.value?.panel?.build || setupData.build || {});
 export const bootPending = ref(true);
 export const bootDetail = ref("Checking local config, run slots, Terraform state, lifecycle processes, clusters, and AWS inventory before enabling actions.");
 export const refreshedAt = ref(null);
@@ -113,6 +115,7 @@ export const activeClusterHAKey = ref("");
 export const setupLaunchPendingUntil = ref(0);
 export const pendingAbortOperation = ref("");
 export const refreshInFlight = ref(false);
+export const refreshError = ref("");
 
 // Action trackers (to disable individual buttons when busy)
 export const activeDownloadClusterId = ref("");
@@ -1585,8 +1588,7 @@ export const refreshPreflight = async () => {
   window.dispatchEvent(new CustomEvent("rancher-control-panel:preflight", { detail: { preflight: preflight.value, checking: true } }));
 
   try {
-    const response = await apiFetch("/api/preflight", { cache: "no-store" });
-    preflight.value = await response.json();
+    preflight.value = await readJSON(signal => apiFetch("/api/preflight", { cache: "no-store", signal }), { label: "Preflight check" });
   } catch (error) {
     preflight.value = {
       ready: false,
@@ -1605,8 +1607,7 @@ export const refreshPreflight = async () => {
 };
 
 export const fetchState = async () => {
-  const response = await apiFetch("/api/state", { cache: "no-store" });
-  return response.json();
+  return readJSON(signal => apiFetch("/api/state", { cache: "no-store", signal }), { label: "Status check" });
 };
 
 export const refresh = async () => {
@@ -1632,6 +1633,7 @@ export const refresh = async () => {
     }
 
     state.value = fetched;
+    refreshError.value = "";
     window.rancherControlPanelState = fetched;
     window.dispatchEvent(new CustomEvent("rancher-control-panel:state", {
       detail: {
@@ -1672,10 +1674,17 @@ export const refresh = async () => {
       ? `${lastLeaderChangeMessage.value} • ${new Date().toLocaleTimeString()}`
       : `Last refreshed at ${new Date().toLocaleTimeString()}`;
   } catch (error) {
-    refreshStatus.value = error instanceof Error ? error.message : "Refresh failed";
+    refreshError.value = error instanceof Error ? error.message : "Refresh failed";
+    refreshStatus.value = refreshError.value;
   } finally {
     refreshInFlight.value = false;
   }
+};
+
+export const refreshChecks = () => {
+  void refresh();
+  void refreshPreflight();
+  dispatchSetupRootEvent("rancher-control-panel-refresh-readiness", {});
 };
 
 // Initial state updates and DOM synchronizations

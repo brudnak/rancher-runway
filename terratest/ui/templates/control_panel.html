@@ -769,7 +769,7 @@
     }
     body[data-panel-fullscreen="true"] .panel-nav {
       position: sticky;
-      top: 0.75rem;
+      top: 4rem;
       z-index: 30;
       backdrop-filter: blur(16px);
     }
@@ -779,6 +779,7 @@
   </style>
 </head>
 <body data-booting="true" class="min-h-screen overflow-x-hidden bg-zinc-100 text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+  <div id="appIdentityVue" class="app-identity-bar"></div>
   <main class="min-h-screen px-4 py-5 sm:px-6 lg:px-8">
     <div class="panel-shell mx-auto max-w-[1680px]">
       <div id="controlPanelChromeVue"></div>
@@ -799,7 +800,7 @@
 
   <div id="controlPanelModalsVue" class="contents"></div>
 
-  <script type="application/json" id="control-panel-data">{"token":"{{.Token}}"}</script>
+  <script type="application/json" id="control-panel-data">{"token":"{{.Token}}","build":{{.Build}}}</script>
   <script src="/setup-editor/static/interactive_setup.js?token={{.Token}}" defer></script>
   <script type="module" src="/static/control_panel_header_vue.js"></script>
 </body>

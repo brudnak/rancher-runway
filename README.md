@@ -48,6 +48,12 @@ macOS may require **Open Anyway** on first launch; see [First Run](#first-run).
 The app contains its own lifecycle worker, so ordinary setup, readiness, and
 cleanup runs do not require a source checkout, Go, Node.js, or Xcode.
 
+If `make setup` already installed `/Applications/Rancher Runway.app`, quit
+that app and rename or move its bundle before the first Homebrew install.
+Keep the checkout: development builds store their configuration and run state
+there, while releases use `~/Library/Application Support/Rancher Runway`.
+Existing development runs are not automatically imported into the release app.
+
 Release setup and optional Developer ID signing are documented in the
 [Homebrew release guide](docs/homebrew-release.md).
 
@@ -86,7 +92,33 @@ make setup INSTALL_DIR="$HOME/Desktop"
 - Linode API token for Linode Docker runs
 - Go, Git, Docker, and k3d only for the optional Steve Lab workflow
 
+Tool readiness baselines (September 2026):
+
+| Tool | Baseline | Requirement |
+| --- | --- | --- |
+| kubectl | 1.37.0 | Major 1; choose a client within one minor of the target cluster |
+| Helm | 3.22.0 | Major 3 (`helm@3`); Helm 4 is not supported |
+| Terraform | 1.16.3 | Major 1 from HashiCorp's tap |
+| Go | 1.27.1 | Source builds / Steve Lab only; core desktop operations use the bundled worker |
+
+Baselines are recorded in [`terratest/system_readiness.json`](terratest/system_readiness.json).
+Newer versions within the required major pass the baseline check. Older versions
+show an advisory; missing tools and unsupported majors block setup. A tool
+version check does not establish compatibility with every target cluster; see
+[Kubernetes client version skew](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+The package versions follow [Homebrew Helm 3](https://formulae.brew.sh/formula/helm@3),
+[Homebrew kubectl](https://formulae.brew.sh/formula/kubernetes-cli), and
+[HashiCorp's Terraform formula](https://github.com/hashicorp/homebrew-tap/blob/main/Formula/terraform.rb).
+
 ## First Run
+
+The top-left version bar stays visible while scrolling. Warning dialogs,
+notifications, and error messages include the running version and build number
+so screenshots identify the affected release. Source builds without release
+metadata show `v0.0.0-dev`; release builds use their version tag automatically.
+Use **Refresh checks** to rerun status, preflight, and Setup tool readiness.
+A check that does not respond within 30 seconds shows an error and can be
+retried; setup remains locked until the startup safety check succeeds.
 
 After Homebrew finishes, open the macOS Applications folder and look for
 `Rancher Runway`. If macOS blocks it because the developer cannot be verified
@@ -101,8 +133,26 @@ Updates may require approval again, and managed Macs may restrict this option.
 Launching the app opens the desktop control panel.
 
 If `tool-config.yml` does not exist, the app creates a private starter config in
-its Application Support workspace. Fill in the blocked values from the Setup
-and preflight screens before starting a run.
+its Application Support workspace. Open **Setup** and choose either path:
+
+- **Import config file**: choose your existing `tool-config.yml`, review the
+  detected sections, then select **Back up & import** and **Continue with imported
+  config**. The preview hides passwords. The import replaces the workspace's
+  saved config, preserves a private backup beside it, and refreshes Setup.
+- **Fill in the checklist**: select each missing value to jump to its field,
+  including fields inside Advanced AWS settings. The checklist follows the
+  selected deployment type. Check **Tools & credentials**, then **Resolve Plan**
+  to save the entered values and review the plan before starting infrastructure.
+
+Import accepts a single `.yml` or `.yaml` file up to 1 MB, including partial
+Runway configs. Invalid YAML and unrelated files are rejected without changing
+settings. It is unavailable during plan resolution or a running operation.
+Backups are named `.tool-config-before-import-*.yml`, are readable only by your
+user, and survive app upgrades. You can restore one through the same import button.
+
+The import copies configuration only. It does not migrate environment variables,
+kubeconfigs, Terraform state, or run history from a development checkout. Keep
+using the development app to manage runs created there.
 
 Common environment variables can live in your shell profile:
 

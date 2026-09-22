@@ -1,4 +1,5 @@
 import { createApp } from "vue";
+import AppIdentity from "./AppIdentity.vue";
 import ControlPanelChrome from "./ControlPanelChrome.vue";
 import ControlPanelCommandDeck from "./ControlPanelCommandDeck.vue";
 import ControlPanelTabs from "./ControlPanelTabs.vue";
@@ -10,6 +11,11 @@ const commandDeckMount = document.getElementById("commandDeck");
 const tabsMount = document.getElementById("panelTabs");
 const panelsMount = document.getElementById("controlPanelPanelsVue");
 const modalsMount = document.getElementById("controlPanelModalsVue");
+
+const identityMount = document.getElementById("appIdentityVue");
+if (identityMount) {
+  createApp(AppIdentity).mount(identityMount);
+}
 
 if (chromeMount) {
   createApp(ControlPanelChrome).mount(chromeMount);

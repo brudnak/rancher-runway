@@ -4,12 +4,6 @@
       <div class="inline-flex items-center rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-500 shadow-sm dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">
         Local control panel
       </div>
-      <div
-        class="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-semibold text-zinc-600 shadow-sm dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-300"
-        :title="buildTitle"
-      >
-        {{ buildLabel }}
-      </div>
     </div>
 
     <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50 sm:text-3xl">
@@ -50,53 +44,13 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from "vue";
+import { refreshError } from "./store.js";
 
 const state = ref(window.rancherControlPanelState || {});
 const bootPending = ref(true);
 const refreshedAt = ref(null);
 
 const panel = computed(() => state.value?.panel || {});
-const build = computed(() => panel.value?.build || {});
-
-const buildLabel = computed(() => {
-  const version = String(build.value?.version || "").trim().replace(/^v/i, "");
-  const buildNumber = String(build.value?.buildNumber || "").trim();
-  const shortCommit = String(build.value?.commitShort || "").trim();
-  const modified = Boolean(build.value?.modified);
-  if (version) {
-    const numberLabel = buildNumber ? ` · build ${buildNumber}` : "";
-    return `v${version}${modified ? "*" : ""}${numberLabel}`;
-  }
-  return shortCommit ? `Build ${shortCommit}${modified ? "*" : ""}` : "Build unknown";
-});
-
-const buildTitle = computed(() => {
-  const version = String(build.value?.version || "").trim().replace(/^v/i, "");
-  const buildNumber = String(build.value?.buildNumber || "").trim();
-  const fullCommit = String(build.value?.commit || "").trim();
-  const buildDate = String(build.value?.buildDate || "").trim();
-  const modified = Boolean(build.value?.modified);
-  const titleParts = [];
-
-  if (version) {
-    titleParts.push(`Version: ${version}`);
-  }
-  if (buildNumber) {
-    titleParts.push(`Build: ${buildNumber}`);
-  }
-  if (fullCommit) {
-    titleParts.push(`Commit: ${fullCommit}`);
-  }
-  if (buildDate) {
-    titleParts.push(`Built: ${buildDate}`);
-  }
-  if (modified) {
-    titleParts.push("Working tree had local changes when this binary was built.");
-  }
-
-  return titleParts.length ? titleParts.join("\n") : "No build metadata was embedded in this binary.";
-});
-
 const sessionMeta = computed(() => {
   if (!panel.value?.sessionId) {
     return "";
@@ -144,6 +98,9 @@ const operationChip = computed(() => {
     };
   }
 
+  if (bootPending.value && refreshError.value) {
+    return { key: "operation", label: "Safety check", value: "Unavailable", tone: "rose", running: false };
+  }
   if (bootPending.value) {
     return {
       key: "operation",
