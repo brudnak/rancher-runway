@@ -8,6 +8,7 @@ Usage: scripts/render-homebrew-cask.sh <version> <release.dmg> [output.rb]
 Renders the checksum-pinned Rancher Runway Cask for a GitHub Release asset.
 
 Optional:
+  RANCHER_RUNWAY_SIGNING_MODE        adhoc (default) or developer-id; match the packaged DMG
   RANCHER_RUNWAY_RELEASE_REPOSITORY  Default: GITHUB_REPOSITORY or brudnak/rancher-runway
 EOF
 }
@@ -32,6 +33,13 @@ version_input="$1"
 dmg_path="$2"
 output_path="${3:-${repo_root}/dist/rancher-runway.rb}"
 
+signing_mode="${RANCHER_RUNWAY_SIGNING_MODE:-adhoc}"
+case "${signing_mode}" in
+  adhoc) caveats_filter='/@ADHOC_CAVEATS_/d' ;;
+  developer-id) caveats_filter='/@ADHOC_CAVEATS_BEGIN@/,/@ADHOC_CAVEATS_END@/d' ;;
+  *) die "RANCHER_RUNWAY_SIGNING_MODE must be adhoc or developer-id" ;;
+esac
+
 release_version="${version_input#v}"
 if [[ ! "${release_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
   die "version must look like v1.2.3 or v1.2.3-rc.1"
@@ -54,6 +62,7 @@ sed \
   -e "s|@RELEASE_REPOSITORY@|${release_repository}|g" \
   -e "s|@RELEASE_TAG@|${release_tag}|g" \
   -e "s|@ASSET_NAME@|${asset_name}|g" \
+  -e "${caveats_filter}" \
   "${template_path}" > "${output_path}"
 
 printf 'Rendered %s\n' "${output_path}"

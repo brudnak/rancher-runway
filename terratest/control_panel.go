@@ -52,6 +52,7 @@ type localControlPanel struct {
 	setupEditor     *interactiveServer
 	imageLookup     *imageLookupService
 	prBuildVerifier *prBuildVerifierService
+	issueRadar      *issueRadarService
 
 	// cleanupBatchRunner is nil in production. Tests may replace it with a
 	// deterministic runner so the batch coordinator can be exercised without
@@ -421,6 +422,11 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/kubeconfig", p.handleKubeconfigDownload)
 	mux.HandleFunc("/api/kubeconfig/save", p.handleKubeconfigSave)
 	mux.HandleFunc("/api/helm-command", p.handleHelmCommandDownload)
+	mux.HandleFunc("/api/helm-lab/save", p.handleHelmLabSave)
+	mux.HandleFunc("/api/issue-radar", p.handleIssueRadar)
+	mux.HandleFunc("/api/issue-radar/milestones", p.handleIssueRadarMilestones)
+	mux.HandleFunc("/api/issue-radar/history", p.handleIssueRadarHistory)
+	mux.HandleFunc("/api/issue-radar/save", p.handleIssueRadarSave)
 	mux.HandleFunc("/api/open-url", p.handleOpenURL)
 	mux.HandleFunc("/api/open-path", p.handleOpenPath)
 	mux.HandleFunc("/api/setup", p.handleSetup)
@@ -2882,7 +2888,7 @@ func saveDownloadFile(filename string, content []byte, perm os.FileMode) (string
 
 	path := uniqueDownloadPath(downloadsDir, filename)
 	if err := os.WriteFile(path, content, perm); err != nil {
-		return "", fmt.Errorf("failed to save kubeconfig to Downloads: %w", err)
+		return "", fmt.Errorf("failed to save file to Downloads: %w", err)
 	}
 	return path, nil
 }

@@ -25,7 +25,7 @@ export const state = ref(window.rancherControlPanelState || {});
 export const bootPending = ref(true);
 export const bootDetail = ref("Checking local config, run slots, Terraform state, lifecycle processes, clusters, and AWS inventory before enabling actions.");
 export const refreshedAt = ref(null);
-export const activeTab = ref(window.location.hash.startsWith("#helm=") ? "helm" : localStorage.getItem("rancherControlPanelTab") || "setup");
+export const activeTab = ref(localStorage.getItem("rancherControlPanelTab") || "setup");
 if (activeTab.value === "lifecycle") {
   activeTab.value = "runs";
 }
@@ -397,7 +397,7 @@ export const setPanelFullscreen = async nextFullscreen => {
 
 // Tab management
 export const setActivePanelTab = tab => {
-  const availableTabs = new Set(["setup", "runs", "clusters", "aws", "images", "helm", "pr-builds", "destroy", "settings", "k3d", "steve"]);
+  const availableTabs = new Set(["setup", "runs", "clusters", "aws", "images", "helm", "pr-builds", "issues", "destroy", "settings", "k3d", "steve"]);
   activeTab.value = availableTabs.has(tab) ? tab : "runs";
   localStorage.setItem("rancherControlPanelTab", activeTab.value);
   window.dispatchEvent(new CustomEvent("rancher-control-panel:tab", { detail: { tab: activeTab.value } }));

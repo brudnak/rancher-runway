@@ -1,13 +1,14 @@
 <script setup>
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { writeTextToClipboard } from './clipboard.js';
+import { apiFetch } from './store.js';
 import HelmLabValue from './HelmLabValue.vue';
 import HelmLabIcon from './HelmLabIcon.vue';
 import HelmLabVersionPicker from './HelmLabVersionPicker.vue';
 import HelmLabChanges from './HelmLabChanges.vue';
 import {
   buildOutput, buildSetupScript, changedField, codeTokens, dataRoot, fieldErrors, fieldsFor, importValues,
-  initialConfig, initialOverrides, restoreState, shareState,
+  initialConfig, initialOverrides,
 } from './helmlab.mjs';
 
 const config = reactive(initialConfig());
@@ -34,9 +35,7 @@ const importText = ref('');
 const importError = ref('');
 const fileInput = ref(null);
 const undo = ref(null);
-const includeSensitive = ref(false);
-const shareOpen = ref(false);
-const omitted = ref([]);
+const savingFile = ref('');
 const channels = computed(() => catalog.value?.distributions.find(item => item.id === config.distribution)?.channels || []);
 const channel = computed(() => channels.value.find(item => item.id === config.type));
 const fields = computed(() => chart.value ? fieldsFor(chart.value) : []);
@@ -140,22 +139,22 @@ async function copy(text, message = 'Copied to clipboard.') {
   }
   catch (err) { announce(err.message, true); }
 }
-function share() {
-  const url = new URL(window.location.href);
-  url.search = '';
-  const saved = shareState(config, overrides.value, env.value, includeSensitive.value);
-  url.hash = 'helm=' + encodeURIComponent(JSON.stringify(saved));
-  copy(url.href, saved.omitted.length ? 'Link copied. Passwords and environment values were omitted.' : 'Configuration link copied.');
-  shareOpen.value = false;
-}
-function download(text, filename) {
-  const url = URL.createObjectURL(new Blob([text], { type: filename.endsWith('.sh') ? 'text/x-shellscript' : 'application/yaml' }));
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  announce(`${filename} downloaded.`);
+async function download(text, filename) {
+  if (savingFile.value) return;
+  savingFile.value = filename;
+  announce(`Saving ${filename}…`);
+  try {
+    const response = await apiFetch('/api/helm-lab/save', {
+      method: 'POST',
+      body: JSON.stringify({ filename, content: text }),
+    });
+    const saved = await response.json();
+    announce(`Saved ${saved.filename} to Downloads.`);
+  } catch (err) {
+    announce(err instanceof Error ? err.message : 'The file could not be saved. Try again.', true);
+  } finally {
+    savingFile.value = '';
+  }
 }
 function snapshot() { undo.value = JSON.stringify({ overrides: overrides.value, env: env.value }); }
 function undoEdit() {
@@ -240,18 +239,7 @@ function toggleGroup(name) {
     expanded.value = next;
   }
 }
-onMounted(() => {
-  if (window.location.hash.startsWith('#helm=')) {
-    try {
-      const saved = restoreState(JSON.parse(decodeURIComponent(window.location.hash.slice(6))));
-      Object.assign(config, saved.config);
-      overrides.value = saved.overrides;
-      env.value = saved.env;
-      omitted.value = saved.omitted;
-    } catch { announce('This configuration link could not be read. Starting with local test defaults.', true); }
-  }
-  load();
-});
+onMounted(() => { load(); });
 onBeforeUnmount(() => { generation++; abortController?.abort(); });
 // Changing a version immediately hides output built from a different reference chart.
 let versionTimer;
@@ -269,15 +257,9 @@ onBeforeUnmount(() => { clearTimeout(versionTimer); clearTimeout(copyTimer); });
   <div class="helmlab">
     <header class="hl-header">
       <div class="hl-title-row"><span class="hl-mark" aria-hidden="true"><HelmLabIcon name="terminal" /></span><div><h2>Helm Lab</h2><p class="hl-muted">Shape your next Rancher release.</p></div></div>
-      <div class="hl-header-actions"><button type="button" class="hl-mobile-jump" @click="jumpTo('hl-preview')">View command ↓</button><button type="button" :disabled="loading" @click="load(true)"><HelmLabIcon name="refresh" /> Refresh catalog</button><button type="button" @click="shareOpen = !shareOpen" :aria-expanded="shareOpen"><HelmLabIcon name="share" /> Share configuration</button></div>
+      <div class="hl-header-actions"><button type="button" class="hl-mobile-jump" @click="jumpTo('hl-preview')">View command ↓</button><button type="button" :disabled="loading" @click="load(true)"><HelmLabIcon name="refresh" /> Refresh catalog</button></div>
     </header>
-    <div v-if="shareOpen" class="hl-share">
-      <div><strong>Share this setup</strong><p class="hl-help">Passwords and environment values are omitted unless you include them.</p></div>
-      <label class="hl-check"><input v-model="includeSensitive" type="checkbox"> Include passwords and environment values</label>
-      <button type="button" class="hl-primary" @click="share">Copy link</button>
-    </div>
     <div v-if="notice" class="hl-notice" :class="{ 'hl-alert': noticeIsError }" role="status"><span>{{ notice }}</span><button type="button" aria-label="Dismiss notification" @click="notice = ''">×</button></div>
-    <div v-if="omitted.length" class="hl-notice">This shared setup omitted {{ omitted.join(', ') }}. Add any needed values before using it.<button type="button" aria-label="Dismiss omitted values notice" @click="omitted = []">×</button></div>
 
     <div class="hl-summary">
       <div><span class="hl-eyebrow">Target release</span><strong>{{ config.release || 'Untitled release' }} <span class="hl-summary-separator">/</span> {{ config.namespace || 'No namespace' }}</strong></div>
@@ -352,10 +334,11 @@ onBeforeUnmount(() => { clearTimeout(versionTimer); clearTimeout(copyTimer); });
           <template v-if="output.command">
             <div class="hl-output-actions">
               <button type="button" class="hl-primary" @click="copy(outputTab === 'script' ? setupScript : outputTab === 'yaml' ? output.allYaml : output.command)"><HelmLabIcon name="copy" />{{ outputTab === 'script' ? 'Copy full setup' : outputTab === 'yaml' ? 'Copy values YAML' : 'Copy Helm command' }}</button>
-              <button type="button" @click="download(outputTab === 'script' ? setupScript : output.allYaml, outputTab === 'script' ? 'setup.sh' : 'values.yaml')"><HelmLabIcon name="download" />{{ outputTab === 'script' ? 'Download script' : 'Export values' }}</button>
+              <button type="button" :disabled="Boolean(savingFile)" @click="download(outputTab === 'script' ? setupScript : output.allYaml, outputTab === 'script' ? 'setup.sh' : 'values.yaml')"><HelmLabIcon name="download" />{{ savingFile ? 'Saving…' : outputTab === 'script' ? 'Download script' : 'Export values' }}</button>
             </div>
-            <p v-if="outputTab === 'script'" class="hl-help">Adds the repository, prepares any needed values in a temporary file, and runs your selected command. Review it before running in your terminal.</p>
-            <div v-if="output.needsFile && outputTab !== 'script'" class="hl-note"><strong>Save the companion file before running.</strong><p class="hl-help">{{ config.delivery === 'file' ? 'Your command reads all overrides from values.yaml.' : 'Lists and maps are stored in values.yaml; scalar values stay on the command line.' }}</p><button type="button" @click="download(output.yaml, 'values.yaml')">Download command’s values.yaml</button><button type="button" class="hl-text-button" @click="outputTab = 'script'">Or use the self-contained setup script →</button></div>
+            <p class="hl-help">Files save to your Downloads folder. Existing files are kept with numbered copies.</p>
+            <p v-if="outputTab === 'script'" class="hl-help">Adds the repository, prepares any needed values in a temporary file, and runs your selected command. Review it, then run it with <code>sh setup.sh</code> from its folder.</p>
+            <div v-if="output.needsFile && outputTab !== 'script'" class="hl-note"><strong>Save the companion file before running.</strong><p class="hl-help">{{ config.delivery === 'file' ? 'Your command reads all overrides from values.yaml.' : 'Lists and maps are stored in values.yaml; scalar values stay on the command line.' }} Place the downloaded file in your working directory as <code>values.yaml</code>.</p><button type="button" :disabled="Boolean(savingFile)" @click="download(output.yaml, 'values.yaml')">{{ savingFile ? 'Saving…' : 'Download command’s values.yaml' }}</button><button type="button" class="hl-text-button" @click="outputTab = 'script'">Or use the self-contained setup script →</button></div>
             <div class="hl-review"><div><span>Release</span><strong>{{ config.release }}</strong></div><div><span>Namespace</span><strong>{{ config.namespace }}</strong></div><div><span>Context</span><strong>{{ config.context || 'Current kube context' }}</strong></div><div><span>Version</span><strong>{{ selectedVersion }}</strong></div></div>
           </template>
           <p class="hl-footnote">{{ catalog?.generatedAt ? `Catalog updated ${new Date(catalog.generatedAt).toLocaleDateString()}. ` : '' }}Chart metadata loads online; edits stay in this session.</p>

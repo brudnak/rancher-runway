@@ -9,7 +9,7 @@ cask "rancher-runway" do
   homepage "https://github.com/@RELEASE_REPOSITORY@"
 
   depends_on macos: :monterey
-  depends_on formula: ["hashicorp/tap/terraform", "helm@3", "kubernetes-cli"]
+  depends_on formula: ["hashicorp/tap/terraform", "helm@3", "kubernetes-cli", "gh"]
 
   app "Rancher Runway.app"
 
@@ -19,4 +19,15 @@ cask "rancher-runway" do
     "~/Library/Preferences/com.brudnak.rancher-runway.plist",
     "~/Library/Saved Application State/com.brudnak.rancher-runway.savedState",
   ]
+@ADHOC_CAVEATS_BEGIN@
+
+  caveats <<~EOS
+    Rancher Runway uses ad-hoc signing and is not notarized by Apple.
+    Try opening the app after installation. If macOS blocks it because the
+    developer cannot be verified or Apple cannot check it for malicious software,
+    and you trust this download, open System Settings > Privacy & Security >
+    Open Anyway, then confirm Open. Updates may require approval again.
+    https://support.apple.com/en-us/102445
+  EOS
+@ADHOC_CAVEATS_END@
 end

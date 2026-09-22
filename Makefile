@@ -6,14 +6,20 @@ INSTALL_DIR ?= /Applications
 APP_PATH := $(INSTALL_DIR)/$(APP_NAME).app
 STATUS_JSON := terratest/automation-output/install-status.json
 WAILS_FRONTEND_DIR := desktop/wails/frontend
+RELEASE_BUMP ?= patch
+RELEASE_VERSION ?=
+RELEASE_REF ?= main
+export RELEASE_BUMP RELEASE_VERSION RELEASE_REF
 
-.PHONY: help setup install app build node-deps frontend-deps panel-css panel-vue panel-ui check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
+.PHONY: help setup install app build release release-plan node-deps frontend-deps panel-css panel-vue panel-ui check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
 
 help:
 	@printf '%s\n' "Targets:"
 	@printf '  %-20s %s\n' "make setup" "Check local safety, rebuild, and install $(APP_NAME).app"
 	@printf '  %-20s %s\n' "make install" "Alias for setup"
 	@printf '  %-20s %s\n' "make app" "Build the Wails app without installing it"
+	@printf '  %-20s %s\n' "make release-plan" "Preview the next version and check published source (read-only)"
+	@printf '  %-20s %s\n' "make release" "Publish the next stable release and update the Homebrew tap"
 	@printf '  %-20s %s\n' "make panel-ui" "Rebuild embedded control-panel CSS and Vue assets"
 	@printf '  %-20s %s\n' "make test" "Run Go tests"
 	@printf '  %-20s %s\n' "make ci" "Run local CI checks"
@@ -28,6 +34,12 @@ app:
 	@scripts/build-wails-app.sh
 
 build: app
+
+release-plan:
+	@python3 scripts/release.py --dry-run
+
+release:
+	@python3 scripts/release.py
 
 node-deps:
 	@npm install

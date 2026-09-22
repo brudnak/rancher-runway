@@ -27,16 +27,22 @@ use. The setup path does not use `curl | bash`.
 
 ## Install The Desktop App
 
-The supported installer for Apple Silicon and Intel macOS is Homebrew:
+Homebrew installation for Apple Silicon and Intel macOS uses the project's
+own tap. Once the first release and Cask have been published:
 
 ```bash
 brew install --cask brudnak/tap/rancher-runway
 ```
 
-The Cask installs the signed, notarized universal app plus Terraform, Helm 3,
-and `kubectl`. The app contains its own signed lifecycle worker, so ordinary
-setup, readiness, and cleanup runs do not require a source checkout, Go,
-Node.js, or Xcode.
+The Cask installs the universal app plus Terraform, Helm 3, and `kubectl`.
+Default release builds use ad-hoc signing without Apple notarization, so no
+paid Apple Developer membership is needed to publish them through this tap.
+macOS may require **Open Anyway** on first launch; see [First Run](#first-run).
+The app contains its own lifecycle worker, so ordinary setup, readiness, and
+cleanup runs do not require a source checkout, Go, Node.js, or Xcode.
+
+Release setup and optional Developer ID signing are documented in the
+[Homebrew release guide](docs/homebrew-release.md).
 
 Upgrade in place with:
 
@@ -76,7 +82,16 @@ make setup INSTALL_DIR="$HOME/Desktop"
 ## First Run
 
 After Homebrew finishes, open the macOS Applications folder and look for
-`Rancher Runway`. Launching the app opens the desktop control panel.
+`Rancher Runway`. If macOS blocks it because the developer cannot be verified
+or Apple cannot check it for malicious software, and you trust the release:
+
+1. Try opening the app once, then dismiss the alert.
+2. Open **System Settings → Privacy & Security → Open Anyway**.
+3. Confirm **Open**, then authenticate if prompted.
+
+Apple documents this [per-app approval process](https://support.apple.com/en-us/102445).
+Updates may require approval again, and managed Macs may restrict this option.
+Launching the app opens the desktop control panel.
 
 If `tool-config.yml` does not exist, the app creates a private starter config in
 its Application Support workspace. Fill in the blocked values from the Setup
@@ -129,12 +144,14 @@ Use the app tabs as the main lifecycle:
   prepare a release. The light and dark themes include syntax-highlighted output.
   The command preview supports explicit kube contexts, wait/timeout, dry runs,
   and a matching companion values file. A self-contained setup script adds the
-  repository and handles temporary values files for you. Shared links omit
-  password fields and environment values by default. Chart metadata requires internet access;
+  repository and handles temporary values files for you. Exports save directly
+  into Downloads. Chart metadata requires internet access;
   editing and command generation happen locally and do not execute Helm.
 - **PR Image Check** resolves a GitHub pull request commit and checks whether
   Rancher head images across all known registries declare that commit in their
   source ancestry.
+- **Issue Radar** shows owner lanes, unassigned issues, milestone gaps, QA-size
+  and issue-kind summaries, and downloadable assignment reports.
 - **Destroy** removes provisioned cloud resources for a selected run slot.
 - **Costs** shows cleanup estimates and the local cost ledger.
 - **Settings** holds local app preferences such as GPU reminders.
@@ -151,6 +168,58 @@ The app protects active work:
 - Development `make setup` installs refuse to replace an open app.
 - Setup, readiness, and cleanup operations are serialized where shared state
   would collide.
+
+### Helm Lab
+
+Helm Lab builds Rancher Helm commands, values files, and self-contained setup
+scripts inside the desktop app. Copy commands directly, or use **Export values**,
+**Download script**, or **Download command’s values.yaml** to save into your
+Downloads folder. The app confirms the saved filename and keeps existing files
+by adding a number to new copies. Exports are readable and writable only by your
+user account because they can contain passwords and environment values.
+
+For a command that uses `values.yaml`, place the downloaded companion file in
+your terminal’s working directory with that exact name. Review a downloaded
+setup script before running it with `sh setup.sh` from its folder. Chart metadata
+loads online; your edits remain in the current app session. Import YAML to reuse
+saved values.
+
+### Issue Radar
+
+Issue Radar is a read-only GitHub workspace. Run `gh auth login` once in your
+terminal using an account that can read the target repository. The Homebrew Cask
+installs `gh`; source installations can use `brew install gh`. Credentials stay
+with the CLI and are never sent to the panel or stored in its preferences.
+
+Enter a repository, one or more team labels such as `team/frameworks` or
+`area/frameworks`, and up to eight GitHub usernames. Multiple labels are combined
+with AND. Choose a specific milestone by exact title (or load its title from
+GitHub), all milestones, or issues without a milestone. The board fetches all
+matching **open issues**, excludes pull requests, and keeps unassigned issues
+in the result regardless of the selected usernames.
+
+- **Board** groups issues into single selected-owner lanes, multiple selected
+  owners, missing selected owners, and QA/None. It distinguishes truly unassigned
+  issues from ones assigned only to people outside your chosen team. Search by
+  title, number, label, milestone, or owner; filter assignment, milestone, and
+  QA-size gaps. Click an owner card to see that person's issues.
+- **Summary** shows assignment totals, QA sizes, and bugs/enhancements/other
+  kinds. Shared issues count once. QA/None is excluded from assignment checks.
+  These tables always represent the full fetched snapshot, independent of board
+  search and filters.
+- **Report** builds a Markdown assignment brief from that same snapshot. Copy
+  it through the desktop clipboard or save it to Downloads. Optional history
+  adds up to 30 or 50 recently updated closed issues per selected owner, using
+  the same labels across all milestones. History failures are reported rather
+  than presented as zero results.
+
+Repository, labels, usernames, and milestone preferences stay on this device;
+issue snapshots stay in memory until the app closes. Editing the scope does not
+relabel an existing report: refresh to apply it. Failed refreshes retain the last
+snapshot with its timestamp. Incomplete fetches never become successful reports;
+scopes reaching the 100-page fetch limit must be narrowed. Saved reports use owner-only file
+permissions and numbered copies to preserve existing files. No assignment,
+milestone, label, or issue is changed on GitHub.
 
 ### Image Lookup
 
@@ -405,10 +474,18 @@ make setup
 make app
 make panel-ui
 make test
+make release-plan
 ```
 
+Maintainers can run `make release` to publish the first stable release as
+`v1.0.0`, then increment the patch version on subsequent runs. Use
+`RELEASE_BUMP=minor` or `RELEASE_BUMP=major` for larger version changes.
+The command builds published GitHub source, publishes the release, and updates
+the Homebrew Cask. See the [release guide](docs/homebrew-release.md#publish-a-release)
+for prerequisites and retry commands.
+
 Development Wails builds store the checkout path in ignored local build hints.
-Release builds instead stage signed, versioned runtime assets in Application
+Release builds instead stage checksum-verified, versioned runtime assets in Application
 Support and do not depend on the checkout.
 
 ## Advanced Usage

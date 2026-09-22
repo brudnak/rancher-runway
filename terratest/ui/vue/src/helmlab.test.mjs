@@ -5,12 +5,12 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { buildOutput, fieldsFor, initialOverrides, quote, importValues, shareState, restoreState, initialConfig, changedField, fieldErrors, buildSetupScript, filterVersions, codeTokens } from './helmlab.mjs';
+import { buildOutput, fieldsFor, initialOverrides, quote, importValues, changedField, fieldErrors, buildSetupScript, filterVersions, codeTokens } from './helmlab.mjs';
 const config = { repo: 'prime', release: 'rancher', namespace: 'cattle-system', action: 'upgrade', delivery: 'set' };
 const channel = { repo: 'https://example.com/charts', devel: true };
 const fields = fieldsFor({ values: { bootstrapPassword: '', image: { pullPolicy: 'IfNotPresent' }, replicas: 3, hostname: '', agentTLSMode: '', annotations: {}, tolerations: [] } });
 const build = (overrides = initialOverrides(), env = [], changes = {}) => buildOutput({ ...config, ...changes }, channel, '2.16.0-head', fields, overrides, env);
-test('linked defaults produce a pinned Prime head upgrade', () => {
+test('local defaults produce a pinned Prime head upgrade', () => {
  const result = build();
  assert.match(result.command, /--reset-then-reuse-values/);
  assert.match(result.command, /--version '2.16.0-head'/);
@@ -85,20 +85,6 @@ test('YAML import round-trips nested values, types, maps and environment pairs',
  assert.throws(() => importValues('extraEnv:\n- name: X\n  valueFrom: {}', fields), /name\/value/);
  assert.throws(() => importValues('__proto__:\n  polluted: true', fields), /Unsupported key/);
  assert.deepEqual(importValues('{}', fields), {overrides: {}, env: []});
-});
-test('safe links omit passwords and env values and never restore admin by default', () => {
- const saved = shareState(initialConfig(), initialOverrides(), [{name:'API_KEY', value:'secret'}]);
- assert.equal(saved.overrides.bootstrapPassword, undefined);
- assert.deepEqual(saved.env, []);
- assert.deepEqual(saved.omitted, ['bootstrapPassword', 'extraEnv']);
- const restored = restoreState(JSON.parse(JSON.stringify(saved)));
- assert.equal(restored.overrides.bootstrapPassword, undefined);
- assert.equal(restored.config.wait, false);
- assert.equal(restored.overrides.hostname, 'rancher.local');
- const full = shareState(initialConfig(), initialOverrides(), [{name:'API_KEY', value:'secret'}], true);
- assert.equal(full.overrides.bootstrapPassword, 'admin');
- assert.equal(full.env[0].value, 'secret');
- assert.throws(() => restoreState({}), /Invalid/);
 });
 test('documented maps stay intact and dotted map keys survive export', () => {
  const mapFields = fieldsFor({values:{annotations:{'example.com/key': 'default'}}, options:[{path:'annotations', default:{}}]});

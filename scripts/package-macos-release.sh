@@ -7,14 +7,16 @@ usage() {
   cat <<'EOF'
 Usage: scripts/package-macos-release.sh <vMAJOR.MINOR.PATCH[-PRERELEASE]>
 
-Builds a universal Rancher Runway app, signs and notarizes it, and writes a
-DMG, ZIP, and SHA-256 checksum file to RANCHER_RUNWAY_OUTPUT_DIR (default:
-dist).
+Builds a universal Rancher Runway app and writes a DMG, ZIP, and SHA-256
+checksum file to RANCHER_RUNWAY_OUTPUT_DIR (default: dist).
 
-Required for a distributable build:
+Signing modes (RANCHER_RUNWAY_SIGNING_MODE):
+  adhoc         Default. No Apple credentials or notarization; suitable for
+                our own Homebrew tap. macOS may require Open Anyway on launch.
+  developer-id  Developer ID signing, notarization, and stapling. Requires:
   RANCHER_RUNWAY_SIGNING_IDENTITY       Developer ID Application identity
 
-Use one of these notarization methods:
+For developer-id, use one of these notarization methods:
   RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE
   RANCHER_RUNWAY_NOTARY_KEYCHAIN        Optional keychain containing profile
 
@@ -33,9 +35,8 @@ Optional:
   RANCHER_RUNWAY_ARTIFACT_BASENAME       Default: Rancher-Runway
   RANCHER_RUNWAY_OUTPUT_DIR              Default: dist
 
-For local packaging tests only, set RANCHER_RUNWAY_ALLOW_UNSIGNED=1. A signed
-build may skip notarization only when RANCHER_RUNWAY_SKIP_NOTARIZATION=1.
-Unsigned or unnotarized artifacts must not be published to Homebrew.
+Ad-hoc releases do not meet the official homebrew/cask Gatekeeper requirements.
+Use the same RANCHER_RUNWAY_SIGNING_MODE when rendering the Homebrew Cask.
 EOF
 }
 
@@ -66,6 +67,35 @@ if [[ ! "${release_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-
   die "version must look like v1.2.3 or v1.2.3-rc.1"
 fi
 marketing_version="${release_version%%-*}"
+
+# Validate release credentials before installing dependencies or compiling.
+# Developer ID mode must never silently fall back to ad-hoc signing.
+signing_mode="${RANCHER_RUNWAY_SIGNING_MODE:-adhoc}"
+notary_auth=()
+case "${signing_mode}" in
+  adhoc)
+    signing_identity="-"
+    ;;
+  developer-id)
+    signing_identity="${RANCHER_RUNWAY_SIGNING_IDENTITY:-}"
+    [[ -n "${signing_identity}" && "${signing_identity}" != "-" ]] || die "developer-id mode requires RANCHER_RUNWAY_SIGNING_IDENTITY"
+    if [[ -n "${RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
+      notary_auth+=(--keychain-profile "${RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE}")
+      if [[ -n "${RANCHER_RUNWAY_NOTARY_KEYCHAIN:-}" ]]; then
+        notary_auth+=(--keychain "${RANCHER_RUNWAY_NOTARY_KEYCHAIN}")
+      fi
+    elif [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
+      notary_auth+=(--apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" --password "${APPLE_APP_SPECIFIC_PASSWORD}")
+    else
+      die "developer-id mode requires notarization credentials; configure a keychain profile or all three APPLE_* environment variables"
+    fi
+    ;;
+  *) die "RANCHER_RUNWAY_SIGNING_MODE must be adhoc or developer-id" ;;
+esac
+codesign_args=(--force --options runtime --sign "${signing_identity}")
+if [[ "${signing_mode}" == "developer-id" ]]; then
+  codesign_args+=(--timestamp)
+fi
 
 build_number="${RANCHER_RUNWAY_BUILD_NUMBER:-${GITHUB_RUN_NUMBER:-1}}"
 [[ "${build_number}" =~ ^[1-9][0-9]*$ ]] || die "RANCHER_RUNWAY_BUILD_NUMBER must be a positive integer"
@@ -104,6 +134,7 @@ cleanup() {
 trap cleanup EXIT
 
 printf 'Building Rancher Runway %s (build %s)\n' "${release_version}" "${build_number}"
+printf 'Signing mode: %s\n' "${signing_mode}"
 (cd "${repo_root}" && npm ci)
 (cd "${repo_root}" && npm run build:panel-ui)
 (cd "${repo_root}/desktop/wails/frontend" && npm ci)
@@ -211,7 +242,7 @@ for helper_arch in amd64 arm64; do
     cd "${repo_root}"
     GOOS=darwin GOARCH="${helper_arch}" CGO_ENABLED=1 \
     MACOSX_DEPLOYMENT_TARGET="${minimum_macos_version}" \
-      go test -c -trimpath -o "${temporary_root}/rancher-runway-lifecycle-${helper_arch}" ./terratest
+      go test -c -buildvcs=false -trimpath -o "${temporary_root}/rancher-runway-lifecycle-${helper_arch}" ./terratest
   )
 done
 lipo -create \
@@ -238,39 +269,13 @@ ditto "${runtime_stage}" "${packaged_runtime}"
 [[ -x "${packaged_runtime}/bin/rancher-runway-lifecycle" ]] || die "packaged lifecycle worker is missing"
 [[ -f "${packaged_runtime}/.rancher-runway-runtime-version" ]] || die "packaged runtime version marker is missing"
 
-signing_identity="${RANCHER_RUNWAY_SIGNING_IDENTITY:-}"
-allow_unsigned="${RANCHER_RUNWAY_ALLOW_UNSIGNED:-0}"
-skip_notarization="${RANCHER_RUNWAY_SKIP_NOTARIZATION:-0}"
-if [[ -z "${signing_identity}" && "${allow_unsigned}" != "1" ]]; then
-  die "RANCHER_RUNWAY_SIGNING_IDENTITY is required (or explicitly set RANCHER_RUNWAY_ALLOW_UNSIGNED=1 for a local-only artifact)"
-fi
-
-notary_auth=()
-if [[ -n "${RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
-  notary_auth+=(--keychain-profile "${RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE}")
-  if [[ -n "${RANCHER_RUNWAY_NOTARY_KEYCHAIN:-}" ]]; then
-    notary_auth+=(--keychain "${RANCHER_RUNWAY_NOTARY_KEYCHAIN}")
-  fi
-elif [[ -n "${APPLE_ID:-}" && -n "${APPLE_TEAM_ID:-}" && -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
-  notary_auth+=(--apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" --password "${APPLE_APP_SPECIFIC_PASSWORD}")
-elif [[ -n "${signing_identity}" && "${skip_notarization}" != "1" ]]; then
-  die "notarization credentials are required; configure a keychain profile or the APPLE_* environment variables"
-fi
-
 submit_for_notarization() {
   local artifact_path="$1"
   xcrun notarytool submit "${notary_auth[@]}" --wait --timeout 45m "${artifact_path}"
 }
 
-if [[ -n "${signing_identity}" ]]; then
-  codesign --force --options runtime --timestamp --sign "${signing_identity}" \
-    "${packaged_runtime}/bin/rancher-runway-lifecycle"
-  codesign --verify --strict --verbose=2 \
-    "${packaged_runtime}/bin/rancher-runway-lifecycle"
-else
-  codesign --force --options runtime --sign - \
-    "${packaged_runtime}/bin/rancher-runway-lifecycle"
-fi
+codesign "${codesign_args[@]}" "${packaged_runtime}/bin/rancher-runway-lifecycle"
+codesign --verify --strict --verbose=2 "${packaged_runtime}/bin/rancher-runway-lifecycle"
 
 manifest_temp="${temporary_root}/runtime.sha256"
 (
@@ -289,21 +294,19 @@ mv "${manifest_temp}" "${packaged_runtime}/runtime.sha256"
 find "${packaged_runtime}" -type f -exec chmod a-w {} +
 find "${packaged_runtime}" -type d -exec chmod a-w {} +
 
-if [[ -n "${signing_identity}" ]]; then
-  codesign --force --options runtime --timestamp --sign "${signing_identity}" "${app_path}"
-  codesign --verify --deep --strict --verbose=2 "${app_path}"
+# Sign only the outer bundle: re-signing nested code here would change the
+# lifecycle worker after its checksum has been recorded in runtime.sha256.
+codesign "${codesign_args[@]}" "${app_path}"
+codesign --verify --deep --strict --verbose=2 "${app_path}"
 
-  if [[ "${skip_notarization}" != "1" ]]; then
-    notary_zip="${temporary_root}/notary-upload.zip"
-    ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${notary_zip}"
-    submit_for_notarization "${notary_zip}"
-    xcrun stapler staple "${app_path}"
-    xcrun stapler validate "${app_path}"
-  fi
+if [[ "${signing_mode}" == "developer-id" ]]; then
+  notary_zip="${temporary_root}/notary-upload.zip"
+  ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${notary_zip}"
+  submit_for_notarization "${notary_zip}"
+  xcrun stapler staple "${app_path}"
+  xcrun stapler validate "${app_path}"
 else
-  codesign --force --deep --options runtime --sign - "${app_path}"
-  codesign --verify --deep --strict --verbose=2 "${app_path}"
-  printf 'WARNING: producing unsigned local-only artifacts\n' >&2
+  printf 'Ad-hoc release: not notarized by Apple; macOS may require Open Anyway on first launch.\n'
 fi
 
 dmg_name="${artifact_basename}-${release_version}-macOS-universal.dmg"
@@ -333,14 +336,12 @@ hdiutil create \
 # or release metadata can be produced.
 codesign --verify --deep --strict --verbose=2 "${app_path}"
 
-if [[ -n "${signing_identity}" ]]; then
+if [[ "${signing_mode}" == "developer-id" ]]; then
   codesign --force --timestamp --sign "${signing_identity}" "${dmg_path}"
   codesign --verify --verbose=2 "${dmg_path}"
-  if [[ "${skip_notarization}" != "1" ]]; then
-    submit_for_notarization "${dmg_path}"
-    xcrun stapler staple "${dmg_path}"
-    xcrun stapler validate "${dmg_path}"
-  fi
+  submit_for_notarization "${dmg_path}"
+  xcrun stapler staple "${dmg_path}"
+  xcrun stapler validate "${dmg_path}"
 fi
 
 (

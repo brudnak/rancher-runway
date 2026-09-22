@@ -1,4 +1,5 @@
 name: Release Rancher Runway for macOS
+run-name: Release Rancher Runway ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 on:
   push:
@@ -30,16 +31,24 @@ jobs:
       RANCHER_RUNWAY_BUNDLE_ID: ${{ vars.RANCHER_RUNWAY_BUNDLE_ID || 'com.brudnak.rancher-runway' }}
       RANCHER_RUNWAY_RELEASE_REPOSITORY: ${{ github.repository }}
       RANCHER_RUNWAY_OUTPUT_DIR: dist
+      RANCHER_RUNWAY_SIGNING_MODE: ${{ vars.RANCHER_RUNWAY_SIGNING_MODE || 'adhoc' }}
       NOTARY_KEYCHAIN_PROFILE: rancher-runway-release-notary
       HOMEBREW_TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'brudnak/homebrew-tap' }}
       HOMEBREW_CASK_PATH: ${{ vars.HOMEBREW_CASK_PATH || 'Casks/rancher-runway.rb' }}
 
     steps:
-      - name: Validate release tag
+      - name: Validate release tag and signing mode
         id: release
         shell: bash
         run: |
           set -euo pipefail
+          case "$RANCHER_RUNWAY_SIGNING_MODE" in
+            adhoc|developer-id) ;;
+            *)
+              echo "RANCHER_RUNWAY_SIGNING_MODE must be adhoc or developer-id" >&2
+              exit 1
+              ;;
+          esac
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
             echo "Release tag must look like v1.2.3 or v1.2.3-rc.1, got '$RELEASE_TAG'" >&2
             exit 1
@@ -75,7 +84,14 @@ jobs:
             package-lock.json
             desktop/wails/frontend/package-lock.json
 
+      - name: Test release tooling
+        shell: bash
+        run: |
+          python3 -B -m unittest discover -s scripts -p test_release.py
+          go test -buildvcs=false ./scripts
+
       - name: Import Developer ID certificate and notary credentials
+        if: env.RANCHER_RUNWAY_SIGNING_MODE == 'developer-id'
         shell: bash
         env:
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
@@ -135,7 +151,7 @@ jobs:
             echo "RANCHER_RUNWAY_NOTARY_KEYCHAIN=$signing_keychain_path"
           } >> "$GITHUB_ENV"
 
-      - name: Build, sign, notarize, and package
+      - name: Build and package macOS release
         shell: bash
         env:
           RANCHER_RUNWAY_BUILD_NUMBER: ${{ github.run_number }}
@@ -167,6 +183,21 @@ jobs:
             exit 1
           fi
 
+          notes_path="$RUNNER_TEMP/rancher-runway-release-notes.md"
+          if [[ "$RANCHER_RUNWAY_SIGNING_MODE" == "adhoc" ]]; then
+            cat > "$notes_path" <<'EOF'
+          This release uses ad-hoc signing and is not notarized by Apple.
+          After installing, try opening Rancher Runway. If macOS blocks it because
+          the developer cannot be verified or Apple cannot check it for malicious
+          software, and you trust this download, open System Settings → Privacy &
+          Security → Open Anyway, then confirm Open. Updates may require approval again.
+
+          See [Apple's first-launch instructions](https://support.apple.com/en-us/102445).
+          EOF
+          else
+            printf '%s\n' 'This release is signed with Developer ID and notarized by Apple.' > "$notes_path"
+          fi
+
           release_args=(
             "$RELEASE_TAG"
             dist/Rancher-Runway-*.dmg
@@ -175,6 +206,7 @@ jobs:
             dist/rancher-runway.rb
             --draft
             --generate-notes
+            --notes-file "$notes_path"
             --verify-tag
             --title "Rancher Runway $RELEASE_TAG"
           )
@@ -228,7 +260,7 @@ jobs:
           echo "Updated $HOMEBREW_TAP_REPOSITORY/$HOMEBREW_CASK_PATH"
 
       - name: Remove signing credentials
-        if: always()
+        if: always() && env.RANCHER_RUNWAY_SIGNING_MODE == 'developer-id'
         shell: bash
         run: |
           signing_keychain_path="${SIGNING_KEYCHAIN_PATH:-$RUNNER_TEMP/rancher-runway-signing.keychain-db}"

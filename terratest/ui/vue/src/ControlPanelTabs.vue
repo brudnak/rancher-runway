@@ -44,6 +44,7 @@ const tabs = [
   { id: "images", label: "Image Lookup" },
   { id: "helm", label: "Helm Lab" },
   { id: "pr-builds", label: "PR Image Check" },
+  { id: "issues", label: "Issue Radar" },
   { id: "destroy", label: "Destroy" },
   { id: "settings", label: "Settings" },
   { id: "k3d", label: "K3D Lab" },

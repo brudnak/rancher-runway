@@ -191,25 +191,6 @@ export function importValues(text, fields) {
   return { overrides, env: env.map(({ name, value }) => ({ name, value })) };
 }
 
-export function shareState(config, overrides, env, includeSensitive = false) {
-  const omitted = includeSensitive ? [] : Object.keys(overrides).filter(sensitivePath);
-  if (!includeSensitive && env.length) omitted.push('extraEnv');
-  return {
-    config: { ...config },
-    overrides: Object.fromEntries(Object.entries(overrides).filter(([path]) => !omitted.includes(path))),
-    env: includeSensitive ? env.map(({ name, value }) => ({ name, value })) : [], omitted,
-  };
-}
-export function restoreState(saved) {
-  if (!plainObject(saved) || !plainObject(saved.config) || !plainObject(saved.overrides) || !Array.isArray(saved.env)) throw new Error('Invalid configuration link.');
-  const config = initialConfig();
-  for (const key of Object.keys(config)) if (typeof saved.config[key] === typeof config[key]) config[key] = saved.config[key];
-  if (!['community', 'prime'].includes(config.distribution) || !['ga', 'rc', 'alpha', 'head'].includes(config.type)) throw new Error('Invalid chart channel in configuration link.');
-  const overrides = Object.fromEntries(Object.entries(saved.overrides).filter(([key, value]) => typeof value === 'string' && !key.split('.').some(part => forbidden.has(part))));
-  const env = saved.env.filter(item => plainObject(item) && typeof item.name === 'string' && typeof item.value === 'string').map(({ name, value }) => ({ name, value }));
-  return { config, overrides, env, omitted: Array.isArray(saved.omitted) ? saved.omitted.filter(item => typeof item === 'string') : [] };
-}
-
 // A single copyable setup script keeps its companion YAML in a private temp directory.
 export function buildSetupScript(output) {
   if (!output?.command) return '';

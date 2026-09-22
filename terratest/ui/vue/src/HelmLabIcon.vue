@@ -4,7 +4,6 @@ const paths = {
   terminal: 'm5 7 5 5-5 5M13 17h6',
   copy: 'M9 9h11v11H9zM5 15H3V3h12v2',
   refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.6-2L20 8M4 16l2.3 3A7 7 0 0 0 18 17',
-  share: 'M12 16V3m-4 4 4-4 4 4M5 13v7h14v-7',
   search: 'm21 21-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
   chevron: 'm8 10 4 4 4-4',
   check: 'm5 12 4 4L19 6',

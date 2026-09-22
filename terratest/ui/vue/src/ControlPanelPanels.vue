@@ -1,4 +1,7 @@
 <template>
+  <section v-if="issuesOpened" v-show="activeTab === 'issues'" class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 text-zinc-900 shadow-sm dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-100 sm:p-5">
+    <IssueRadarPanel />
+  </section>
   <section v-if="helmOpened" v-show="activeTab === 'helm'" class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 text-zinc-900 shadow-sm dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-100 sm:p-5">
     <HelmLabPanel />
   </section>
@@ -95,6 +98,7 @@
 <script setup>
 import { ref, watch } from "vue";
 import HelmLabPanel from "./HelmLabPanel.vue";
+import IssueRadarPanel from "./IssueRadarPanel.vue";
 import { activeTab, refreshStatus, openLogModal } from "./store.js";
 import AwsInventoryPanel from "./AwsInventoryPanel.vue";
 import ClustersPanel from "./ClustersPanel.vue";
@@ -107,5 +111,7 @@ import SettingsPanel from "./SettingsPanel.vue";
 import SteveLabPanel from "./SteveLabPanel.vue";
 import WorkspaceRunsPanel from "./WorkspaceRunsPanel.vue";
 const helmOpened = ref(false);
+const issuesOpened = ref(false);
+watch(activeTab, tab => { if (tab === "issues") issuesOpened.value = true; }, { immediate: true });
 watch(activeTab, tab => { if (tab === "helm") helmOpened.value = true; }, { immediate: true });
 </script>
