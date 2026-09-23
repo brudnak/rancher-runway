@@ -95,7 +95,9 @@ const statuses = computed(() => {
         : status(),
     runs: contentStatus(runs.length, "recorded run"),
     clusters: contentStatus(clusters.length, "cluster record"),
-    aws: contentStatus(awsItems.length, "visible AWS resource"),
+    aws: state.value?.awsCleanup?.running
+      ? status("busy", "AWS inventory cleanup running; lifecycle actions are locked")
+      : contentStatus(awsItems.length, "visible AWS resource"),
     destroy: contentStatus(runs.length, "run available to destroy", "runs available to destroy"),
     k3d: k3dRunning
       ? status("busy", "K3D operation running; K3D controls are locked")

@@ -72,6 +72,7 @@ const runClusterStats = run => {
 
 const operationSummary = computed(() => {
   const active = [
+    ["awsCleanup", "AWS cleanup", state.value?.awsCleanup],
     ["setup", "Setup", state.value?.setup],
     ["readiness", "Readiness", state.value?.readiness],
     ["downstream", "Downstream", state.value?.downstream],
@@ -98,6 +99,7 @@ const operationSummary = computed(() => {
 });
 
 const lifecycleRunning = currentState => Boolean(
+  currentState?.awsCleanup?.running ||
   currentState?.setup?.running ||
   currentState?.readiness?.running ||
   currentState?.downstream?.running ||
@@ -142,10 +144,10 @@ const tiles = computed(() => {
           tone: "sky",
           eyebrow: "Safety gate",
           title: `${operation.label} is active`,
-          detail: "Setup, readiness, downstream provisioning, and destroy are serialized so the run state and cloud targets stay unambiguous.",
+          detail: state.value?.awsCleanup?.running ? "AWS inventory cleanup is processing the reviewed resources. Keep Runway open and check per-resource results." : "Setup, readiness, downstream provisioning, and destroy are serialized so the run state and cloud targets stay unambiguous.",
           meta: "Busy",
-          action: "runs",
-          actionLabel: "Inspect run",
+          action: state.value?.awsCleanup?.running ? "aws" : "runs",
+          actionLabel: state.value?.awsCleanup?.running ? "View cleanup" : "Inspect run",
         }
       : {
           key: "safety",
@@ -188,7 +190,7 @@ const tiles = computed(() => {
         tone: "amber",
         eyebrow: "AWS exposure",
         title: `${awsItems.length} resource${awsItems.length === 1 ? "" : "s"} visible`,
-        detail: "Inventory is read-only. Destructive actions remain per-slot and require typed confirmation before downstream-first cleanup starts.",
+        detail: "Review leftover resources for individual or bulk cleanup in AWS Inventory. Recorded runs use the Destroy tab. Every deletion requires typed confirmation.",
         meta: "Live",
         action: "aws",
         actionLabel: "Open inventory",

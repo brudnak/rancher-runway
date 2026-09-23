@@ -251,8 +251,8 @@ const awsItems = computed(() => Array.isArray(state.value?.aws?.items) ? state.v
 const currentRunID = computed(() => workspace.value?.currentRun?.runId || "");
 const totalHAs = computed(() => runs.value.reduce((total, run) => total + Number(run.totalHAs || 1), 0));
 
-const awsLifecycleRunning = computed(() => Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running || state.value?.cleanup?.running));
-const linodeLifecycleRunning = computed(() => Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running));
+const awsLifecycleRunning = computed(() => Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running || state.value?.cleanup?.running || state.value?.awsCleanup?.running));
+const linodeLifecycleRunning = computed(() => Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running || state.value?.awsCleanup?.running));
 const lifecycleRunning = computed(() => Boolean(awsLifecycleRunning.value || linodeLifecycleRunning.value));
 const canStart = computed(() => Boolean(workspace.value?.canStartIsolatedRun && !lifecycleRunning.value && !bootPending.value));
 

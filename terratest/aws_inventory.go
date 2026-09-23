@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -68,20 +69,43 @@ func (p *localControlPanel) discoverAWSInventory(records []panelRunRecord) panel
 		return state
 	}
 
-	collector := &awsInventoryCollector{
-		state:       &state,
-		region:      region,
-		owner:       owner,
-		prefixes:    prefixes,
-		runByPrefix: runByPrefix,
-		seen:        map[string]bool{},
+	// Each service gets its own collector and time budget. A slow ELB scan
+	// must not consume IAM/ACM's entire deadline before they even start.
+	collectors := make([]*awsInventoryCollector, 5)
+	var scans sync.WaitGroup
+	collect := []func(context.Context, *awsInventoryCollector){
+		func(ctx context.Context, c *awsInventoryCollector) { c.collectEC2(ctx, ec2.NewFromConfig(cfg)) },
+		func(ctx context.Context, c *awsInventoryCollector) {
+			c.collectELB(ctx, elasticloadbalancingv2.NewFromConfig(cfg))
+		},
+		func(ctx context.Context, c *awsInventoryCollector) { c.collectIAM(ctx, iam.NewFromConfig(cfg)) },
+		func(ctx context.Context, c *awsInventoryCollector) { c.collectACM(ctx, acm.NewFromConfig(cfg)) },
+		func(ctx context.Context, c *awsInventoryCollector) {
+			c.collectRoute53(ctx, route53.NewFromConfig(cfg), records)
+		},
 	}
-
-	collector.collectEC2(ctx, ec2.NewFromConfig(cfg))
-	collector.collectELB(ctx, elasticloadbalancingv2.NewFromConfig(cfg))
-	collector.collectIAM(ctx, iam.NewFromConfig(cfg))
-	collector.collectACM(ctx, acm.NewFromConfig(cfg))
-	collector.collectRoute53(ctx, route53.NewFromConfig(cfg), records)
+	for i, scan := range collect {
+		c := &awsInventoryCollector{state: &panelAWSInventoryState{}, region: region, owner: owner, prefixes: prefixes, runByPrefix: runByPrefix, seen: map[string]bool{}}
+		collectors[i] = c
+		scans.Add(1)
+		go func() {
+			defer scans.Done()
+			serviceCtx, stop := context.WithTimeout(context.Background(), 12*time.Second)
+			defer stop()
+			scan(serviceCtx, c)
+		}()
+	}
+	scans.Wait()
+	var scanErrors []string
+	for _, c := range collectors {
+		state.Items = append(state.Items, c.state.Items...)
+		scanErrors = append(scanErrors, c.errors...)
+	}
+	for i := range state.Items {
+		reason := awsCleanupBlockedReason(state.Items[i], owner, region, records)
+		state.Items[i].CleanupEligible = reason == ""
+		state.Items[i].CleanupReason = reason
+	}
 
 	sort.Slice(state.Items, func(i, j int) bool {
 		if state.Items[i].Type != state.Items[j].Type {
@@ -92,8 +116,8 @@ func (p *localControlPanel) discoverAWSInventory(records []panelRunRecord) panel
 		}
 		return state.Items[i].ID < state.Items[j].ID
 	})
-	if len(collector.errors) > 0 {
-		state.Error = strings.Join(collector.errors, "; ")
+	if len(scanErrors) > 0 {
+		state.Error = strings.Join(scanErrors, "; ")
 	}
 	p.cacheAWSInventory(cacheKey, state)
 	return state

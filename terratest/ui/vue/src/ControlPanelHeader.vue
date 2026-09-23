@@ -78,6 +78,7 @@ const activeGPUClusters = currentState => clusterItems(currentState).filter(clus
 );
 
 const activeOperation = computed(() => [
+  ["awsCleanup", "AWS cleanup", state.value?.awsCleanup],
   ["setup", "Setup", state.value?.setup],
   ["readiness", "Readiness", state.value?.readiness],
   ["downstream", "Downstream", state.value?.downstream],

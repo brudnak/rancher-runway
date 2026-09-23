@@ -37,6 +37,7 @@ func newPanelOperations() map[panelOperationName]*panelOperationState {
 		panelOperationCleanupBatch:  {},
 		panelOperationSteveLab:      {},
 		panelOperationK3DLab:        {},
+		panelOperationAWSCleanup:    {},
 	}
 }
 
@@ -51,6 +52,7 @@ func allPanelOperationNames() []panelOperationName {
 		panelOperationCleanupBatch,
 		panelOperationSteveLab,
 		panelOperationK3DLab,
+		panelOperationAWSCleanup,
 	}
 }
 
@@ -829,6 +831,9 @@ func (p *localControlPanel) anyOperationRunningLocked() bool {
 }
 
 func (p *localControlPanel) conflictingOperationRunningLocked(operation panelOperationName) bool {
+	if p.operationLocked(panelOperationAWSCleanup).Running {
+		return true
+	}
 	for _, name := range conflictingPanelOperationNames(operation) {
 		op := p.operationLocked(name)
 		if op.Running && op.PID > 0 && !processAlive(op.PID) {
@@ -862,6 +867,9 @@ func (p *localControlPanel) runningOperationNameLocked() string {
 }
 
 func (p *localControlPanel) runningConflictingOperationNameLocked(operation panelOperationName) string {
+	if p.operationLocked(panelOperationAWSCleanup).Running {
+		return "AWS inventory cleanup"
+	}
 	for _, name := range conflictingPanelOperationNames(operation) {
 		if p.operationLocked(name).Running {
 			return string(name)

@@ -44,15 +44,18 @@ type localControlPanel struct {
 	baseURL              string
 	doneCh               chan error
 
-	mu              sync.Mutex
-	operations      map[panelOperationName]*panelOperationState
-	awsMu           sync.Mutex
-	awsCache        panelAWSInventoryState
-	awsCacheKey     string
-	setupEditor     *interactiveServer
-	imageLookup     *imageLookupService
-	prBuildVerifier *prBuildVerifierService
-	issueRadar      *issueRadarService
+	mu                      sync.Mutex
+	operations              map[panelOperationName]*panelOperationState
+	awsMu                   sync.Mutex
+	awsCache                panelAWSInventoryState
+	awsCacheKey             string
+	awsCleanupPlan          *awsCleanupPlan
+	awsCleanupResults       []awsCleanupResult
+	awsCleanupClientFactory func(context.Context, string) (awsCleanupClient, error)
+	setupEditor             *interactiveServer
+	imageLookup             *imageLookupService
+	prBuildVerifier         *prBuildVerifierService
+	issueRadar              *issueRadarService
 
 	// cleanupBatchRunner is nil in production. Tests may replace it with a
 	// deterministic runner so the batch coordinator can be exercised without
@@ -103,6 +106,7 @@ type panelState struct {
 	K3D           k3dLabPanelState          `json:"k3d"`
 	Clusters      panelClusterState         `json:"clusters"`
 	AWS           panelAWSInventoryState    `json:"aws"`
+	AWSCleanup    awsCleanupSnapshot        `json:"awsCleanup"`
 	Cleanup       panelOperationSnapshot    `json:"cleanup"`
 	CleanupBatch  panelCleanupBatchSnapshot `json:"cleanupBatch"`
 	Costs         panelCostHistoryState     `json:"costs"`
@@ -131,16 +135,18 @@ type panelAWSInventoryState struct {
 }
 
 type awsResourceView struct {
-	Type    string            `json:"type"`
-	ID      string            `json:"id"`
-	Name    string            `json:"name,omitempty"`
-	Region  string            `json:"region,omitempty"`
-	Status  string            `json:"status,omitempty"`
-	RunID   string            `json:"runId,omitempty"`
-	Owner   string            `json:"owner,omitempty"`
-	Source  string            `json:"source"`
-	Details string            `json:"details,omitempty"`
-	Tags    map[string]string `json:"tags,omitempty"`
+	Type            string            `json:"type"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name,omitempty"`
+	Region          string            `json:"region,omitempty"`
+	Status          string            `json:"status,omitempty"`
+	RunID           string            `json:"runId,omitempty"`
+	Owner           string            `json:"owner,omitempty"`
+	Source          string            `json:"source"`
+	Details         string            `json:"details,omitempty"`
+	Tags            map[string]string `json:"tags,omitempty"`
+	CleanupEligible bool              `json:"cleanupEligible"`
+	CleanupReason   string            `json:"cleanupReason,omitempty"`
 }
 
 type clusterView struct {
@@ -221,6 +227,7 @@ const (
 	panelOperationCleanupBatch  panelOperationName = "cleanupBatch"
 	panelOperationSteveLab      panelOperationName = "steveLab"
 	panelOperationK3DLab        panelOperationName = "k3dLab"
+	panelOperationAWSCleanup    panelOperationName = "awsCleanup"
 )
 
 type panelOperationState struct {
@@ -453,6 +460,8 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/readiness", p.handleReadiness)
 	mux.HandleFunc("/api/downstream/retry", p.handleDownstreamRetry)
 	mux.HandleFunc("/api/cleanup", p.handleCleanup)
+	mux.HandleFunc("/api/aws/cleanup/preview", p.handleAWSCleanupPreview)
+	mux.HandleFunc("/api/aws/cleanup", p.handleAWSCleanup)
 	mux.HandleFunc("/api/costs/reset", p.handleCostLedgerReset)
 	mux.HandleFunc("/api/local-artifacts/clean", p.handleLocalArtifactsClean)
 	mux.HandleFunc("/api/shutdown", p.handleShutdown)
@@ -1490,6 +1499,7 @@ func (p *localControlPanel) buildState() panelState {
 			Items: clusters,
 		},
 		AWS:          p.discoverAWSInventory(workspace.Runs),
+		AWSCleanup:   p.snapshotAWSCleanup(),
 		Cleanup:      p.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs),
 		CleanupBatch: p.snapshotCleanupBatch(),
 		Costs:        discoverCostHistory(),

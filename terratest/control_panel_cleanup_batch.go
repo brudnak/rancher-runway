@@ -49,6 +49,8 @@ func isCloudPanelOperation(operation panelOperationName) bool {
 		panelOperationLinodeCleanup,
 		panelOperationCleanupBatch:
 		return true
+	case panelOperationAWSCleanup:
+		return true
 	default:
 		return false
 	}
@@ -107,6 +109,7 @@ func (p *localControlPanel) startCleanupBatch(runIDs []string) error {
 		panelOperationLinodeSetup,
 		panelOperationLinodeCleanup,
 		panelOperationCleanupBatch,
+		panelOperationAWSCleanup,
 	} {
 		op := p.operationLocked(operation)
 		if operation != panelOperationCleanupBatch && op.Running && op.PID > 0 && !processAlive(op.PID) {

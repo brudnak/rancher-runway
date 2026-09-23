@@ -191,7 +191,8 @@ Use the app tabs as the main lifecycle:
 - **Clusters** shows Rancher URLs, kubeconfig paths or Linode IPs, reachability,
   pod visibility, recent logs, and active leader details.
 - **AWS Inventory** shows resources associated with recorded slots and owner
-  tags.
+  tags. Delete individual cleanup candidates, select several, or review all
+  candidates before confirming the exact deletion list.
 - **Image Lookup** searches Rancher server, agent, and webhook tags across
   Docker Hub and the Rancher/SUSE registries, or inspects a custom image
   repository.
@@ -384,6 +385,49 @@ producer-declared, a later commit can revert a change, and an equivalent
 cherry-pick has a different SHA. Head tags are mutable, so re-check immediately
 before testing. GitHub PR and ancestry lookups use the configured `gh` CLI
 login; the browser never receives a GitHub token.
+
+### Cleaning up leftover AWS resources
+
+In **AWS Inventory**, use **Delete…** on a row, select multiple rows and choose
+**Review selected**, or choose **Review all candidates**. The review fetches
+current AWS metadata, lists the exact IDs and deletion effects, and requires a
+typed confirmation. Reviews expire after five minutes and apply only once;
+new resources discovered afterward are never added to an approved cleanup.
+A review accepts up to 200 resources; use smaller selections for larger inventories.
+
+A cleanup candidate must be in the configured region, have your matching
+`Owner` tag, a recognized Runway `ManagedBy` tag and `HA_Rancher_RKE2_Run_ID`,
+and have no matching recorded run in this workspace. **A candidate is not proof
+that a resource is unused**: another installation or CI run may still depend on it.
+Recorded runs stay protected; destroy them from the **Destroy** tab so Terraform
+can clean up their complete infrastructure.
+
+Inventory cleanup supports EC2 instances, EBS volumes, load balancers and their
+listeners, target groups, and ACM certificates. Review includes listeners and
+rules removed with their load balancer, and volumes configured to be deleted
+when an instance terminates. No snapshots or backups are created. An attached
+EBS volume requires its instance in the same selection; Runway never force-detaches
+volumes or disables AWS deletion/termination protection. Associated target groups
+and certificates require the load balancer in the selection or its prior removal.
+IAM roles, profiles, policy attachments, DNS records, and resources with missing
+ownership tags remain protected because this regional inventory cannot establish
+all their dependencies.
+
+If a scan is incomplete, **Review all candidates** covers only the currently
+listed candidates. The review highlights unavailable or blocked selections.
+Cleanup checks the whole reviewed plan again before deleting anything, checks
+each resource before its deletion, and processes dependencies in order. Keep
+Runway open until it finishes. Per-resource results report failures and skipped
+dependents; refresh inventory before retrying. Other lifecycle operations and
+configuration imports are locked while cleanup runs. A restart never resumes
+unfinished deletion automatically; operation logs remain in the workspace.
+
+The existing AWS credentials need read access for resource tags and dependencies
+(including ELB `DescribeRules` and ACM `DescribeCertificate`), plus the relevant
+`ec2:TerminateInstances`, `ec2:DeleteVolume`,
+`elasticloadbalancing:DeleteLoadBalancer`, `elasticloadbalancing:DeleteListener`,
+`elasticloadbalancing:DeleteTargetGroup`, or `acm:DeleteCertificate` permissions.
+Runway reports AWS permission errors without changing account permissions.
 
 ## Local Labs
 

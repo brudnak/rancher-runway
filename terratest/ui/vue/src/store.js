@@ -168,7 +168,7 @@ export const apiFetch = async (path, options = {}) => {
 
 // Lifecycle checkers
 export const awsLifecycleRunning = computed(() =>
-  Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running || state.value?.cleanup?.running)
+  Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running || state.value?.cleanup?.running || state.value?.awsCleanup?.running)
 );
 export const linodeLifecycleRunning = computed(() =>
   Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running)
@@ -180,7 +180,7 @@ export const lifecycleRunning = computed(() =>
 
 export const runIsLinodeDocker = run => run?.deploymentType === "linode-docker-cattle";
 export const runDestroyBlocked = run =>
-  cleanupBatchRunning.value || cleanupBatchStarting.value || (runIsLinodeDocker(run) ? linodeLifecycleRunning.value : awsLifecycleRunning.value);
+  state.value?.awsCleanup?.running || cleanupBatchRunning.value || cleanupBatchStarting.value || (runIsLinodeDocker(run) ? linodeLifecycleRunning.value : awsLifecycleRunning.value);
 
 const cleanupRunIdsInState = () => Array.isArray(state.value?.workspace?.runs)
   ? state.value.workspace.runs.map(run => String(run?.runId || "").trim()).filter(Boolean)
@@ -236,6 +236,9 @@ watch(cleanupRunIdsInState, availableRunIds => {
 
 export const lifecycleBusyDetail = () => {
   const curState = state.value;
+  if (curState?.awsCleanup?.running) {
+    return { busy: true, operation: "awsCleanup", message: "AWS inventory cleanup is running. Wait for the reviewed deletions to finish.", busyByDeployment: { "ha-rke2": true, "hosted-tenant-k3s": true, "linode-docker-cattle": true } };
+  }
   if (curState?.cleanupBatch?.running || cleanupBatchStarting.value) {
     const total = Array.isArray(curState?.cleanupBatch?.runIds) ? curState.cleanupBatch.runIds.length : 0;
     return {
@@ -558,6 +561,7 @@ export const maybeShowGPUReminder = curState => {
     curState?.readiness?.running ||
     curState?.downstream?.running ||
     curState?.cleanup?.running ||
+    curState?.awsCleanup?.running ||
     curState?.cleanupBatch?.running ||
     cleanupStarting.value ||
     cleanupBatchStarting.value ||
