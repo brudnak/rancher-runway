@@ -615,6 +615,9 @@ func normalizeVersionInput(value string) string {
 	}
 	value = strings.TrimPrefix(value, "v")
 	value = strings.TrimPrefix(value, "V")
+	if strings.EqualFold(value, "head") {
+		return "head"
+	}
 	return value
 }
 

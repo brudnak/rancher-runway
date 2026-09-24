@@ -36,6 +36,12 @@ func TestNormalizeDockerRancherTagAddsLeadingVExceptPlainHead(t *testing.T) {
 		"2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head": "v2.13-a2770149753c8e4a48aec2c1e2598bb30cbb2652-head",
 		"v2.14.2-rc1": "v2.14.2-rc1",
 		"head":        "head",
+		"Head":        "head",
+		"HEAD":        "head",
+		" hEaD ":      "head",
+		"vHead":       "head",
+		"VHEAD":       "head",
+		"v2.16-MyFix": "v2.16-MyFix",
 	}
 	for input, want := range tests {
 		if got := normalizeDockerRancherTag(input); got != want {

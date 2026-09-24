@@ -481,7 +481,10 @@ func normalizeDockerRancherTag(version string) string {
 	if version == "" {
 		return version
 	}
-	if version == "head" || strings.HasPrefix(version, "v") {
+	if normalizeVersionInput(version) == "head" {
+		return "head"
+	}
+	if strings.HasPrefix(version, "v") {
 		return version
 	}
 	return "v" + version

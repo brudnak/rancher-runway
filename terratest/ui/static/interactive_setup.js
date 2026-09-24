@@ -1509,7 +1509,7 @@ const renderRows = () => {
 			`<div class="${rowClass}">`,
 			`<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
 			'<div class="grid gap-2">',
-			`<input class="${inputClass}" type="text" name="versions" value="${escapeHtml(version)}" data-index="${index}" placeholder="${versionPlaceholder}" />`,
+			`<input class="${inputClass}" type="text" name="versions" autocapitalize="off" autocorrect="off" spellcheck="false" value="${escapeHtml(version)}" data-index="${index}" placeholder="${versionPlaceholder}" />`,
 			agentControls,
 			downstreamLinodeControls,
 			'</div>',
@@ -2175,7 +2175,9 @@ const renderCustomHostname = () => {
 
 const normalizeVersion = value => {
   const normalized = String(value || '').trim()
-  return normalized.includes('/') ? normalized : normalized.replace(/^[vV]/, '')
+  if (normalized.includes('/')) return normalized
+  const version = normalized.replace(/^[vV]/, '')
+  return version.toLowerCase() === 'head' ? 'head' : version
 }
 const looksLikeExactImageReference = value => {
   const normalized = String(value || '').trim()

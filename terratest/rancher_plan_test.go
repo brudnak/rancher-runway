@@ -83,6 +83,38 @@ func TestClassifyRancherVersionAllowsPlainHead(t *testing.T) {
 	}
 }
 
+func TestRequestedHeadSelectorIgnoresCase(t *testing.T) {
+	for _, input := range []string{"head", "Head", "HEAD", " hEaD ", "vHead", "VHEAD"} {
+		for _, key := range []string{"rancher.version", "rancher.versions"} {
+			t.Run(key+"/"+input, func(t *testing.T) {
+				viper.Reset()
+				t.Cleanup(viper.Reset)
+				if key == "rancher.versions" {
+					viper.Set(key, []string{input})
+				} else {
+					viper.Set(key, input)
+				}
+				versions, err := getRequestedRancherVersions(1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				buildType, minorLine, err := classifyRancherVersionOrImage(versions[0])
+				if err != nil {
+					t.Fatalf("head selector %q was rejected: %v", input, err)
+				}
+				if versions[0] != "head" || buildType != "head" || minorLine != "" {
+					t.Fatalf("unexpected head resolution: versions=%v build=%q minor=%q", versions, buildType, minorLine)
+				}
+				_, distro, _ := chooseRancherSourceCandidates("auto", buildType)
+				image, tag, agent, _ := resolveImageSettings(versions[0], buildType, distro)
+				if image != "" || tag != "head" || agent != "" {
+					t.Fatalf("expected Docker Hub head defaults, got image=%q tag=%q agent=%q", image, tag, agent)
+				}
+			})
+		}
+	}
+}
+
 func TestClassifyRancherCustomImageAsHead(t *testing.T) {
 	image := "docker.io/tomleb/rancher:fix-tls-internal-cn-hostname-injection-1"
 	buildType, minorLine, err := classifyRancherVersionOrImage(image)

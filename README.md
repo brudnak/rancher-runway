@@ -491,6 +491,8 @@ you are most likely to care about:
   patch-qualified Prime heads such as `2.15.1-<SHA>-head`, and exact custom server
   images such as `bigkevmcd/rancher:v2.16-da0ab2f1dc-head`,
   `docker.io/example/rancher:my-fix`, or their matching `rancher-agent` images.
+  The plain `head` selector also accepts `Head` or `HEAD`; exact custom image
+  tags keep their original capitalization.
   Docker Hub namespace shorthand is accepted. Runway derives the sibling image
   with the same tag, verifies both, and uses a recognizable version in the image
   tag to select the Rancher release line for chart and Kubernetes compatibility

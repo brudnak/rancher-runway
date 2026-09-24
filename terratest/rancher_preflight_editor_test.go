@@ -842,6 +842,27 @@ func TestNormalizePreflightVersionsPreservesExactImage(t *testing.T) {
 	}
 }
 
+func TestNormalizePreflightVersionsCanonicalizesHeadWithoutChangingExactTags(t *testing.T) {
+	versions, err := normalizePreflightVersions([]string{
+		"Head", "HEAD", " vHead ", "bigkevmcd/rancher:Head", "docker.io/example/rancher:HEAD",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"head", "head", "head", "bigkevmcd/rancher:Head", "docker.io/example/rancher:HEAD"}
+	for i, version := range versions {
+		if version != want[i] {
+			t.Fatalf("version %d = %q, want %q", i, version, want[i])
+		}
+		if strings.Contains(version, "/") {
+			image, ok, err := parseCustomRancherImageRequest(version)
+			if err != nil || !ok || !strings.HasSuffix(version, ":"+image.tag) {
+				t.Fatalf("exact tag changed: version=%q image=%#v err=%v", version, image, err)
+			}
+		}
+	}
+}
+
 func TestNormalizeVersionInputDoesNotStripDockerNamespace(t *testing.T) {
 	const image = "vteam/rancher:v2.16-head"
 	if got := normalizeVersionInput(image); got != image {
