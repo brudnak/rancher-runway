@@ -1,130 +1,35 @@
 <template>
-  <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-    <div>
-      <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">AWS Inventory</h2>
-      <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">{{ summary }}</p>
-    </div>
-    <span class="text-sm text-zinc-500">{{ updatedLabel }}</span>
-  </div>
-
-  <div class="aws-inventory grid min-w-0 gap-3">
-    <p v-if="inventory.refreshing" class="text-sm text-zinc-500 dark:text-zinc-400" role="status">
-      {{ inventory.updatedAt ? 'Refreshing AWS inventory in the background. Showing the last completed scan.' : 'Scanning AWS resources in the background…' }}
-    </p>
-    <div v-if="inventory.error" class="aws-warning">
-      <strong>Inventory is incomplete.</strong> Review all covers only the candidates currently listed.
-      <details class="mt-2"><summary>Scan details</summary><p class="mt-2 break-words">{{ inventory.error }}</p></details>
-      <AppBuildStamp />
-    </div>
-    <div v-if="error && !plan" class="aws-warning" role="alert">{{ error }}<AppBuildStamp /></div>
-
-    <div class="aws-cleanup-toolbar">
-      <div>
-        <h3 class="font-semibold text-zinc-900 dark:text-zinc-100">Clean up leftover resources</h3>
-        <p class="mt-1 text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          {{ candidates.length }} cleanup candidate{{ candidates.length === 1 ? '' : 's' }} · {{ items.length - candidates.length }} protected.
-          Candidates have your Owner tag and Runway tags but no recorded run here. Verify they are unused before deleting.
-        </p>
-        <p v-if="items.some(item => item.type.startsWith('IAM '))" class="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">IAM review checks EC2 usage across all enabled regions. Reviewing a role includes its owned instance profiles and policy detachments. Shared managed policies are retained.</p>
-      </div>
-      <div class="flex flex-wrap items-center gap-2">
-        <button class="aws-button" :disabled="locked || !selected.length" @click="review(selectedItems)">Review selected ({{ selected.length }})</button>
-        <button class="aws-button aws-danger" :disabled="locked || !candidates.length" @click="review(candidates)">Review all candidates</button>
-        <span v-if="busy" class="text-sm text-zinc-500" role="status">{{ busy === 'review' ? 'Checking resources in AWS…' : 'Starting cleanup…' }}</span>
-      </div>
-      <p v-if="lifecycleRunning" class="text-xs text-amber-700 dark:text-amber-300">Cleanup actions are locked while an operation is running.</p>
-    </div>
-
-    <section v-if="cleanup.startedAt" class="aws-results" aria-live="polite">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <h3 class="font-semibold">{{ cleanup.running ? 'Cleanup in progress' : 'Cleanup finished' }}</h3>
-        <span class="text-sm">{{ completedCount }} / {{ results.length }} processed</span>
-      </div>
-      <p v-if="cleanup.running" class="mt-2 text-sm text-zinc-500">Keep Runway open. AWS may take several minutes to finish deleting a resource.</p>
-      <p v-if="cleanup.error" class="mt-2 text-sm text-amber-700 dark:text-amber-300">{{ cleanup.error }}</p>
-      <AppBuildStamp />
-      <details class="mt-3" :open="cleanup.running || !!cleanup.error">
-        <summary class="cursor-pointer text-sm font-semibold">Per-resource results</summary>
-        <ul class="mt-2 grid gap-2 text-sm">
-          <li v-for="result in results" :key="itemKey(result.resource)" class="aws-result-row">
-            <span class="aws-status" :data-status="result.status">{{ result.status }}</span>
-            <div class="min-w-0 break-words"><strong>{{ result.resource.name || result.resource.id }}</strong><p class="text-xs text-zinc-500">{{ result.resource.type }} · {{ result.resource.id }}</p><p class="mt-1">{{ result.message }}</p></div>
-          </li>
-          <li v-if="!results.length" class="text-zinc-500">{{ cleanup.error || 'Refresh inventory to check remaining resources.' }}</li>
-        </ul>
-      </details>
-    </section>
-
-    <p v-if="!items.length" class="rounded-xl border border-zinc-200 p-4 text-sm text-zinc-500 dark:border-white/10">{{ inventory.refreshing ? 'Waiting for AWS inventory to finish.' : 'No matching AWS resources found for the recorded run prefixes or Owner tag.' }}</p>
-    <template v-else>
-      <div class="flex flex-wrap items-center gap-2">
-        <span v-for="badge in countBadges" :key="badge.type" class="rounded-md bg-zinc-100 px-2 py-1 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">{{ badge.type }}: {{ badge.count }}</span>
-        <label class="ml-auto flex items-center gap-2 text-sm text-zinc-500"><input v-model="candidatesOnly" type="checkbox" /> Candidates only</label>
-      </div>
-      <div class="overflow-x-auto rounded-xl border border-zinc-200 dark:border-white/10">
-        <table class="aws-table w-full border-collapse text-left">
-          <thead class="bg-zinc-50 dark:bg-white/[0.04]">
-            <tr>
-              <th class="w-10"><input type="checkbox" aria-label="Select all cleanup candidates" :checked="allSelected" :indeterminate.prop="selected.length > 0 && !allSelected" :disabled="locked || !candidates.length" @change="selectAll($event.target.checked)" /></th>
-              <th>Resource</th><th>Status / Run</th><th>Details</th><th>Cleanup</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-zinc-200 dark:divide-white/10">
-            <tr v-for="item in visibleItems" :key="itemKey(item)">
-              <td><input v-model="selected" type="checkbox" :value="itemKey(item)" :aria-label="`Select ${item.name || item.id}`" :disabled="locked || !item.cleanupEligible" :title="item.cleanupReason || 'Select cleanup candidate'" /></td>
-              <td class="aws-resource"><div class="text-xs font-semibold text-zinc-500">{{ item.type }}</div><div class="mt-1 font-semibold">{{ item.name || item.id }}</div><div class="mt-1 text-xs text-zinc-500">{{ item.region }}</div></td>
-              <td><div>{{ item.status || '—' }}</div><div class="mt-1 text-xs text-zinc-500">Run tag {{ item.runId || 'unknown' }}</div><div v-if="item.cleanupEligible" class="mt-1 text-xs text-zinc-500">No recorded run here</div></td>
-              <td class="aws-detail"><div>{{ item.details || item.id }}</div><div v-if="item.owner" class="mt-1 text-xs text-zinc-500">Owner {{ item.owner }}</div><details class="mt-2 text-xs text-zinc-500"><summary class="cursor-pointer">ID &amp; tags</summary><p class="mt-1">{{ item.id }}</p><p class="mt-1">{{ tagsFor(item) }}</p></details></td>
-              <td class="aws-action"><template v-if="item.cleanupEligible"><span class="mb-2 block text-xs text-amber-700 dark:text-amber-300">Candidate</span><button class="aws-button aws-danger" :disabled="locked" @click="review([item])">Delete…</button></template><template v-else><span class="text-xs font-semibold text-zinc-500">Protected</span><p class="mt-1 text-xs text-zinc-500">{{ item.cleanupReason }}</p></template></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </template>
-  </div>
-
-  <Teleport to="body">
-    <dialog ref="reviewDialog" class="aws-review" aria-labelledby="aws-review-title" @cancel.prevent="closeReview">
-      <form v-if="plan" @submit.prevent="confirmCleanup">
-        <header class="aws-review-header">
-          <span class="text-xs font-semibold uppercase tracking-wide text-rose-600 dark:text-rose-300">Permanent AWS deletion</span>
-          <h2 id="aws-review-title" class="mt-2 text-xl font-semibold">Review {{ plan.items.length }} resource{{ plan.items.length === 1 ? '' : 's' }}</h2>
-          <AppBuildStamp />
-          <p class="mt-2 text-sm">{{ plan.region }} · Owner {{ plan.owner }}. These resources are not recorded in this workspace. They may still be in use elsewhere.</p>
-        </header>
-        <div class="aws-review-content">
-          <p class="aws-warning">{{ cleanupWarning }}<AppBuildStamp /></p>
-          <p v-if="plan.inventoryWarning" class="mt-3 text-sm text-amber-700 dark:text-amber-300">The inventory scan was incomplete. This review covers only the exact resources below; other resources may remain.</p>
-          <ol class="mt-4 grid gap-3">
-            <li v-for="item in plan.items" :key="itemKey(item.resource)" class="aws-review-item">
-              <strong>{{ item.resource.type }} · {{ item.resource.name || item.resource.id }}</strong>
-              <p class="mt-1 break-all text-xs text-zinc-500">{{ item.resource.id }}</p>
-              <ul v-if="item.checks?.length" class="mt-3 space-y-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400"><li v-for="check in item.checks" :key="check">{{ check }}</li></ul>
-              <ul class="mt-2 list-disc space-y-1 pl-5 text-sm"><li v-for="effect in item.effects" :key="effect" class="break-words">{{ effect }}</li></ul>
-            </li>
-          </ol>
-          <details v-if="plan.blocked.length" open class="mt-4 text-sm"><summary class="font-semibold">{{ plan.blocked.length }} protected or unavailable — will not be deleted</summary><ul class="mt-2 grid gap-2"><li v-for="item in plan.blocked" :key="itemKey(item.resource)"><strong>{{ item.resource.name || item.resource.id }}</strong>: {{ item.message }}</li></ul></details>
-          <label v-if="plan.items.length" class="mt-5 block text-sm">Type <strong>{{ plan.confirmation }}</strong> to confirm this exact selection.<input v-model="confirmation" :disabled="!!busy || expired" autocomplete="off" spellcheck="false" aria-label="Deletion confirmation" class="aws-confirmation mt-2 block w-full" /></label>
-          <p v-if="expired" class="mt-2 text-sm text-amber-700 dark:text-amber-300">This review expired. Cancel and review again.</p>
-          <p v-if="error" class="aws-warning mt-3" role="alert">{{ error }}<AppBuildStamp /></p>
-        </div>
-        <footer class="aws-review-footer">
-          <button type="button" class="aws-button" :disabled="!!busy" autofocus @click="closeReview">Cancel</button>
-          <button type="submit" class="aws-button aws-delete-confirm" :disabled="!!busy || lifecycleRunning || expired || !plan.items.length || confirmation !== plan.confirmation">{{ busy === 'delete' ? 'Starting cleanup…' : `Delete ${plan.items.length} ${plan.items.length === 1 ? 'resource' : 'resources'}` }}</button>
-        </footer>
-      </form>
-    </dialog>
-  </Teleport>
+ <div class="ops-workspace inventory-workspace">
+  <header class="ops-hero"><div><span class="ops-eyebrow"><Icon name="globe"/>RANCHER RUNWAY / CLOUD VISIBILITY</span><h2>AWS Inventory<span>.</span></h2><p>See what is there. Understand what belongs. Review what can go.</p></div><div class="ops-hero-actions"><span class="ops-badge"><i :class="{'ops-live':inventory.refreshing}"/>{{ inventory.refreshing?'Scan in progress':inventory.error?'Partial inventory':inventory.updatedAt?'Inventory loaded':'Awaiting inventory' }}</span><button class="ops-button" :disabled="manualRefreshInFlight||inventory.refreshing" @click="refreshChecks"><Icon name="refresh"/>Refresh view</button></div><div class="ops-hero-footer"><span><Icon name="globe"/>{{ inventory.region||'Configured region' }} + global services</span><span><Icon name="fingerprint"/>{{ inventory.owner||'Owner not configured' }}</span><span>{{ updatedLabel||'Waiting for the first scan' }}</span></div></header>
+  <div class="ops-stat-grid"><button class="ops-stat" :class="{selected:status==='all'}" @click="status='all'"><span>Resources discovered</span><strong>{{ initialDiscovery(inventory)?'—':items.length }}</strong><small>Matching run prefixes or Owner tags</small></button><button class="ops-stat" :class="{selected:status==='candidates'}" @click="status='candidates'"><span>Cleanup candidates</span><strong class="ops-accent">{{ initialDiscovery(inventory)?'—':candidates.length }}</strong><small>Runway-tagged · no local run record</small></button><button class="ops-stat" :class="{selected:status==='protected'}" @click="status='protected'"><span>Protected resources</span><strong>{{ initialDiscovery(inventory)?'—':protectedCount }}</strong><small>Review the reason on each resource</small></button></div>
+  <RefreshStatus :refreshing="inventory.refreshing" label="AWS inventory"/>
+  <div v-if="inventory.error" class="ops-alert ops-alert-warning"><Icon name="signal"/><div><strong>This scan is incomplete.</strong><p>Cleanup review covers only the resources listed here. Other resources may remain.</p><details><summary>Scan details</summary><p>{{ inventory.error }}</p></details></div></div>
+  <div v-if="error&&!plan" class="ops-alert ops-alert-error" role="alert">{{ error }}</div>
+  <section class="ops-cleanup-guide"><div class="ops-guide-icon"><Icon name="compass"/></div><div><h3>A clear path for leftover resources.</h3><p>Candidates match your Owner and Runway tags and have no recorded run here. Review rechecks their dependencies in AWS before presenting the exact deletion effects.</p><details><summary>What stays protected?</summary><p>A local run record, missing ownership evidence, or an unverified dependency can keep a resource protected. IAM review checks EC2 use across enabled regions and includes owned instance profiles and policy detachments. Shared managed policies are retained. Verify that candidates are unused elsewhere.</p></details></div><button class="ops-button" @click="openDestroy">Have a recorded run?<span>Open Destroy</span><Icon name="arrow"/></button></section>
+  <section v-if="cleanup.startedAt" class="ops-result-card" aria-live="polite"><div class="ops-section-heading"><div><span class="ops-eyebrow">CLEANUP ACTIVITY</span><h3>{{ cleanup.running?'Cleanup in progress':cleanup.error?'Cleanup needs attention':'Cleanup finished' }}</h3><p>{{ completedCount }} of {{ results.length }} resources processed. {{ cleanup.running?'Keep Runway open while AWS finishes.':'' }}</p></div><span class="ops-badge">{{ cleanup.running?'Running':'Finished' }}</span></div><div class="ops-progress-track"><i :style="{width:(results.length?completedCount/results.length*100:0)+'%'}"/></div><p v-if="cleanup.error" class="ops-warning-text">{{ cleanup.error }}</p><details :open="cleanup.running||!!cleanup.error"><summary>Per-resource results</summary><ul class="ops-result-list"><li v-for="result in results" :key="itemKey(result.resource)"><span class="aws-status" :data-status="result.status">{{ result.status }}</span><div><strong>{{ result.resource.name||result.resource.id }}</strong><small>{{ result.resource.type }} · {{ result.resource.id }}</small><p>{{ result.message }}</p></div></li><li v-if="!results.length">Refresh inventory to check remaining resources.</li></ul></details></section>
+  <section class="ops-resource-browser" aria-label="AWS resources"><div class="ops-section-heading"><div><h3>Your AWS footprint.</h3><p>{{ visibleItems.length }} of {{ items.length }} resources · {{ selected.length }} selected</p></div><div class="ops-actions"><label class="ops-search"><Icon name="search"/><input v-model="query" type="search" aria-label="Search AWS resources" placeholder="Name, ID, run, or tag…"/></label><select v-model="type" aria-label="Filter AWS resource type"><option value="">All resource types</option><option v-for="badge in countBadges" :key="badge.type" :value="badge.type">{{ badge.type }} ({{ badge.count }})</option></select></div></div>
+   <div class="ops-resource-controls"><div class="ops-segment" role="group" aria-label="Filter cleanup eligibility"><button v-for="filter in [{id:'all',label:'All resources'},{id:'candidates',label:'Candidates'},{id:'protected',label:'Protected'}]" :key="filter.id" :aria-pressed="status===filter.id" :class="{selected:status===filter.id}" @click="status=filter.id">{{ filter.label }}</button></div><div class="ops-actions"><button v-if="selected.length" class="ops-link" :disabled="locked" @click="selected=[]">Clear selection</button><button class="ops-button" :disabled="locked||!selected.length" @click="review(selectedItems,$event)">Review selected ({{ selected.length }})</button><button class="ops-button ops-primary" :disabled="locked||!visibleCandidates.length" @click="review(visibleCandidates,$event)">Review {{ visibleCandidates.length }} visible candidate{{ visibleCandidates.length===1?'':'s' }} <Icon name="arrow"/></button></div></div>
+   <p v-if="busy" class="ops-inline-status" role="status"><span class="spinner"/>{{ busy==='review'?'Rechecking ownership and dependencies in AWS…':'Starting the reviewed cleanup…' }}</p><p v-else-if="lifecycleRunning" class="ops-inline-status"><Icon name="lock"/>Cleanup is locked while a lifecycle operation runs. You can still inspect and filter.</p>
+   <div v-if="visibleItems.length" class="ops-table-scroll"><table class="ops-inventory-table"><thead><tr><th><input type="checkbox" aria-label="Select visible cleanup candidates" :checked="allSelected" :indeterminate.prop="visibleSelectedCount>0&&!allSelected" :disabled="locked||!visibleCandidates.length" @change="selectAll($event.target.checked)"/></th><th>Resource</th><th>Run & status</th><th>Details</th><th>Cleanup</th></tr></thead><tbody><tr v-for="item in visibleItems" :key="itemKey(item)" :class="{'is-selected':selected.includes(itemKey(item))}"><td><input v-model="selected" type="checkbox" :value="itemKey(item)" :aria-label="`Select ${item.name||item.id}`" :disabled="locked||!item.cleanupEligible" :title="item.cleanupReason||'Select cleanup candidate'"/></td><td><div class="ops-resource-name"><span class="ops-resource-icon"><Icon :name="resourceIcon(item)"/></span><div><small>{{ item.type }}</small><strong>{{ item.name||item.id }}</strong><span>{{ item.region }}</span></div></div></td><td><span class="ops-badge">{{ item.status||'Status not reported' }}</span><small>Run tag {{ item.runId||'not recorded' }}</small><small v-if="item.cleanupEligible">No recorded run here</small></td><td class="ops-resource-details"><p>{{ item.details||item.id }}</p><small v-if="item.owner">{{ item.owner }}</small><details><summary>ID & tags</summary><code>{{ item.id }}</code><p>{{ tagsFor(item)||'No tags returned' }}</p></details></td><td class="ops-resource-cleanup"><template v-if="item.cleanupEligible"><span class="ops-candidate-label"><i/>Candidate</span><button class="ops-button" :disabled="locked" @click="review([item],$event)">Review cleanup <Icon name="arrow"/></button></template><template v-else><span class="ops-protected-label"><Icon name="lock"/>Protected</span><p>{{ (item.cleanupReason||'Ownership or dependencies require verification.').replace(/^Protected:\s*/i,'') }}</p></template></td></tr></tbody></table></div>
+   <div v-else class="ops-empty"><Icon :name="query||type||status!=='all'?'search':'globe'"/><h3>{{ initialDiscovery(inventory)?'Getting the picture.':items.length?'No resources match these filters.':inventory.error?'The scan needs attention.':'No matching resources found.' }}</h3><p>{{ initialDiscovery(inventory)?'Waiting for AWS discovery to finish.':items.length?'Try a broader search or another resource type.':'This view covers matching run prefixes and Owner tags, not your entire AWS account.' }}</p><button v-if="items.length" class="ops-link" @click="clearFilters">Clear filters <Icon name="arrow"/></button></div>
+  </section>
+  <div class="ops-footnote"><Icon name="lock"/><span>Every deletion requires a fresh dependency review and typed confirmation. Browsing this inventory never deletes resources.</span></div>
+ </div>
+ <Teleport to="body"><dialog ref="reviewDialog" class="aws-review ops-workspace" aria-labelledby="aws-review-title" @cancel.prevent="closeReview"><form v-if="plan" @submit.prevent="confirmCleanup"><header class="aws-review-header"><span class="ops-eyebrow ops-warning-text">PERMANENT AWS DELETION</span><h2 id="aws-review-title">Review {{ plan.items.length }} resource{{ plan.items.length===1?'':'s' }}</h2><p>{{ plan.region }} · Owner {{ plan.owner }}. These resources are not recorded in this workspace. They may still be in use elsewhere.</p><AppBuildStamp/></header><div class="aws-review-content"><p class="ops-alert ops-alert-warning">{{ cleanupWarning }}</p><p v-if="plan.inventoryWarning" class="ops-caption">The inventory scan was incomplete. This review covers only the exact resources below; other resources may remain.</p><ol class="ops-review-items"><li v-for="item in plan.items" :key="itemKey(item.resource)"><strong>{{ item.resource.type }} · {{ item.resource.name||item.resource.id }}</strong><code>{{ item.resource.id }}</code><ul v-if="item.checks?.length" class="ops-review-checks"><li v-for="check in item.checks" :key="check"><Icon name="check"/>{{ check }}</li></ul><ul class="ops-review-effects"><li v-for="effect in item.effects" :key="effect">{{ effect }}</li></ul></li></ol><details v-if="plan.blocked.length" open class="ops-review-blocked"><summary>{{ plan.blocked.length }} protected or unavailable — will not be deleted</summary><p v-for="item in plan.blocked" :key="itemKey(item.resource)"><strong>{{ item.resource.name||item.resource.id }}</strong>: {{ item.message }}</p></details><label v-if="plan.items.length" class="ops-confirm-label">Type <strong>{{ plan.confirmation }}</strong> to confirm this exact selection.<input v-model="confirmation" :disabled="!!busy||expired" autocomplete="off" spellcheck="false" aria-label="Deletion confirmation" class="aws-confirmation"/></label><p v-if="expired" class="ops-warning-text">This review expired. Cancel and review again.</p><p v-if="error" class="ops-alert ops-alert-error" role="alert">{{ error }}</p></div><footer class="aws-review-footer"><button type="button" class="ops-button" :disabled="!!busy" autofocus @click="closeReview">Cancel</button><button type="submit" class="ops-button ops-danger-solid" :disabled="!!busy||lifecycleRunning||expired||!plan.items.length||confirmation!==plan.confirmation">{{ busy==='delete'?'Starting cleanup…':`Delete ${plan.items.length} ${plan.items.length===1?'resource':'resources'}` }}</button></footer></form></dialog></Teleport>
 </template>
 
 <script setup>
+import Icon from './HelmLabIcon.vue';
+import {filterAWSResources,toggleVisibleCandidates,awsResourceKey} from './cloud-workspace.mjs';
+import RefreshStatus from './RefreshStatus.vue';
+import { initialDiscovery } from './panel-presentation.mjs';
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue';
-import { apiFetch, bootPending, lifecycleRunning, refresh, state } from './store.js';
+import { apiFetch, bootPending, lifecycleRunning, refresh, refreshChecks, manualRefreshInFlight, setActivePanelTab, setActiveDestroyTab, state } from './store.js';
 import { readJSON } from './read-json.mjs';
 import AppBuildStamp from './AppBuildStamp.vue';
 
 const selected = ref([]);
-const candidatesOnly = ref(false);
+const query=ref(''),type=ref(''),status=ref('all');
 const busy = ref('');
 const error = ref('');
 const plan = ref(null);
@@ -138,14 +43,21 @@ const confirmation = ref('');
 const reviewDialog = ref(null);
 const expired = ref(false);
 let expiryTimer;
+let reviewTrigger;
 const inventory = computed(() => state.value?.aws || {});
 const cleanup = computed(() => state.value?.awsCleanup || {});
 const items = computed(() => inventory.value.items || []);
 const candidates = computed(() => items.value.filter(item => item.cleanupEligible));
-const visibleItems = computed(() => candidatesOnly.value ? candidates.value : items.value);
+const visibleItems=computed(()=>filterAWSResources(items.value,{query:query.value,type:type.value,status:status.value}));
+const visibleCandidates=computed(()=>visibleItems.value.filter(item=>item.cleanupEligible));
+const visibleSelectedCount=computed(()=>visibleCandidates.value.filter(item=>selected.value.includes(itemKey(item))).length);
+const protectedCount=computed(()=>items.value.length-candidates.value.length);
+const resourceIcon=item=>item.type.startsWith('IAM')?'lock':item.type.includes('EC2')?'server':item.type.includes('RDS')?'database':item.type.includes('EBS')?'layers':'globe';
+function openDestroy(){setActiveDestroyTab('slots');setActivePanelTab('destroy');}
+function clearFilters(){query.value='';type.value='';status.value='all';}
 const selectedItems = computed(() => candidates.value.filter(item => selected.value.includes(itemKey(item))));
 const locked = computed(() => !!busy.value || !!plan.value || bootPending.value || lifecycleRunning.value);
-const allSelected = computed(() => candidates.value.length > 0 && selected.value.length === candidates.value.length);
+const allSelected = computed(() => visibleCandidates.value.length > 0 && visibleSelectedCount.value === visibleCandidates.value.length);
 const results = computed(() => cleanup.value.results || []);
 const completedCount = computed(() => results.value.filter(item => ['deleted','failed','blocked'].includes(item.status)).length);
 const updatedLabel = computed(() => inventory.value.updatedAt ? `Updated ${new Date(inventory.value.updatedAt).toLocaleTimeString()}` : '');
@@ -154,25 +66,29 @@ const countBadges = computed(() => {
   const counts = items.value.reduce((all,item) => { all[item.type] = (all[item.type] || 0) + 1; return all; }, {});
   return Object.entries(counts).sort(([a],[b]) => a.localeCompare(b)).map(([type,count]) => ({type,count}));
 });
-const itemKey = item => JSON.stringify([item.type,item.id]);
+const itemKey = awsResourceKey;
 const tagsFor = item => Object.entries(item.tags || {}).map(([key,value]) => `${key}=${value}`).join(' · ');
-const selectAll = checked => { selected.value = checked ? candidates.value.map(itemKey) : []; };
+const selectAll = checked => { selected.value = toggleVisibleCandidates(selected.value,visibleItems.value,checked); };
 watch(candidates, items => { const keys = new Set(items.map(itemKey)); selected.value = selected.value.filter(key => keys.has(key)); });
-const review = async resources => {
+const review = async (resources,event) => {
   if (locked.value || !resources.length) return;
+  reviewTrigger = event?.currentTarget || document.activeElement;
   error.value = ''; busy.value = 'review';
   try {
     plan.value = await readJSON(signal => apiFetch('/api/aws/cleanup/preview', { method:'POST', signal, body:JSON.stringify({ resources:resources.map(({type,id}) => ({type,id})) }) }), {label:'AWS cleanup review',timeoutMs:125000});
     confirmation.value = ''; expired.value = false;
     clearTimeout(expiryTimer);
     expiryTimer = setTimeout(() => { expired.value = true; }, Math.max(0,new Date(plan.value.expiresAt).getTime() - Date.now()));
+    busy.value = '';
     await nextTick(); reviewDialog.value.showModal();
-  } catch (err) { error.value = err.message; }
+  } catch (err) { plan.value = null; error.value = err.message; }
   finally { busy.value = ''; }
 };
 const closeReview = () => {
   if (busy.value) return;
   reviewDialog.value?.close(); plan.value = null; confirmation.value = ''; error.value = ''; clearTimeout(expiryTimer);
+  const trigger = reviewTrigger; reviewTrigger = null;
+  nextTick(() => { if (trigger?.isConnected) trigger.focus({preventScroll:true}); });
 };
 const confirmCleanup = async () => {
   if (busy.value || lifecycleRunning.value || expired.value || !plan.value?.items.length || confirmation.value !== plan.value.confirmation) return;

@@ -11,7 +11,7 @@ RELEASE_VERSION ?=
 RELEASE_REF ?= main
 export RELEASE_BUMP RELEASE_VERSION RELEASE_REF
 
-.PHONY: help setup install app build release release-plan node-deps frontend-deps panel-css panel-vue panel-ui check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
+.PHONY: help setup install app build release release-plan node-deps frontend-deps panel-css panel-vue panel-ui prepare-runtime-data check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
 
 help:
 	@printf '%s\n' "Targets:"
@@ -56,12 +56,15 @@ panel-vue: node-deps
 panel-ui: node-deps
 	@npm run build:panel-ui
 
-test:
+prepare-runtime-data:
+	@bash scripts/prepare-runtime-data.sh
+
+test: prepare-runtime-data
 	@go test ./...
 
 ci: ci-go ci-web ci-terraform ci-workflows
 
-ci-go:
+ci-go: prepare-runtime-data
 	@go test ./...
 
 ci-web: panel-ui frontend-deps

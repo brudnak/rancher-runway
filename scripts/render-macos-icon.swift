@@ -12,6 +12,7 @@ let outputDir = repoRoot.appendingPathComponent("packaging/macos")
 let sourcePNG = outputDir.appendingPathComponent("AppIcon-source.png")
 let iconsetDir = outputDir.appendingPathComponent("AppIcon.iconset")
 let basePNG = outputDir.appendingPathComponent("AppIcon-1024.png")
+let previewPNG = outputDir.appendingPathComponent("AppIcon-preview.png")
 let icnsPath = outputDir.appendingPathComponent("AppIcon.icns")
 let pngOutPath = (ProcessInfo.processInfo.environment["RANCHER_RUNWAY_ICON_PNG_OUT"] ?? ProcessInfo.processInfo.environment["HA_RANCHER_ICON_PNG_OUT"])
     .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
@@ -25,40 +26,41 @@ guard let sourceImage = NSImage(contentsOf: sourcePNG) else {
 }
 
 let size = NSSize(width: 1024, height: 1024)
-let image = NSImage(size: size)
-image.lockFocus()
+// Supply an opaque, full-bleed square. macOS applies its own rounded mask;
+// pre-rounded artwork with transparent padding can gain a gray outer tile.
+// An explicit bitmap makes output pixels independent of the display's scale.
+guard let bitmap = NSBitmapImageRep(
+    bitmapDataPlanes: nil,
+    pixelsWide: 1024,
+    pixelsHigh: 1024,
+    bitsPerSample: 8,
+    samplesPerPixel: 3,
+    hasAlpha: false,
+    isPlanar: false,
+    colorSpaceName: .deviceRGB,
+    bytesPerRow: 0,
+    bitsPerPixel: 32
+), let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
+    fatalError("failed to create icon bitmap")
+}
+bitmap.size = size
 
-let bounds = NSRect(origin: .zero, size: size)
-let iconMask = NSBezierPath(roundedRect: bounds.insetBy(dx: 12, dy: 12), xRadius: 210, yRadius: 210)
-
-let w = sourceImage.size.width
-let h = sourceImage.size.height
-let cropSize = min(w, h) * 0.8788
-let cropX = (w - cropSize) / 2
-let cropY = (h - cropSize) / 2
-let sourceCrop = NSRect(x: cropX, y: cropY, width: cropSize, height: cropSize)
-
-NSGraphicsContext.current?.saveGraphicsState()
-iconMask.addClip()
-NSGraphicsContext.current?.imageInterpolation = .high
-sourceImage.draw(in: bounds, from: sourceCrop, operation: .sourceOver, fraction: 1.0)
-NSGraphicsContext.current?.restoreGraphicsState()
+NSGraphicsContext.saveGraphicsState()
+NSGraphicsContext.current = context
+context.imageInterpolation = .high
+sourceImage.draw(in: NSRect(origin: .zero, size: size), from: .zero, operation: .copy, fraction: 1.0)
+NSGraphicsContext.restoreGraphicsState()
 
 if let pngOutPath {
     let pngDir = pngOutPath.deletingLastPathComponent()
     try FileManager.default.createDirectory(at: pngDir, withIntermediateDirectories: true)
 }
 
-image.unlockFocus()
-
-guard
-    let tiff = image.tiffRepresentation,
-    let bitmap = NSBitmapImageRep(data: tiff),
-    let pngData = bitmap.representation(using: .png, properties: [:])
-else {
+guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
     fatalError("failed to render icon PNG")
 }
 try pngData.write(to: basePNG)
+try pngData.write(to: previewPNG)
 if let pngOutPath {
     try pngData.write(to: pngOutPath)
 }

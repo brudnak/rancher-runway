@@ -1,108 +1,72 @@
-<template>
-  <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-    <div
-      v-for="card in totalCards"
-      :key="card.label"
-      class="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 dark:border-white/10 dark:bg-white/[0.03]"
-    >
-      <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-        {{ card.label }}
-      </div>
-      <div class="mt-1 text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
-        {{ formatUSD(card.value) }}
-      </div>
-      <div class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Estimated AWS cleanup cost</div>
-    </div>
-  </div>
-
-  <div class="mt-4 overflow-hidden rounded-xl border border-zinc-200 dark:border-white/10">
-    <div
-      v-if="costs?.error"
-      class="border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200"
-    >
-      Cost history unavailable: {{ costs.error }}
-    </div>
-
-    <div
-      v-else-if="!entries.length"
-      class="bg-zinc-50 p-4 text-sm text-zinc-600 dark:bg-white/[0.03] dark:text-zinc-400"
-    >
-      No persisted cost estimates yet. Successful destroys will add estimated EC2, EBS, RDS/Aurora, and load balancer cost rows here.
-    </div>
-
-    <div v-else class="overflow-x-auto">
-      <table class="min-w-full divide-y divide-zinc-200 text-left text-sm dark:divide-white/10">
-        <thead class="bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:bg-white/[0.03] dark:text-zinc-400">
-          <tr>
-            <th v-for="label in tableLabels" :key="label" class="px-4 py-3">{{ label }}</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-zinc-200 bg-white dark:divide-white/10 dark:bg-white/[0.02]">
-          <tr v-for="entry in entries" :key="entryKey(entry)">
-            <td class="px-4 py-3 font-semibold text-zinc-900 dark:text-zinc-100">
-              {{ entry.runId || "unknown" }}
-              <div v-if="entry.awsPrefix" class="mt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                {{ entry.awsPrefix }}
-              </div>
-            </td>
-            <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">{{ finishedAt(entry) }}</td>
-            <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">{{ entry.owner || "not recorded" }}</td>
-            <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">{{ entry.region || "unknown" }}</td>
-            <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">{{ Number(entry.totalRuntimeHours || 0).toFixed(2) }}h</td>
-            <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">{{ formatUSD(entry.ec2CostUsd) }}</td>
-            <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">{{ formatUSD(entry.ebsCostUsd) }}</td>
-            <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">{{ formatUSD(entry.rdsCostUsd) }}</td>
-            <td class="px-4 py-3 text-zinc-600 dark:text-zinc-300">{{ formatUSD(entry.loadBalancerCostUsd) }}</td>
-            <td class="px-4 py-3 font-semibold text-zinc-950 dark:text-zinc-50">{{ formatUSD(entry.totalCostUsd) }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</template>
-
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
-
-const state = ref(window.rancherControlPanelState || {});
-const tableLabels = ["Run", "Finished", "Owner", "Region", "Runtime", "EC2", "EBS", "RDS", "LB", "Total"];
-
-const costs = computed(() => state.value?.costs || {});
-const entries = computed(() => Array.isArray(costs.value?.entries) ? costs.value.entries : []);
-const totals = computed(() => costs.value?.totals || {});
-const totalCards = computed(() => [
-  { label: "Lifetime", value: totals.value.lifetime },
-  { label: "This month", value: totals.value.month },
-  { label: "This week", value: totals.value.week },
-  { label: "Today", value: totals.value.today },
-]);
-
-const formatUSD = value => {
-  const number = Number(value || 0);
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: number >= 100 ? 0 : 2,
-  }).format(number);
-};
-
-const finishedAt = entry => entry.finishedAt ? new Date(entry.finishedAt).toLocaleString() : "not recorded";
-
-const entryKey = entry => [
-  entry.runId || "unknown",
-  entry.finishedAt || "",
-  entry.totalCostUsd || "",
-].join(":");
-
-const handleStateEvent = event => {
-  state.value = event.detail?.state || {};
-};
-
-onMounted(() => {
-  window.addEventListener("rancher-control-panel:state", handleStateEvent);
-});
-
-onUnmounted(() => {
-  window.removeEventListener("rancher-control-panel:state", handleStateEvent);
-});
+import {computed,ref,watch} from 'vue';
+import Icon from './HelmLabIcon.vue';
+import {state,apiFetch,refresh,lifecycleRunning,bootPending} from './store.js';
+import {readJSON} from './read-json.mjs';
+import {COST_SERVICES,money,costChartModel,costPeriodLabel,filterCostEntries} from './cloud-workspace.mjs';
+const range=ref('30'),region=ref(''),chartType=ref('bars'),selectedKey=ref(''),query=ref(''),sort=ref('newest'),page=ref(0);
+const transfer=ref(''),busy=ref(false),error=ref(''),notice=ref(''),fileInput=ref(null),bundle=ref(null),preview=ref(null),importName=ref('');
+const costs=computed(()=>state.value?.costs||{}),entries=computed(()=>costs.value.entries||[]),daily=computed(()=>costs.value.daily||[]);
+const regions=computed(()=>[...new Set(daily.value.map(d=>d.region))].sort());
+const model=computed(()=>costChartModel(daily.value,range.value,region.value));
+const summary=computed(()=>model.value.summary),points=computed(()=>model.value.points);
+const selected=computed(()=>points.value.find(p=>p.key===selectedKey.value)||[...points.value].reverse().find(p=>p.records)||points.value.at(-1));
+const max=computed(()=>{const raw=Math.max(...points.value.map(p=>chartType.value==='bars'?p.total:p.cumulative),.01);const target=raw/3;const power=10**Math.floor(Math.log10(target));const interval=[1,2,2.5,5,10].find(n=>n*power>=target)*power;return interval*3;});
+const axisMoney=value=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',notation:'compact',maximumFractionDigits:value<1?2:1}).format(value);
+const step=computed(()=>840/Math.max(points.value.length,1));
+const x=i=>60+(i+.5)*step.value;
+const y=v=>210-v/max.value*180;
+const segments=p=>{let prior=0;return COST_SERVICES.map(service=>{const value=p[service.key];const segment={...service,value,y:y(prior+value),height:value/max.value*180};prior+=value;return segment;});};
+const cumulativePath=computed(()=>points.value.map((p,i)=>`${i?'L':'M'}${x(i)},${y(p.cumulative)}`).join(' '));
+const areaPath=computed(()=>points.value.length?`${cumulativePath.value}L${x(points.value.length-1)},210L${x(0)},210Z`:'');
+const tickIndices=computed(()=>[...new Set([0,Math.floor((points.value.length-1)/3),Math.floor(2*(points.value.length-1)/3),points.value.length-1])].filter(i=>i>=0));
+const filtered=computed(()=>filterCostEntries(entries.value,range.value,region.value,query.value).sort((a,b)=>sort.value==='largest'?b.totalCostUsd-a.totalCostUsd:new Date(b.finishedAt)-new Date(a.finishedAt)));
+const pages=computed(()=>Math.ceil(filtered.value.length/15)),currentPage=computed(()=>Math.min(page.value,Math.max(0,pages.value-1))),visible=computed(()=>filtered.value.slice(currentPage.value*15,(currentPage.value+1)*15));
+const cards=computed(()=>[{label:'Lifetime recorded',value:costs.value.totals?.lifetime,detail:`${costs.value.recordCount??entries.value.length} local records`},{label:'This month',value:costs.value.totals?.month,detail:'By cleanup completion date'},{label:'This week',value:costs.value.totals?.week,detail:'Monday through today'},{label:'Today',value:costs.value.totals?.today,detail:'Recorded on this computer'}]);
+watch([range,region,query,sort],()=>{page.value=0;selectedKey.value='';});
+function chartKey(event,index){const next=event.key==='ArrowRight'?Math.min(points.value.length-1,index+1):event.key==='ArrowLeft'?Math.max(0,index-1):event.key==='Home'?0:event.key==='End'?points.value.length-1:-1;if(next>=0){event.preventDefault();selectedKey.value=points.value[next].key;event.currentTarget.parentElement.querySelector(`[data-cost-point="${next}"]`)?.focus();}}
+async function request(action,payload={}){return readJSON(signal=>apiFetch('/api/costs/transfer',{method:'POST',signal,body:JSON.stringify({action,...payload})}),{label:'Cost history transfer',timeoutMs:60000});}
+async function perform(fn){if(busy.value)return;busy.value=true;error.value='';notice.value='';try{await fn();}catch(e){error.value=e.message;}finally{busy.value=false;}}
+async function exportHistory(type){await perform(async()=>{const data=await request('export-'+type);notice.value=`Saved to ${data.path}`;});}
+async function chooseImport(event){const file=event.target.files?.[0];event.target.value='';if(!file)return;preview.value=null;bundle.value=null;importName.value=file.name;await perform(async()=>{if(file.size>64*1024*1024)throw Error('Choose a cost-history JSON bundle no larger than 64 MiB.');try{bundle.value=JSON.parse(await file.text());}catch{throw Error('Choose a valid runway-aws-costs.json bundle. CSV exports are for analysis; JSON bundles can be imported.');}preview.value=await request('import-preview',{bundle:bundle.value});});}
+async function importHistory(){await perform(async()=>{const review=preview.value;preview.value=null;const result=await request('import',{bundle:bundle.value,revision:review.revision,confirm:'IMPORT COST HISTORY'});bundle.value=null;transfer.value='';notice.value=`Imported ${result.added} record${result.added===1?'':'s'}. Existing history was preserved.`;await refresh();});}
+async function previewAgain(){await perform(async()=>{preview.value=await request('import-preview',{bundle:bundle.value});});}
 </script>
+<template>
+ <section class="cost-workspace" aria-label="Local AWS cost history">
+  <div class="ops-section-heading"><div><span class="ops-eyebrow">THE LOCAL COST JOURNAL</span><h3>Understand what your experiments cost<span>.</span></h3><p>Estimates captured during successful Runway AWS destroys. Stored locally, with the history you choose to keep.</p></div><div class="ops-actions"><button class="ops-button" :disabled="busy" @click="transfer=transfer==='export'?'':'export';preview=null"><Icon name="download"/>Export</button><button class="ops-button" :disabled="busy" @click="transfer=transfer==='import'?'':'import';preview=null"><Icon name="upload"/>Import</button></div></div>
+  <div v-if="error||costs.error" class="ops-alert ops-alert-error" role="alert">{{ error||`Cost history unavailable: ${costs.error}` }}</div><div v-if="notice" class="ops-alert" role="status"><Icon name="check"/><span>{{ notice }}</span><button class="ops-link" @click="notice=''">Dismiss</button></div>
+  <div v-if="transfer" class="cost-transfer"><div class="ops-section-heading"><div><h4>{{ transfer==='export'?'Take your history with you.':'Bring your history back.' }}</h4><p>{{ transfer==='export'?'Exports include the full ledger, regardless of the chart filters.':'Import a runway-aws-costs.json bundle. Review the merge before saving.' }}</p></div><button class="ops-icon-button" :disabled="busy" aria-label="Close cost transfer" @click="transfer=''"><Icon name="close"/></button></div>
+   <div v-if="transfer==='export'" class="cost-export-options"><button class="cost-export-option" :disabled="busy||costs.error" @click="exportHistory('json')"><Icon name="database"/><span><strong>Portable JSON backup</strong><small>Full records and metadata · import into Runway</small></span><Icon name="download"/></button><button class="cost-export-option" :disabled="busy||costs.error" @click="exportHistory('csv')"><Icon name="table"/><span><strong>Spreadsheet CSV</strong><small>Service estimates and totals · open in your analysis tool</small></span><Icon name="download"/></button></div>
+   <template v-else><div class="ops-actions"><button class="ops-button" :disabled="busy" @click="fileInput.click()"><Icon name="upload"/>{{ importName?'Choose another bundle':'Choose JSON bundle' }}</button><span class="ops-muted">{{ importName||'Up to 64 MiB · 50,000 records' }}</span></div><input ref="fileInput" type="file" accept=".json" hidden @change="chooseImport"/>
+    <div v-if="preview" class="cost-import-preview"><div><strong>{{ preview.added }}</strong><span>new record{{ preview.added===1?'':'s' }} · {{ money(preview.addedTotal) }}</span></div><div><strong>{{ preview.duplicates }}</strong><span>duplicates skipped</span></div><div><strong>{{ preview.conflicts }}</strong><span>conflicts kept unchanged</span></div></div><p v-if="preview" class="ops-caption">Existing records are never overwritten. Conflicts have the same run, date, and source with different values; they will be skipped. New records are marked as imported.</p>
+    <div class="ops-actions cost-import-actions"><button v-if="preview" class="ops-button ops-primary" :disabled="busy||!preview.added||lifecycleRunning||bootPending" @click="importHistory">Import {{ preview.added }} record{{ preview.added===1?'':'s' }}</button><button v-else-if="bundle" class="ops-button" :disabled="busy" @click="previewAgain">Preview again</button><span v-if="lifecycleRunning" class="ops-caption">Import becomes available when the active operation finishes.</span></div>
+   </template><span v-if="busy" class="ops-caption" role="status">Working with your local history…</span>
+  </div>
+  <div class="cost-total-cards"><article v-for="card in cards" :key="card.label"><span>{{ card.label }}</span><strong>{{ costs.error||card.value==null?'—':money(card.value) }}</strong><small>{{ card.detail }}</small></article></div>
+  <div v-if="!costs.error" class="cost-chart-card">
+   <div class="ops-section-heading"><div><span class="ops-eyebrow">RECORDED ESTIMATES · USD</span><h4>{{ chartType==='bars'?'A clearer picture over time.':'See your history add up.' }}</h4><p>Grouped by {{ model.grain==='day'?'day':model.grain==='month'?'month':'year' }} of cleanup completion.</p></div><div class="ops-actions"><label class="ops-select-label"><span class="sr-only">Cost history period</span><select v-model="range" aria-label="Cost history period"><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option><option value="all">All history</option></select></label><select v-model="region" aria-label="Cost history region"><option value="">All regions</option><option v-for="r in regions" :key="r">{{ r }}</option></select></div></div>
+   <div class="cost-chart-summary"><div><strong>{{ money(summary.total) }}</strong><span>{{ summary.records }} estimate{{ summary.records===1?'':'s' }} in this view</span></div><div class="ops-segment" role="group" aria-label="Chart style"><button :aria-pressed="chartType==='bars'" :class="{selected:chartType==='bars'}" @click="chartType='bars'">By service</button><button :aria-pressed="chartType==='line'" :class="{selected:chartType==='line'}" @click="chartType='line'">Cumulative</button></div></div>
+   <div v-if="points.length" class="cost-plot">
+    <svg viewBox="0 0 920 260" role="group" aria-label="Recorded AWS estimates. Use arrow keys to explore periods.">
+     <defs><linearGradient id="cost-area-gradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--runway-accent)" stop-opacity=".23"/><stop offset="100%" stop-color="var(--runway-accent)" stop-opacity=".01"/></linearGradient></defs>
+     <g v-for="n in [0,1,2,3]" :key="n" class="cost-grid"><line x1="56" x2="905" :y1="210-n*60" :y2="210-n*60"/><text x="45" :y="214-n*60" text-anchor="end">{{ axisMoney(max*n/3) }}</text></g>
+     <path v-if="chartType==='line'" :d="areaPath" fill="url(#cost-area-gradient)"/><path v-if="chartType==='line'" :d="cumulativePath" fill="none" stroke="var(--runway-accent)" stroke-width="2.5" stroke-linejoin="round"/>
+     <g v-for="(point,i) in points" :key="point.key" role="button" :aria-label="`${costPeriodLabel(point.key)}: ${money(chartType==='bars'?point.total:point.cumulative)}, ${point.records} estimate${point.records===1?'':'s'}`" :tabindex="selected?.key===point.key?0:-1" :data-cost-point="i" class="cost-point" :class="{'is-selected':selected?.key===point.key}" @mouseenter="selectedKey=point.key" @focus="selectedKey=point.key" @click="selectedKey=point.key" @keydown="chartKey($event,i)">
+      <rect :x="x(i)-step/2" y="25" :width="step" height="190" fill="transparent"/>
+      <template v-if="chartType==='bars'"><rect v-for="segment in segments(point)" :key="segment.key" :x="x(i)-Math.min(30,step*.65)/2" :y="segment.y" :width="Math.min(30,step*.65)" :height="segment.height" :fill="segment.color" rx="1.8"/></template>
+      <template v-else><line v-if="selected?.key===point.key" :x1="x(i)" :x2="x(i)" y1="25" y2="210" class="cost-crosshair"/><circle :cx="x(i)" :cy="y(point.cumulative)" :r="selected?.key===point.key?4.5:2" fill="var(--runway-accent)"/></template>
+      <title>{{ costPeriodLabel(point.key) }} · {{ money(point.total) }} recorded · {{ point.records }} estimate{{ point.records===1?'':'s' }}</title>
+     </g>
+     <text v-for="i in tickIndices" :key="i" :x="x(i)" y="242" :text-anchor="i===0?'start':i===points.length-1?'end':'middle'" class="cost-axis">{{ costPeriodLabel(points[i].key) }}</text>
+    </svg>
+    <div class="cost-chart-inspector"><div><strong>{{ selected?costPeriodLabel(selected.key):'Explore a period' }}</strong><span>{{ selected?.records||0 }} estimate{{ selected?.records===1?'':'s' }}<template v-if="chartType==='line'"> · {{ money(selected?.cumulative) }} cumulative in view</template></span></div><div v-for="service in COST_SERVICES" :key="service.key"><i :style="{background:service.color}"/><span>{{ service.label }}</span><strong>{{ money(selected?.[service.key]) }}</strong></div></div>
+   </div>
+   <div v-else class="ops-empty cost-chart-empty"><Icon name="pulse"/><h4>{{ costs.recordCount?'No estimates in this view.':'Your next cleanup starts the story.' }}</h4><p>{{ costs.recordCount?'Try another period or region to explore your recorded history.':'When Runway captures an AWS estimate and its management destroy succeeds, that estimate is saved here.' }}</p><button v-if="costs.recordCount" class="ops-link" @click="range='all';region=''">Show all history <Icon name="arrow"/></button></div>
+   <div class="cost-breakdown"><div v-for="service in COST_SERVICES" :key="service.key"><span><i :style="{background:service.color}"/>{{ service.label }}</span><strong>{{ money(summary[service.key]) }}</strong><div class="cost-service-track"><i :style="{background:service.color,width:(summary.total?summary[service.key]/summary.total*100:0)+'%'}"/></div></div></div>
+   <p class="ops-caption cost-chart-note">Each period groups whole-run estimates recorded when cleanup completed. This is a local experiment journal, not daily billed usage. {{ summary.partial?`${summary.partial} estimate${summary.partial===1?' in this view has':'s in this view have'} missing-service notes.`:'' }}</p>
+  </div>
+  <details class="cost-method"><summary><Icon name="compass"/><span>How Runway estimates costs</span><Icon name="chevron"/></summary><div class="cost-method-grid"><div><h4>Prices × observed resource age</h4><p>Runway queries the AWS Price List API before destroy. It estimates EC2 Linux on-demand compute from launch time, attached EBS capacity from volume age (730 hours per month), matched RDS/Aurora instance-hours, and the base hourly charge for matched load balancers.</p><p>“Instance-hours” sums EC2 ages across instances; it is not the elapsed time of one run. Prices are queried at cleanup time, not reconstructed historically.</p></div><div><h4>Know the edges of the estimate</h4><p>It does not reconcile your AWS bill or account for discounts, credits, taxes, stopped intervals, data transfer, NAT, public IPv4, extra IOPS, database storage/I/O, or load-balancer capacity units. Linode costs and Inventory orphan cleanup are not added to this journal.</p><p>Price lookups currently support us-east-1, us-east-2, us-west-1, and us-west-2. Failed RDS or load-balancer lookups are noted on new records; older records may not disclose missing services.</p><a href="https://docs.aws.amazon.com/awsaccountbilling/latest/aboutv2/price-changes.html" target="_blank" rel="noopener noreferrer">AWS Price List documentation <Icon name="external"/></a></div></div></details>
+  <section v-if="!costs.error" class="cost-records" aria-label="Recorded cost estimates"><div class="ops-section-heading"><div><h4>The records behind the chart.</h4><p>Newest {{ costs.entryLimit||200 }} records available here. Charts, totals, and exports use the full ledger.</p></div><div class="ops-actions"><label class="ops-search"><Icon name="search"/><input v-model="query" type="search" aria-label="Search cost records" placeholder="Run, owner, or region…"/></label><select v-model="sort" aria-label="Sort cost records"><option value="newest">Newest first</option><option value="largest">Largest estimate</option></select></div></div><div class="ops-table-scroll"><table class="cost-record-table"><thead><tr><th>Run / owner</th><th>Recorded cleanup</th><th>Region</th><th>EC2 instance-hours</th><th>Estimated total</th><th>Breakdown</th></tr></thead><tbody><tr v-for="entry in visible" :key="entry.runId+entry.finishedAt+entry.source"><td><strong>{{ entry.runId }}</strong><small>{{ entry.owner||entry.awsPrefix||'Owner not recorded' }}</small><span v-if="entry.importedAt" class="ops-badge">Imported</span></td><td>{{ new Date(entry.finishedAt).toLocaleString() }}</td><td>{{ entry.region }}</td><td>{{ Number(entry.totalRuntimeHours).toFixed(2) }}h</td><td class="cost-record-total">{{ money(entry.totalCostUsd) }}<small v-if="entry.warnings?.length" class="ops-warning-text">Partial estimate</small></td><td><details><summary>Details</summary><div class="cost-record-details"><span>EC2 <strong>{{ money(entry.ec2CostUsd) }}</strong></span><span>EBS <strong>{{ money(entry.ebsCostUsd) }}</strong></span><span>RDS / Aurora <strong>{{ money(entry.rdsCostUsd) }}</strong></span><span>Load balancers <strong>{{ money(entry.loadBalancerCostUsd) }}</strong></span><p v-for="warning in entry.warnings" :key="warning">{{ warning }}</p><small>{{ entry.source }}</small></div></details></td></tr><tr v-if="!visible.length"><td colspan="6" class="ops-table-empty">No matching records in the most recent history.</td></tr></tbody></table></div><div v-if="filtered.length" class="ops-pagination"><span>{{ currentPage*15+1 }}–{{ Math.min((currentPage+1)*15,filtered.length) }} of {{ filtered.length }} records</span><button class="ops-icon-button" :disabled="currentPage===0" aria-label="Previous cost records" @click="page=currentPage-1"><Icon name="arrow-left"/></button><button class="ops-icon-button" :disabled="currentPage>=pages-1" aria-label="Next cost records" @click="page=currentPage+1"><Icon name="arrow"/></button></div></section>
+ </section>
+</template>

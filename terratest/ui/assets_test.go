@@ -93,31 +93,24 @@ func TestDeployedClusterImageDetailsAreBundled(t *testing.T) {
 	}
 }
 
-func TestControlPanelTabsUseStableLayoutTrack(t *testing.T) {
+func TestControlPanelNavigationUsesSearchableGroupedWorkspaces(t *testing.T) {
 	source := controlPanelTabsSource(t)
-	if !strings.Contains(ControlPanelHeaderVueJS, "panel-tabs-track") {
-		t.Fatal("compiled control panel tabs must render the stable navigation track")
-	}
-
 	for _, marker := range []string{
-		`class="panel-tab rounded-lg text-sm font-semibold whitespace-nowrap"`,
-		`Status markers are positioned within each tab so refreshes never change tab geometry.`,
+		`matchingNavigationGroups`, `Search workspaces`, `aria-expanded`, `aria-controls="workspace-picker"`,
+		`@keydown="searchKeys"`, `@keydown="resultKeys"`, `data-active-workspace`,
+		`document.removeEventListener('keydown', shortcut)`,
 	} {
 		if !strings.Contains(source, marker) {
-			t.Fatalf("control panel tabs must use natural, status-independent geometry; missing %q", marker)
+			t.Fatalf("workspace navigation is missing %q", marker)
 		}
 	}
-
-	for _, css := range []string{
-		`.panel-tabs-track {`,
-		`width: max-content;`,
-		`min-width: 100%;`,
-		`gap: clamp(0.125rem, 0.45vw, 0.375rem);`,
-		`scroll-snap-type: x proximity;`,
-	} {
-		if !strings.Contains(ControlPanelHTML, css) {
-			t.Fatalf("control panel navigation track must retain a stable responsive layout; missing %q", css)
+	for _, marker := range []string{`panel-workspace-picker`, `Find a workspace`, `No workspaces found`} {
+		if !strings.Contains(ControlPanelHeaderVueJS, marker) {
+			t.Fatalf("compiled navigation is missing %q", marker)
 		}
+	}
+	if strings.Contains(ControlPanelHTML, `class="panel-nav mb-5 overflow-x-auto`) {
+		t.Fatal("navigation must not require horizontal scrolling")
 	}
 }
 
@@ -174,26 +167,16 @@ func TestControlPanelTabsUseMeaningfulGeometryNeutralStatuses(t *testing.T) {
 	}
 }
 
-func TestControlPanelTabsUseCompactHitTargets(t *testing.T) {
-	source := controlPanelTabsSource(t)
-	if !strings.Contains(source, `class="panel-tab rounded-lg text-sm font-semibold whitespace-nowrap"`) {
-		t.Fatal("control panel tab buttons must leave responsive spacing to the stable panel-tab CSS")
-	}
-
+func TestControlPanelNavigationHasResponsivePickerAndVisibleFocus(t *testing.T) {
 	for _, css := range []string{
-		`min-height: 2.75rem;`,
-		`padding: 0.5rem 0.8rem;`,
-		`@media (max-width: 640px) {`,
-		`padding-inline: 0.625rem;`,
-		`font-size: 0.8125rem;`,
+		`min-height: 2.75rem;`, `max-height: min(72vh, 44rem);`,
+		`@media (max-width: 760px) {`, `overflow-y: auto;`,
+		`.panel-nav button:focus-visible`, `.panel-picker-search:focus-within`,
+		`.panel-nav-mobile`,
 	} {
 		if !strings.Contains(ControlPanelHTML, css) {
-			t.Fatalf("control panel navigation must retain balanced desktop and narrow spacing; missing %q", css)
+			t.Fatalf("responsive workspace navigation is missing %q", css)
 		}
-	}
-
-	if strings.Contains(ControlPanelHTML, `.panel-tab:hover`) {
-		t.Fatal("control panel tab hover must not shift the navigation geometry")
 	}
 }
 

@@ -131,6 +131,25 @@ func automationOutputPath(name string) string {
 	return filepath.Join(automationOutputDir(), name)
 }
 
+// ensureGoDataModule keeps downloaded source in runtime workspaces out of
+// Runway's package discovery and Wails' go mod tidy. It does not alter caches,
+// and child test sources still use their own go.mod with GOWORK=off.
+func ensureGoDataModule(root string) error {
+	f, err := os.OpenFile(filepath.Join(root, "go.mod"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if os.IsExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.WriteString("// Generated runtime data; excluded from Runway source discovery.\nmodule rancher-runway.local/runtime-data\n")
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
+}
+
 func CreateInstallScript(helmCommand, haDir, ingressDaemonSetName string) {
 	installScript := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail

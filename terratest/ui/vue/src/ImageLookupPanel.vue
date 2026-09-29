@@ -1,35 +1,14 @@
 <template>
-  <div class="grid min-w-0 gap-5">
-    <header class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-      <div class="min-w-0">
-        <div class="flex items-center gap-2.5">
-          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-4.35-4.35m2.1-5.4a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z" />
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8.75 9.25h5m-5 3h3" />
-            </svg>
-          </div>
-          <div>
-            <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Image Lookup</h2>
-            <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-              Discover community and Prime-head image builds, verify server/agent candidates, then inspect manifests, provenance, platforms, and embedded build metadata.
-            </p>
-          </div>
-        </div>
-      </div>
+  <div class="image-workspace il-workspace" :class="{ 'il-focus': detailFocus && detailVisible }">
+    <ImageWorkspaceHeader title="Image Lookup" eyebrow="Registry explorer" icon="boxes" description="Find the build. Explore the evidence. Keep the exact reference." :timestamp="searchedAtLabel"/>
 
-      <div class="flex shrink-0 flex-wrap items-center gap-2 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-        <span class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 dark:border-white/10 dark:bg-white/[0.04]">Read-only registry requests</span>
-        <span v-if="searchedAtLabel" class="rounded-full border border-zinc-200 bg-white px-3 py-1.5 dark:border-white/10 dark:bg-white/[0.04]">{{ searchedAtLabel }}</span>
-      </div>
-    </header>
 
     <form
-      class="rounded-2xl border border-zinc-200/80 bg-zinc-50/70 p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.025] sm:p-5"
+      class="iw-search-form il-search-form"
       :aria-busy="searchLoading ? 'true' : 'false'"
       @submit.prevent="submitImageSearch"
     >
-      <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-12">
+      <div class="il-search-grid">
         <label class="grid gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300 xl:col-span-3">
           <span>Registry</span>
           <select
@@ -54,8 +33,9 @@
         </label>
 
         <label class="grid gap-1.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300 xl:col-span-4">
-          <span>Tag, patch, selector, SHA, or full reference <span class="font-normal text-zinc-400">(optional)</span></span>
+          <span>Find an image <span class="font-normal text-zinc-400">· tag, patch, SHA, or reference</span></span>
           <input
+            ref="searchInput"
             v-model.trim="query"
             type="search"
             autocomplete="off"
@@ -78,6 +58,7 @@
             </svg>
             {{ searchButtonLabel }}
           </button>
+          <button v-if="searchLoading" type="button" class="iw-button" @click="cancelSearch">Cancel</button>
           <button
             v-if="searched || searchError"
             type="button"
@@ -188,11 +169,12 @@
           </div>
           <p class="text-xs leading-5 text-zinc-500 dark:text-zinc-400">
             <template v-if="recentOnly">Uses known timestamps and may require a complete registry scan; undated images are excluded.</template>
-            <template v-else>Enter a patch such as 2.15.1 to get a fast verified Prime-head lookup.</template>
+            <template v-else>Advanced filters narrow the registry search.</template>
           </p>
         </div>
       </div>
 
+      <details class="iw-disclosure il-advanced" :open="advancedOpen" @toggle="advancedOpen = $event.target.open"><summary><span><Icon name="sliders"/>Refine the search <span v-if="activeAdvancedFilterCount" class="iw-count">{{ activeAdvancedFilterCount }} active</span></span><span class="iw-caption">Architecture, Prime builds, version &amp; provenance <Icon name="chevron"/></span></summary>
       <div class="mt-4 grid gap-3 border-t border-zinc-200/70 pt-4 dark:border-white/10 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <label class="grid gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-300">
           <span>Prime scope</span>
@@ -245,6 +227,7 @@
           Reset {{ activeAdvancedFilterCount }} filter{{ activeAdvancedFilterCount === 1 ? "" : "s" }}
         </button>
       </div>
+      </details>
     </form>
 
     <div v-if="searchError" role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
@@ -253,34 +236,18 @@
       <AppBuildStamp />
     </div>
 
-    <div class="grid min-w-0 items-start gap-5" :class="detailVisible ? 'xl:grid-cols-[minmax(0,1.45fr)_minmax(23rem,0.85fr)]' : ''">
-      <section class="grid min-w-0 gap-4">
-        <div v-if="searchLoading" class="grid gap-3" role="status">
-          <div v-for="index in 3" :key="index" class="animate-pulse rounded-2xl border border-zinc-200 bg-zinc-50/70 p-5 dark:border-white/10 dark:bg-white/[0.025]">
-            <div class="h-4 w-44 rounded bg-zinc-200 dark:bg-zinc-700"></div>
-            <div class="mt-3 h-3 w-72 max-w-full rounded bg-zinc-100 dark:bg-zinc-800"></div>
-            <div class="mt-5 h-24 rounded-xl bg-white dark:bg-zinc-900"></div>
-          </div>
-          <span class="sr-only">Searching image registries</span>
-        </div>
-
+    <div v-if="recentInspections.length" class="il-recents"><span class="iw-caption">Recently inspected</span><button v-for="item in recentInspections" :key="item.reference + item.platform" type="button" :title="item.reference" @click="reopenInspection(item)"><Icon name="clock"/><span>{{ compactReference(item.reference) }}</span></button><button type="button" class="iw-text-button" @click="recentInspections = []">Clear</button></div>
+    <div v-if="searchCancelled" class="iw-alert" role="status">Search cancelled. Adjust the filters or search again when ready.</div>
+    <div class="il-layout" :class="{ 'il-with-details': detailVisible }">
+      <section class="il-results grid min-w-0 gap-4">
+        <div v-if="searchLoading" class="iw-progress" role="status"><span class="spinner"></span><div><h3>Looking through the registries…</h3><p>Matching tags and checking the requested evidence.</p><span class="iw-caption">{{ searchElapsed }}s elapsed · {{ registryOptions.find(item => item.value === registry)?.label || registry }}</span></div></div>
         <div v-else-if="searchError" class="rounded-2xl border border-dashed border-rose-200 bg-rose-50/50 px-6 py-8 text-center text-sm leading-6 text-rose-700 dark:border-rose-500/20 dark:bg-rose-500/[0.06] dark:text-rose-200">
           No results are being shown for the failed request. Review the error above, adjust the repository or tag, and try again.
         </div>
 
-        <div v-else-if="!searched" class="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/60 px-6 py-12 text-center dark:border-white/15 dark:bg-white/[0.02]">
-          <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-400 dark:bg-white/[0.06] dark:text-zinc-500">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M20 7 12 3 4 7m16 0-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-            </svg>
-          </div>
-          <h3 class="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">Search registry tags</h3>
-          <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-            Choose a registry and image family. Leave the search blank to browse available tags, enter a patch-qualified Prime selector to discover verified candidates, or paste an exact image reference.
-          </p>
-        </div>
-
+        <div v-else-if="!searched" class="il-start"><span class="iw-eyebrow">The right image, with context</span><h3>Find your next test build.</h3><p>Browse release tags, resolve a Prime server–agent pair, or go straight to an image’s manifest and build metadata.</p><div class="il-start-options"><button type="button" @click="browseHeads"><Icon name="layers"/><strong>Browse head builds</strong><span>Explore current tags across registries.</span><Icon name="arrow"/></button><button type="button" @click="preparePrimeSearch"><Icon name="diamond"/><strong>Find a Prime pair</strong><span>Start with a patch such as 2.15.1.</span><Icon name="arrow"/></button><button type="button" @click="prepareExactSearch"><Icon name="search"/><strong>Inspect a reference</strong><span>Paste an image tag or a pinned digest.</span><Icon name="arrow"/></button></div></div>
         <template v-else>
+          <div class="il-metrics"><div><span>Visible tags</span><strong>{{ visibleTagCount }}</strong><small>of {{ totalMatched }} matching</small></div><div><span>Verified Prime pairs</span><strong>{{ verifiedPairCount }}</strong><small>unique complete pairs in view</small></div><div><span>Sources checked</span><strong>{{ groups.length }}</strong><small>{{ failedGroupCount ? `${failedGroupCount} need attention` : 'Registry / image combinations' }}</small></div></div>
           <div class="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50/70 px-4 py-3 dark:border-white/10 dark:bg-white/[0.025] sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div class="text-sm font-bold text-zinc-900 dark:text-zinc-100">{{ resultSummary }}</div>
@@ -361,78 +328,13 @@
               </template>
             </div>
 
-            <div v-if="group.visibleTags.length" class="overflow-x-auto">
-              <table class="w-full min-w-[1020px] table-fixed border-collapse text-left">
-                <thead class="bg-zinc-50/50 text-[11px] font-bold uppercase tracking-wide text-zinc-500 dark:bg-white/[0.018] dark:text-zinc-400">
-                  <tr>
-                    <th scope="col" class="w-[27%] px-4 py-2.5">Tag</th>
-                    <th scope="col" class="w-[23%] px-3 py-2.5">Build identity</th>
-                    <th scope="col" class="w-[16%] px-3 py-2.5">Pair evidence</th>
-                    <th scope="col" class="w-[10%] px-3 py-2.5">Architecture</th>
-                    <th scope="col" class="w-[13%] px-3 py-2.5">Time</th>
-                    <th scope="col" class="w-[11%] px-3 py-2.5">Image</th>
-                  </tr>
-                </thead>
-                <tbody class="divide-y divide-zinc-200/70 dark:divide-white/10">
-                  <tr
-                    v-for="tag in group.visibleTags"
-                    :key="tag.reference || tag.name"
-                    class="transition-colors hover:bg-emerald-50/45 dark:hover:bg-emerald-500/[0.055]"
-                    :class="selectedReference === tagReference(group, tag) ? 'bg-emerald-50/70 dark:bg-emerald-500/[0.08]' : ''"
-                  >
-                    <td class="px-4 py-3 align-top">
-                      <button
-                        type="button"
-                        class="max-w-full text-left font-mono text-sm font-bold text-emerald-700 hover:underline dark:text-emerald-300"
-                        :title="`Inspect ${tagReference(group, tag)}`"
-                        @click="inspectTag(group, tag)"
-                      >
-                        <span class="break-all">{{ tag.name || tagReference(group, tag) }}</span>
-                      </button>
-                      <div v-if="tag.baseTag" class="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-500" :title="tag.baseTag">Base {{ tag.baseTag }}</div>
-                      <div class="mt-1 flex flex-wrap gap-1.5">
-                        <span class="rounded-full border border-zinc-200 bg-zinc-50 px-2 py-0.5 text-[10px] font-bold text-zinc-600 dark:border-white/10 dark:bg-white/[0.035] dark:text-zinc-400">{{ roleLabel(tag.imageRole) }}</span>
-                        <span v-if="tag.artifact" class="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-300">Artifact</span>
-                      </div>
-                    </td>
-                    <td class="px-3 py-3 align-top">
-                      <div class="flex flex-wrap gap-1.5">
-                        <span class="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold" :class="channelClass(tag)">{{ tag.channel || "unknown" }}</span>
-                        <span v-if="tag.isPrimeHead" class="inline-flex rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-[11px] font-bold text-violet-700 dark:border-violet-500/25 dark:bg-violet-500/10 dark:text-violet-300">Prime head</span>
-                        <span v-if="tag.headKind" class="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold" :class="headKindClass(tag.headKind)">{{ headKindLabel(tag.headKind) }}</span>
-                      </div>
-                      <div v-if="tag.isPrimeHead" class="mt-2 space-y-1 text-[11px] leading-4 text-zinc-500 dark:text-zinc-400" :title="primeMetadataTitle(tag)">
-                        <div v-if="tag.version"><span class="font-semibold">Patch</span> <code>{{ normalizeVersionLabel(tag.version) }}</code></div>
-                        <div v-if="tag.commit"><span class="font-semibold">Commit</span> <code>{{ shortCommit(tag.commit) }}</code></div>
-                        <div v-if="tag.selector && tag.headKind === 'immutable'"><span class="font-semibold">Moving selector</span> <code>{{ tag.selector }}</code></div>
-                        <div v-if="tag.ossRevision"><span class="font-semibold">OSS revision</span> <code>{{ shortCommit(tag.ossRevision) }}</code></div>
-                        <div v-if="tag.sourceRepository" class="truncate" :title="tag.sourceRepository"><span class="font-semibold">Source</span> {{ compactSource(tag.sourceRepository) }}</div>
-                        <div v-if="tag.primeSourceValid === true" class="font-bold text-emerald-700 dark:text-emerald-300">Canonical Prime source</div>
-                        <div v-if="tag.pairStatus === 'invalid' && (tag.primeSourceValid === false || tag.provenanceValid === false)" class="font-bold text-rose-700 dark:text-rose-300">Prime provenance needs attention</div>
-                      </div>
-                    </td>
-                    <td class="px-3 py-3 align-top">
-                      <template v-if="tag.isPrimeHead">
-                        <span class="inline-flex rounded-full border px-2.5 py-1 text-[11px] font-bold" :class="pairStatusClass(tag)">{{ pairStatusLabel(tag) }}</span>
-                        <div v-if="tag.resolvedRank" class="mt-2 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">Resolved rank #{{ tag.resolvedRank }}</div>
-                        <div v-if="tag.companionReference" class="mt-1 truncate font-mono text-[10px] text-zinc-500 dark:text-zinc-500" :title="tag.companionReference">{{ tag.companionVerified ? "Verified with" : "Expected" }} {{ tag.companionReference }}</div>
-                        <div v-if="tag.pairError" class="mt-1 line-clamp-3 text-[10px] font-semibold leading-4" :class="tag.headKind === 'moving' ? 'text-amber-700 dark:text-amber-300' : 'text-rose-700 dark:text-rose-300'" :title="tag.pairError">{{ tag.pairError }}</div>
-                      </template>
-                      <span v-else class="text-xs text-zinc-400">—</span>
-                    </td>
-                    <td class="break-words px-3 py-3 align-top text-xs font-semibold text-zinc-600 dark:text-zinc-300">{{ architectureLabel(tag.architecture) }}</td>
-                    <td class="px-3 py-3 align-top text-[11px] leading-5 text-zinc-600 dark:text-zinc-300">
-                      <div v-if="tag.pairCompletedAt"><span class="block text-[10px] font-bold uppercase tracking-wide text-zinc-400">Pair complete</span>{{ formatDate(tag.pairCompletedAt) }}</div>
-                      <div v-if="tag.uploadedAt" :class="tag.pairCompletedAt ? 'mt-2' : ''"><span class="block text-[10px] font-bold uppercase tracking-wide text-zinc-400">Uploaded</span>{{ formatDate(tag.uploadedAt) }}</div>
-                      <span v-if="!tag.pairCompletedAt && !tag.uploadedAt">—</span>
-                    </td>
-                    <td class="px-3 py-3 align-top text-[11px] text-zinc-600 dark:text-zinc-300">
-                      <div class="font-semibold">{{ formatBytes(tag.size) }}</div>
-                      <code class="mt-1 block break-all text-[10px] text-zinc-500 dark:text-zinc-400" :title="tag.digest || ''">{{ shortDigest(tag.digest) }}</code>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <div v-if="group.visibleTags.length" class="il-image-list" role="list">
+              <article v-for="tag in group.visibleTags" :key="tag.reference || tag.name" class="il-image-row" :class="{ 'il-image-selected': selectedReference === tagReference(group,tag) }" role="listitem">
+                <div class="il-image-main"><div class="iw-inline"><span class="il-role-mark"><Icon :name="tag.imageRole === 'agent' ? 'pulse' : 'boxes'"/></span><span class="iw-eyebrow">{{ roleLabel(tag.imageRole) }}</span><span v-if="tag.headKind" class="iw-caption">{{ headKindLabel(tag.headKind) }}</span></div><button type="button" class="il-image-title" :title="`Inspect ${tagReference(group,tag)}`" @click="inspectTag(group,tag)">{{ tag.name || tagReference(group,tag) }}<Icon name="arrow"/></button><div class="il-tag-marks"><span class="iw-status" :class="channelClass(tag)">{{ tag.channel || 'unknown' }}</span><span v-if="tag.isPrimeHead" class="iw-status il-prime-mark">Prime head</span><span v-if="tag.isPrimeHead" class="iw-status" :class="pairStatusClass(tag)">{{ pairStatusLabel(tag) }}</span><span v-if="tag.isPrimeHead && tag.resolvedRank" class="iw-caption">Pair rank #{{ tag.resolvedRank }}</span></div><p v-if="tag.pairError" class="il-row-warning">{{ tag.pairError }}</p></div>
+                <dl class="il-row-facts"><div><dt>Architecture</dt><dd>{{ architectureLabel(tag.architecture) }}</dd></div><div><dt>{{ tag.pairCompletedAt ? 'Pair completed' : tag.uploadedAt ? 'Uploaded' : tag.createdAt ? 'Created' : 'Timestamp' }}</dt><dd>{{ formatDate(tag.pairCompletedAt || tag.uploadedAt || tag.createdAt) || 'Not reported' }}</dd></div><div v-if="tag.commit"><dt>Commit</dt><dd><code :title="tag.commit">{{ shortCommit(tag.commit) }}</code></dd></div><div v-if="tag.size"><dt>Image size</dt><dd>{{ formatBytes(tag.size) }}</dd></div></dl>
+                <div class="il-row-actions"><button type="button" class="iw-icon-button" :aria-label="`Copy reference for ${tag.name}`" title="Copy image reference" @click="copyText(tagReference(group,tag),'Image reference copied')"><Icon name="copy"/></button><button type="button" class="iw-button" @click="inspectTag(group,tag)">Inspect <Icon name="arrow"/></button></div>
+                <details v-if="tag.digest || tag.isPrimeHead || tag.baseTag" class="il-row-metadata"><summary>Build identity &amp; provenance <Icon name="chevron"/></summary><dl><div v-if="tag.digest"><dt>Observed digest</dt><dd><code>{{ tag.digest }}</code></dd></div><div v-if="tag.baseTag"><dt>Base tag</dt><dd>{{ tag.baseTag }}</dd></div><div v-if="tag.version"><dt>Patch</dt><dd>{{ normalizeVersionLabel(tag.version) }}</dd></div><div v-if="tag.selector"><dt>Moving selector</dt><dd>{{ tag.selector }}</dd></div><div v-if="tag.ossRevision"><dt>OSS revision</dt><dd><code>{{ tag.ossRevision }}</code></dd></div><div v-if="tag.sourceRepository"><dt>Source</dt><dd>{{ tag.sourceRepository }}</dd></div><div v-if="tag.companionReference"><dt>{{ tag.companionVerified ? 'Verified companion' : 'Expected companion' }}</dt><dd><code>{{ tag.companionReference }}</code></dd></div></dl><p v-if="tag.primeSourceValid === true">Canonical Prime source</p><p v-if="tag.artifact">Registry artifact</p></details>
+              </article>
             </div>
             <div v-else-if="!group.error" class="px-5 py-8 text-center text-sm leading-6 text-zinc-500 dark:text-zinc-400">
               {{ group.tags.length ? "No loaded tags pass the current filters." : "No matching tags were found in this repository." }}
@@ -443,7 +345,8 @@
 
       <aside
         v-if="detailVisible"
-        class="min-w-0 overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-50/70 shadow-lg shadow-zinc-200/40 dark:border-white/10 dark:bg-zinc-950/70 dark:shadow-black/25 xl:sticky xl:top-24"
+        ref="detailPanel" tabindex="-1" aria-label="Image details"
+        class="il-inspector"
         :aria-busy="inspectLoading ? 'true' : 'false'"
       >
         <div class="flex items-start justify-between gap-3 border-b border-zinc-200 bg-white px-4 py-4 dark:border-white/10 dark:bg-zinc-900/80">
@@ -451,6 +354,7 @@
             <div class="text-[11px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Image details</div>
             <h3 class="mt-1 break-all font-mono text-sm font-bold text-zinc-900 dark:text-zinc-100">{{ selectedReference || "Inspecting image" }}</h3>
           </div>
+          <button type="button" class="iw-icon-button" :aria-label="detailFocus ? 'Return to split view' : 'Expand image details'" :title="detailFocus ? 'Return to split view' : 'Expand image details'" @click="detailFocus = !detailFocus"><Icon :name="detailFocus ? 'layers' : 'external'"/></button>
           <button
             type="button"
             class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-50 hover:text-zinc-800 dark:border-white/10 dark:bg-white/[0.05] dark:text-zinc-400 dark:hover:bg-white/[0.09] dark:hover:text-white"
@@ -464,7 +368,8 @@
           </button>
         </div>
 
-        <div class="max-h-[calc(100vh-10rem)] overflow-y-auto p-4">
+        <nav v-if="inspection && !inspectLoading" class="il-inspector-nav" aria-label="Jump to image detail section"><button type="button" @click="jumpToDetail('overview')">Overview</button><button v-if="platforms.length" type="button" @click="jumpToDetail('platforms')">Platforms</button><button v-if="hasConfiguration" type="button" @click="jumpToDetail('config')">Configuration</button><button v-if="buildYamlVisible" type="button" @click="jumpToDetail('build')">build.yaml</button></nav>
+        <div class="il-inspector-body">
           <div class="flex flex-col gap-2 sm:flex-row sm:items-end">
             <label class="grid min-w-0 flex-1 gap-1.5 text-xs font-bold text-zinc-600 dark:text-zinc-300">
               <span>Inspect platform</span>
@@ -504,11 +409,12 @@
           </div>
 
           <div v-else-if="inspection" class="mt-4 grid gap-4">
-            <section class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/70">
+            <section id="il-overview" tabindex="-1" class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/70">
               <div class="flex items-center justify-between gap-3">
                 <h4 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">Overview</h4>
                 <button type="button" class="text-xs font-bold text-emerald-700 hover:underline dark:text-emerald-300" @click="copyText(inspection.reference || selectedReference, 'Image reference copied')">Copy reference</button>
               </div>
+              <div v-if="pinnedInspection" class="il-pinned"><div><Icon name="lock"/><span>Keep this exact image</span></div><code>{{ pinnedInspection }}</code><button type="button" class="iw-text-button" @click="copyText(pinnedInspection, 'Digest-pinned reference copied')"><Icon name="copy"/>Copy pinned reference</button></div>
               <dl class="mt-3 grid gap-3 sm:grid-cols-2">
                 <div
                   v-for="item in detailOverview"
@@ -534,7 +440,7 @@
               </dl>
             </section>
 
-            <section v-if="platforms.length" class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/70">
+            <section id="il-platforms" tabindex="-1" v-if="platforms.length" class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/70">
               <h4 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">Platforms <span class="ml-1 text-xs font-semibold text-zinc-400">{{ platforms.length }}</span></h4>
               <div class="mt-3 flex flex-wrap gap-2">
                 <button
@@ -560,7 +466,7 @@
               <AppBuildStamp />
             </section>
 
-            <section v-if="hasConfiguration" class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/70">
+            <section id="il-config" tabindex="-1" v-if="hasConfiguration" class="rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-zinc-900/70">
               <h4 class="text-sm font-bold text-zinc-900 dark:text-zinc-100">Configuration</h4>
               <dl v-if="configurationSummary.length" class="mt-3 grid gap-2 sm:grid-cols-2">
                 <div v-for="item in configurationSummary" :key="item.label" class="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-white/[0.035]">
@@ -655,7 +561,7 @@
               </div>
             </section>
 
-            <section v-if="buildYamlVisible" class="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900/70">
+            <section id="il-build" tabindex="-1" v-if="buildYamlVisible" class="overflow-hidden rounded-xl border border-zinc-200 bg-white dark:border-white/10 dark:bg-zinc-900/70">
               <div class="flex flex-col gap-3 border-b border-zinc-200 px-4 py-3 dark:border-white/10 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div class="flex flex-wrap items-center gap-2">
@@ -782,6 +688,7 @@
       </aside>
     </div>
 
+    <footer class="iw-footer"><span>Registry metadata · no Docker daemon needed</span><span>Inspections stay in this session</span></footer>
     <div
       v-if="copyNotice"
       class="pointer-events-none fixed bottom-5 right-5 z-[9999] max-w-sm rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm font-bold text-emerald-800 shadow-xl dark:border-emerald-500/25 dark:bg-zinc-900 dark:text-emerald-200"
@@ -794,9 +701,12 @@
 
 <script setup>
 import AppBuildStamp from "./AppBuildStamp.vue";
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { writeTextToClipboard } from "./clipboard.js";
-import { apiFetch } from "./store.js";
+import { apiFetch, activeTab } from "./store.js";
+import Icon from './HelmLabIcon.vue';
+import ImageWorkspaceHeader from './ImageWorkspaceHeader.vue';
+import { readImageJSON, digestReference } from './image-workspace.mjs';
 
 const registryOptions = [
   { value: "all", label: "All known registries" },
@@ -1806,6 +1716,8 @@ const resultSortRequest = pairLookupEligible => {
 };
 
 const searchImages = async () => {
+  if (searchLoading.value) return;
+  searchCancelled.value = false;
   if (!resultSortTouched.value) {
     resultSort.value = isPrimeMovingSelectorInput.value ? "pair-rank" : "fast";
   }
@@ -1912,12 +1824,13 @@ const searchImages = async () => {
     });
     const fetchSearchPayload = async body => {
       const send = async payload => {
-        const response = await apiFetch("/api/images/search", {
+        const result = await readImageJSON(signal => apiFetch("/api/images/search", {
           method: "POST",
-          signal: controller.signal,
+          signal,
           body: JSON.stringify(payload),
-        });
-        return response.json();
+        }), controller, "Image search", 40000);
+        if (!result || !Array.isArray(result.groups)) throw new Error("The registry search returned an invalid response. Try again.");
+        return result;
       };
       if (legacyRequestFallback) return send(legacyBody(body));
       try {
@@ -1950,6 +1863,7 @@ const searchImages = async () => {
         aliasFallbackExpanded = true;
       }
     }
+    if (disposed || searchController !== controller || controller.signal.aborted) return;
     searchResponse.value = {
       ...payload,
       requestedQuery: normalizedQuery,
@@ -1959,7 +1873,7 @@ const searchImages = async () => {
     };
     searched.value = true;
   } catch (error) {
-    if (error?.name !== "AbortError") {
+    if (!disposed && searchController === controller && error?.name !== "AbortError") {
       searchError.value = error instanceof Error ? error.message : "Image search failed.";
     }
   } finally {
@@ -1977,6 +1891,7 @@ const handleResultSortChange = async () => {
 
 const clearSearch = () => {
   searchController?.abort();
+  searchController = null; searchCancelled.value = false;
   searchLoading.value = false;
   searchError.value = "";
   searchResponse.value = null;
@@ -2055,17 +1970,18 @@ const fetchSourceBuildYaml = async () => {
     || inspectPlatform.value;
 
   try {
-    const response = await apiFetch("/api/images/build-yaml/source", {
+    const payload = await readImageJSON(signal => apiFetch("/api/images/build-yaml/source", {
       method: "POST",
-      signal: controller.signal,
+      signal,
       body: JSON.stringify({
         reference: inspection.value?.reference || selectedReference.value,
         platform: selectedPlatform,
         expectedDigest: inspection.value?.digest,
       }),
-    });
-    const payload = await response.json();
+    }), controller, "Source build metadata", 55000);
+    if (disposed || sourceBuildController !== controller || controller.signal.aborted) return;
     const result = payload?.buildYaml && typeof payload.buildYaml === "object" ? payload.buildYaml : payload;
+    if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("The source metadata returned an invalid response. Try again.");
     sourceBuildYaml.value = {
       ...result,
       origin: result?.origin || "declared-source",
@@ -2076,7 +1992,7 @@ const fetchSourceBuildYaml = async () => {
     };
     buildYamlMode.value = "structured";
   } catch (error) {
-    if (error?.name !== "AbortError") {
+    if (!disposed && sourceBuildController === controller && error?.name !== "AbortError") {
       sourceBuildError.value = error instanceof Error ? error.message : "Could not fetch build.yaml from the declared source.";
     }
   } finally {
@@ -2091,6 +2007,8 @@ const inspectReference = async reference => {
   reference = String(reference || "").trim();
   if (!reference) return;
 
+  if (!detailVisible.value) inspectTrigger = document.activeElement;
+  if (!searched.value && !searchLoading.value) detailFocus.value = true;
   inspectController?.abort();
   resetSourceBuildState();
   const controller = new AbortController();
@@ -2100,22 +2018,27 @@ const inspectReference = async reference => {
   inspectError.value = "";
   inspection.value = null;
   buildYamlMode.value = "structured";
+  await nextTick();
+  detailPanel.value?.focus({preventScroll:true});
+  if (window.innerWidth < 1100) detailPanel.value?.scrollIntoView({block:"start"});
 
   try {
-    const response = await apiFetch("/api/images/inspect", {
+    const payload = await readImageJSON(signal => apiFetch("/api/images/inspect", {
       method: "POST",
-      signal: controller.signal,
+      signal,
       body: JSON.stringify({
         reference,
         platform: inspectPlatform.value,
         includeBuildYaml: true,
       }),
-    });
-    const payload = await response.json();
-    inspection.value = { ...payload, reference: payload?.reference || reference };
+    }), controller, "Image inspection", 100000);
+    if (disposed || inspectController !== controller || controller.signal.aborted) return;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) || !payload.digest) throw new Error("The image inspection returned an invalid response. Try again.");
+    inspection.value = { ...payload, reference: payload.reference || reference };
+    recentInspections.value = [{reference, platform:inspectPlatform.value}, ...recentInspections.value.filter(item => item.reference !== reference || item.platform !== inspectPlatform.value)].slice(0,5);
     buildYamlMode.value = payload?.buildYaml?.error && payload?.buildYaml?.raw ? "raw" : "structured";
   } catch (error) {
-    if (error?.name !== "AbortError") {
+    if (!disposed && inspectController === controller && error?.name !== "AbortError") {
       inspectError.value = error instanceof Error ? error.message : "Image inspection failed.";
     }
   } finally {
@@ -2127,6 +2050,9 @@ const inspectReference = async reference => {
 
 const closeDetails = () => {
   inspectController?.abort();
+  inspectController = null; detailFocus.value = false;
+  if (inspectTrigger?.isConnected && activeTab.value === "images") inspectTrigger.focus({preventScroll:true});
+  inspectTrigger = null;
   resetSourceBuildState();
   inspectLoading.value = false;
   inspectError.value = "";
@@ -2140,8 +2066,10 @@ const copyText = async (value, successMessage) => {
   if (!value) return;
   try {
     await writeTextToClipboard(value);
+    if (disposed) return;
     copyNotice.value = successMessage;
   } catch (_) {
+    if (disposed) return;
     copyNotice.value = "Clipboard access is unavailable.";
   }
   window.clearTimeout(copyNoticeTimer);
@@ -2298,7 +2226,25 @@ const structuredValueClass = value => {
   return "text-zinc-800 dark:text-zinc-200";
 };
 
+
+const advancedOpen = ref(false), detailFocus = ref(false), searchInput = ref(null), detailPanel = ref(null), recentInspections = ref([]), searchCancelled = ref(false), searchElapsed = ref(0);
+let disposed = false, inspectTrigger = null, searchTimer;
+const pinnedInspection = computed(() => digestReference(inspection.value?.reference || selectedReference.value, inspection.value?.digest));
+watch(searchLoading, value => { clearInterval(searchTimer); searchElapsed.value=0; if(value) { const start=Date.now(); searchTimer=setInterval(()=>{searchElapsed.value=Math.floor((Date.now()-start)/1000);},1000); } });
+function cancelSearch() { searchController?.abort(); searchController=null; searchLoading.value=false; searchCancelled.value=true; }
+function compactReference(value) { const last=value.split('/').pop(); return last.length > 55 ? last.slice(0,52)+'…' : last; }
+function reopenInspection(item) { inspectPlatform.value=item.platform; inspectReference(item.reference); }
+function browseHeads() { applyQuickFilter('head'); if(!searched.value && !searchLoading.value) searchImages(); }
+async function preparePrimeSearch() { applyQuickFilter('prime-head'); query.value=''; await nextTick(); searchInput.value?.focus(); }
+async function prepareExactSearch() { query.value=''; quickFilter.value='all'; await nextTick(); searchInput.value?.focus(); }
+function jumpToDetail(section) { const element=document.getElementById('il-'+section); element?.scrollIntoView({block:'nearest'}); element?.focus({preventScroll:true}); }
+function receiveInspection(event) { const detail=event.detail; if(!detail || typeof detail.reference !== 'string' || !detail.reference.includes('@sha256:')) return; inspectPlatform.value=detail.platform || 'linux/amd64'; inspectReference(detail.reference); }
+function lookupShortcut(event) { if(activeTab.value !== 'images' || event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey || event.target.closest?.('input,textarea,select,[contenteditable="true"]')) return; event.preventDefault(); searchInput.value?.focus(); }
+onMounted(()=>{window.addEventListener('rancher-control-panel:inspect-image',receiveInspection);window.addEventListener('keydown',lookupShortcut);});
+
 onBeforeUnmount(() => {
+  disposed=true; clearInterval(searchTimer);
+  window.removeEventListener("rancher-control-panel:inspect-image",receiveInspection); window.removeEventListener("keydown",lookupShortcut);
   searchController?.abort();
   inspectController?.abort();
   sourceBuildController?.abort();

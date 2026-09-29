@@ -1,5 +1,6 @@
-import { ref, reactive, computed, watch } from "vue";
+import { ref, reactive, computed, watch, nextTick } from "vue";
 import { writeTextToClipboard } from "./clipboard.js";
+import { resumableTab, workspaceTools } from "./home-workspace.mjs";
 import { readJSON } from "./read-json.mjs";
 import { createSingleFlight } from "./local-lab.mjs";
 import {
@@ -28,10 +29,9 @@ export const appBuild = computed(() => state.value?.panel?.build || setupData.bu
 export const bootPending = ref(true);
 export const bootDetail = ref("Checking local config, run slots, Terraform state, lifecycle processes, clusters, and AWS inventory before enabling actions.");
 export const refreshedAt = ref(null);
-export const activeTab = ref(localStorage.getItem("rancherControlPanelTab") || "setup");
-if (activeTab.value === "lifecycle") {
-  activeTab.value = "runs";
-}
+export const previousWorkspaceTab = ref(resumableTab(localStorage.getItem("rancherControlPanelTab")));
+export const activeTab = ref("home");
+export const cacheWorkspaceIntent = ref("");
 export const activeDestroyTab = ref(localStorage.getItem("rancherDestroyTab") || "slots");
 export const refreshStatus = ref("Waiting for first refresh...");
 
@@ -406,9 +406,18 @@ export const setPanelFullscreen = async nextFullscreen => {
 
 // Tab management
 export const setActivePanelTab = tab => {
-  const availableTabs = new Set(["setup", "runs", "clusters", "aws", "images", "helm", "pr-builds", "issues", "destroy", "settings", "k3d", "steve"]);
-  activeTab.value = availableTabs.has(tab) ? tab : "runs";
-  localStorage.setItem("rancherControlPanelTab", activeTab.value);
+  const fromHome = activeTab.value === "home";
+  const availableTabs = new Set(["home", ...workspaceTools.map(tool => tool.id)]);
+  activeTab.value = availableTabs.has(tab) ? tab : "home";
+  if (fromHome || activeTab.value === "home") nextTick(() => {
+    if (activeTab.value === "home") {
+      window.scrollTo({ top: 0, behavior: "instant" });
+      document.getElementById("home-title")?.focus({ preventScroll: true });
+    } else {
+      document.getElementById("panelTabs")?.scrollIntoView({ block: "start" });
+      Array.from(document.querySelectorAll("#panelTabs [aria-current=page], #panelTabs [data-active-workspace], #panelTabs .panel-nav-mobile")).find(element => element.getClientRects().length)?.focus({ preventScroll: true });
+    }
+  });
   window.dispatchEvent(new CustomEvent("rancher-control-panel:tab", { detail: { tab: activeTab.value } }));
   if (activeTab.value === "setup" && state.value) {
     dispatchSetupLifecycleState();
@@ -1639,13 +1648,14 @@ const refreshState = async () => {
     }
 
     state.value = fetched;
+    refreshedAt.value = new Date().toISOString();
     refreshError.value = "";
     window.rancherControlPanelState = fetched;
     window.dispatchEvent(new CustomEvent("rancher-control-panel:state", {
       detail: {
         state: fetched,
         bootPending: false,
-        refreshedAt: new Date().toISOString(),
+        refreshedAt: refreshedAt.value,
       },
     }));
 
@@ -1717,6 +1727,11 @@ watch(bootPending, pending => {
 }, { immediate: true });
 
 watch(activeTab, tab => {
+  document.body.dataset.workspace = tab;
+  if (resumableTab(tab)) {
+    previousWorkspaceTab.value = tab;
+    localStorage.setItem("rancherControlPanelTab", tab);
+  }
   const setupEl = document.getElementById("setupTabPanel") || document.querySelector('[data-tab-panel="setup"]');
   if (setupEl) {
     setupEl.classList.toggle("hidden", tab !== "setup");

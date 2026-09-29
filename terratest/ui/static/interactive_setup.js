@@ -98,6 +98,8 @@ let manualValidationResults = []
 let manualRKE2Recommendations = []
 let planCommandCopies = []
 let lastResolverFailure = ''
+let invalidSetupTarget = null
+let originalSetupDescription = null
 let linodeImageSearchResults = []
 let linodeImageSearchTag = ''
 let linodeImageSearchError = ''
@@ -267,7 +269,23 @@ const setPhase = phase => {
     renderCompletion(pendingCompletionShouldContinue)
   }
 
+  const previousPhase = setupRootEl.dataset.phase
   setupRootEl.dataset.phase = phase
+  if (phase !== previousPhase) {
+    const heading = setupQuery(`section[data-section="${phase}"] h1`)
+    if (heading && heading.getClientRects().length) {
+      heading.tabIndex = -1
+      heading.focus({ preventScroll: true })
+      heading.scrollIntoView({ block: 'start', behavior: 'auto' })
+    }
+  }
+  const phases = ['editor', 'resolving', 'review']
+  const activeIndex = phase === 'done' ? 3 : phases.indexOf(phase)
+  setupQueryAll('[data-setup-stage]').forEach((stage, index) => {
+    stage.toggleAttribute('data-complete', index < activeIndex)
+    if (index === activeIndex) stage.setAttribute('aria-current', 'step')
+    else stage.removeAttribute('aria-current')
+  })
 }
 
 const currentTheme = () => document.documentElement.classList.contains('dark') ? 'dark' : 'light'
@@ -986,7 +1004,7 @@ const autoRowLabel = index => isHostedTenantDeployment()
   ? index === 0 ? 'Host' : `Tenant ${index}`
   : isLinodeDockerDeployment()
     ? `Docker Rancher ${index + 1}`
-    : `HA ${index + 1}`
+    : `Rancher ${index + 1}`
 
 const activeInstanceLabel = () => isHostedTenantDeployment() || isLinodeDockerDeployment() ? 'Rancher instances' : 'HAs'
 
@@ -1064,19 +1082,37 @@ const ensureDeploymentCompatibleRows = () => {
   saveDeploymentVersions()
 }
 
-const showValidationError = (message, target) => {
-  editorErrorBoxEl.textContent = message
-  editorStatusBoxEl.textContent = ''
-  editorErrorBoxEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
-
-  if (target) {
-    target.focus({ preventScroll: true })
-  }
-}
-
 const clearValidationError = () => {
   editorErrorBoxEl.textContent = ''
-	lastResolverFailure = ''
+  lastResolverFailure = ''
+  byId('setupFieldError')?.remove()
+  if (invalidSetupTarget) {
+    invalidSetupTarget.removeAttribute('aria-invalid')
+    if (originalSetupDescription === null) invalidSetupTarget.removeAttribute('aria-describedby')
+    else invalidSetupTarget.setAttribute('aria-describedby', originalSetupDescription)
+  }
+  invalidSetupTarget = null
+  originalSetupDescription = null
+}
+
+const showValidationError = (message, target) => {
+  clearValidationError()
+  editorErrorBoxEl.textContent = message
+  editorStatusBoxEl.textContent = ''
+  if (target) {
+    invalidSetupTarget = target
+    originalSetupDescription = target.getAttribute('aria-describedby')
+    target.setAttribute('aria-invalid', 'true')
+    target.setAttribute('aria-describedby', [originalSetupDescription, 'setupFieldError'].filter(Boolean).join(' '))
+    const hint = document.createElement('p')
+    hint.id = 'setupFieldError'
+    hint.className = 'setup-field-error'
+    hint.textContent = message
+    target.insertAdjacentElement('afterend', hint)
+    focusSetupField(target)
+  } else {
+    editorErrorBoxEl.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' })
+  }
 }
 
 const showConfirmModal = ({ title, body, confirmText = 'Continue', cancelText = 'Go back', showCancel = true }) => new Promise(resolve => {
@@ -1389,6 +1425,8 @@ const renderDeploymentType = () => {
   customHostnameBoxEl?.classList.toggle('hidden', hosted || linode)
   rke2ServerLayoutFieldsetEl?.classList.toggle('hidden', hosted || linode)
   gpuWorkerBoxEl?.classList.toggle('hidden', hosted || linode)
+  byId('setupGPUOptions')?.classList.toggle('hidden', hosted || linode)
+  byId('setupImageOptions')?.classList.toggle('hidden', linode)
   distroFieldEl?.classList.toggle('hidden', linode)
 	preferredImageRegistriesFieldsetEl?.classList.toggle('hidden', linode || setupMode !== 'auto')
   webhookImageFieldEl?.classList.toggle('hidden', linode)
@@ -1420,7 +1458,7 @@ const renderDeploymentType = () => {
   tfVarField('aws_prefix')?.classList.toggle('lg:col-span-2', linode)
   tfVarField('aws_pem_key_name')?.classList.toggle('hidden', linode)
   if (basicAwsSettingsTitleEl) {
-    basicAwsSettingsTitleEl.textContent = linode ? 'Linode naming' : 'Basic AWS settings'
+    basicAwsSettingsTitleEl.textContent = linode ? 'Destination & naming' : 'Destination & access'
   }
   if (basicAwsSettingsDescriptionEl) {
     basicAwsSettingsDescriptionEl.textContent = linode
@@ -1441,12 +1479,12 @@ const renderDeploymentType = () => {
   })
   tfVarField('aws_route53_fqdn')?.classList.toggle('lg:col-span-2', linode)
   if (advancedAwsSettingsTitleEl) {
-    advancedAwsSettingsTitleEl.textContent = linode ? 'Route53 DNS' : 'Advanced AWS settings'
+    advancedAwsSettingsTitleEl.textContent = linode ? 'Route53 DNS' : 'Network & infrastructure'
   }
   if (advancedAwsSettingsDescriptionEl) {
     advancedAwsSettingsDescriptionEl.textContent = linode
       ? 'Used to create the Rancher URL DNS record for each Linode Docker install.'
-      : 'Most users should not need to change these. Unlock a field only when you know the AWS value needs to change.'
+      : 'Review the saved region, network, machine image and DNS zone. Unlock an individual field to edit it.'
   }
   restoreAdvancedDetailsState()
   if (manualModeBtnEl) {
@@ -1456,20 +1494,20 @@ const renderDeploymentType = () => {
     manualModeBtnEl.classList.toggle('opacity-50', hosted || linode)
   }
   if (addBtnEl) {
-    addBtnEl.textContent = hosted ? 'Add tenant' : linode ? 'Add Rancher' : 'Add HA'
+    addBtnEl.textContent = hosted ? 'Add tenant' : 'Add Rancher'
   }
   if (manualAddBtnEl) {
-    manualAddBtnEl.textContent = hosted ? 'Add tenant' : linode ? 'Add Rancher' : 'Add HA'
+    manualAddBtnEl.textContent = hosted ? 'Add tenant' : 'Add Rancher'
   }
   if (totalInstancesLabelEl) {
-    totalInstancesLabelEl.textContent = hosted || linode ? 'Total Rancher instances for this run:' : 'Total HAs for this run:'
+    totalInstancesLabelEl.textContent = 'Rancher instances for this run:'
   }
   if (deploymentSummaryEl) {
     deploymentSummaryEl.textContent = hosted
       ? 'Hosted tenant K3s creates one host Rancher first, then one to three tenant Ranchers backed by RDS/Aurora MySQL.'
       : linode
         ? 'Linode Docker creates standalone Rancher Docker installs on Linode with Route53 DNS records. It can run while the AWS lane is busy.'
-      : 'HA RKE2 creates standalone Rancher management clusters using the RKE2 server layout below.'
+      : 'Each Rancher runs on its own RKE2 management cluster in AWS. Three servers per cluster is the default; use one for a smaller test.'
   }
   if (preloadImagesTextEl) {
     preloadImagesTextEl.textContent = hosted ? 'Preload K3s images' : linode ? 'No preload needed for Docker Rancher' : 'Preload RKE2 images'
@@ -1501,7 +1539,7 @@ const renderRows = () => {
 		const agentControls = isLinodeDockerDeployment() ? '' : [
 			`<label class="flex items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-400"><input type="checkbox" data-agent-derive-index="${index}"${derivesAgent ? ' checked' : ''} /> Derive matching rancher-agent image</label>`,
 			`<input type="hidden" name="agentImages" value="${escapeHtml(agentImage)}" data-agent-hidden-index="${index}" />`,
-			`<input class="${inputClass}${derivesAgent ? ' hidden' : ''}" type="text" value="${escapeHtml(agentImage)}" data-agent-index="${index}" placeholder="docker.io/user/rancher-agent:tag" />`
+			`<input class="${inputClass}${derivesAgent ? ' hidden' : ''}" type="text" aria-label="${escapeHtml(label)} agent image override" value="${escapeHtml(agentImage)}" data-agent-index="${index}" placeholder="docker.io/user/rancher-agent:tag" />`
 		].join('')
 		const downstreamLinodeControls = downstreamLinodePlanHTML(index)
 
@@ -1509,11 +1547,11 @@ const renderRows = () => {
 			`<div class="${rowClass}">`,
 			`<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
 			'<div class="grid gap-2">',
-			`<input class="${inputClass}" type="text" name="versions" autocapitalize="off" autocorrect="off" spellcheck="false" value="${escapeHtml(version)}" data-index="${index}" placeholder="${versionPlaceholder}" />`,
+			`<input class="${inputClass}" type="text" name="versions" aria-label="${escapeHtml(label)} version or image" autocapitalize="off" autocorrect="off" spellcheck="false" value="${escapeHtml(version)}" data-index="${index}" placeholder="${versionPlaceholder}" />`,
 			agentControls,
 			downstreamLinodeControls,
 			'</div>',
-			`<div><button class="${removeButtonClass}" type="button" data-remove-index="${index}"${removeDisabled}>Remove</button></div>`,
+			`<div><button class="${removeButtonClass}" type="button" data-remove-index="${index}" aria-label="Remove ${escapeHtml(label)}"${removeDisabled}>Remove</button></div>`,
       '</div>'
     ].join('')
   }).join('')
@@ -1657,6 +1695,7 @@ const renderServerTopology = () => {
     const count = normalizeServerCount(button.dataset.serverCount)
     const active = count === selected
     button.setAttribute('aria-checked', active ? 'true' : 'false')
+    button.tabIndex = active ? 0 : -1
     button.classList.toggle('border-emerald-300', active)
     button.classList.toggle('bg-emerald-50', active)
     button.classList.toggle('dark:border-emerald-500/30', active)
@@ -1936,8 +1975,8 @@ const renderMode = () => {
       : isLinodeDockerDeployment()
         ? 'Linode Docker uses auto mode to map each Rancher version to one Docker install on its own Linode.'
       : setupMode === 'manual'
-      ? 'Manual mode saves one editable Helm command and one RKE2 version per HA, then validates the Helm render before AWS starts.'
-      : 'Auto mode resolves the Rancher chart, server and agent images, RKE2 version, and installer SHA256 from a requested version or exact custom server image.'
+      ? 'Bring one Helm command and an exact RKE2 version per Rancher. Runway validates the rendered chart before provisioning.'
+      : 'Start with a version or exact server image. Runway finds the chart, matching agent image, compatible Kubernetes version and installer checksum.'
   }
   if (setupMode === 'manual') {
     ensureManualRows()
@@ -2071,7 +2110,7 @@ const renderManualRows = () => {
     return `
       <div class="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.03] dark:shadow-none">
         <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">HA ${index + 1}</div>
+          <div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">Rancher ${index + 1}</div>
           <div class="flex flex-wrap gap-2">
             <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" type="button" data-seed-index="${index}">Rebuild base</button>
             <button class="${removeButtonClass}" type="button" data-manual-remove-index="${index}"${removeDisabled}>Remove</button>
@@ -2786,7 +2825,7 @@ const toggleSecretFieldVisibility = key => {
 const completionCopy = shouldContinue => shouldContinue
   ? {
       title: isLinodeDockerDeployment() ? 'Linode setup started' : 'Setup started',
-      body: 'The isolated run has been handed to the Lifecycle tab.',
+      body: 'Follow provisioning in Runs. Your other workspaces remain available.',
       detail: 'Terraform state and run records are being tracked under a dedicated run slot.',
       accentClass: 'flex h-11 w-11 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300',
       icon: '<path d="M20 6 9 17l-5-5"></path>'
@@ -2849,7 +2888,7 @@ const setSubmittingState = nextSubmitting => {
       ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Lifecycle running'
       : nextSubmitting
         ? '<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>Resolving plan'
-        : 'Resolve Plan'
+        : 'Resolve &amp; review plan <span aria-hidden="true">→</span>'
   ;[addBtnEl, continueBtnEl, editorCancelBtnEl].forEach(button => {
     if (!button) {
       return
@@ -3077,7 +3116,6 @@ const beginResolutionUI = () => {
   reviewErrorBoxEl.textContent = ''
   setPhase('resolving')
   setSubmittingState(true)
-  startSetupStatePolling()
 }
 
 const prepareSetupSubmit = async event => {
@@ -3211,6 +3249,9 @@ const prepareSetupSubmit = async event => {
 
   try {
     await submitSetupFormWithoutHTMX(formData)
+    // Wait for the server to accept the form before polling. Otherwise an older
+    // editor snapshot can re-enable submission while configuration is saving.
+    startSetupStatePolling()
   } catch (error) {
     setPhase('editor')
     showValidationError(error instanceof Error ? error.message : 'Setup submit failed.')
@@ -3258,14 +3299,14 @@ const setResponseActionPending = action => {
     return
   }
 
-  const startLabel = isLinodeDockerDeployment() ? 'Start Linode setup' : isHostedTenantDeployment() ? 'Start hosted tenant setup' : 'Start AWS setup'
+  const startLabel = isLinodeDockerDeployment() ? 'Approve & start Linode setup' : isHostedTenantDeployment() ? 'Approve & start hosted tenant setup' : 'Approve & start AWS setup'
   const pendingLabel = isLinodeDockerDeployment() ? 'Starting Linode setup...' : isHostedTenantDeployment() ? 'Starting hosted tenant setup...' : 'Starting AWS setup...'
   respondActionsEl.querySelectorAll('button[data-response-action]').forEach(button => {
     const buttonAction = button.getAttribute('data-response-action')
     if (action && buttonAction === action) {
       button.innerHTML = `<span class="spinner mr-2 !h-4 !w-4 !border-2"></span>${action === 'continue' ? pendingLabel : 'Canceling...'}`
     } else if (!action) {
-      button.textContent = buttonAction === 'continue' ? startLabel : 'Cancel'
+      button.textContent = buttonAction === 'continue' ? startLabel : (embeddedSetup ? 'Back to configuration' : 'Cancel')
     }
   })
 }
@@ -3511,6 +3552,7 @@ addBtnEl.addEventListener('click', () => {
   saveDeploymentVersions()
   renderDeploymentType()
   renderRows()
+  rowsEl.querySelector(`input[data-index="${versions.length - 1}"]`)?.focus()
 })
 
 manualAddBtnEl.addEventListener('click', () => {
@@ -3651,7 +3693,14 @@ resolveInstallerSHAToggleEl.addEventListener('change', event => {
   renderManualRows()
 })
 
-serverCountButtonEls.forEach(button => {
+serverCountButtonEls.forEach((button, index) => {
+  button.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? serverCountButtonEls.length - 1 : (index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1) + serverCountButtonEls.length) % serverCountButtonEls.length
+    const target = serverCountButtonEls[next]
+    if (!target.disabled) { target.focus(); target.click() }
+  })
   button.addEventListener('click', () => {
     if (button.disabled || !serverCountInputEl) {
       return
@@ -4011,7 +4060,7 @@ const focusSetupField = target => {
     if (key) setFieldLocked(key, false)
     else if (target === hostedRdsPasswordInputEl) setHostedRDSPasswordLocked(false)
   }
-  target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  target.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' })
   target.focus({ preventScroll: true })
 }
 
@@ -4031,7 +4080,22 @@ const renderSetupChecklist = () => {
   }
   const validation = missing.length ? null : validateSetup()
   if (validation) missing.push({ label: validation.message, target: validation.target })
-  byId('setupChecklistSummary').textContent = missing.length ? `${missing.length} setup value${missing.length === 1 ? '' : 's'} need attention` : 'Configuration filled in — review your plan next'
+  const hosted = isHostedTenantDeployment(), linode = isLinodeDockerDeployment()
+  const count = activeHACount()
+  byId('setupBriefTitle').textContent = hosted ? 'Host + tenant Rancher' : linode ? 'Rancher in Docker' : 'Rancher on RKE2'
+  byId('setupBriefDescription').textContent = hosted ? 'A host environment with separate tenant instances.' : linode ? 'Standalone Rancher containers on Linode.' : 'Dedicated management clusters on AWS.'
+  byId('setupBriefInstances').textContent = hosted ? `1 host + ${Math.max(0, count - 1)} tenant${count === 2 ? '' : 's'}` : String(count)
+  byId('setupBriefNodes').textContent = linode ? `${count} Linode instance${count === 1 ? '' : 's'}` : hosted ? `${count * 2} K3s nodes + MySQL` : `${count * Number(serverCountInputEl?.value || 3)} RKE2 server${count * Number(serverCountInputEl?.value || 3) === 1 ? '' : 's'}${gpuWorkerEnabled() ? ' + 1 GPU worker' : ''}`
+  byId('setupBriefRegion').textContent = linode ? 'Linode + Route53' : `AWS · ${tfVarInputEls.find(input => input.dataset.tfVar === 'aws_region')?.value.trim() || 'region needed'}`
+  byId('setupBriefMode').textContent = setupMode === 'manual' ? 'Your Helm commands' : 'Version / image selector'
+  const chips = byId('setupBriefVersions'); chips.replaceChildren()
+  const selectedVersions = setupMode === 'auto' ? normalizedVersions() : k8sVersions.map(value => String(value || '').trim())
+  for (const value of selectedVersions) {
+    const chip = document.createElement('span'); chip.textContent = value || (setupMode === 'auto' ? 'Version needed' : 'RKE2 version needed'); chip.title = chip.textContent; chips.append(chip)
+  }
+  byId('setupActionTitle').textContent = missing.length ? `${missing.length} detail${missing.length === 1 ? '' : 's'} to complete` : 'Ready to resolve the details?'
+  byId('setupActionHint').textContent = missing.length ? 'Resolve highlights the next field that needs attention.' : 'Saves your settings. Creates a plan for review.'
+  byId('setupChecklistSummary').textContent = missing.length ? `${missing.length} setup value${missing.length === 1 ? ' needs' : 's need'} attention` : 'Configuration filled in — review your plan next'
   items.replaceChildren()
   for (const field of missing) {
     const button = document.createElement('button')
@@ -4120,6 +4184,7 @@ byId('applyConfigImport')?.addEventListener('click', async () => {
   }
 })
 byId('reloadImportedConfig')?.addEventListener('click', () => window.location.reload())
+setupQueryAll('[data-setup-jump]').forEach(button => button.addEventListener('click', () => focusSetupField(byId(button.dataset.setupJump))))
 byId('setupChecklistTools')?.addEventListener('click', () => {
   systemReadinessDetailsEl.open = true
   focusSetupField(systemReadinessDetailsEl)
@@ -4141,6 +4206,7 @@ setupRootEl.addEventListener('rancher-control-panel-lifecycle', event => {
 })
 
 renderEditableConfig()
+if (byId('setupGPUOptions')) byId('setupGPUOptions').open = Boolean(config.gpuWorker?.enabled)
 renderDeploymentType()
 renderCustomHostname()
 renderSetupChecklist()

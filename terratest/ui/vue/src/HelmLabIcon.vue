@@ -1,6 +1,12 @@
 <script setup>
 defineProps({ name: String });
 const paths = {
+  database: 'M20 6c0 2-3.6 3-8 3S4 8 4 6s3.6-3 8-3 8 1 8 3ZM4 6v12c0 2 3.6 3 8 3s8-1 8-3V6M4 12c0 2 3.6 3 8 3s8-1 8-3',
+  table: 'M3 4h18v16H3zM3 9h18M9 9v11M3 14h18',
+  plus: 'M12 5v14M5 12h14',
+  bookmark: 'M6 3h12v18l-6-4-6 4V3Z',
+  fingerprint: 'M12 2a9 9 0 0 0-9 9M21 11a9 9 0 0 0-5-8M7 20c2-3 1-6 1-9a4 4 0 0 1 8 0v5c0 2 1 4 2 5M4 16v-5a8 8 0 0 1 1-4M12 9v7c0 3-1 5-2 6M20 11v5',
+  home: 'm3 10 9-7 9 7M5 9v12h5v-7h4v7h5V9',
   boxes: 'm12 2 8 4-8 4-8-4 8-4ZM4 6v9l8 5 8-5V6M12 10v10M8 4l8 4',
   server: 'M4 3h16v7H4zM4 14h16v7H4zM7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6',
   play: 'm8 4 12 8-12 8V4Z',

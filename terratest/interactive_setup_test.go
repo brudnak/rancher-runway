@@ -84,3 +84,31 @@ func TestInteractiveLinodeCatalogEndpointRequiresSetupTokenAndProviderToken(t *t
 		t.Fatalf("missing provider token response = %q", missingProviderToken.Body.String())
 	}
 }
+
+func TestInteractiveSetupStylesAreLocalAndAuthenticated(t *testing.T) {
+	for _, base := range []string{"", "/setup-editor"} {
+		t.Run(base, func(t *testing.T) {
+			server := &interactiveServer{token: "setup-token"}
+			mux := http.NewServeMux()
+			server.registerHandlersAt(mux, nil, base)
+			path := base + "/static/control_panel.css"
+			for _, tc := range []struct {
+				method, query string
+				status        int
+			}{
+				{http.MethodGet, "", http.StatusForbidden},
+				{http.MethodPost, "?token=setup-token", http.StatusMethodNotAllowed},
+				{http.MethodGet, "?token=setup-token", http.StatusOK},
+			} {
+				response := httptest.NewRecorder()
+				mux.ServeHTTP(response, httptest.NewRequest(tc.method, path+tc.query, nil))
+				if response.Code != tc.status {
+					t.Fatalf("%s %s: status %d, want %d", tc.method, path, response.Code, tc.status)
+				}
+				if tc.status == http.StatusOK && (!strings.Contains(response.Header().Get("Content-Type"), "text/css") || !strings.Contains(response.Body.String(), "--runway-card")) {
+					t.Fatal("standalone Setup did not receive the bundled workbench theme")
+				}
+			}
+		})
+	}
+}

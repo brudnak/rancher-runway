@@ -1,31 +1,8 @@
 <template>
-  <div class="grid min-w-0 gap-5">
-    <header class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-      <div class="flex min-w-0 items-start gap-3">
-        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-300">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
-            <circle cx="6" cy="5" r="2" />
-            <circle cx="18" cy="7" r="2" />
-            <circle cx="6" cy="19" r="2" />
-            <path stroke-linecap="round" stroke-linejoin="round" d="M6 7v10m2-10h3a3 3 0 0 1 3 3v1a3 3 0 0 0 3 3h1" />
-          </svg>
-        </div>
-        <div class="min-w-0">
-          <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">PR Image Verifier</h2>
-          <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            Check whether a GitHub pull request commit is included in a Rancher head image across every known registry.
-          </p>
-        </div>
-      </div>
-
-      <div class="flex shrink-0 flex-wrap items-center gap-2 text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-        <span class="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1.5 dark:border-white/10 dark:bg-white/[0.04]">Read-only checks</span>
-        <span v-if="checkedAtLabel" class="rounded-full border border-zinc-200 bg-white px-3 py-1.5 dark:border-white/10 dark:bg-white/[0.04]">{{ checkedAtLabel }}</span>
-      </div>
-    </header>
-
+  <div class="image-workspace pr-workspace">
+    <ImageWorkspaceHeader title="PR Image Check" eyebrow="Commit to container" icon="branch" description="Trace a pull request into the images you can test." :timestamp="checkedAtLabel"/>
     <form
-      class="rounded-2xl border border-zinc-200/80 bg-zinc-50/70 p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.025] sm:p-5"
+      class="iw-search-form pr-search-form"
       :aria-busy="loading ? 'true' : 'false'"
       novalidate
       @submit.prevent="verifyBuild"
@@ -121,149 +98,39 @@
         </p>
       </div>
     </form>
-
-    <div class="rounded-xl border border-sky-200 bg-sky-50/70 px-4 py-3 text-xs leading-5 text-sky-900 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-100">
-      <span class="font-bold">How proof works:</span>
-      the verifier compares the PR commit with the full Git revision declared by the image. A container digest identifies image content; it is not a Git commit and is never compared directly with the PR SHA.
-    </div>
-
-    <div v-if="requestError" role="alert" class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm leading-6 text-rose-800 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
-      <div class="font-bold">PR image verification failed</div>
-      <div class="mt-1 whitespace-pre-wrap break-words">{{ requestError }}</div>
-      <AppBuildStamp />
-    </div>
-
-    <section v-if="loading" class="grid gap-4" role="status" aria-live="polite">
-      <div class="rounded-2xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-500/20 dark:bg-sky-500/[0.07] sm:p-5">
-        <div class="flex items-center gap-3">
-          <span class="spinner shrink-0 text-sky-600 dark:text-sky-300"></span>
-          <div>
-            <h3 class="text-sm font-bold text-sky-950 dark:text-sky-100">Verification in progress</h3>
-            <p class="mt-1 text-xs leading-5 text-sky-800/80 dark:text-sky-100/70">This may take a little while when registries or GitHub respond slowly.</p>
-          </div>
-        </div>
-        <ol class="mt-4 grid gap-2 sm:grid-cols-4" aria-label="Verification work">
-          <li v-for="(phase, index) in phases" :key="phase" class="flex items-center gap-2 rounded-lg border border-sky-200/70 bg-white/60 px-3 py-2 text-xs font-semibold text-sky-800 dark:border-sky-500/15 dark:bg-black/10 dark:text-sky-100">
-            <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-100 text-[10px] font-extrabold text-sky-600 dark:bg-sky-500/15 dark:text-sky-200">{{ index + 1 }}</span>
-            <span>{{ phase }}</span>
-          </li>
-        </ol>
-      </div>
-
-      <div class="grid gap-3 lg:grid-cols-2">
-        <div v-for="index in 4" :key="index" class="animate-pulse rounded-2xl border border-zinc-200 bg-zinc-50/70 p-5 dark:border-white/10 dark:bg-white/[0.025]">
-          <div class="h-4 w-36 rounded bg-zinc-200 dark:bg-zinc-700"></div>
-          <div class="mt-3 h-3 w-56 max-w-full rounded bg-zinc-100 dark:bg-zinc-800"></div>
-          <div class="mt-5 grid grid-cols-2 gap-3">
-            <div class="h-28 rounded-xl bg-white dark:bg-zinc-900"></div>
-            <div class="h-28 rounded-xl bg-white dark:bg-zinc-900"></div>
-          </div>
-        </div>
-      </div>
+    <div v-if="requestError" role="alert" class="iw-alert iw-error"><strong>The check could not finish.</strong><p>{{ requestError }}</p><AppBuildStamp/></div>
+    <section v-if="loading" class="iw-progress" role="status"><span class="spinner"></span><div><h3>Following the evidence…</h3><p>Reading the PR, inspecting four registries, and comparing source ancestry.</p><span class="iw-caption">{{ elapsedSeconds }}s elapsed · cancel at any time</span></div><span class="iw-progress-orbit" aria-hidden="true"><Icon name="branch"/></span></section>
+    <section v-else-if="!result" class="pr-start">
+      <span class="iw-eyebrow">{{ cancelled ? 'Check cancelled' : 'From code review to testable build' }}</span>
+      <h3>{{ cancelled ? 'Ready whenever you are.' : 'Has the change reached an image?' }}</h3>
+      <p>Follow the PR’s verification commit through the declared image revision. See the evidence for each registry, then inspect the exact image.</p>
+      <div class="pr-method"><div><Icon name="branch"/><strong>01 · Resolve the commit</strong><span>Merged integration commit, or the current PR head.</span></div><div><Icon name="boxes"/><strong>02 · Read the images</strong><span>Server and agent manifests across four registries.</span></div><div><Icon name="check"/><strong>03 · Compare ancestry</strong><span>A clear verdict, with the source evidence behind it.</span></div></div>
+      <p class="iw-caption">Uses your GitHub CLI login and existing registry credentials.</p>
     </section>
-
-    <div v-else-if="cancelled" class="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/60 px-6 py-10 text-center dark:border-white/15 dark:bg-white/[0.02]">
-      <h3 class="text-base font-bold text-zinc-900 dark:text-zinc-100">Verification cancelled</h3>
-      <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-zinc-500 dark:text-zinc-400">No registry or GitHub data was changed. Submit the form whenever you are ready to try again.</p>
-    </div>
-
-    <div v-else-if="!result && !requestError" class="rounded-2xl border border-dashed border-zinc-300 bg-zinc-50/60 px-6 py-12 text-center dark:border-white/15 dark:bg-white/[0.02]">
-      <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-zinc-100 text-zinc-400 dark:bg-white/[0.06] dark:text-zinc-500">
-        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M20 7 12 3 4 7m16 0-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-        </svg>
-      </div>
-      <h3 class="mt-4 text-base font-bold text-zinc-900 dark:text-zinc-100">Verify a PR against head images</h3>
-      <p class="mx-auto mt-2 max-w-xl text-sm leading-6 text-zinc-500 dark:text-zinc-400">
-        Paste a GitHub pull request URL and target head tag. The check will report the image and Git evidence from each known registry.
-      </p>
-    </div>
-
-    <template v-else-if="result">
-      <section ref="resultSummaryElement" tabindex="-1" role="status" aria-live="polite" class="overflow-hidden rounded-2xl border p-4 outline-none sm:p-5" :class="summaryCardClass">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div class="min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="inline-flex rounded-full border px-3 py-1 text-xs font-extrabold" :class="statusBadgeClass(overallState)">{{ statusLabel(overallState) }}</span>
-              <span class="inline-flex rounded-full border px-3 py-1 text-xs font-bold" :class="scanComplete ? 'border-emerald-300 bg-white/70 text-emerald-800 dark:border-emerald-500/30 dark:bg-black/10 dark:text-emerald-200' : 'border-amber-300 bg-white/70 text-amber-800 dark:border-amber-500/30 dark:bg-black/10 dark:text-amber-200'">
-                {{ scanComplete ? "Scan complete" : "Partial scan" }}
-              </span>
-            </div>
-            <h3 class="mt-3 text-xl font-bold tracking-tight">{{ summaryHeading }}</h3>
-            <p class="mt-2 max-w-4xl text-sm leading-6 opacity-80">{{ summaryMessage }}</p>
-          </div>
-          <div class="flex shrink-0 flex-wrap gap-2 lg:max-w-md lg:justify-end">
-            <span v-for="item in summaryCountBadges" :key="item.label" class="rounded-lg border border-current/20 bg-white/60 px-3 py-2 text-xs font-bold dark:bg-black/10">
-              {{ item.label }} <span class="ml-1 text-sm">{{ item.value }}</span>
-            </span>
-          </div>
-        </div>
+    <template v-else>
+      <div v-if="scopeChanged" class="iw-alert" role="status">Inputs changed. These results still describe <strong>{{ resultTag }}</strong> and the previous PR. Run a new check to apply your changes.</div>
+      <section ref="resultSummaryElement" tabindex="-1" class="pr-verdict" :data-state="overallState" aria-label="Verification result">
+        <div class="pr-verdict-symbol"><Icon :name="includedRegistryCount ? 'check' : 'signal'"/></div>
+        <div class="pr-verdict-copy"><div class="iw-inline"><span class="iw-status" :data-state="overallState">{{ statusLabel(overallState) }}</span><span class="iw-caption">{{ scanComplete ? 'Scan complete' : 'Partial scan' }} · {{ registries.length }} registries</span></div><h3>{{ summaryHeading }}</h3><p>{{ summaryMessage }}</p></div>
+        <button type="button" class="iw-button" @click="copyEvidence"><Icon name="copy"/>Copy evidence brief</button>
       </section>
-
-      <section v-if="resultWarnings.length" class="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-sm leading-6 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/[0.08] dark:text-amber-100">
-        <h3 class="font-bold">Interpretation notes</h3>
-        <ul class="mt-2 list-disc space-y-1 pl-5">
-          <li v-for="warning in resultWarnings" :key="warning">{{ warning }}</li>
-        </ul>
-        <AppBuildStamp />
-      </section>
-
-      <div class="grid min-w-0 gap-4 lg:grid-cols-2">
-        <section class="min-w-0 rounded-2xl border border-zinc-200 bg-zinc-50/60 p-4 dark:border-white/10 dark:bg-white/[0.025] sm:p-5">
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div class="min-w-0">
-              <div class="text-[11px] font-extrabold uppercase tracking-wider text-violet-600 dark:text-violet-300">Pull request evidence</div>
-              <h3 class="mt-1 break-words text-base font-bold text-zinc-900 dark:text-zinc-100">{{ pullRequestHeading }}</h3>
-            </div>
-            <a v-if="pullRequestLink" :href="pullRequestLink" target="_blank" rel="noopener noreferrer" class="shrink-0 text-xs font-bold text-violet-700 hover:underline dark:text-violet-300">Open PR ↗</a>
-          </div>
-          <dl class="mt-4 grid gap-2 sm:grid-cols-2">
-            <div v-for="item in pullRequestDetails" :key="item.label" class="min-w-0 rounded-lg border border-zinc-200/70 bg-white px-3 py-2.5 dark:border-white/[0.07] dark:bg-zinc-900/60" :class="item.wide ? 'sm:col-span-2' : ''">
-              <dt class="text-[10px] font-bold uppercase tracking-wide text-zinc-500">{{ item.label }}</dt>
-              <dd class="mt-1 break-all text-xs font-semibold text-zinc-800 dark:text-zinc-200" :class="item.mono ? 'font-mono' : ''" :title="item.value">{{ item.value }}</dd>
-            </div>
-          </dl>
-          <a v-if="requiredCommitLink" :href="requiredCommitLink" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs font-bold text-violet-700 hover:underline dark:text-violet-300">Open verification commit ↗</a>
-        </section>
-
-        <section class="min-w-0 rounded-2xl border border-zinc-200 bg-zinc-50/60 p-4 dark:border-white/10 dark:bg-white/[0.025] sm:p-5">
-          <div class="text-[11px] font-extrabold uppercase tracking-wider text-sky-600 dark:text-sky-300">Target image evidence</div>
-          <h3 class="mt-1 break-all font-mono text-base font-bold text-zinc-900 dark:text-zinc-100">rancher/rancher:{{ resultTag }}</h3>
-          <dl class="mt-4 grid gap-2 sm:grid-cols-2">
-            <div v-for="item in targetDetails" :key="item.label" class="min-w-0 rounded-lg border border-zinc-200/70 bg-white px-3 py-2.5 dark:border-white/[0.07] dark:bg-zinc-900/60">
-              <dt class="text-[10px] font-bold uppercase tracking-wide text-zinc-500">{{ item.label }}</dt>
-              <dd class="mt-1 break-all text-xs font-semibold text-zinc-800 dark:text-zinc-200" :class="item.mono ? 'font-mono' : ''">{{ item.value }}</dd>
-            </div>
-          </dl>
-          <p class="mt-3 text-xs leading-5 text-zinc-500 dark:text-zinc-400">The tag is mutable. These results describe the image digests observed at the checked time, not every image that has ever used this tag.</p>
-        </section>
+      <div class="pr-evidence-path">
+        <div><span class="iw-eyebrow">Pull request</span><h3>{{ pullRequestHeading }}</h3><a v-if="pullRequestLink" :href="pullRequestLink" target="_blank" rel="noopener noreferrer">Open PR <Icon name="external"/></a></div>
+        <Icon name="arrow" class="pr-path-arrow"/>
+        <div><span class="iw-eyebrow">Verification commit</span><code :title="requiredRevision">{{ shortRevision(requiredRevision) || 'Not available' }}</code><span class="iw-caption">{{ formatBasis(pullRequestResult.inclusionBasis) || 'See PR details' }}</span><button v-if="requiredRevision" type="button" class="iw-text-button" @click="copyValue(requiredRevision, 'Verification commit copied.')">Copy SHA</button></div>
+        <Icon name="arrow" class="pr-path-arrow"/>
+        <div><span class="iw-eyebrow">Target image</span><code>{{ resultTag }}</code><span class="iw-caption">{{ result.platform || 'linux/amd64' }} · observed {{ checkedAtLabel.replace(/^Checked /, '') }}</span><span class="iw-caption">Head tags can move. Re-check before testing.</span></div>
       </div>
-
-      <section class="grid min-w-0 gap-4">
-        <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h3 class="text-base font-bold text-zinc-950 dark:text-zinc-50">Registry evidence</h3>
-            <p class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">The Rancher server result determines the commit-ancestry verdict. Agent evidence confirms whether both exact server and agent tags were found.</p>
-          </div>
-          <span class="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{{ registries.length }} registr{{ registries.length === 1 ? "y" : "ies" }} checked</span>
-        </div>
-
-        <div v-if="!registries.length" class="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-8 text-center text-sm leading-6 text-amber-800 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200">
-          The verification response did not include any registry results.
-        </div>
-
-        <article v-for="(registryResult, registryIndex) in registries" :key="registryKey(registryResult, registryIndex)" class="min-w-0 overflow-hidden rounded-2xl border border-zinc-200 bg-white shadow-sm dark:border-white/10 dark:bg-zinc-900/60">
-          <header class="flex flex-col gap-3 border-b border-zinc-200/70 bg-zinc-50/75 px-4 py-4 dark:border-white/10 dark:bg-white/[0.025] sm:flex-row sm:items-start sm:justify-between">
-            <div class="min-w-0">
-              <div class="flex flex-wrap items-center gap-2">
-                <h4 class="font-bold text-zinc-900 dark:text-zinc-100">{{ registryName(registryResult) }}</h4>
-                <span class="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-bold" :class="statusBadgeClass(registryState(registryResult))">Server: {{ statusLabel(registryState(registryResult)) }}</span>
-                <span class="inline-flex rounded-full border px-2.5 py-0.5 text-[11px] font-bold" :class="pairStatusClass(registryResult)">{{ pairStatusLabel(registryResult) }}</span>
-              </div>
-              <div class="mt-1 break-all font-mono text-xs text-zinc-500 dark:text-zinc-400">{{ displayValue(registryResult.registry) || "Registry host unavailable" }}</div>
-            </div>
-          </header>
-
+      <details class="iw-disclosure pr-source-details"><summary>Pull request &amp; verification details <Icon name="chevron"/></summary><dl class="pr-source-grid"><div v-for="item in pullRequestDetails" :key="item.label"><dt>{{ item.label }}</dt><dd :class="{ 'font-mono': item.mono }">{{ item.value }}</dd></div></dl><a v-if="requiredCommitLink" :href="requiredCommitLink" target="_blank" rel="noopener noreferrer" class="iw-text-button">Open verification commit ↗</a></details>
+      <div v-if="resultWarnings.length" class="iw-alert"><strong>Interpretation notes</strong><ul><li v-for="warning in resultWarnings" :key="warning">{{ warning }}</li></ul></div>
+      <section class="pr-registry-workspace">
+        <div class="iw-section-heading"><div><span class="iw-eyebrow">Across the registries</span><h3>Where the commit shows up</h3><p class="iw-caption">Server ancestry determines the verdict. Agent ancestry and pair availability are shown separately.</p></div><div class="iw-segments" aria-label="Registry result filters"><button v-for="option in registryFilters" :key="option.id" type="button" :aria-pressed="registryFilter === option.id" @click="registryFilter = option.id">{{ option.label }} <span>{{ option.count }}</span></button></div></div>
+        <div class="pr-matrix-scroll" v-if="filteredRegistries.length" tabindex="0" role="region" aria-label="Registry comparison, scroll horizontally on narrow screens"><table class="pr-matrix"><thead><tr><th scope="col">Registry</th><th scope="col">Server ancestry</th><th scope="col">Agent ancestry</th><th scope="col">Image pair</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody><tr v-for="(item,index) in filteredRegistries" :key="registryKey(item,index)"><th scope="row"><button type="button" @click="focusRegistry(item,index)">{{ registryName(item) }} <Icon name="chevron"/></button><small>{{ item.registry }}</small></th><td><span class="iw-status" :data-state="registryState(item)">{{ statusLabel(registryState(item)) }}</span><code :title="item.server?.match?.candidateRevision">{{ shortRevision(item.server?.match?.candidateRevision) }}</code></td><td><span class="iw-status" :data-state="imageState(item.agent)">{{ statusLabel(imageState(item.agent)) }}</span></td><td><span class="pr-pair" :data-complete="item.pairAvailable"><Icon :name="item.pairAvailable ? 'check' : 'signal'"/>{{ item.pairAvailable ? 'Both found' : 'Incomplete' }}</span></td><td><button v-if="pinnedReference(item.server)" type="button" class="iw-button" @click="inspectImage(item.server)">Inspect server <Icon name="arrow"/></button><button v-else type="button" class="iw-text-button" @click="focusRegistry(item,index)">View evidence</button></td></tr></tbody></table></div>
+        <div v-else class="iw-empty-small">{{ registries.length ? 'No registries match this view.' : 'No registry evidence was returned.' }}<button v-if="registries.length" type="button" class="iw-text-button" @click="registryFilter = 'all'">Show all registries</button></div>
+        <p v-if="filteredRegistries.length" class="pr-matrix-hint iw-caption">Scroll sideways to compare all image evidence.</p>
+        <div class="pr-registry-details">
+          <details v-for="(registryResult, registryIndex) in filteredRegistries" :key="registryKey(registryResult, registryIndex)" :id="`pr-evidence-${registryKey(registryResult,registryIndex)}`" :open="expandedRegistry === registryKey(registryResult,registryIndex)" class="pr-registry-detail">
+            <summary><span class="pr-registry-letter">{{ registryName(registryResult).slice(0,1) }}</span><span><strong>{{ registryName(registryResult) }}</strong><small>{{ pairStatusLabel(registryResult) }}</small></span><span class="iw-status" :data-state="registryState(registryResult)">{{ statusLabel(registryState(registryResult)) }}</span><Icon name="chevron"/></summary>
           <div class="grid min-w-0 gap-3 p-3 lg:grid-cols-2 lg:p-4">
             <section v-for="imageEntry in imageEntries(registryResult)" :key="imageEntry.role" class="min-w-0 rounded-xl border p-3.5" :class="imageCardClass(imageEntry.image)">
               <div class="flex flex-wrap items-center justify-between gap-2">
@@ -273,7 +140,7 @@
 
               <template v-if="imageEntry.image && imageEntry.image.found !== false">
                 <p class="mt-3 break-all font-mono text-[11px] font-semibold leading-5 text-zinc-700 dark:text-zinc-300">{{ displayValue(imageEntry.image.reference, 1024) || "Image reference unavailable" }}</p>
-                <p class="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{{ matchReason(imageEntry.image) }}</p>
+                <p class="mt-2 text-xs leading-5 text-zinc-600 dark:text-zinc-300">{{ matchReason(imageEntry.image) }}</p><div v-if="pinnedReference(imageEntry.image)" class="iw-inline mt-3"><button type="button" class="iw-text-button" @click="copyValue(pinnedReference(imageEntry.image), 'Digest-pinned reference copied.')"><Icon name="copy"/>Copy pinned reference</button><button type="button" class="iw-text-button" @click="inspectImage(imageEntry.image)">Inspect this image <Icon name="arrow"/></button></div>
 
                 <dl class="mt-3 grid gap-2 sm:grid-cols-2">
                   <div v-for="item in imageOverview(imageEntry.image)" :key="item.label" class="min-w-0 rounded-lg bg-white/75 px-3 py-2 dark:bg-black/10" :class="item.wide ? 'sm:col-span-2' : ''">
@@ -305,25 +172,25 @@
               </div>
             </section>
           </div>
-        </article>
-      </section>
 
-      <section class="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-xs leading-5 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/[0.08] dark:text-amber-100">
-        <h3 class="font-bold">Proof limits</h3>
-        <ul class="mt-2 list-disc space-y-1 pl-5">
-          <li><span class="font-semibold">Unknown</span> means the available image or GitHub metadata could not prove either result; it does not mean the fix is absent.</li>
-          <li>A cherry-pick or equivalent backport has a different Git SHA and cannot be proven by ancestry alone.</li>
-          <li>Re-check immediately before testing because a head tag can move to a different image digest.</li>
-        </ul>
+          </details>
+        </div>
       </section>
+      <details class="iw-disclosure pr-proof-limits"><summary>What this evidence can—and cannot—tell you <Icon name="chevron"/></summary><ul><li>A digest identifies image content. A Git SHA identifies source; the two are never compared directly.</li><li>Image labels are producer-declared. Commit ancestry is evidence, not a binary attestation, and a later commit may revert the change.</li><li>Unknown is not proof of absence. Equivalent cherry-picks and backports have different SHAs.</li><li>These results describe the observed digests. Mutable head tags can change after this check.</li></ul></details>
     </template>
+    <footer class="iw-footer"><span>GitHub + OCI registry evidence</span><span>Inspection only · no registry or cluster changes</span></footer>
+    <div v-if="copyNotice" class="iw-toast" role="status"><Icon name="check"/><span>{{ copyNotice }}</span><button type="button" aria-label="Dismiss notification" @click="copyNotice = ''"><Icon name="close"/></button></div>
   </div>
 </template>
 
 <script setup>
 import AppBuildStamp from "./AppBuildStamp.vue";
-import { computed, nextTick, onBeforeUnmount, ref } from "vue";
-import { apiFetch } from "./store.js";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { apiFetch, activeTab } from "./store.js";
+import { writeTextToClipboard } from './clipboard.js';
+import Icon from './HelmLabIcon.vue';
+import ImageWorkspaceHeader from './ImageWorkspaceHeader.vue';
+import { readImageJSON, digestReference, imageEvidenceState, evidenceStateLabel, buildPRImageBrief } from './image-workspace.mjs';
 
 const knownRegistryLabels = ["SUSE staging", "Rancher Prime", "SUSE registry", "Docker Hub"];
 const phases = [
@@ -414,7 +281,7 @@ const validateForm = () => {
 };
 
 const verifyBuild = async () => {
-  if (!validateForm()) return;
+  if (loading.value || !validateForm()) return;
 
   const canonicalPullRequest = canonicalPullRequestURL(pullRequest.value);
   pullRequest.value = canonicalPullRequest;
@@ -429,22 +296,24 @@ const verifyBuild = async () => {
   let completed = false;
 
   try {
-    const response = await apiFetch("/api/pr-builds/verify", {
+    const payload = await readImageJSON(signal => apiFetch("/api/pr-builds/verify", {
       method: "POST",
-      signal: controller.signal,
+      signal,
       body: JSON.stringify({
         pullRequest: canonicalPullRequest,
         tag: cleanString(tag.value, 160),
       }),
-    });
-    const payload = await response.json();
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    }), controller, "PR image check", 130000);
+    if (disposed || requestController !== controller || controller.signal.aborted) return;
+    if (!payload || typeof payload !== "object" || !Array.isArray(payload.registries)) {
       throw new Error("The verifier returned an invalid response.");
     }
     result.value = payload;
+    checkedScope.value = { pullRequest: canonicalPullRequest, tag: normalizedInputTag.value };
+    registryFilter.value = "all"; expandedRegistry.value = "";
     completed = true;
   } catch (error) {
-    if (error?.name !== "AbortError") {
+    if (!disposed && requestController === controller && error?.name !== "AbortError") {
       requestError.value = error instanceof Error ? error.message : "PR image verification failed.";
     }
   } finally {
@@ -481,22 +350,9 @@ const registries = computed(() => Array.isArray(result.value?.registries) ? resu
 const summary = computed(() => result.value?.summary && typeof result.value.summary === "object" ? result.value.summary : {});
 const pullRequestResult = computed(() => result.value?.pullRequest && typeof result.value.pullRequest === "object" ? result.value.pullRequest : {});
 const resultWarnings = computed(() => Array.isArray(result.value?.warnings) ? result.value.warnings.map(value => cleanString(value, 1200)).filter(Boolean) : []);
-const scanComplete = computed(() => summary.value.scanComplete !== false);
+const scanComplete = computed(() => summary.value.scanComplete === true);
 
-const imageState = image => {
-  if (!image || image.found === false) return image?.error ? "error" : "unavailable";
-  if (image.error) return "error";
-  const match = image.match && typeof image.match === "object" ? image.match : {};
-  const verdict = normalizeStateToken(match.verdict);
-  const relation = normalizeStateToken(match.relation);
-
-  if (["exact", "equal", "same"].includes(relation) || ["exact", "exact-revision", "exact-match", "exact-commit"].includes(verdict)) return "exact";
-  if (["descendant", "included", "contains", "present", "verified", "candidate-is-descendant", "required-is-ancestor"].includes(relation)
-      || ["descendant", "included", "included-descendant", "contains", "contains-commit", "commit-included", "present", "verified", "match"].includes(verdict)) return "descendant";
-  if (["not-included", "not-present", "absent", "diverged", "unrelated", "does-not-contain"].includes(verdict)
-      || ["not-included", "not-present", "ancestor", "candidate-is-ancestor", "required-is-descendant", "diverged", "unrelated"].includes(relation)) return "not-included";
-  return "unknown";
-};
+const imageState = imageEvidenceState;
 
 const registryState = registryResult => imageState(registryResult?.server);
 
@@ -520,15 +376,7 @@ const overallState = computed(() => {
   return "unknown";
 });
 
-const statusLabel = state => ({
-  exact: "Exact revision",
-  descendant: "Included (descendant)",
-  included: "Included",
-  "not-included": "Not included",
-  unknown: "Unknown",
-  unavailable: "Image not found",
-  error: "Registry error",
-}[state] || "Unknown");
+const statusLabel = evidenceStateLabel;
 
 const statusBadgeClass = state => ({
   exact: "border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-200",
@@ -551,9 +399,9 @@ const summaryCardClass = computed(() => ({
 const includedRegistryCount = computed(() => registryStats.value.exact + registryStats.value.descendant);
 
 const summaryHeading = computed(() => ({
-  exact: "The checked image is built from the PR commit",
-  included: "The PR fix is included in a checked head image",
-  "not-included": "The PR fix is not included in the checked head images",
+  exact: "Exact source revision confirmed",
+  included: "Commit ancestry confirmed in a checked image",
+  "not-included": "No matching ancestry in the checked images",
   error: "Registry verification could not complete",
   unknown: "Inclusion could not be proven across all registries",
 }[overallState.value]));
@@ -733,7 +581,22 @@ const imageLinks = image => {
   });
 };
 
+
+const copyNotice = ref(''), registryFilter = ref('all'), expandedRegistry = ref(''), checkedScope = ref(null), elapsedSeconds = ref(0);
+let disposed = false, noticeTimer, elapsedTimer;
+watch(loading, value => { clearInterval(elapsedTimer); elapsedSeconds.value = 0; if (value) { const started = Date.now(); elapsedTimer = setInterval(() => { elapsedSeconds.value = Math.floor((Date.now() - started) / 1000); }, 1000); } });
+const scopeChanged = computed(() => !!result.value && !!checkedScope.value && (canonicalPullRequestURL(pullRequest.value) !== checkedScope.value.pullRequest || normalizedInputTag.value !== checkedScope.value.tag));
+const pinnedReference = image => image?.found === false ? '' : digestReference(image?.reference, image?.digest);
+const shortRevision = value => value ? String(value).slice(0,12) : '';
+const registryFilters = computed(() => [{ id:'all', label:'All', count:registries.value.length }, { id:'included', label:'Confirmed', count:includedRegistryCount.value }, { id:'attention', label:'Needs review', count:registries.value.length-includedRegistryCount.value }]);
+const filteredRegistries = computed(() => registries.value.filter(item => registryFilter.value === 'all' || (registryFilter.value === 'included') === ['exact','descendant'].includes(registryState(item))));
+async function focusRegistry(item,index) { expandedRegistry.value = registryKey(item,index); await nextTick(); const element = document.getElementById(`pr-evidence-${expandedRegistry.value}`); element?.scrollIntoView({block:'nearest',behavior:'instant'}); element?.querySelector('summary')?.focus({preventScroll:true}); }
+async function copyValue(value,message) { try { await writeTextToClipboard(value); if (!disposed) copyNotice.value=message; } catch(error) { if (!disposed) copyNotice.value=error.message || 'Could not copy.'; } clearTimeout(noticeTimer); if (!disposed) noticeTimer=setTimeout(()=>{copyNotice.value='';},6000); }
+function copyEvidence() { if (result.value) copyValue(buildPRImageBrief(result.value),'Evidence brief copied with the observed digests and check time.'); }
+async function inspectImage(image) { const reference=pinnedReference(image); if (!reference) return; activeTab.value='images'; await nextTick(); window.dispatchEvent(new CustomEvent('rancher-control-panel:inspect-image',{detail:{reference,platform:image.platform || 'linux/amd64'}})); }
+
 onBeforeUnmount(() => {
+  disposed = true; clearTimeout(noticeTimer); clearInterval(elapsedTimer);
   requestController?.abort();
   requestController = null;
 });

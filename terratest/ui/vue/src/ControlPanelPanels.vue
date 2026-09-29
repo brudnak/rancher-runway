@@ -1,4 +1,5 @@
 <template>
+  <section v-show="activeTab === 'home'" aria-label="Home workspace" class="min-w-0"><HomePanel /></section>
   <section v-if="issuesOpened" v-show="activeTab === 'issues'" class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 text-zinc-900 shadow-sm dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-100 sm:p-5">
     <IssueRadarPanel />
   </section>
@@ -84,6 +85,10 @@
     <K3DLabPanel :active="activeTab === 'k3d'" />
   </section>
 
+  <section v-if="testsOpened" v-show="activeTab === 'tests'" class="min-w-0" aria-label="Test Lab workspace"><TestLabPanel :active="activeTab === 'tests'" /></section>
+
+  <section v-if="cacheOpened" v-show="activeTab === 'cache'" class="min-w-0" aria-label="Cache Lab workspace"><CacheLabPanel :active="activeTab === 'cache'" /></section>
+
   <section v-if="steveOpened" v-show="activeTab === 'steve'" class="min-w-0" aria-label="Steve Lab workspace">
     <SteveLabPanel :active="activeTab === 'steve'" />
   </section>
@@ -91,6 +96,7 @@
 
 <script setup>
 import { ref, watch } from "vue";
+import HomePanel from "./HomePanel.vue";
 import HelmLabPanel from "./HelmLabPanel.vue";
 import IssueRadarPanel from "./IssueRadarPanel.vue";
 import { activeTab, refreshStatus, openLogModal } from "./store.js";
@@ -102,9 +108,14 @@ import K3DLabPanel from "./K3DLabPanel.vue";
 import PRBuildVerifierPanel from "./PRBuildVerifierPanel.vue";
 import PreflightPanel from "./PreflightPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";
+import TestLabPanel from "./TestLabPanel.vue";
+import CacheLabPanel from "./CacheLabPanel.vue";
 import SteveLabPanel from "./SteveLabPanel.vue";
 import WorkspaceRunsPanel from "./WorkspaceRunsPanel.vue";
-const k3dOpened = ref(false), steveOpened = ref(false);
+const testsOpened = ref(false);
+watch(activeTab, tab => { if (tab === "tests") testsOpened.value = true; }, { immediate: true });
+const k3dOpened = ref(false), steveOpened = ref(false), cacheOpened = ref(false);
+watch(activeTab, tab => { if (tab === "cache") cacheOpened.value = true; }, { immediate: true });
 watch(activeTab, tab => { if (tab === "k3d") k3dOpened.value = true; if (tab === "steve") steveOpened.value = true; }, { immediate: true });
 const helmOpened = ref(false);
 const issuesOpened = ref(false);

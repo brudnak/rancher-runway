@@ -43,6 +43,7 @@
 
 <script setup>
 import { computed } from "vue";
+import { inventoryExposure } from './panel-presentation.mjs';
 import {
   state,
   bootPending,
@@ -121,7 +122,6 @@ const deploymentTargetLabel = run => {
 const tiles = computed(() => {
   const runs = Array.isArray(state.value?.workspace?.runs) ? state.value.workspace.runs : [];
   const currentRun = state.value?.workspace?.currentRun || runs[0] || null;
-  const awsItems = Array.isArray(state.value?.aws?.items) ? state.value.aws.items : [];
   const operation = operationSummary.value;
   const lifecycleBusy = lifecycleRunning(state.value);
   const readyForSetup = Boolean(state.value?.workspace?.canStartIsolatedRun && !lifecycleBusy && !bootPending.value);
@@ -184,31 +184,7 @@ const tiles = computed(() => {
         actionLabel: "Start setup flow",
       };
 
-  const exposureTile = awsItems.length
-    ? {
-        key: "exposure",
-        tone: "amber",
-        eyebrow: "AWS exposure",
-        title: `${awsItems.length} resource${awsItems.length === 1 ? "" : "s"} visible`,
-        detail: "Review leftover resources for individual or bulk cleanup in AWS Inventory. Recorded runs use the Destroy tab. Every deletion requires typed confirmation.",
-        meta: "Live",
-        action: "aws",
-        actionLabel: "Open inventory",
-      }
-    : {
-        key: "exposure",
-        tone: runs.length ? "emerald" : "zinc",
-        eyebrow: "AWS exposure",
-        title: state.value?.aws?.refreshing ? "Checking AWS resources" : "No resources shown",
-        detail: state.value?.aws?.refreshing
-          ? "AWS inventory is refreshing in the background. Resources have not been ruled out."
-          : runs.length
-          ? "Recorded slots are available; AWS inventory currently has no matching visible resources."
-          : "No AWS resources are expected before an approved setup run.",
-        meta: state.value?.aws?.refreshing ? "Checking" : "Quiet",
-        action: state.value?.aws?.refreshing ? "aws" : runs.length ? "destroy" : "setup",
-        actionLabel: state.value?.aws?.refreshing ? "Open inventory" : runs.length ? "Open destroy" : "Open setup",
-      };
+  const exposureTile = inventoryExposure(state.value?.aws, runs.length > 0);
 
   return [safetyTile, runTile, exposureTile];
 });

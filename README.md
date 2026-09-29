@@ -135,14 +135,20 @@ Launching the app opens the desktop control panel.
 If `tool-config.yml` does not exist, the app creates a private starter config in
 its Application Support workspace. Open **Setup** and choose either path:
 
-- **Import config file**: choose your existing `tool-config.yml`, review the
+- **Import configuration**: choose your existing `tool-config.yml`, review the
   detected sections, then select **Back up & import** and **Continue with imported
   config**. The preview hides passwords. The import replaces the workspace's
   saved config, preserves a private backup beside it, and refreshes Setup.
 - **Fill in the checklist**: select each missing value to jump to its field,
-  including fields inside Advanced AWS settings. The checklist follows the
-  selected deployment type. Check **Tools & credentials**, then **Resolve Plan**
+  including fields inside **Network & infrastructure**. The checklist follows the
+  selected deployment type. Check **Tools & credentials**, then **Resolve & review plan**
   to save the entered values and review the plan before starting infrastructure.
+
+Setup groups the form into environment, Rancher configuration, and destination.
+The live run brief distinguishes Rancher instances from underlying server counts.
+Registry overrides and GPU options expand when needed; validation opens and
+focuses the relevant field. The progress rail follows configuration, resolution,
+and final approval. Setup and the labs share the same light/dark design tokens.
 
 Import accepts a single `.yml` or `.yaml` file up to 1 MB, including partial
 Runway configs. Invalid YAML and unrelated files are rejected without changing
@@ -181,6 +187,24 @@ Restart the app after changing shell credentials so new launches inherit them.
 
 ## Desktop Workflow
 
+Runway opens on **Home**, an overview of the workspace with live activity,
+guided workflows, and a searchable guide to every tool. Use the Home icon in
+the top bar to return at any time, or resume your last workspace from Home.
+Press `/` on Home to find a tool by name or task.
+
+The navigation groups workspaces into **Deploy & operate**, **Investigate**, and
+**Local tools**, using the same catalog as Home. Open a group to browse its tools,
+or use **Jump to…** (`⌘J` on macOS, `Ctrl+J` elsewhere) to search every workspace
+by name or task. Arrow keys move through results; Enter opens a workspace and
+Escape returns to where you were. Running-operation markers remain visible on
+their group while you work elsewhere. Narrow windows use a compact workspace
+picker instead of a horizontally scrolling tab bar.
+
+Steve Lab and K3D Lab use their own local Docker environments and can run
+while cloud provisioning continues. Each lab checks its own prerequisites and
+ports; available machine resources still matter. Switching tabs does not stop
+provisioning. Keep Runway open and return to **Runs** to follow its progress.
+
 Use the app tabs as the main lifecycle:
 
 - **Setup** resolves a plan, checks local prerequisites, lets you choose AWS
@@ -191,8 +215,10 @@ Use the app tabs as the main lifecycle:
 - **Clusters** shows Rancher URLs, kubeconfig paths or Linode IPs, reachability,
   pod visibility, recent logs, and active leader details.
 - **AWS Inventory** shows resources associated with recorded slots and owner
-  tags. Delete individual cleanup candidates, select several, or review all
-  candidates before confirming the exact deletion list.
+  tags. Search by name, ID, run, or tag; filter by resource type and cleanup
+  eligibility. Review individual leftovers, a selection, or the visible
+  candidates, then confirm the exact deletion list. Each protected resource
+  explains why it cannot be deleted through inventory.
 - **Image Lookup** searches Rancher server, agent, and webhook tags across
   Docker Hub and the Rancher/SUSE registries, or inspects a custom image
   repository.
@@ -210,8 +236,13 @@ Use the app tabs as the main lifecycle:
   source ancestry.
 - **Issue Radar** shows owner lanes, unassigned issues, milestone gaps, QA-size
   and issue-kind summaries, and downloadable assignment reports.
-- **Destroy** removes provisioned cloud resources for a selected run slot.
-- **Costs** shows cleanup estimates and the local cost ledger.
+- **Destroy** retires recorded runs individually or in a sequential batch.
+  Its **Costs & local data** view shows locally recorded AWS cleanup estimates
+  with service and cumulative charts, date/region filters, CSV export, and
+  JSON backup/import. Local file cleanup and cost-history reset are separate
+  actions. Home links directly to both leftover cleanup and the cost journal.
+  See [AWS cleanup and cost history](docs/aws-cost-history.md) for coverage
+  and limitations.
 - **Settings** holds local app preferences such as GPU reminders.
 - **K3D Lab** starts and stops local k3d clusters without provisioning cloud
   infrastructure.
@@ -315,6 +346,13 @@ milestone, label, or issue is changed on GitHub.
 Image Lookup is a read-only registry browser for finding and comparing Rancher
 builds without a Docker daemon or `skopeo` command line workflow.
 
+The search workspace keeps advanced filters in **Refine the search**, presents
+build identity in expandable rows, and opens metadata in a split or expanded
+inspector. Copy a digest-pinned reference to preserve the inspected image. The
+last five successful inspections remain available for the current session;
+press `/` while this tab is active to focus search. Searches and inspections
+can be cancelled and have bounded request times.
+
 - Search Docker Hub, `stgregistry.suse.com`, `registry.rancher.com`, and
   `registry.suse.com` together or one at a time.
 - Browse `rancher/rancher`, `rancher/rancher-agent`, and
@@ -395,6 +433,14 @@ browser for a GitHub token.
 
 PR Image Check answers whether a pull request's Git commit is represented in a
 specific Rancher head image such as `2.14-head`.
+
+A registry comparison matrix separates server ancestry, agent ancestry, and
+pair availability. Filter confirmed results or those needing review, expand
+the underlying evidence, or **Copy evidence brief** for a complete Markdown
+snapshot (including registries hidden by the filter). **Inspect server** opens
+Image Lookup with the observed digest and platform, preserving the image
+identity even if its mutable tag moves. Changed inputs are clearly marked
+until a fresh check completes.
 
 - Paste an exact `https://github.com/{owner}/{repository}/pull/{number}` URL
   and enter `head` or a minor-line head tag such as `2.14-head`.
@@ -522,6 +568,87 @@ Both labs share a searchable Activity viewer with issue filtering, line
 wrapping, pause/resume, and copying of matching output. Status checks pause
 when a tab is inactive. If a refresh fails, the last successful workspace stays
 visible and lifecycle actions wait for a fresh check.
+
+## Cache Lab
+
+Cache Lab keeps a persistent local workspace for each Rancher source. Connect
+with a Rancher URL and password by default, choose the **URL + API token**
+tab for an existing token, point to a trusted kubeconfig and context, or
+start a collection of imported SQLite files. Names default to the source host;
+use a nickname to distinguish environments. URL/token access uses Rancher's
+Kubernetes proxy (management cluster `local` by default), so the account needs
+permission to discover and exec into the Rancher pods. Kubeconfig connections
+must target the cluster where Rancher runs. Runway pins the context and rejects
+capture if that context's server URL later changes.
+
+**Use this Rancher** lists management environments already detected by Runway’s
+Runs & Clusters view. It fills the URL; **Use kubeconfig** selects the recorded
+management kubeconfig without needing a Rancher token. Downstream kubeconfigs
+are excluded, and Docker-only Ranchers are labeled as unsupported for pod
+capture. You can still enter any other Rancher manually.
+
+**URL + password → Sign in & generate token** creates a named, expiring API
+token for a local Rancher account (default username `admin`) and fills the token
+field. The password is used once and cleared, never saved. TLS verification is
+on by default; Connection settings offers a custom CA or an explicit opt-out for
+self-signed servers. Runway logs out its temporary sign-in session afterward.
+The generated token stays in the draft unless you explicitly remember it in
+Keychain. Choose its expiry; the server’s policy still applies. For SSO, paste
+an API token from Rancher. Revoke generated tokens in Rancher’s **API & Keys**;
+creating a replacement or deleting a local workspace does not revoke old keys.
+The [same connection flow is available in Test Lab](docs/test-lab.md#rancher-token-caveat).
+
+**Capture always uses `VACUUM INTO`.** Live capture downloads the pinned
+[`vai-vacuum` v1.0.0-beta](https://github.com/brudnak/vai-vacuum) helper on your
+computer, verifies its SHA-256 checksum, and streams it into the chosen pod.
+The pod needs a shell, `cat`, `chmod`, `uname`, and standard file/process tools;
+it needs neither SQLite installation nor outbound GitHub access. The published
+helper is Linux amd64. For ARM pods or offline operation, supply a matching
+Linux `vai-vacuum` binary under Connection → Advanced. The helper expects
+`/var/lib/rancher/informer_object_cache.db`; SQL caching must already be active.
+Capture reads the source and writes a temporary snapshot, so it still uses pod
+CPU and disk space. Competing Runway captures use a pod lock and a remote
+five-minute watchdog. An existing `/tmp/vai-snapshot.db` is never removed to
+make room for a new capture; inspect a leftover file before removing it.
+
+- **Library:** source tabs, nicknames, folders, favorites, notes, and saved SQL
+  queries survive app restarts. Each snapshot records its source, pod UID,
+  restart count, image, capture time, checksum, and size. Tokens are session-only
+  unless you opt into macOS Keychain. Kubeconfig files stay at their original
+  paths; Runway does not change your current Kubernetes context.
+- **Explore:** searchable tables, schema and index definitions, paged/filterable
+  rows, sorting, and expandable JSON records. The inspector opens snapshots
+  read-only. SQL accepts a single SELECT/CTE, supports JSON functions, and exports
+  the displayed result as CSV or JSON. Cmd/Ctrl+Enter runs a query.
+- **Compare:** choose a baseline and comparison, then a table. The disk-backed
+  engine compares schema and records, matching explicit primary keys or
+  verified unique identity columns. Without a reliable key, it compares row
+  multisets, preserving duplicate counts. JSON object key order is normalized;
+  optional filtering ignores only `metadata.resourceVersion` and
+  `metadata.managedFields`. Source/replica differences are flagged. Counts cover
+  every scanned row; exported table reports include any preview-limit warning.
+- **Capture again & compare:** captures the selected pod and opens its result
+  against the currently selected baseline. Steve Lab's **Capture in Cache Lab**
+  sends a fresh local VACUUM snapshot directly into the same library.
+- **Cleanup:** delete a snapshot, clear a workspace's snapshots, or delete the
+  entire workspace after typed confirmation. Removing a folder moves its files
+  to Unfiled. These controls never delete live Rancher resources or the original
+  file used for an import. Completed copies can be exported to Downloads.
+
+The library lives in `automation-output/control-panel/cache-lab` under Runway's
+workspace. Snapshot files and the manifest have private permissions. Keep the
+whole directory together when backing it up; tokens stored in Keychain are
+separate. Imports must be standalone SQLite files, not a bare copy of a live
+WAL database. Interrupted or invalid captures are not published in the library.
+
+Current bounds are 2 GiB per snapshot; SQL results show up to 500 rows / 16 MiB
+and run for at most 20 seconds. A table comparison scans up to one million rows
+per side / 512 MiB of decoded data with a 60-second deadline. It returns up to
+300 record details / 8 MiB, with full scan counts. Exceeding the scan budget
+fails explicitly rather than reporting an incomplete comparison as complete.
+
+Lab and investigation tabs share the [workbench theme](docs/workbench-theme.md),
+including Helm Lab's dark blue surfaces and accessible mint focus/accent colors.
 
 ## Configuration Notes
 
@@ -676,3 +803,7 @@ In manual mode, you provide installer checksum pins. In auto mode, the app
 resolves the matching installer checksum during plan generation.
 
 # Test
+
+## Test Lab
+
+Open **Local tools → Test Lab** to search `rancher/tests/validation`, select suites or individual tests, configure a Rancher target, and review exact pinned Go commands before running locally. Saved plans, Keychain configuration, activity logs, and test results make repeat runs easier. GitHub onboarding supports device sign-in, private repository connection/creation, and manual-only repository deletion guidance. Managed workflow installation and cloud execution are the next milestone and are not enabled in this initial version. See [Test Lab setup and usage](docs/test-lab.md).

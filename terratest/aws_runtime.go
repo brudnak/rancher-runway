@@ -444,11 +444,13 @@ func buildCleanupCostEstimate(region string, inputs cleanupCostEstimateInputs) (
 	if len(inputs.DBEndpoints) > 0 || strings.TrimSpace(inputs.AWSPrefix) != "" || strings.TrimSpace(inputs.RunID) != "" {
 		if err := addRDSCleanupCostEstimate(ctx, estimate, region, inputs, now); err != nil {
 			log.Printf("[cleanup] Could not estimate RDS cost: %v", err)
+			estimate.Warnings = append(estimate.Warnings, "RDS/Aurora estimate unavailable: "+err.Error())
 		}
 	}
 	if len(inputs.LoadBalancerDNSNames) > 0 || strings.TrimSpace(inputs.AWSPrefix) != "" || strings.TrimSpace(inputs.RunID) != "" {
 		if err := addLoadBalancerCleanupCostEstimate(ctx, estimate, region, inputs, now); err != nil {
 			log.Printf("[cleanup] Could not estimate load balancer cost: %v", err)
+			estimate.Warnings = append(estimate.Warnings, "Load balancer estimate unavailable: "+err.Error())
 		}
 	}
 	if estimate.InstanceCount == 0 && estimate.VolumeCount == 0 && estimate.DBInstanceCount == 0 && estimate.LoadBalancerCount == 0 {

@@ -1,15 +1,16 @@
 <template>
   <header class="panel-header mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
     <div class="min-w-0">
-      <ControlPanelHeader />
-      <div v-if="refreshError" role="alert" class="mt-4 max-w-4xl rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
+      <ControlPanelHeader v-if="activeTab !== 'home'" />
+      <div v-else class="home-chrome-label"><span class="home-chrome-dot"></span>Local workspace <span> / </span> Home</div>
+      <div v-if="refreshError && activeTab !== 'home'" role="alert" :class="{ 'panel-refresh-alert': !bootPending }" class="mt-4 max-w-4xl rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
         <div class="font-semibold">{{ bootPending ? 'Startup check could not finish' : 'Status could not refresh' }}</div>
         <p class="mt-1">{{ refreshError }}</p>
         <p class="mt-1">{{ bootPending ? 'Setup stays locked until a fresh safety check succeeds.' : 'Showing the last successful status. It may be out of date.' }}</p>
         <AppBuildStamp />
         <button type="button" class="chrome-button mt-3" :disabled="refreshInFlight" @click="refreshChecks">{{ refreshInFlight ? 'Retrying…' : 'Retry checks' }}</button>
       </div>
-      <div v-else-if="bootPending" class="mt-4 max-w-4xl rounded-xl border border-sky-200 bg-white px-4 py-3 text-sm text-sky-900 shadow-sm dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100">
+      <div v-else-if="bootPending && activeTab !== 'home'" class="mt-4 max-w-4xl rounded-xl border border-sky-200 bg-white px-4 py-3 text-sm text-sky-900 shadow-sm dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-start">
           <span class="spinner mt-0.5 shrink-0 text-sky-600 dark:text-sky-300"></span>
           <div class="min-w-0">
@@ -101,6 +102,7 @@ import { computed } from "vue";
 import ControlPanelHeader from "./ControlPanelHeader.vue";
 import AppBuildStamp from "./AppBuildStamp.vue";
 import {
+  activeTab,
   bootPending,
   bootDetail,
   fullscreen,

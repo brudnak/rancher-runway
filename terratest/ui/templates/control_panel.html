@@ -110,8 +110,17 @@
       color: rgb(82 82 91);
       box-shadow: 0 1px 2px rgb(24 24 27 / 0.05);
     }
-    .panel-chip::before {
-      content: "";
+    .panel-chip-indicator {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 0.75rem;
+      width: 0.75rem;
+      height: 0.75rem;
+    }
+    .panel-chip[data-chip="clusters"] .panel-chip-value { min-width: 12ch; }
+    .panel-chip[data-chip="aws"] .panel-chip-value { min-width: 18ch; }
+    .panel-chip-dot {
       width: 0.45rem;
       height: 0.45rem;
       flex: 0 0 auto;
@@ -141,7 +150,7 @@
       background: rgb(236 253 245);
       color: rgb(6 95 70);
     }
-    .panel-chip-tone-emerald::before {
+    .panel-chip-tone-emerald .panel-chip-dot {
       background: rgb(16 185 129);
       box-shadow: 0 0 0 3px rgb(16 185 129 / 0.16);
     }
@@ -150,7 +159,7 @@
       background: rgb(240 249 255);
       color: rgb(7 89 133);
     }
-    .panel-chip-tone-sky::before {
+    .panel-chip-tone-sky .panel-chip-dot {
       background: rgb(14 165 233);
       box-shadow: 0 0 0 3px rgb(14 165 233 / 0.16);
     }
@@ -159,7 +168,7 @@
       background: rgb(255 251 235);
       color: rgb(146 64 14);
     }
-    .panel-chip-tone-amber::before {
+    .panel-chip-tone-amber .panel-chip-dot {
       background: rgb(245 158 11);
       box-shadow: 0 0 0 3px rgb(245 158 11 / 0.16);
     }
@@ -168,7 +177,7 @@
       background: rgb(255 241 242);
       color: rgb(159 18 57);
     }
-    .panel-chip-tone-rose::before {
+    .panel-chip-tone-rose .panel-chip-dot {
       background: rgb(244 63 94);
       box-shadow: 0 0 0 3px rgb(244 63 94 / 0.16);
     }
@@ -224,38 +233,99 @@
       background: rgb(244 63 94 / 0.1);
       color: rgb(254 205 211);
     }
-    .panel-tab {
-      position: relative;
-      display: inline-flex;
-      flex: 0 0 auto;
-      min-height: 2.75rem;
-      align-items: center;
-      justify-content: center;
-      padding: 0.5rem 0.8rem;
-      white-space: nowrap;
-      scroll-snap-align: start;
-      transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
-    }
-    .panel-tab:focus-visible {
-      outline: 2px solid rgb(16 185 129 / 0.45);
-      outline-offset: 1px;
-    }
-    .panel-tabs-track {
-      display: flex;
-      width: max-content;
-      min-width: 100%;
-      gap: clamp(0.125rem, 0.45vw, 0.375rem);
-      padding-inline: 0.125rem;
-    }
     .panel-nav {
-      box-shadow: 0 8px 24px rgb(24 24 27 / 0.06);
-      backdrop-filter: blur(18px);
-      scroll-padding-inline: 0.25rem;
-      scroll-snap-type: x proximity;
-      -webkit-overflow-scrolling: touch;
+      position: relative;
+      scroll-margin-top: 4rem;
+      border: 1px solid var(--runway-border);
+      border-radius: 1rem;
+      padding: 0.375rem;
+      box-shadow: var(--runway-shadow);
     }
-    .dark .panel-nav {
-      box-shadow: 0 14px 30px rgb(0 0 0 / 0.22);
+    .panel-nav:has(.panel-workspace-picker) { z-index: 45; }
+    .workspace-nav { min-width: 0; }
+    .panel-nav-primary { display: flex; align-items: stretch; gap: 0.375rem; }
+    .panel-nav button { appearance: none; font: inherit; cursor: pointer; }
+    .panel-nav button:focus-visible, .panel-picker-search:focus-within {
+      outline: 2px solid var(--runway-accent); outline-offset: 2px;
+    }
+    .panel-nav .hl-icon { width: 1.125rem; height: 1.125rem; flex: 0 0 auto; }
+    .panel-nav-anchor, .panel-nav-search, .panel-nav-mobile, .panel-nav-group {
+      position: relative; display: flex; align-items: center; gap: 0.625rem;
+      border: 1px solid transparent; border-radius: 0.7rem;
+      padding: 0.5rem 0.8rem; min-height: 2.75rem;
+      background: transparent; color: var(--runway-muted);
+      transition: background-color 120ms ease, color 120ms ease;
+    }
+    .panel-nav-anchor:hover, .panel-nav-search:hover, .panel-nav-group:hover, .panel-nav-mobile:hover { background: var(--runway-raised); color: var(--runway-ink); }
+    .panel-nav-anchor[aria-current], .panel-nav-group.is-current, .panel-nav-group[aria-expanded=true] { color: var(--runway-accent); background: var(--runway-accent-soft); border-color: var(--runway-border); }
+    .panel-nav-groups { display: flex; gap: 0.375rem; flex: 1; min-width: 0; }
+    .panel-nav-group { text-align: left; min-width: 0; flex: 0 1 13.5rem; }
+    .panel-group-copy { display: grid; gap: 0.2rem; min-width: 0; }
+    .panel-group-copy strong { font-size: 0.8125rem; font-weight: 650; white-space: nowrap; }
+    .panel-group-copy > span { font-size: 0.6875rem; color: var(--runway-muted); white-space: nowrap; }
+    .panel-nav-group.is-current .panel-group-copy > span { color: var(--runway-ink); }
+    .panel-nav-chevron { margin-left: auto; opacity: 0.65; width: 0.9rem !important; }
+    .panel-nav-group[aria-expanded=true] .panel-nav-chevron { transform: rotate(180deg); }
+    .panel-nav-search { margin-left: auto; white-space: nowrap; font-size: 0.8125rem !important; }
+    .panel-nav-anchor-label { font-size: 0.8125rem; font-weight: 600; }
+    .panel-nav kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 1.2rem; padding: 0.1rem 0.25rem; border: 1px solid var(--runway-border); border-radius: 0.25rem; font: inherit; font-size: 0.6875rem; color: var(--runway-muted); }
+    .panel-nav-mobile, .panel-mobile-activity { display: none; }
+    .panel-workspace-picker {
+      position: absolute; left: 0; right: 0; top: calc(100% + 0.5rem);
+      display: grid; grid-template-rows: auto auto minmax(0,1fr) auto;
+      max-height: min(72vh, 44rem); overflow: hidden;
+      border: 1px solid var(--runway-control); border-radius: 1rem;
+      color: var(--runway-ink); background: var(--runway-card);
+      box-shadow: 0 20px 70px #00000030;
+    }
+    .panel-picker-search { display: flex; align-items: center; gap: 0.75rem; margin: 1rem 1rem 0; padding: 0.625rem 0.875rem; border: 1px solid var(--runway-border); background: var(--runway-input); border-radius: 0.65rem; }
+    .panel-picker-search > .hl-icon { color: var(--runway-muted); }
+    .panel-picker-search input { width: 100%; min-width: 0; border: 0; outline: none; box-shadow: none; padding: 0.125rem 0; background: transparent; color: var(--runway-ink); font-size: 0.9375rem; }
+    .panel-picker-search input::placeholder { color: var(--runway-muted); }
+    .panel-picker-search button { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem; margin: -0.4rem; border: 0; background: transparent; color: var(--runway-muted); border-radius: 0.25rem; }
+    .panel-picker-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.9rem 1.25rem 0.25rem; font-size: 0.75rem; color: var(--runway-muted); }
+    .panel-picker-heading button, .panel-picker-empty button { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0; border: 0; background: transparent; color: var(--runway-accent); white-space: nowrap; }
+    .panel-picker-groups { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1.25rem; padding: 1rem; overflow-y: auto; overscroll-behavior: contain; }
+    .panel-picker-groups { scrollbar-width: thin; scrollbar-color: var(--runway-control) transparent; }
+    .panel-picker-groups::-webkit-scrollbar { width: 6px; }
+    .panel-picker-groups::-webkit-scrollbar-thumb { background: var(--runway-control); border-radius: 6px; }
+    .panel-picker-groups section { min-width: 0; }
+    .panel-picker-groups h3 { margin: 0 0.625rem 0.6rem; font-size: 0.6875rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--runway-muted); font-weight: 700; }
+    .panel-picker-items { display: grid; gap: 0.25rem; }
+    .panel-picker-single { grid-template-columns: minmax(0,1fr); }
+    .panel-picker-single .panel-picker-items { grid-template-columns: repeat(3,minmax(0,1fr)); }
+    .panel-workspace-option { display: flex; align-items: flex-start; gap: 0.75rem; width: 100%; padding: 0.8rem 0.625rem; border: 1px solid transparent; border-radius: 0.7rem; background: transparent; text-align: left; color: var(--runway-ink); }
+    .panel-workspace-option:hover, .panel-workspace-option:focus-visible { background: var(--runway-raised); }
+    .panel-workspace-option[aria-current] { border-color: var(--runway-border); background: var(--runway-accent-soft); }
+    .panel-option-icon { position: relative; display: grid; place-items: center; width: 2.25rem; height: 2.25rem; flex: 0 0 auto; border: 1px solid var(--runway-border); border-radius: 0.65rem; background: var(--runway-soft); color: var(--runway-accent); }
+    .panel-option-copy { display: grid; gap: 0.3rem; min-width: 0; }
+    .panel-option-copy strong { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; font-size: 0.8125rem; font-weight: 650; }
+    .panel-option-copy > span { font-size: 0.75rem; line-height: 1.6; color: var(--runway-muted); }
+    .panel-option-copy em { font-size: 0.6875rem; font-style: normal; color: var(--runway-gold); }
+    .panel-option-current { border: 1px solid var(--runway-border); border-radius: 1rem; padding: 0.05rem 0.35rem; color: var(--runway-accent); font-size: 0.5625rem; font-weight: 600; }
+    .panel-picker-footer { display: flex; justify-content: space-between; gap: 1rem; padding: 0.75rem 1.25rem; border-top: 1px solid var(--runway-border); color: var(--runway-muted); font-size: 0.6875rem; background: var(--runway-soft); }
+    .panel-picker-footer kbd + kbd { margin-left: 0.125rem; }
+    .panel-picker-empty { display: grid; justify-items: center; gap: 0.65rem; padding: 2rem 1rem; text-align: center; }
+    .panel-picker-empty p { color: var(--runway-muted); font-size: 0.875rem; }
+    @media (max-width: 1100px) {
+      .panel-nav-anchor-label, .panel-nav-search > span:not(.tab-status), .panel-nav-group > .hl-icon:first-child { display: none; }
+      .panel-nav-group { padding-inline: 0.65rem; }
+    }
+    @media (max-width: 760px) {
+      .panel-nav-groups, .panel-nav-search > kbd { display: none; }
+      .panel-nav-mobile { display: flex; flex: 1; min-width: 0; text-align: left; gap: 0.5rem; padding-inline: 0.5rem; }
+      .panel-nav-mobile > span { display: grid; gap: 0.15rem; min-width: 0; }
+      .panel-nav-mobile small { font-size: 0.625rem; color: var(--runway-muted); }
+      .panel-nav-mobile strong { font-size: 0.8125rem; color: var(--runway-ink); white-space: nowrap; }
+      .panel-nav-mobile > .hl-icon:last-child { margin-left: auto; }
+      .panel-nav-anchor, .panel-nav-search { padding-inline: 0.625rem; }
+      .panel-mobile-activity { display: block; }
+      .panel-picker-groups, .panel-picker-single .panel-picker-items { grid-template-columns: minmax(0,1fr); }
+      .panel-picker-search { margin: 0.75rem 0.75rem 0; padding-inline: 0.6rem; }
+      .panel-picker-search input { font-size: 1rem; }
+      .panel-picker-search kbd, .panel-picker-footer > span:last-child { display: none; }
+      .panel-picker-heading { align-items: start; padding-inline: 1rem; }
+      .panel-picker-footer { padding-inline: 1rem; }
     }
     .tab-status {
       position: absolute;
@@ -292,15 +362,6 @@
     @media (prefers-reduced-motion: reduce) {
       .tab-status--busy {
         animation: none;
-      }
-    }
-    @media (max-width: 640px) {
-      .panel-tabs-track {
-        gap: 0.125rem;
-      }
-      .panel-tab {
-        padding-inline: 0.625rem;
-        font-size: 0.8125rem;
       }
     }
     .run-summary-strip {
@@ -786,7 +847,7 @@
     }
   </style>
 </head>
-<body data-booting="true" class="min-h-screen overflow-x-hidden bg-zinc-100 text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
+<body data-workspace="home" data-booting="true" class="min-h-screen overflow-x-hidden bg-zinc-100 text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
   <div id="appIdentityVue" class="app-identity-bar"></div>
   <main class="min-h-screen px-4 py-5 sm:px-6 lg:px-8">
     <div class="panel-shell mx-auto max-w-[1680px]">
@@ -794,14 +855,14 @@
 
       <section id="commandDeck" data-vue-owned="true" class="mb-5 grid min-w-0 gap-3 md:grid-cols-3" aria-live="polite"></section>
 
-      <nav id="panelTabs" data-vue-owned="true" class="panel-nav mb-5 overflow-x-auto rounded-xl border border-zinc-200 bg-white/[0.88] p-1 dark:border-white/10 dark:bg-zinc-900/90" aria-label="Control panel sections"></nav>
+      <nav id="panelTabs" data-vue-owned="true" class="panel-nav mb-5" aria-label="Control panel sections"></nav>
 
       <div class="grid min-w-0 gap-6">
-        <section data-tab-panel="setup" class="control-panel-setup min-w-0">
+        <section data-tab-panel="setup" class="hidden control-panel-setup min-w-0">
           {{.SetupEditorHTML}}
         </section>
 
-        <div id="controlPanelPanelsVue" class="contents"></div>
+        <div id="controlPanelPanelsVue" class="contents"><section class="home-startup" role="status" aria-busy="true"><span class="home-eyebrow">Rancher Runway</span><h1>Opening your workspace.</h1><p>Preparing your tools and checking for active work…</p><span class="spinner" aria-hidden="true"></span></section></div>
       </div>
     </div>
   </main>

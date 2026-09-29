@@ -1,8 +1,6 @@
 <template>
   <div class="grid min-w-0 gap-4">
-    <p v-if="state.clusters?.refreshing && !cleanupRunning" class="text-sm text-zinc-500 dark:text-zinc-400" role="status">
-      {{ state.clusters?.updatedAt ? 'Refreshing cluster status in the background. Showing the last completed check.' : 'Checking cluster connectivity in the background…' }}
-    </p>
+    <RefreshStatus v-if="!cleanupRunning" :refreshing="state.clusters?.refreshing" label="cluster status" />
     <!-- Active operation is running teardown -->
     <div
       v-if="cleanupRunning"
@@ -40,7 +38,7 @@
           Destroy finished for the selected run. Downstream cleanup and management Terraform destroy both succeeded.
         </template>
       </div>
-      <div v-else>{{ state.clusters?.refreshing ? 'Waiting for cluster discovery to finish.' : 'No clusters discovered yet.' }}</div>
+      <div v-else>{{ initialDiscovery(state.clusters) ? 'Waiting for cluster discovery to finish.' : 'No clusters discovered yet.' }}</div>
     </div>
 
     <!-- Cluster groups available -->
@@ -127,6 +125,8 @@
 </template>
 
 <script setup>
+import RefreshStatus from './RefreshStatus.vue';
+import { initialDiscovery } from './panel-presentation.mjs';
 import { computed, ref, watch } from "vue";
 import {
   state,

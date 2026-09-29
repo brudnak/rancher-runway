@@ -16,11 +16,7 @@
     const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
     document.documentElement.classList.toggle('dark', savedTheme ? savedTheme === 'dark' : systemDark)
   </script>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = { darkMode: 'class' }
-  </script>
-  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <link rel="stylesheet" href="{{.BasePath}}/static/control_panel.css?token={{.Token}}" />
   <style>
     button:focus-visible,
     input:focus-visible,
@@ -38,10 +34,6 @@
       font-size: 0.94em;
     }
     section[data-section] { display: none; }
-    body[data-phase="editor"] section[data-section="editor"] { display: block; }
-    body[data-phase="resolving"] section[data-section="resolving"] { display: block; }
-    body[data-phase="review"] section[data-section="review"] { display: block; }
-    body[data-phase="done"] section[data-section="done"] { display: block; }
     [data-setup-root][data-phase="editor"] section[data-section="editor"] { display: block; }
     [data-setup-root][data-phase="resolving"] section[data-section="resolving"] { display: block; }
     [data-setup-root][data-phase="review"] section[data-section="review"] { display: block; }
@@ -116,17 +108,9 @@
   <div id="interactiveSetupRoot" data-setup-root data-phase="editor">
   <main class="min-h-screen px-4 py-10 sm:px-6 lg:px-8">
     <div class="setup-shell mx-auto max-w-4xl">
-      <section data-section="editor">
-        <div class="setup-header mb-6 flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <div class="setup-eyebrow mb-4 inline-flex items-center rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-500 shadow-sm dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">
-              Interactive setup
-            </div>
-            <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50 sm:text-3xl">Rancher Runway Setup Preflight</h1>
-            <p class="mt-3 max-w-3xl text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400 sm:text-base">
-              Review the requested Rancher versions or exact custom server images for this run. The row count becomes <code>total_has</code> automatically. After you resolve, this same page will show the final plan for approval.
-            </p>
-          </div>
+      <header class="setup-masthead">
+        <div class="setup-brand"><div class="setup-emblem" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m16 3 12 7v12l-12 7-12-7V10Z"/><path d="m4 10 12 7 12-7M16 17v12M10 6.5l12 7V19"/></svg></div><div><span class="setup-eyebrow">RANCHER RUNWAY / DEPLOYMENT WORKSPACE</span><h1>Setup<span>.</span></h1><p>A considered plan. A confident start.</p></div></div>
+        <div class="setup-masthead-note"><span class="setup-safe-dot"></span> Plan first. Provision after approval.</div>
           {{if not .Embedded}}<button id="themeToggle" type="button" class="inline-flex items-center justify-center gap-2 rounded-lg border border-zinc-200 bg-white px-3.5 py-2 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]" aria-label="Toggle color theme">
             <svg id="themeSunIcon" xmlns="http://www.w3.org/2000/svg" class="hidden h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="4"></circle>
@@ -144,15 +128,28 @@
             </svg>
             <span id="themeToggleLabel">Theme</span>
           </button>{{end}}
-        </div>
-
-        <section aria-labelledby="setupWelcomeTitle" class="mb-5 rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm dark:border-emerald-500/20 dark:bg-zinc-900/80">
+      </header>
+      <ol class="setup-journey" aria-label="Setup progress">
+        <li data-setup-stage="editor" aria-current="step"><span>01</span><div><strong>Shape your environment</strong><small>Topology, versions &amp; destination</small></div></li>
+        <li data-setup-stage="resolving"><span>02</span><div><strong>Resolve the details</strong><small>Pin images, charts &amp; compatibility</small></div></li>
+        <li data-setup-stage="review"><span>03</span><div><strong>Review &amp; launch</strong><small>Your approval starts provisioning</small></div></li>
+      </ol>
+      <section data-section="editor">
+       <div class="setup-layout">
+        <aside aria-labelledby="setupBriefTitle" class="setup-companion">
+          <span class="setup-eyebrow">YOUR NEXT RUN</span>
+          <h2 id="setupBriefTitle">Rancher on RKE2</h2>
+          <p id="setupBriefDescription" class="setup-muted">A dedicated management environment.</p>
+          <dl class="setup-brief"><div><dt>Rancher instances</dt><dd id="setupBriefInstances">1</dd></div><div><dt>Infrastructure</dt><dd id="setupBriefNodes">3 RKE2 servers</dd></div><div><dt>Destination</dt><dd id="setupBriefRegion">AWS</dd></div><div><dt>Plan source</dt><dd id="setupBriefMode">Version selector</dd></div></dl>
+          <div id="setupBriefVersions" class="setup-version-chips" aria-label="Requested versions"></div>
+          <nav class="setup-jump-nav" aria-label="Setup sections"><button type="button" data-setup-jump="setupSectionTopology"><span>01</span> Environment</button><button type="button" data-setup-jump="setupSectionRelease"><span>02</span> Rancher configuration</button><button type="button" data-setup-jump="basicAwsSettingsPanel"><span>03</span> Destination &amp; access</button></nav>
+          <div class="setup-import">
           <div class="flex flex-wrap items-start justify-between gap-4">
             <div class="min-w-0">
-              <h2 id="setupWelcomeTitle" class="text-lg font-semibold">Make this workspace yours</h2>
-              <p class="mt-1 max-w-xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">Bring your existing <code>tool-config.yml</code>, or fill in the setup fields below. Importing saves a backup and does not start a run.</p>
+              <h2 id="setupWelcomeTitle" class="text-lg font-semibold">Have a saved configuration?</h2>
+              <p class="mt-1 max-w-xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">Import <code>tool-config.yml</code> to fill this workspace. Review the changes before replacing your saved configuration.</p>
             </div>
-            <button id="importConfigButton" type="button" class="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50">Import config file</button>
+            <button id="importConfigButton" type="button" class="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50">Import configuration</button>
             <input id="importConfigFile" type="file" accept=".yml,.yaml" class="hidden" aria-label="Choose Runway configuration file" />
           </div>
           <div id="configImportStatus" role="status" class="mt-3 hidden rounded-lg border border-zinc-200 p-3 text-sm dark:border-white/10">
@@ -170,41 +167,48 @@
             <p class="app-build-stamp mt-2">{{.BuildLabel}}</p>
           </div>
           <button id="reloadImportedConfig" type="button" class="mt-3 hidden rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white">Continue with imported config</button>
+          </div>
           <details id="setupChecklist" class="mt-4 border-t border-zinc-200 pt-4 dark:border-white/10" open>
             <summary class="cursor-pointer text-sm font-semibold"><span id="setupChecklistSummary">Your setup checklist</span></summary>
             <p class="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">Choose a missing value to jump to its field. Values are saved when you resolve a plan; provisioning starts only after you approve it.</p>
             <div id="setupChecklistItems" class="mt-3 flex flex-wrap gap-2"></div>
             <button id="setupChecklistTools" type="button" class="mt-3 text-sm font-medium text-emerald-700 underline underline-offset-4 dark:text-emerald-400">Check tools &amp; credentials</button>
           </details>
-        </section>
+          <div class="setup-next-note"><strong>What happens next?</strong><p>Resolve to save these settings and build an exact plan. Review it before approving cloud resources.</p><p>While provisioning, Steve Lab and K3D Lab remain available for local experiments.</p></div>
+        </aside>
 
         <form id="setupForm" method="post" action="{{.BasePath}}/submit?token={{.Token}}" hx-post="{{.BasePath}}/submit?token={{.Token}}" hx-trigger="confirmed-submit" hx-swap="none">
           <input id="modeInput" type="hidden" name="mode" value="auto" />
           <input id="deploymentTypeInput" type="hidden" name="deploymentType" value="ha-rke2" />
           <input id="downstreamLinodePlansInput" type="hidden" name="downstreamLinodePlans" value="[]" />
-          <div class="rounded-2xl border border-zinc-200 bg-white p-4 shadow-xl shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/30 sm:p-5">
-              <div class="mb-5 rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
+          <div class="setup-editor-card">
+              <section id="setupSectionTopology" class="setup-block" tabindex="-1" aria-labelledby="setupEnvironmentTitle">
+                <div class="setup-section-heading"><span>01</span><div><h2 id="setupEnvironmentTitle">Choose your environment</h2><p>Pick the architecture that fits this test.</p></div></div>
+              <div class="setup-topology-box">
                 <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Deployment shape</h2>
+                    <span class="sr-only">Deployment shape</span>
                   </div>
-                  <div class="grid grid-cols-3 gap-2 rounded-xl bg-white p-1 ring-1 ring-zinc-200 dark:bg-zinc-950/30 dark:ring-white/10" role="group" aria-label="Deployment shape">
-                    <button id="haRke2DeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="true">HA RKE2</button>
-                    <button id="hostedTenantDeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false">Hosted tenant K3s</button>
-                    <button id="linodeDockerDeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false">Linode Docker</button>
+                  <div class="setup-topology-options" role="group" aria-label="Deployment shape">
+                    <button id="haRke2DeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="true"><span class="setup-choice-meta">AWS · flexible topology</span><strong>Rancher on RKE2</strong><span class="setup-choice-description">Independent management clusters. Choose one, three, or five servers each.</span><span class="setup-choice-selected" aria-hidden="true">✓</span></button>
+                    <button id="hostedTenantDeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false"><span class="setup-choice-meta">AWS · K3s + MySQL</span><strong>Hosted tenants</strong><span class="setup-choice-description">One host Rancher and up to three tenants, with external database storage.</span><span class="setup-choice-selected" aria-hidden="true">✓</span></button>
+                    <button id="linodeDockerDeploymentBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false"><span class="setup-choice-meta">Linode · standalone</span><strong>Rancher in Docker</strong><span class="setup-choice-description">A separate Docker installation per instance, with Route53 DNS.</span><span class="setup-choice-selected" aria-hidden="true">✓</span></button>
                   </div>
                 </div>
-                <div id="deploymentSummary" class="text-sm leading-6 text-zinc-600 dark:text-zinc-400"></div>
+                <div id="deploymentSummary" role="status" class="text-sm leading-6 text-zinc-600 dark:text-zinc-400"></div>
               </div>
 
+              </section>
+              <section id="setupSectionRelease" class="setup-block" tabindex="-1" aria-labelledby="setupReleaseTitle">
+                <div class="setup-section-heading"><span>02</span><div><h2 id="setupReleaseTitle">Make Rancher yours</h2><p>Choose what to install and how it should run.</p></div></div>
               <div class="mb-5 rounded-xl border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
                 <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Planning mode</h2>
+                    <h2 class="text-base font-semibold text-zinc-950 dark:text-zinc-100">How should Runway build the plan?</h2>
                   </div>
                   <div class="grid grid-cols-2 gap-2 rounded-xl bg-white p-1 ring-1 ring-zinc-200 dark:bg-zinc-950/30 dark:ring-white/10" role="group" aria-label="Planning mode">
-                    <button id="autoModeBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="true">Auto</button>
-                    <button id="manualModeBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false">Manual</button>
+                    <button id="autoModeBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="true">From a version</button>
+                    <button id="manualModeBtn" type="button" class="setup-mode-btn rounded-lg border border-transparent px-3.5 py-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200" aria-pressed="false">My Helm commands</button>
                   </div>
                 </div>
                 <div id="modeSummary" class="text-sm leading-6 text-zinc-600 dark:text-zinc-400"></div>
@@ -213,12 +217,12 @@
               <div id="autoModePanel">
               <div class="mb-3 flex items-center justify-between gap-3">
                 <h2 id="autoVersionsTitle" class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">Rancher versions or exact images</h2>
-                <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="addBtn" type="button">Add HA</button>
+                <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="addBtn" type="button">Add Rancher</button>
               </div>
               <div class="grid gap-2" id="rows"></div>
-              <div id="autoVersionsHelp" class="mx-2 mt-3 text-sm font-normal text-zinc-500 dark:text-zinc-400">
-                Examples: 2.15.1-head, 2.14-head, head, or bigkevmcd/rancher:v2.16-da0ab2f1dc-head. A patch head such as 2.15.1-head selects and pins the newest complete server/agent image pair from SUSE staging, then prefers an exact eligible chart (typically Optimus) when available. Docker Hub shorthand is accepted for custom images. For a custom image, its matching server or agent image is derived automatically, and a version-like tag selects the Rancher line used for Kubernetes compatibility lookup. A leading v on a version selector is stripped when saved; exact image tags are preserved.
-              </div>
+              <p class="setup-field-help">Each row creates one Rancher instance. Enter a release, a head selector, or an exact server image.</p>
+              <details class="setup-help-disclosure"><summary>Version selectors &amp; image examples</summary><div id="autoVersionsHelp" class="setup-field-help"></div></details>
+
               </div>
 
               <div id="hostedTenantPanel" class="mt-5 hidden rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
@@ -303,7 +307,7 @@
                   <div class="flex flex-wrap gap-2">
                     <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="recommendRKE2Btn" type="button">Find RKE2 version</button>
                     <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="validateHelmBtn" type="button">Validate Helm</button>
-                    <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="manualAddBtn" type="button">Add HA</button>
+                    <button class="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="manualAddBtn" type="button">Add Rancher</button>
                   </div>
                 </div>
                 <div class="grid gap-3" id="manualRows"></div>
@@ -326,7 +330,7 @@
                   <span>
                     <span class="block text-sm font-medium text-zinc-950 dark:text-zinc-100">Use a custom Rancher URL</span>
                     <span class="mt-1 block text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400">
-                      Creates exactly one HA and uses this DNS label for Rancher. AWS resource names still use <code>aws_prefix</code>.
+                      Creates one Rancher instance with your chosen DNS label. AWS resource names still use <code>aws_prefix</code>.
                     </span>
                   </span>
                   <input id="customHostnameToggle" name="customHostnameEnabled" value="true" type="checkbox" class="peer sr-only" />
@@ -348,20 +352,22 @@
                 </div>
                 <div class="grid gap-4 lg:grid-cols-2">
                   <label id="distroField" class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                    Distro
+                    Rancher distribution
                     <select id="distroSelect" name="distro" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100">
-                      <option class="bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100" value="auto">auto</option>
-                      <option class="bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100" value="community">community</option>
-                      <option class="bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100" value="prime">prime</option>
+                      <option class="bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100" value="auto">Choose automatically</option>
+                      <option class="bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100" value="community">Community</option>
+                      <option class="bg-white text-zinc-950 dark:bg-zinc-900 dark:text-zinc-100" value="prime">Prime</option>
                     </select>
                   </label>
                   <label class="grid gap-2 text-sm font-medium text-zinc-600 dark:text-zinc-400">
-                    Bootstrap password
+                    Initial admin password
                     <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
                       <input id="bootstrapPasswordInput" name="bootstrapPassword" type="password" autocomplete="off" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
                       <button class="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm font-semibold text-zinc-800 hover:bg-zinc-100 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700" id="bootstrapPasswordToggle" type="button">Show</button>
                     </div>
                   </label>
+                </div>
+                <details class="setup-options" id="setupImageOptions"><summary><span>Image sources &amp; overrides</span><small>Registries, preloading and webhook image</small></summary><div class="setup-options-body grid gap-4 lg:grid-cols-2">
 				  <fieldset id="preferredImageRegistriesFieldset" class="grid gap-3 rounded-lg border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-black/20 lg:col-span-2" aria-describedby="preferredImageRegistriesHelp">
 					<legend class="px-1 text-sm font-semibold text-zinc-950 dark:text-zinc-100">Preferred Rancher image registries <span class="font-normal text-zinc-400 dark:text-zinc-500">(optional)</span></legend>
 					<div class="grid gap-2 sm:grid-cols-2">
@@ -394,9 +400,9 @@
                   <input id="webhookImageInput" name="webhookImage" type="text" spellcheck="false" autocomplete="off" placeholder="stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rcs-0844.1" class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 font-mono text-sm text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100" />
                   <span class="text-xs font-normal leading-5 text-zinc-500 dark:text-zinc-400">Enter a complete, anonymously readable registry/repository:tag reference. Runway verifies the manifest and scopes the override to Rancher's managed webhook chart; leave blank to use the chart default.</span>
                 </label>
-              </div>
+                              </div></details>
                 <fieldset id="rke2ServerLayoutFieldset" class="mt-5 grid gap-3">
-                  <legend class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">RKE2 server layout</legend>
+                  <legend class="text-sm font-semibold text-zinc-950 dark:text-zinc-100">Servers per Rancher</legend>
                   <input id="serverCountInput" name="serverCount" type="hidden" value="3" />
                   <div class="grid gap-3 lg:grid-cols-3" role="radiogroup" aria-label="RKE2 server layout">
                     <button type="button" data-server-count="1" role="radio" aria-checked="false" class="server-count-btn rounded-lg border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:bg-zinc-50 dark:border-white/10 dark:bg-black/20 dark:hover:bg-white/[0.06]">
@@ -420,6 +426,7 @@
                   </p>
                 </fieldset>
 
+                <details id="setupGPUOptions" class="setup-options"><summary><span>GPU testing</span><small>Optional worker for Liz / Ollama workloads</small></summary><div class="setup-options-body">
                 <section id="gpuWorkerBox" class="mt-5 grid gap-4 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-white/10 dark:bg-black/20">
                   <label class="flex cursor-pointer items-start justify-between gap-4">
                     <span>
@@ -494,10 +501,13 @@
                     </p>
                   </div>
                 </section>
+                </div></details>
               </div>
+              </section>
 
-              <div id="basicAwsSettingsPanel" class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
+              <div id="basicAwsSettingsPanel" tabindex="-1" class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]">
                 <div class="mb-4">
+                  <span class="setup-section-number">03</span>
                   <h2 id="basicAwsSettingsTitle" class="text-base font-semibold text-zinc-950 dark:text-zinc-100">Basic AWS settings</h2>
                   <p id="basicAwsSettingsDescription" class="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">These identify the owner and existing EC2 key pair for the AWS resources.</p>
                 </div>
@@ -526,7 +536,7 @@
               <details class="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]" id="advancedAwsDetails">
                 <summary class="advanced-summary flex cursor-pointer list-none items-start justify-between gap-4 rounded-lg p-1">
                   <span>
-                    <span id="advancedAwsSettingsTitle" class="block text-base font-semibold text-zinc-950 dark:text-zinc-100">Advanced AWS settings</span>
+                    <span id="advancedAwsSettingsTitle" class="block text-base font-semibold text-zinc-950 dark:text-zinc-100">Network &amp; infrastructure</span>
                     <span id="advancedAwsSettingsDescription" class="mt-1 block text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400">Most users should not need to change these. Unlock a field only when you know the AWS value needs to change.</span>
                   </span>
                   <span aria-hidden="true" class="advanced-toggle-track mt-0.5 h-6 w-11 shrink-0 rounded-full bg-zinc-300 ring-1 ring-zinc-300 transition dark:bg-zinc-800 dark:ring-white/10">
@@ -625,26 +635,22 @@
                 </div>
               </details>
 
-              <div class="mt-5 grid gap-2 text-sm font-normal text-zinc-500 dark:text-zinc-400">
-                <div><strong id="totalInstancesLabel" class="text-zinc-950 dark:text-zinc-100">Total HAs for this run:</strong> <span id="totalInstancesValue"></span></div>
-                <div><strong class="text-zinc-950 dark:text-zinc-100">Config file:</strong> <code>{{.ConfigPath}}</code></div>
-                <div><strong class="text-zinc-950 dark:text-zinc-100">Mode:</strong> <span id="modeValue">auto</span></div>
-                <div>After you submit, this same page will stream resolver logs and then show the full plan for approval.</div>
-              </div>
+              <details class="setup-config-details"><summary>Configuration details</summary><div><strong id="totalInstancesLabel">Rancher instances:</strong> <span id="totalInstancesValue"></span></div><div><strong>Config file:</strong> <code>{{.ConfigPath}}</code></div><div><strong>Mode:</strong> <span id="modeValue">auto</span></div></details>
               <div class="mt-4 min-h-6 whitespace-pre-wrap text-sm font-medium text-rose-600 dark:text-rose-300" id="editorErrorBox" role="alert" aria-live="polite"></div>
               <div class="mt-2 min-h-6 text-sm font-normal text-zinc-500 dark:text-zinc-400" id="editorStatusBox"></div>
             </div>
 
-          <div class="mt-4 flex flex-wrap items-center justify-end gap-3">
+          <div class="setup-action-bar"><div><strong id="setupActionTitle">Ready to resolve the details?</strong><p id="setupActionHint">Saves your settings. Creates a plan for review.</p></div>
             <div class="flex flex-wrap gap-3">
               <button class="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-200 dark:hover:bg-white/[0.08]" id="editorCancelBtn" type="button">Cancel</button>
-              <button class="rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-950/30 hover:bg-emerald-400" id="continueBtn" type="button">Resolve Plan</button>
+              <button class="rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-950/30 hover:bg-emerald-400" id="continueBtn" type="button">Resolve &amp; review plan <span aria-hidden="true">→</span></button>
             </div>
           </div>
         </form>
+       </div>
       </section>
 
-      <section data-section="resolving">
+      <section data-section="resolving" class="setup-phase-card">
         <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/30 sm:p-6">
           <div class="flex items-start gap-4">
             <div class="spinner mt-1" aria-hidden="true"></div>
@@ -661,11 +667,11 @@
         </div>
       </section>
 
-      <section data-section="review">
+      <section data-section="review" class="setup-phase-card">
         <div class="rounded-2xl border border-zinc-200 bg-white p-5 shadow-xl shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/30 sm:p-6">
-          <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50 sm:text-3xl">Approve this Rancher Runway plan?</h1>
+          <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50 sm:text-3xl">Your plan, ready to review.</h1>
           <p class="mt-3 max-w-4xl text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-400 sm:text-base">This is the final sign-off gate before Terraform can create resources. Review the resolved install plan below. Bootstrap passwords are redacted.</p>
-          <details id="reviewResolverLogDetails" open class="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 dark:border-white/10 dark:bg-zinc-950/30">
+          <details id="reviewResolverLogDetails" class="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 dark:border-white/10 dark:bg-zinc-950/30">
             <summary class="advanced-summary flex cursor-pointer list-none items-center justify-between gap-4 rounded-xl px-4 py-3">
               <span>
                 <span class="block text-sm font-semibold text-zinc-950 dark:text-zinc-100">Resolver log</span>
@@ -692,7 +698,7 @@
           <div class="min-h-6 whitespace-pre-wrap text-sm font-medium text-rose-600 dark:text-rose-300" id="reviewErrorBox" role="alert" aria-live="polite"></div>
           <div class="sticky bottom-0 -mx-5 mt-5 flex flex-wrap justify-end gap-3 border-t border-zinc-200 bg-white/95 px-5 pt-5 pb-1 backdrop-blur dark:border-white/10 dark:bg-zinc-900/95" id="respondActions">
             <button type="button" data-response-action="cancel" class="rounded-lg border border-zinc-200 bg-white px-4 py-2.5 font-semibold text-zinc-700 hover:bg-zinc-100 disabled:cursor-default disabled:opacity-60 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700">Cancel</button>
-            <button type="button" data-response-action="continue" class="rounded-lg bg-emerald-500 px-4 py-2.5 font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400 disabled:cursor-default disabled:opacity-60">Start setup</button>
+            <button type="button" data-response-action="continue" class="rounded-lg bg-emerald-500 px-4 py-2.5 font-semibold text-white shadow-sm shadow-emerald-500/20 hover:bg-emerald-400 disabled:cursor-default disabled:opacity-60">Approve &amp; start setup</button>
           </div>
         </div>
       </section>
@@ -717,7 +723,7 @@
   </main>
 
   <div id="confirmModal" class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto bg-zinc-950/45 p-4 py-10 backdrop-blur-sm dark:bg-zinc-950/80" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalBody">
-    <div class="flex max-h-[calc(100vh-5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl shadow-zinc-900/20 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/50">
+    <div class="setup-confirm-surface flex max-h-[calc(100vh-5rem)] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl shadow-zinc-900/20 dark:border-white/10 dark:bg-zinc-900 dark:shadow-black/50">
       <h2 id="confirmModalTitle" class="shrink-0 text-xl font-semibold text-zinc-950 dark:text-zinc-100"></h2>
       <span class="app-build-stamp">{{.BuildLabel}}</span>
       <p id="confirmModalBody" class="mt-3 min-h-0 overflow-y-auto whitespace-pre-wrap break-words text-sm font-normal leading-6 text-zinc-600 dark:text-zinc-300"></p>

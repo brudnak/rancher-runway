@@ -147,6 +147,8 @@ func gpuCloseWarningDialog(summary harancher.GPUInfrastructureSummary) (string, 
 func lifecycleCloseBlockedDialog(operation string) (string, string) {
 	operation = strings.TrimSpace(strings.ToLower(operation))
 	switch operation {
+	case "test lab":
+		return "A local test is still running", "Keep Runway open while Test Lab is running. You can stop the run in Test Lab → Activity & results. Stopping may interrupt suite cleanup; inspect the target afterward."
 	case "setup":
 		return "Setup is still running", "Rancher Runway is creating a run slot or provisioning infrastructure. Keep the app open and wait for setup to finish before closing it."
 	case "cleanup":

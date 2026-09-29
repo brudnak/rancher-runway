@@ -57,6 +57,10 @@ type localControlPanel struct {
 	prBuildVerifier         *prBuildVerifierService
 	issueRadar              *issueRadarService
 	helmCatalog             helmLabCatalogService
+	cacheLabMu              sync.Mutex
+	cacheLab                *cacheLabService
+	testLabMu               sync.Mutex
+	testLab                 *testLabService
 
 	// cleanupBatchRunner is nil in production. Tests may replace it with a
 	// deterministic runner so the batch coordinator can be exercised without
@@ -98,6 +102,7 @@ type GPUInfrastructureDetail struct {
 }
 
 type panelState struct {
+	TestLab       testLabActivityState      `json:"testLab"`
 	Panel         panelSessionState         `json:"panel"`
 	Workspace     panelWorkspaceState       `json:"workspace"`
 	Setup         panelOperationSnapshot    `json:"setup"`
@@ -450,6 +455,11 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/setup", p.handleSetup)
 	mux.HandleFunc("/api/run-slots/start", p.handleRunSlotStart)
 	mux.HandleFunc("/api/operations/abort", p.handleAbortOperation)
+	mux.HandleFunc("/api/test-lab", p.handleTestLab)
+	mux.HandleFunc("/api/rancher/targets", p.handleRancherTargets)
+	mux.HandleFunc("/api/rancher/token", p.handleRancherToken)
+	mux.HandleFunc("/api/cache-lab", p.handleCacheLab)
+	mux.HandleFunc("/api/cache-lab/import", p.handleCacheLab)
 	mux.HandleFunc("/api/steve/state", p.handleSteveLabState)
 	mux.HandleFunc("/api/steve/versions", p.handleSteveLabVersions)
 	mux.HandleFunc("/api/steve/ref", p.handleSteveLabRef)
@@ -474,6 +484,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/aws/cleanup/preview", p.handleAWSCleanupPreview)
 	mux.HandleFunc("/api/aws/cleanup", p.handleAWSCleanup)
 	mux.HandleFunc("/api/costs/reset", p.handleCostLedgerReset)
+	mux.HandleFunc("/api/costs/transfer", p.handleCostTransfer)
 	mux.HandleFunc("/api/local-artifacts/clean", p.handleLocalArtifactsClean)
 	mux.HandleFunc("/api/shutdown", p.handleShutdown)
 	return mux
@@ -662,12 +673,15 @@ func (s *ControlPanelServer) Reused() bool {
 }
 
 func (s *ControlPanelServer) LifecycleRunning() bool {
-	return s != nil && s.panel != nil && s.panel.anyOperationRunning()
+	return s != nil && s.panel != nil && (s.panel.anyOperationRunning() || s.panel.testLabRunning())
 }
 
 func (s *ControlPanelServer) RunningOperation() string {
 	if s == nil || s.panel == nil {
 		return ""
+	}
+	if s.panel.testLabRunning() {
+		return "test lab"
 	}
 	s.panel.mu.Lock()
 	defer s.panel.mu.Unlock()
@@ -697,6 +711,8 @@ func (s *ControlPanelServer) Shutdown(ctx context.Context) error {
 	if s == nil || s.panel == nil {
 		return nil
 	}
+	s.panel.stopCacheLab()
+	s.panel.stopTestLab()
 	err := s.panel.server.Shutdown(ctx)
 	s.cleanup()
 	return err
@@ -1475,6 +1491,8 @@ func (p *localControlPanel) handleShutdown(w http.ResponseWriter, r *http.Reques
 
 	go func() {
 		time.Sleep(150 * time.Millisecond)
+		p.stopCacheLab()
+		p.stopTestLab()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = p.server.Shutdown(shutdownCtx)
@@ -1497,6 +1515,7 @@ func (p *localControlPanel) buildState() panelState {
 			Build:                buildinfo.Current(),
 		},
 		Workspace:     workspace,
+		TestLab:       p.testLabActivity(),
 		Setup:         p.snapshotOperationForRuns(panelOperationSetup, activeRunIDs),
 		Readiness:     p.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs),
 		Downstream:    p.snapshotOperationForRuns(panelOperationDownstream, activeRunIDs),

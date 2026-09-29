@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,11 +15,14 @@ import (
 )
 
 type panelCostHistoryState struct {
-	DBPath    string                 `json:"dbPath"`
-	UpdatedAt time.Time              `json:"updatedAt"`
-	Totals    panelCostHistoryTotals `json:"totals"`
-	Entries   []panelCostEntryView   `json:"entries"`
-	Error     string                 `json:"error,omitempty"`
+	RecordCount int                    `json:"recordCount"`
+	Daily       []panelCostDay         `json:"daily"`
+	EntryLimit  int                    `json:"entryLimit"`
+	DBPath      string                 `json:"dbPath"`
+	UpdatedAt   time.Time              `json:"updatedAt"`
+	Totals      panelCostHistoryTotals `json:"totals"`
+	Entries     []panelCostEntryView   `json:"entries"`
+	Error       string                 `json:"error,omitempty"`
 }
 
 type panelCostHistoryTotals struct {
@@ -29,6 +33,8 @@ type panelCostHistoryTotals struct {
 }
 
 type panelCostEntryView struct {
+	ImportedAt          string    `json:"importedAt,omitempty"`
+	Warnings            []string  `json:"warnings,omitempty"`
 	RunID               string    `json:"runId"`
 	SlotID              string    `json:"slotId,omitempty"`
 	Owner               string    `json:"owner,omitempty"`
@@ -106,6 +112,8 @@ func initCostLedger(db *sql.DB) error {
 		}
 	}
 	migrations := []string{
+		`ALTER TABLE cost_estimates ADD COLUMN imported_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE cost_estimates ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]'`,
 		`ALTER TABLE cost_estimates ADD COLUMN rds_cost_usd REAL NOT NULL DEFAULT 0`,
 		`ALTER TABLE cost_estimates ADD COLUMN db_instance_count INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE cost_estimates ADD COLUMN db_instance_class TEXT`,
@@ -150,8 +158,8 @@ func recordCleanupCostEstimate(estimate *cleanupCostEstimate) error {
 			run_id, slot_id, owner, aws_prefix, region, started_at, finished_at, created_at,
 			runtime_seconds, total_runtime_hours, ec2_cost_usd, ebs_cost_usd, rds_cost_usd, load_balancer_cost_usd, total_cost_usd,
 			currency, source, instance_count, instance_type, volume_count, volume_type, volume_size_gib,
-			db_instance_count, db_instance_class, load_balancer_count, load_balancer_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			db_instance_count, db_instance_class, load_balancer_count, load_balancer_type, warnings
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		runID,
 		record.SlotID,
 		record.Owner,
@@ -178,6 +186,7 @@ func recordCleanupCostEstimate(estimate *cleanupCostEstimate) error {
 		estimate.DBInstanceClass,
 		estimate.LoadBalancerCount,
 		estimate.LoadBalancerType,
+		costWarningsJSON(estimate.Warnings),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to record cleanup cost estimate: %w", err)
@@ -205,11 +214,8 @@ func readRunRecordForLedger(runID string) panelRunRecord {
 		if err := json.Unmarshal(data, &candidate); err != nil {
 			continue
 		}
-		if sameRunID(candidate.RunID, safeRunID) || record.RunID == "" {
-			record = candidate
-		}
 		if sameRunID(candidate.RunID, safeRunID) {
-			return record
+			return candidate
 		}
 	}
 	return record
@@ -228,59 +234,66 @@ func discoverCostHistory() panelCostHistoryState {
 	}
 	defer db.Close()
 
-	rows, err := db.Query(`SELECT run_id, slot_id, owner, aws_prefix, region, finished_at, total_runtime_hours, ec2_cost_usd, ebs_cost_usd, rds_cost_usd, load_balancer_cost_usd, total_cost_usd, currency, source FROM cost_estimates ORDER BY finished_at DESC LIMIT 200`)
+	records, err := readCostRecords(db)
 	if err != nil {
 		state.Error = err.Error()
 		return state
 	}
-	defer rows.Close()
-
+	state.EntryLimit = 200
+	state.RecordCount = len(records)
+	state.Entries = []panelCostEntryView{}
+	days := map[string]*panelCostDay{}
 	now := time.Now()
 	year, week := now.ISOWeek()
-	for rows.Next() {
-		var entry panelCostEntryView
-		var finishedAt string
-		if err := rows.Scan(
-			&entry.RunID,
-			&entry.SlotID,
-			&entry.Owner,
-			&entry.AWSPrefix,
-			&entry.Region,
-			&finishedAt,
-			&entry.TotalRuntimeHours,
-			&entry.EC2CostUSD,
-			&entry.EBSCostUSD,
-			&entry.RDSCostUSD,
-			&entry.LoadBalancerCostUSD,
-			&entry.TotalCostUSD,
-			&entry.Currency,
-			&entry.Source,
-		); err != nil {
-			state.Error = err.Error()
-			return state
+	for i, record := range records {
+		entry := record.panelCostEntryView
+		if i < state.EntryLimit {
+			state.Entries = append(state.Entries, entry)
 		}
-		parsed, err := time.Parse(time.RFC3339Nano, finishedAt)
-		if err == nil {
-			entry.FinishedAt = parsed
-		}
-		state.Entries = append(state.Entries, entry)
-
 		state.Totals.Lifetime += entry.TotalCostUSD
-		finishedLocal := entry.FinishedAt.Local()
-		if sameDay(finishedLocal, now) {
+		local := entry.FinishedAt.Local()
+		if sameDay(local, now) {
 			state.Totals.Today += entry.TotalCostUSD
 		}
-		if finishedLocal.Year() == now.Year() && finishedLocal.Month() == now.Month() {
+		if local.Year() == now.Year() && local.Month() == now.Month() {
 			state.Totals.Month += entry.TotalCostUSD
 		}
-		entryYear, entryWeek := finishedLocal.ISOWeek()
+		entryYear, entryWeek := local.ISOWeek()
 		if entryYear == year && entryWeek == week {
 			state.Totals.Week += entry.TotalCostUSD
 		}
+		if entry.FinishedAt.IsZero() {
+			continue
+		}
+		key := local.Format("2006-01-02") + "/" + entry.Region
+		day := days[key]
+		if day == nil {
+			day = &panelCostDay{Date: local.Format("2006-01-02"), Region: entry.Region}
+			days[key] = day
+		}
+		day.Records++
+		day.EC2 += entry.EC2CostUSD
+		day.EBS += entry.EBSCostUSD
+		day.RDS += entry.RDSCostUSD
+		day.LB += entry.LoadBalancerCostUSD
+		day.Total += entry.TotalCostUSD
+		if len(entry.Warnings) > 0 {
+			day.Partial++
+		}
+		if entry.ImportedAt != "" {
+			day.Imported++
+		}
 	}
-	if err := rows.Err(); err != nil {
-		state.Error = err.Error()
+	state.Daily = []panelCostDay{}
+	for _, day := range days {
+		state.Daily = append(state.Daily, *day)
 	}
+	sort.Slice(state.Daily, func(i, j int) bool {
+		if state.Daily[i].Date == state.Daily[j].Date {
+			return state.Daily[i].Region < state.Daily[j].Region
+		}
+		return state.Daily[i].Date < state.Daily[j].Date
+	})
 	return state
 }
 

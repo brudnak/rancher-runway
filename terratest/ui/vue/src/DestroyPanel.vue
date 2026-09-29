@@ -1,41 +1,12 @@
 <template>
-  <div class="mx-auto max-w-5xl">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div>
-        <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Destroy Slots</h2>
-        <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          Destroy one slot immediately, select several slots for a sequential batch, or explicitly destroy all recorded slots.
-          For an HA slot, cleanup attempts any recorded Linode downstream clusters first, then proceeds to AWS management Terraform destroy even if downstream deletion fails.
-          The panel warns when Linode resources may require manual cleanup. A slot record is removed after management Terraform destroy succeeds; Terraform failures remain available to retry.
-        </p>
-      </div>
-      <div :class="cleanupStatusClass">
-        <span v-if="cleanupStatusTone === 'running'" class="spinner mr-2"></span>
-        {{ cleanupStatusLabel }}
-      </div>
-    </div>
-
-    <div class="mt-5 inline-flex rounded-xl border border-zinc-200 bg-zinc-50 p-1 dark:border-white/10 dark:bg-white/[0.03]" role="tablist" aria-label="Destroy tabs">
-      <button
-        type="button"
-        @click="setActiveDestroyTab('slots')"
-        :class="activeDestroyTab === 'slots' ? activeTabClass : inactiveTabClass"
-      >
-        Run slots
-      </button>
-      <button
-        type="button"
-        @click="setActiveDestroyTab('costs')"
-        :class="activeDestroyTab === 'costs' ? activeTabClass : inactiveTabClass"
-      >
-        Local data
-      </button>
-    </div>
-
-    <div v-if="activeDestroyTab === 'slots'" id="destroySlotsPane">
+  <div class="ops-workspace destroy-workspace">
+    <header class="ops-hero"><div><span class="ops-eyebrow"><Icon name="layers"/>RANCHER RUNWAY / CLOSE THE LOOP</span><h2>Destroy<span>.</span></h2><p>Retire the environment. Keep the insight.</p></div><div class="ops-hero-actions"><div :class="cleanupStatusClass"><span v-if="cleanupStatusTone==='running'" class="spinner mr-2"/>{{ cleanupStatusLabel }}</div><button class="ops-button" @click="setActivePanelTab('aws')">Inspect AWS leftovers <Icon name="arrow"/></button></div><div class="ops-hero-footer"><span><Icon name="layers"/>{{ runs.length }} recorded run{{ runs.length===1?'':'s' }}</span><span><Icon name="lock"/>Typed confirmation before cleanup</span><span><Icon name="database"/>Cost estimates stay on this computer</span></div></header>
+    <nav class="ops-view-tabs" aria-label="Destroy views"><button :aria-current="activeDestroyTab==='slots'?'page':undefined" :class="{selected:activeDestroyTab==='slots'}" @click="setActiveDestroyTab('slots')"><Icon name="trash"/>Run cleanup<span class="ops-count">{{ runs.length }}</span></button><button :aria-current="activeDestroyTab==='costs'?'page':undefined" :class="{selected:activeDestroyTab==='costs'}" @click="setActiveDestroyTab('costs')"><Icon name="pulse"/>Costs & local data<span class="ops-count">{{ state?.costs?.recordCount??state?.costs?.entries?.length??0 }}</span></button></nav>
+    <div v-show="activeDestroyTab === 'slots'" id="destroySlotsPane">
+      <section class="destroy-route"><div><span class="ops-eyebrow">RECORDED RUNS</span><h3>Clean up with the original run context.</h3><p>Choose a run or a batch. Runway uses each recorded Terraform target, keeps failures available to retry, and saves eligible AWS estimates after successful management cleanup.</p><details><summary>How downstream cleanup works</summary><p>For an HA run, cleanup attempts recorded Linode downstream clusters first. It then proceeds to AWS management Terraform destroy even when a downstream deletion fails. Warnings identify Linode resources that may need manual cleanup and may still generate charges. A run record is removed only after management Terraform destroy succeeds.</p></details></div><ol><li><span>01</span><strong>Choose</strong><small>One run or a batch</small></li><li><span>02</span><strong>Confirm</strong><small>Review the exact targets</small></li><li><span>03</span><strong>Follow through</strong><small>Results, leftovers, estimates</small></li></ol></section>
       <div
         v-if="runs.length"
-        class="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03]"
+        class="destroy-selection-bar"
       >
         <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div class="min-w-0">
@@ -43,7 +14,7 @@
               {{ selectedCount }} of {{ runs.length }} slot{{ runs.length === 1 ? '' : 's' }} selected
             </div>
             <div class="mt-1 text-xs leading-5 text-zinc-500 dark:text-zinc-400">
-              Bulk cleanup runs one slot at a time and continues past failures. Each HA slot attempts recorded Linode downstreams first, then destroys its AWS management infrastructure even when downstream cleanup needs manual follow-up. Other lifecycle actions stay locked until the batch finishes.
+              Batches process one run at a time and continue past failures. Other lifecycle actions remain locked until the batch finishes.
             </div>
           </div>
           <div class="flex flex-wrap gap-2 xl:justify-end">
@@ -53,7 +24,7 @@
               :disabled="bulkActionsLocked || allRunsSelected"
               :class="bulkActionsLocked || allRunsSelected ? disabledCompactButtonClass : secondaryCompactButtonClass"
             >
-              Select all
+              Select all runs
             </button>
             <button
               type="button"
@@ -71,7 +42,7 @@
               :class="bulkActionsLocked || selectedCount === 0 ? disabledButtonClass : dangerButtonClass"
             >
               <span v-if="cleanupBatchStarting" class="spinner mr-2 !h-4 !w-4 !border-2"></span>
-              Destroy selected<span v-if="selectedCount"> ({{ selectedCount }})</span>
+              Review selected<span v-if="selectedCount"> ({{ selectedCount }})</span>
             </button>
             <button
               type="button"
@@ -80,7 +51,7 @@
               :title="bulkActionTitle('all')"
               :class="bulkActionsLocked || runs.length === 0 ? disabledButtonClass : destroyAllButtonClass"
             >
-              Destroy all ({{ runs.length }})
+              Review all ({{ runs.length }})
             </button>
           </div>
         </div>
@@ -166,7 +137,8 @@
         </div>
       </div>
 
-      <div id="cleanupSlots" class="mt-5 grid gap-3">
+      <div v-if="runs.length" class="ops-section-heading destroy-run-heading"><div><h3>Recorded environments</h3><p>{{ visibleRuns.length }} of {{ runs.length }} runs shown. Selection is preserved across filters.</p></div><label class="ops-search"><Icon name="search"/><input v-model="runQuery" type="search" aria-label="Search cleanup runs" placeholder="Run, owner, or hostname…"/></label></div>
+      <div id="cleanupSlots" class="mt-5 grid gap-3"><div v-if="runs.length&&!visibleRuns.length" class="ops-empty"><Icon name="search"/><h4>No runs match your search.</h4><button class="ops-link" @click="runQuery=''">Clear search</button></div>
         <div
           v-if="!runs.length && bootPending"
           class="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100"
@@ -177,7 +149,7 @@
           v-else-if="!runs.length"
           class="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400"
         >
-          No recorded run slots found. There is nothing for downstream cleanup or Terraform destroy to target from this panel.
+          <div class="ops-empty"><Icon name="check"/><h3>No recorded runs to retire.</h3><p>AWS resources may still exist without a local run record. Inventory can identify eligible leftovers for a separate cleanup review.</p><div class="ops-actions"><button class="ops-button" @click="setActivePanelTab('aws')">Check AWS Inventory <Icon name="arrow"/></button><button class="ops-link" @click="setActiveDestroyTab('costs')">Explore cost history</button></div></div>
         </div>
 
         <div
@@ -188,9 +160,9 @@
         </div>
 
         <article
-          v-for="run in runs"
+          v-for="run in visibleRuns"
           :key="run.runId || run.slotId || run.slotName || JSON.stringify(run)"
-          class="rounded-xl border p-4"
+          class="destroy-run-card rounded-xl border p-4"
           :class="slotCardClass(run)"
         >
           <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -205,7 +177,7 @@
                     :checked="isBulkSelected(run)"
                     :disabled="bulkActionsLocked"
                     @change="toggleCleanupRunSelection(run.runId)"
-                    class="h-4 w-4 rounded border-zinc-300 accent-emerald-500"
+                    :aria-label="`Select run ${run.runId}`" class="h-4 w-4 rounded border-zinc-300 accent-emerald-500"
                   />
                   Select
                 </label>
@@ -245,9 +217,9 @@
                 </span>
               </div>
               <div v-if="run.updatedAt" class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Updated {{ timeLabel(run.updatedAt) }}</div>
-              <div class="mt-3 grid gap-2 text-sm text-zinc-700 dark:text-zinc-300 md:grid-cols-2">
+              <p class="destroy-run-summary">{{ hostnameLabel(run) }} · {{ versionsLabel(run) }}</p><details class="destroy-run-details"><summary>Run details</summary><div class="mt-3 grid gap-2 text-sm text-zinc-700 dark:text-zinc-300 md:grid-cols-2">
                 <div><span class="font-semibold">Slot:</span> {{ run.slotId || run.slotName || "not recorded" }}</div>
-                <div><span class="font-semibold">HAs:</span> {{ run.totalHAs || 1 }}</div>
+                <div><span class="font-semibold">Rancher instances:</span> {{ run.totalHAs || 1 }}</div>
                 <div><span class="font-semibold">Rancher:</span> {{ versionsLabel(run) }}</div>
                 <div><span class="font-semibold">Owner:</span> {{ run.owner || "not recorded" }}</div>
                 <div><span class="font-semibold">AWS prefix:</span> {{ run.awsPrefix || "not recorded" }}</div>
@@ -258,7 +230,7 @@
                     {{ compactPath(run.terraformStatePath || run.terraformBackend || "not recorded") }}
                   </span>
                 </div>
-              </div>
+              </div></details>
             </div>
             <div class="flex shrink-0 flex-wrap gap-2 lg:justify-end">
               <button
@@ -342,52 +314,20 @@
       </div>
     </div>
 
-    <div v-else-if="activeDestroyTab === 'costs'" id="destroyCostsPane" class="mt-5">
-      <div class="mb-4 flex flex-col gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-white/10 dark:bg-white/[0.03] sm:flex-row sm:items-start sm:justify-between">
-        <div class="min-w-0">
-          <h3 class="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Cost ledger</h3>
-          <p class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            {{ costResetStatusText }}
-          </p>
-        </div>
-        <button
-          type="button"
-          @click="resetCostLedger"
-          :disabled="resetCostsLocked"
-          :title="resetCostsTitle"
-          class="shrink-0 rounded-lg border border-rose-200 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 disabled:opacity-50 dark:border-rose-500/25 dark:bg-white/[0.06] dark:text-rose-300 dark:hover:bg-rose-500/10"
-        >
-          <span v-if="costResetting" class="spinner mr-2 !h-4 !w-4 !border-2 align-[-0.15em]"></span>
-          {{ resetCostsLabel }}
-        </button>
-      </div>
-      <div class="mb-4 flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-4 dark:border-white/10 dark:bg-white/[0.03] sm:flex-row sm:items-start sm:justify-between">
-        <div class="min-w-0">
-          <p class="mt-1 break-words text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-            {{ artifactsStatusText }}
-          </p>
-        </div>
-        <button
-          type="button"
-          @click="cleanLocalArtifacts"
-          :disabled="cleanArtifactsLocked"
-          :title="cleanArtifactsTitle"
-          class="shrink-0 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]"
-        >
-          <span v-if="localArtifactsCleaning" class="spinner mr-2 !h-4 !w-4 !border-2 align-[-0.15em]"></span>
-          {{ cleanArtifactsLabel }}
-        </button>
-      </div>
+    <div v-show="activeDestroyTab === 'costs'" id="destroyCostsPane">
       <CostHistoryPanel />
+      <details class="ops-local-management"><summary><Icon name="folder"/><span><strong>Manage local files</strong><small>Clean run residue or reset this computer’s cost journal.</small></span><Icon name="chevron"/></summary><div class="ops-local-cards"><article><span class="ops-eyebrow">RUN RESIDUE</span><h4>A tidy workspace, after cleanup.</h4><p>{{ artifactsStatusText }}</p><p>Removes leftover run output and shared Terraform working files after recorded runs are gone. Keeps cost history, lab workspaces, and saved cattle-configs.</p><button class="ops-button" :disabled="cleanArtifactsLocked" :title="cleanArtifactsTitle" @click="cleanLocalArtifacts"><Icon name="folder"/>{{ cleanArtifactsLabel }}</button></article><article><span class="ops-eyebrow">COST JOURNAL</span><h4>Your history stays yours.</h4><p>Export a JSON backup above before resetting. Reset removes only the local estimate ledger; it does not delete AWS resources or change Terraform state.</p><details><summary>Storage location</summary><code>{{ state?.costs?.dbPath||'automation-output/control-panel/cost-ledger.sqlite' }}</code></details><button class="ops-button ops-danger" :disabled="resetCostsLocked" :title="resetCostsTitle" @click="resetCostLedger"><Icon name="trash"/>{{ resetCostsLabel }}</button></article></div></details>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, ref } from "vue";
+import Icon from "./HelmLabIcon.vue";
 import CostHistoryPanel from "./CostHistoryPanel.vue";
 import {
   state,
+  setActivePanelTab,
   bootPending,
   activeDestroyTab,
   selectedCleanupRunId as selectedRunId,
@@ -414,17 +354,16 @@ import {
   cleanLocalArtifacts,
 } from "./store.js";
 
-const secondaryButtonClass = "rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]";
-const disabledButtonClass = "rounded-lg bg-zinc-200 px-4 py-2.5 text-sm font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400";
-const dangerButtonClass = "rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400";
-const destroyAllButtonClass = "rounded-lg border border-rose-300 bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20";
-const secondaryCompactButtonClass = "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 shadow-sm hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]";
-const disabledCompactButtonClass = "rounded-lg bg-zinc-200 px-3 py-2 text-xs font-semibold text-zinc-500 shadow-sm dark:bg-white/[0.06] dark:text-zinc-400";
-const stopBatchButtonClass = "rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/20";
+const secondaryButtonClass = "ops-button";
+const disabledButtonClass = "ops-button";
+const dangerButtonClass = "ops-button ops-danger";
+const destroyAllButtonClass = "ops-button ops-danger";
+const secondaryCompactButtonClass = "ops-button ops-button-small";
+const disabledCompactButtonClass = "ops-button ops-button-small";
+const stopBatchButtonClass = "ops-button ops-button-small";
 
-const activeTabClass = "rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-zinc-900 shadow-sm dark:bg-white/[0.08] dark:text-zinc-100";
-const inactiveTabClass = "rounded-lg px-3.5 py-2 text-sm font-semibold text-zinc-600 hover:bg-white dark:text-zinc-300 dark:hover:bg-white/[0.06]";
-
+const runQuery=ref('');
+const visibleRuns=computed(()=>{const words=runQuery.value.toLowerCase().trim().split(/\s+/).filter(Boolean);return runs.value.filter(run=>words.every(w=>[run.runId,run.slotId,run.slotName,run.owner,run.awsPrefix,hostnameLabel(run),versionsLabel(run)].join(' ').toLowerCase().includes(w)));});
 const runs = computed(() => Array.isArray(state.value?.workspace?.runs) ? state.value.workspace.runs : []);
 const cleanupBatch = computed(() => state.value?.cleanupBatch || {});
 const batchWarning = computed(() => String(cleanupBatch.value?.warning || "").trim());
@@ -608,7 +547,7 @@ const slotDestroyLabel = run => destroying(run)
             ? "Destroy running"
             : cleanupBatch.value?.running || cleanupBatchStarting.value
               ? "Batch destroy running"
-            : "Destroy this slot";
+            : "Review destroy…";
 
 const cleanupResultKey = cleanup => {
   if (!cleanup || cleanup.running || (!cleanup.finishedAt && !cleanup.error)) {
@@ -761,7 +700,7 @@ const resetCostsTitle = computed(() =>
       : "Delete the local ignored SQLite cost ledger and recreate it empty."
 );
 const resetCostsLabel = computed(() =>
-  costResetting.value ? "Resetting" : "Reset cost DB"
+  costResetting.value ? "Resetting…" : "Reset cost history…"
 );
 const costResetStatusText = computed(() => {
   const dbPath = state.value?.costs?.dbPath || "terratest/automation-output/control-panel/cost-ledger.sqlite";

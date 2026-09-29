@@ -24,10 +24,14 @@
       <span
         v-for="chip in chips"
         :key="chip.key"
+        :data-chip="chip.key"
         class="panel-chip"
         :class="chipToneClass(chip.tone)"
       >
-        <span v-if="chip.running" class="spinner !h-3 !w-3 !border-[1.5px]"></span>
+        <span class="panel-chip-indicator" aria-hidden="true">
+          <span v-if="chip.running" class="spinner !h-3 !w-3 !border-[1.5px]"></span>
+          <span v-else class="panel-chip-dot"></span>
+        </span>
         <span>{{ chip.label }}</span>
         <span class="panel-chip-value" :class="{ 'panel-chip-freshness': chip.key === 'refreshed' }">{{ chip.value }}</span>
       </span>
@@ -43,12 +47,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
-import { refreshError } from "./store.js";
-
-const state = ref(window.rancherControlPanelState || {});
-const bootPending = ref(true);
-const refreshedAt = ref(null);
+import { computed } from "vue";
+import { state, bootPending, refreshedAt, refreshError } from "./store.js";
+import { discoveryValue } from './panel-presentation.mjs';
 
 const panel = computed(() => state.value?.panel || {});
 const sessionMeta = computed(() => {
@@ -149,7 +150,7 @@ const chips = computed(() => {
     {
       key: "clusters",
       label: "Clusters",
-      value: clusters.length ? `${reachable}/${clusters.length} reachable` : state.value?.clusters?.refreshing ? "Checking…" : "None yet",
+      value: discoveryValue('clusters', state.value?.clusters),
       tone: clusters.length ? (reachable === clusters.length ? "emerald" : "amber") : "zinc",
       running: state.value?.clusters?.refreshing,
     },
@@ -157,7 +158,7 @@ const chips = computed(() => {
     {
       key: "aws",
       label: "AWS view",
-      value: awsItems.length ? `${awsItems.length} resources` : state.value?.aws?.refreshing ? "Scanning…" : "No resources shown",
+      value: discoveryValue('aws', state.value?.aws),
       tone: awsItems.length ? "amber" : "zinc",
       running: state.value?.aws?.refreshing,
     },
@@ -174,17 +175,4 @@ const chipToneClass = tone => ({
   zinc: "",
 })[tone] || "";
 
-const handleStateEvent = event => {
-  state.value = event.detail?.state || {};
-  bootPending.value = Boolean(event.detail?.bootPending);
-  refreshedAt.value = event.detail?.refreshedAt || new Date().toISOString();
-};
-
-onMounted(() => {
-  window.addEventListener("rancher-control-panel:state", handleStateEvent);
-});
-
-onUnmounted(() => {
-  window.removeEventListener("rancher-control-panel:state", handleStateEvent);
-});
 </script>

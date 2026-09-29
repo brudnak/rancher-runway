@@ -71,6 +71,7 @@ type helmSearchResult struct {
 }
 
 type cleanupCostEstimate struct {
+	Warnings            []string
 	Region              string
 	TotalRuntimeHours   float64
 	InstanceCount       int

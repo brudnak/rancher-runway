@@ -6,7 +6,7 @@ import LocalLabSessions from './LocalLabSessions.vue';
 import LocalLabSessionCard from './LocalLabSessionCard.vue';
 import LocalLabConsole from './LocalLabConsole.vue';
 import LocalLabConfirm from './LocalLabConfirm.vue';
-import { streamSteveLogs } from './store.js';
+import { streamSteveLogs, setActivePanelTab, cacheWorkspaceIntent } from './store.js';
 import { useLocalLab } from './use-local-lab.mjs';
 import { createLatestTask, endpointURL, kubectlCommand, k3sMinor, liveSteveRun, refError, reuseSteveDraft, steveDraftErrors, steveStartPayload } from './local-lab.mjs';
 const props=defineProps({active:{type:Boolean,default:true}});
@@ -87,6 +87,10 @@ async function sessionAction({type,record,...extra}) {
     try{await lab.request('/api/open-url',{method:'POST',body:JSON.stringify({url:endpointURL(record)})});lab.notify('Endpoint opened.');}catch(error){lab.notify(error.message,'error');}return;
   }
   if(type==='save-kubeconfig')return lab.action(`save-${record.runId}`,'/api/steve/kubeconfig/save',{runId:record.runId},result=>`${result.filename || 'Kubeconfig'} saved to Downloads.`);
+  if(type==='cache-lab'){
+    const ok=await lab.action(`cache-${record.runId}`,'/api/cache-lab',{action:'steve',runId:record.runId},result=>{cacheWorkspaceIntent.value=result.workspace || '';return 'Snapshot started in Cache Lab.';});
+    if(ok)setActivePanelTab('cache');return;
+  }
   if(type==='sqlite')return lab.action(`sqlite-${record.runId}`,'/api/steve/sqlite/vacuum',{runId:record.runId},result=>`${result.filename || 'SQLite snapshot'} saved to Downloads.`);
   if(lab.blocked)return;
   if(type==='reuse')return changeDraft(reuseSteveDraft(record),`Settings from ${record.runId}. The version stays pinned; a free HTTPS port will be assigned.`);

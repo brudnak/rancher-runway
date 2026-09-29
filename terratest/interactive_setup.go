@@ -212,6 +212,19 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 	basePath = normalizeInteractiveBasePath(basePath)
 	pageTemplate := template.Must(template.New("interactive-setup").Parse(ui.InteractiveSetupHTML))
 	mux.HandleFunc(interactiveSetupPath(basePath, "/api/import-config"), s.handleConfigImport)
+	mux.HandleFunc(interactiveSetupPath(basePath, "/static/control_panel.css"), func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(r) {
+			http.Error(w, "invalid interactive setup token", http.StatusForbidden)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte(ui.ControlPanelCSS))
+	})
 
 	mux.HandleFunc(interactiveSetupPath(basePath, "/static/interactive_setup.js"), func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r) {
