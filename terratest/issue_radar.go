@@ -38,6 +38,7 @@ type issueRadarIssue struct {
 	Title       string    `json:"title"`
 	URL         string    `json:"html_url"`
 	State       string    `json:"state"`
+	StateReason string    `json:"state_reason,omitempty"`
 	Body        string    `json:"body,omitempty"`
 	CreatedAt   string    `json:"created_at"`
 	UpdatedAt   string    `json:"updated_at"`
@@ -188,10 +189,7 @@ func (s *issueRadarService) issues(ctx context.Context, config issueRadarConfig,
 			return nil, &imageLookupInputError{message: fmt.Sprintf("Milestone %q was not found in %s. Load milestones to choose an exact title.", config.Milestone, config.Repo)}
 		}
 	}
-	projection := "map({number,title,html_url,state,created_at,updated_at,closed_at,pull_request,labels:[.labels[]|{name}],assignees:[.assignees[]|{login}],milestone:(.milestone|if . == null then null else {number,title,state,due_on} end)})"
-	if closedUser != "" {
-		projection = strings.Replace(projection, "number,title,html_url", "number,title,html_url,body:((.body // \"\")[0:1200])", 1)
-	}
+	projection := "map({number,title,html_url,state,state_reason,body:((.body // \"\")[0:1200]),created_at,updated_at,closed_at,pull_request,labels:[.labels[]|{name}],assignees:[.assignees[]|{login}],milestone:(.milestone|if . == null then null else {number,title,state,due_on} end)})"
 	items := []issueRadarIssue{}
 	seen := map[int]bool{}
 	for page := 1; page <= 100; page++ {
@@ -340,12 +338,13 @@ func (p *localControlPanel) handleIssueRadarHistory(w http.ResponseWriter, r *ht
 		}
 		history[user] = issues
 	}
-	writeJSON(w, map[string]any{"history": history, "warnings": warnings, "generatedAt": time.Now().UTC(), "limit": payload.Limit})
+	writeJSON(w, map[string]any{"config": config, "history": history, "warnings": warnings, "generatedAt": time.Now().UTC(), "limit": payload.Limit})
 }
 
 func (p *localControlPanel) handleIssueRadarSave(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
 		Content string `json:"content"`
+		Kind    string `json:"kind,omitempty"`
 	}
 	if !p.issueRadarRequest(w, r, &payload, 8<<20) {
 		return
@@ -354,7 +353,14 @@ func (p *localControlPanel) handleIssueRadarSave(w http.ResponseWriter, r *http.
 		http.Error(w, "Generate an issue report before saving.", http.StatusBadRequest)
 		return
 	}
-	path, err := saveDownloadFile("issue-radar-report.md", []byte(payload.Content), 0o600)
+	filename := "issue-radar-report.md"
+	if payload.Kind == "prompt" {
+		filename = "issue-radar-assignment-prompt.md"
+	} else if payload.Kind != "" && payload.Kind != "report" {
+		http.Error(w, "Choose a report or assignment prompt export.", http.StatusBadRequest)
+		return
+	}
+	path, err := saveDownloadFile(filename, []byte(payload.Content), 0o600)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

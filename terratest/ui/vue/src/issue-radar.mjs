@@ -21,13 +21,17 @@ export function buildIssueRadarReport(snapshot) {
     const has = name => labels.some(label => label.toLowerCase() === name.toLowerCase());
     const assignees = [...new Set((issue.assignees || []).map(user => user.login.toLowerCase()))];
     const matchedUsers = config.users.filter(user => assignees.includes(user));
+    const qaLabels = QA_LABELS.slice(0, -1).filter(has);
     return {
       number: issue.number, title: issue.title,
+      body: issue.body || '', createdAt: issue.created_at,
       url: `https://github.com/${config.repo}/issues/${issue.number}`,
       assignees, matchedUsers, labels, milestone: issue.milestone?.title || '',
       updatedAt: issue.updated_at,
       qaNone: has('QA/None'),
-      qaSize: has('QA/None') ? 'QA/None' : QA_LABELS.find(has) || 'Lacks QA Size',
+      qaLabels,
+      sizeConflict: qaLabels.length > 1 || (has('QA/None') && qaLabels.length > 0),
+      qaSize: has('QA/None') ? 'QA/None' : qaLabels.length === 1 ? qaLabels[0] : 'Lacks QA Size',
       kind: has('kind/bug') ? 'Bug' : has('kind/enhancement') ? 'Enhancement' : 'Other',
     };
   }).sort((a, b) => a.number - b.number);
@@ -73,7 +77,7 @@ export function visibleIssueLanes(report, { filter = 'all', query = '', owner = 
     if (needle && ![issue.number, issue.title, issue.milestone, ...issue.labels, ...issue.assignees].join(' ').toLowerCase().includes(needle)) return false;
     if (filter === 'unassigned') return !issue.qaNone && !issue.assignees.length;
     if (filter === 'no-milestone') return !issue.qaNone && !issue.milestone;
-    if (filter === 'missing-size') return !issue.qaNone && issue.qaSize === 'Lacks QA Size';
+    if (filter === 'missing-size') return !issue.qaNone && (issue.qaSize === 'Lacks QA Size' || issue.sizeConflict);
     return true;
   };
   const missing = report.buckets.find(lane => lane.id === 'missing-owner');

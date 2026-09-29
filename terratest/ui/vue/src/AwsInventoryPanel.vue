@@ -25,6 +25,7 @@
           {{ candidates.length }} cleanup candidate{{ candidates.length === 1 ? '' : 's' }} · {{ items.length - candidates.length }} protected.
           Candidates have your Owner tag and Runway tags but no recorded run here. Verify they are unused before deleting.
         </p>
+        <p v-if="items.some(item => item.type.startsWith('IAM '))" class="mt-2 text-xs leading-5 text-zinc-500 dark:text-zinc-400">IAM review checks EC2 usage across all enabled regions. Reviewing a role includes its owned instance profiles and policy detachments. Shared managed policies are retained.</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <button class="aws-button" :disabled="locked || !selected.length" @click="review(selectedItems)">Review selected ({{ selected.length }})</button>
@@ -72,7 +73,7 @@
             <tr v-for="item in visibleItems" :key="itemKey(item)">
               <td><input v-model="selected" type="checkbox" :value="itemKey(item)" :aria-label="`Select ${item.name || item.id}`" :disabled="locked || !item.cleanupEligible" :title="item.cleanupReason || 'Select cleanup candidate'" /></td>
               <td class="aws-resource"><div class="text-xs font-semibold text-zinc-500">{{ item.type }}</div><div class="mt-1 font-semibold">{{ item.name || item.id }}</div><div class="mt-1 text-xs text-zinc-500">{{ item.region }}</div></td>
-              <td><div>{{ item.status || '—' }}</div><div class="mt-1 text-xs text-zinc-500">Run {{ item.runId || 'unknown' }}</div></td>
+              <td><div>{{ item.status || '—' }}</div><div class="mt-1 text-xs text-zinc-500">Run tag {{ item.runId || 'unknown' }}</div><div v-if="item.cleanupEligible" class="mt-1 text-xs text-zinc-500">No recorded run here</div></td>
               <td class="aws-detail"><div>{{ item.details || item.id }}</div><div v-if="item.owner" class="mt-1 text-xs text-zinc-500">Owner {{ item.owner }}</div><details class="mt-2 text-xs text-zinc-500"><summary class="cursor-pointer">ID &amp; tags</summary><p class="mt-1">{{ item.id }}</p><p class="mt-1">{{ tagsFor(item) }}</p></details></td>
               <td class="aws-action"><template v-if="item.cleanupEligible"><span class="mb-2 block text-xs text-amber-700 dark:text-amber-300">Candidate</span><button class="aws-button aws-danger" :disabled="locked" @click="review([item])">Delete…</button></template><template v-else><span class="text-xs font-semibold text-zinc-500">Protected</span><p class="mt-1 text-xs text-zinc-500">{{ item.cleanupReason }}</p></template></td>
             </tr>
@@ -92,12 +93,13 @@
           <p class="mt-2 text-sm">{{ plan.region }} · Owner {{ plan.owner }}. These resources are not recorded in this workspace. They may still be in use elsewhere.</p>
         </header>
         <div class="aws-review-content">
-          <p class="aws-warning">Deletion cannot be undone. EC2 termination can permanently delete attached volumes. No backups or snapshots are created. Review every effect below.<AppBuildStamp /></p>
+          <p class="aws-warning">{{ cleanupWarning }}<AppBuildStamp /></p>
           <p v-if="plan.inventoryWarning" class="mt-3 text-sm text-amber-700 dark:text-amber-300">The inventory scan was incomplete. This review covers only the exact resources below; other resources may remain.</p>
           <ol class="mt-4 grid gap-3">
             <li v-for="item in plan.items" :key="itemKey(item.resource)" class="aws-review-item">
               <strong>{{ item.resource.type }} · {{ item.resource.name || item.resource.id }}</strong>
               <p class="mt-1 break-all text-xs text-zinc-500">{{ item.resource.id }}</p>
+              <ul v-if="item.checks?.length" class="mt-3 space-y-1 text-xs leading-5 text-zinc-600 dark:text-zinc-400"><li v-for="check in item.checks" :key="check">{{ check }}</li></ul>
               <ul class="mt-2 list-disc space-y-1 pl-5 text-sm"><li v-for="effect in item.effects" :key="effect" class="break-words">{{ effect }}</li></ul>
             </li>
           </ol>
@@ -126,6 +128,12 @@ const candidatesOnly = ref(false);
 const busy = ref('');
 const error = ref('');
 const plan = ref(null);
+const cleanupWarning = computed(() => {
+  const types = (plan.value?.items || []).map(item => item.resource.type);
+  if (types.some(type => type === 'EC2 instance' || type === 'EBS volume')) return 'Deletion cannot be undone. EC2 termination can permanently delete attached volumes. No backups or snapshots are created. Review every effect below.';
+  if (types.some(type => type.startsWith('IAM '))) return 'Review every role, instance profile, and policy detachment below. Deleted IAM resources cannot be restored with the same identity. Shared managed policies are retained.';
+  return 'Deletion cannot be undone. Review every resource and effect below before confirming.';
+});
 const confirmation = ref('');
 const reviewDialog = ref(null);
 const expired = ref(false);
@@ -141,7 +149,7 @@ const allSelected = computed(() => candidates.value.length > 0 && selected.value
 const results = computed(() => cleanup.value.results || []);
 const completedCount = computed(() => results.value.filter(item => ['deleted','failed','blocked'].includes(item.status)).length);
 const updatedLabel = computed(() => inventory.value.updatedAt ? `Updated ${new Date(inventory.value.updatedAt).toLocaleTimeString()}` : '');
-const summary = computed(() => inventory.value.updatedAt ? `${items.value.length} matching AWS resources in ${inventory.value.region || 'the configured region'}. ${inventory.value.owner ? `Owner ${inventory.value.owner}.` : 'Owner tag not configured.'}` : 'Loading AWS inventory…');
+const summary = computed(() => inventory.value.updatedAt ? `${items.value.length} matching AWS resources · ${inventory.value.region || 'the configured region'} and global services. ${inventory.value.owner ? `Owner ${inventory.value.owner}.` : 'Owner tag not configured.'}` : 'Loading AWS inventory…');
 const countBadges = computed(() => {
   const counts = items.value.reduce((all,item) => { all[item.type] = (all[item.type] || 0) + 1; return all; }, {});
   return Object.entries(counts).sort(([a],[b]) => a.localeCompare(b)).map(([type,count]) => ({type,count}));

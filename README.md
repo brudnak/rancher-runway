@@ -283,16 +283,24 @@ in the result regardless of the selected usernames.
   owners, missing selected owners, and QA/None. It distinguishes truly unassigned
   issues from ones assigned only to people outside your chosen team. Search by
   title, number, label, milestone, or owner; filter assignment, milestone, and
-  QA-size gaps. Click an owner card to see that person's issues.
+  QA-size gaps. Click an owner card to see that person's issues. Compare relative
+  QA effort (XS/S/M/L/XL = 1/2/3/5/8 points), with shared effort split between
+  selected owners and missing or conflicting sizes marked provisional. Use `/`
+  to search, switch to compact cards, or expand an issue's context in place.
 - **Summary** shows assignment totals, QA sizes, and bugs/enhancements/other
   kinds. Shared issues count once. QA/None is excluded from assignment checks.
   These tables always represent the full fetched snapshot, independent of board
   search and filters.
-- **Report** builds a Markdown assignment brief from that same snapshot. Copy
-  it through the desktop clipboard or save it to Downloads. Optional history
-  adds up to 30 or 50 recently updated closed issues per selected owner, using
-  the same labels across all milestones. History failures are reported rather
-  than presented as zero results.
+- **Create prompt** prepares an AI assignment-planning prompt from the full
+  snapshot and automatically gathers up to **50 recently updated closed issues
+  per selected owner**, using the same labels across all milestones. Choose to
+  preserve ownership or rebalance the team, adjust relative capacity, and add
+  planning context. The prompt asks the AI to balance estimated effort, explain
+  changes, produce work packages per owner, and reconcile every issue. History
+  is tentative topic evidence, not a measure of performance. Shared historical
+  issues are deduplicated; missing history stays distinct from zero matches.
+  Failed requests can be retried, cancelled, or explicitly omitted. Preview and
+  copy the prompt, or save `issue-radar-assignment-prompt.md` to Downloads.
 
 Repository, labels, usernames, and milestone preferences stay on this device;
 issue snapshots stay in memory until the app closes. Editing the scope does not

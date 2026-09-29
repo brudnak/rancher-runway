@@ -12,14 +12,17 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2Types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticloadbalancingv2"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/smithy-go"
 )
 
 type awsSDKCleanupClient struct {
-	region string
-	ec2    *ec2.Client
-	elb    *elasticloadbalancingv2.Client
-	acm    *acm.Client
+	region       string
+	ec2          *ec2.Client
+	elb          *elasticloadbalancingv2.Client
+	acm          *acm.Client
+	iam          *iam.Client
+	ec2ForRegion func(string) *ec2.Client
 }
 
 func newAWSCleanupClient(ctx context.Context, region string) (awsCleanupClient, error) {
@@ -27,13 +30,17 @@ func newAWSCleanupClient(ctx context.Context, region string) (awsCleanupClient, 
 	if err != nil {
 		return nil, err
 	}
-	return &awsSDKCleanupClient{region: region, ec2: ec2.NewFromConfig(cfg), elb: elasticloadbalancingv2.NewFromConfig(cfg), acm: acm.NewFromConfig(cfg)}, nil
+	return &awsSDKCleanupClient{region: region, ec2: ec2.NewFromConfig(cfg), elb: elasticloadbalancingv2.NewFromConfig(cfg), acm: acm.NewFromConfig(cfg), iam: iam.NewFromConfig(cfg),
+		ec2ForRegion: func(region string) *ec2.Client {
+			return ec2.NewFromConfig(cfg, func(options *ec2.Options) { options.Region = region })
+		},
+	}, nil
 }
 func awsCleanupAPIError(err error) error {
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.ErrorCode() {
-		case "InvalidInstanceID.NotFound", "InvalidVolume.NotFound", "LoadBalancerNotFound", "ListenerNotFound", "TargetGroupNotFound", "ResourceNotFoundException":
+		case "InvalidInstanceID.NotFound", "InvalidVolume.NotFound", "LoadBalancerNotFound", "ListenerNotFound", "TargetGroupNotFound", "ResourceNotFoundException", "NoSuchEntity":
 			return errAWSResourceGone
 		}
 	}
@@ -67,6 +74,8 @@ func (c *awsSDKCleanupClient) Inspect(ctx context.Context, resource awsResourceV
 	item := awsResourceView{Type: resource.Type, ID: resource.ID, Region: c.region}
 	inspection := awsCleanupInspection{Effects: []string{}}
 	switch item.Type {
+	case "IAM role", "IAM instance profile", "IAM policy attachment":
+		return c.inspectIAMCleanup(ctx, resource)
 	case "EC2 instance":
 		out, err := c.ec2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{InstanceIds: []string{item.ID}})
 		if err != nil {
@@ -242,6 +251,8 @@ func (c *awsSDKCleanupClient) Delete(ctx context.Context, item awsCleanupInspect
 	id := aws.String(item.Resource.ID)
 	var err error
 	switch item.Resource.Type {
+	case "IAM role", "IAM instance profile", "IAM policy attachment":
+		return c.deleteIAMCleanup(ctx, item)
 	case "EC2 instance":
 		_, err = c.ec2.TerminateInstances(ctx, &ec2.TerminateInstancesInput{InstanceIds: []string{*id}})
 		if err == nil {

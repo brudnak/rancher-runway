@@ -26,8 +26,12 @@ type awsCleanupRef struct {
 type awsCleanupInspection struct {
 	Resource awsResourceView `json:"resource"`
 	Effects  []string        `json:"effects"`
+	Checks   []string        `json:"checks,omitempty"`
 	// Dependencies must also be selected; never detach a disk from a live instance.
 	Dependencies []awsCleanupRef `json:"-"`
+	// AWS unique IDs catch deletion/recreation under an unchanged ARN.
+	Identities map[string]string     `json:"-"`
+	IAM        *awsIAMCleanupDetails `json:"-"`
 }
 type awsCleanupResult struct {
 	Resource awsResourceView `json:"resource"`
@@ -81,11 +85,15 @@ func awsCleanupBlockedReason(item awsResourceView, owner, region string, records
 	}
 	switch item.Type {
 	case "EC2 instance", "EBS volume", "ALB", "ALB listener", "Target group", "ACM certificate":
+		if region == "" || item.Region != region {
+			return "Resource is outside the configured AWS region."
+		}
+	case "IAM role", "IAM instance profile", "IAM policy attachment":
+		if item.Region != "global" {
+			return "IAM cleanup requires a verified global resource."
+		}
 	default:
-		return "Protected: IAM and DNS dependencies cannot be verified by this regional inventory."
-	}
-	if region == "" || item.Region != region {
-		return "Resource is outside the configured AWS region."
+		return "This resource type does not support verified inventory cleanup."
 	}
 	if owner == "" || normalizeAWSOwner(item.Tags["Owner"]) != owner {
 		return "A matching Owner tag is required for cleanup."
@@ -291,6 +299,12 @@ func awsCleanupOrder(resourceType string) int {
 		return 3
 	case "EBS volume":
 		return 4
+	case "IAM policy attachment":
+		return 6
+	case "IAM instance profile":
+		return 7
+	case "IAM role":
+		return 8
 	default:
 		return 5
 	}
@@ -416,6 +430,11 @@ func (p *localControlPanel) runAWSCleanup(plan *awsCleanupPlan) {
 func validateAWSCleanupInspection(reviewed, current awsCleanupInspection, plan *awsCleanupPlan, records []panelRunRecord) error {
 	if current.Resource.Type != reviewed.Resource.Type || current.Resource.ID != reviewed.Resource.ID {
 		return fmt.Errorf("Resource identity changed.")
+	}
+	for arn, identity := range current.Identities {
+		if identity == "" || reviewed.Identities[arn] != identity {
+			return fmt.Errorf("IAM resource identity changed for %s. Review cleanup again.", arn)
+		}
 	}
 	if reason := awsCleanupBlockedReason(current.Resource, plan.Owner, plan.Region, records); reason != "" {
 		return errors.New(reason)

@@ -247,7 +247,7 @@ func TestIssueRadarHistoryKeepsFailuresDistinctAndIgnoresMilestone(t *testing.T)
 		}
 		return radarResponse(t, items), nil
 	})}}
-	request := radarHTTPRequest("/api/issue-radar/history", "POST", map[string]any{"config": config, "limit": 30})
+	request := radarHTTPRequest("/api/issue-radar/history", "POST", map[string]any{"config": config, "limit": 50})
 	recorder := httptest.NewRecorder()
 	panel.handleIssueRadarHistory(recorder, request)
 	if recorder.Code != http.StatusOK {
@@ -256,11 +256,13 @@ func TestIssueRadarHistoryKeepsFailuresDistinctAndIgnoresMilestone(t *testing.T)
 	var result struct {
 		History  map[string][]issueRadarIssue
 		Warnings []string
+		Config   issueRadarConfig
+		Limit    int
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.History["alice"]) != 30 || len(result.Warnings) != 1 {
+	if len(result.History["alice"]) != 50 || len(result.Warnings) != 1 || result.Limit != 50 || !reflect.DeepEqual(result.Config, config) {
 		t.Fatalf("incorrect history result: %+v", result)
 	}
 	if _, exists := result.History["bob"]; exists {
@@ -272,9 +274,13 @@ func TestIssueRadarSavesLargeReportPrivatelyWithoutReplacingExistingFile(t *test
 	t.Setenv("HOME", t.TempDir())
 	panel := &localControlPanel{token: "test-token"}
 	content := "# Assignment review\n" + strings.Repeat("A long report of real issues\n", 5000)
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 4; i++ {
+		kind := "report"
+		if i >= 2 {
+			kind = "prompt"
+		}
 		recorder := httptest.NewRecorder()
-		panel.handleIssueRadarSave(recorder, radarHTTPRequest("/api/issue-radar/save", "POST", map[string]string{"content": content}))
+		panel.handleIssueRadarSave(recorder, radarHTTPRequest("/api/issue-radar/save", "POST", map[string]string{"content": content, "kind": kind}))
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("save failed: %d %s", recorder.Code, recorder.Body)
 		}
@@ -282,9 +288,13 @@ func TestIssueRadarSavesLargeReportPrivatelyWithoutReplacingExistingFile(t *test
 		if err := json.Unmarshal(recorder.Body.Bytes(), &saved); err != nil {
 			t.Fatal(err)
 		}
-		want := "issue-radar-report.md"
-		if i > 0 {
-			want = fmt.Sprintf("issue-radar-report (%d).md", i)
+		stem := "issue-radar-report"
+		if kind == "prompt" {
+			stem = "issue-radar-assignment-prompt"
+		}
+		want := stem + ".md"
+		if i%2 > 0 {
+			want = fmt.Sprintf("%s (%d).md", stem, i%2)
 		}
 		if saved.Filename != want || filepath.Base(saved.Path) != want {
 			t.Fatalf("unexpected filename: %+v", saved)
@@ -296,6 +306,31 @@ func TestIssueRadarSavesLargeReportPrivatelyWithoutReplacingExistingFile(t *test
 		info, err := os.Stat(saved.Path)
 		if err != nil || info.Mode().Perm() != 0o600 {
 			t.Fatalf("report must be private: %v", err)
+		}
+	}
+}
+
+func TestIssueRadarRejectsUnknownExportKind(t *testing.T) {
+	panel := &localControlPanel{token: "test-token"}
+	recorder := httptest.NewRecorder()
+	panel.handleIssueRadarSave(recorder, radarHTTPRequest("/api/issue-radar/save", "POST", map[string]string{"content": "content", "kind": "../other"}))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: %d", recorder.Code)
+	}
+}
+
+func TestIssueRadarRequestsBoundedContextForOpenAndClosedIssues(t *testing.T) {
+	for _, owner := range []string{"", "alice"} {
+		service := &issueRadarService{runCommand: func(ctx context.Context, command string, args, env []string, limit int64) ([]byte, error) {
+			projection := args[len(args)-1]
+			if !strings.Contains(projection, `body:((.body // "")[0:1200])`) || !strings.Contains(projection, "state_reason") {
+				t.Fatalf("issue context must be bounded and include closure reason: %s", projection)
+			}
+			return radarResponse(t, []issueRadarIssue{{Number: 42, Body: "Verification context", StateReason: "not_planned"}}), nil
+		}}
+		items, err := service.issues(context.Background(), radarConfig(), owner, 50)
+		if err != nil || len(items) != 1 || items[0].Body != "Verification context" || items[0].StateReason != "not_planned" {
+			t.Fatalf("missing issue context: %+v %v", items, err)
 		}
 	}
 }

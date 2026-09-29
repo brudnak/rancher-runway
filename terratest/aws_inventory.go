@@ -71,19 +71,20 @@ func (p *localControlPanel) discoverAWSInventory(records []panelRunRecord) panel
 
 	// Each service gets its own collector and time budget. A slow ELB scan
 	// must not consume IAM/ACM's entire deadline before they even start.
-	collectors := make([]*awsInventoryCollector, 5)
 	var scans sync.WaitGroup
 	collect := []func(context.Context, *awsInventoryCollector){
 		func(ctx context.Context, c *awsInventoryCollector) { c.collectEC2(ctx, ec2.NewFromConfig(cfg)) },
 		func(ctx context.Context, c *awsInventoryCollector) {
 			c.collectELB(ctx, elasticloadbalancingv2.NewFromConfig(cfg))
 		},
-		func(ctx context.Context, c *awsInventoryCollector) { c.collectIAM(ctx, iam.NewFromConfig(cfg)) },
+		func(ctx context.Context, c *awsInventoryCollector) { c.collectIAMRoles(ctx, iam.NewFromConfig(cfg)) },
+		func(ctx context.Context, c *awsInventoryCollector) { c.collectIAMProfiles(ctx, iam.NewFromConfig(cfg)) },
 		func(ctx context.Context, c *awsInventoryCollector) { c.collectACM(ctx, acm.NewFromConfig(cfg)) },
 		func(ctx context.Context, c *awsInventoryCollector) {
 			c.collectRoute53(ctx, route53.NewFromConfig(cfg), records)
 		},
 	}
+	collectors := make([]*awsInventoryCollector, len(collect))
 	for i, scan := range collect {
 		c := &awsInventoryCollector{state: &panelAWSInventoryState{}, region: region, owner: owner, prefixes: prefixes, runByPrefix: runByPrefix, seen: map[string]bool{}}
 		collectors[i] = c
@@ -389,7 +390,7 @@ func (c *awsInventoryCollector) collectELBListeners(ctx context.Context, client 
 	}
 }
 
-func (c *awsInventoryCollector) collectIAM(ctx context.Context, client *iam.Client) {
+func (c *awsInventoryCollector) collectIAMRoles(ctx context.Context, client *iam.Client) {
 	rolePaginator := iam.NewListRolesPaginator(client, &iam.ListRolesInput{})
 	for rolePaginator.HasMorePages() {
 		page, err := rolePaginator.NextPage(ctx)
@@ -398,6 +399,10 @@ func (c *awsInventoryCollector) collectIAM(ctx context.Context, client *iam.Clie
 			break
 		}
 		for _, role := range page.Roles {
+			if ctx.Err() != nil {
+				c.addError("IAM role scan did not finish: %v", ctx.Err())
+				return
+			}
 			name := aws.ToString(role.RoleName)
 			tags := c.iamRoleTags(ctx, client, name)
 			if !c.matches(name, tags) {
@@ -418,7 +423,10 @@ func (c *awsInventoryCollector) collectIAM(ctx context.Context, client *iam.Clie
 			c.collectIAMRolePolicyAttachments(ctx, client, name, aws.ToString(role.Arn), runID, tags)
 		}
 	}
+}
 
+// Profiles scan independently so a large role list cannot consume their deadline.
+func (c *awsInventoryCollector) collectIAMProfiles(ctx context.Context, client *iam.Client) {
 	profilePaginator := iam.NewListInstanceProfilesPaginator(client, &iam.ListInstanceProfilesInput{})
 	for profilePaginator.HasMorePages() {
 		page, err := profilePaginator.NextPage(ctx)
@@ -427,6 +435,10 @@ func (c *awsInventoryCollector) collectIAM(ctx context.Context, client *iam.Clie
 			break
 		}
 		for _, profile := range page.InstanceProfiles {
+			if ctx.Err() != nil {
+				c.addError("IAM instance profile scan did not finish: %v", ctx.Err())
+				return
+			}
 			name := aws.ToString(profile.InstanceProfileName)
 			tags := c.iamInstanceProfileTags(ctx, client, name)
 			if !c.matches(name, tags) {
@@ -659,6 +671,7 @@ func (c *awsInventoryCollector) elbTags(ctx context.Context, client *elasticload
 func (c *awsInventoryCollector) iamRoleTags(ctx context.Context, client *iam.Client, name string) map[string]string {
 	out, err := client.ListRoleTags(ctx, &iam.ListRoleTagsInput{RoleName: aws.String(name)})
 	if err != nil {
+		c.addError("IAM role tags for %s: %v", name, err)
 		return nil
 	}
 	return iamTags(out.Tags)
@@ -667,6 +680,7 @@ func (c *awsInventoryCollector) iamRoleTags(ctx context.Context, client *iam.Cli
 func (c *awsInventoryCollector) iamInstanceProfileTags(ctx context.Context, client *iam.Client, name string) map[string]string {
 	out, err := client.ListInstanceProfileTags(ctx, &iam.ListInstanceProfileTagsInput{InstanceProfileName: aws.String(name)})
 	if err != nil {
+		c.addError("IAM instance profile tags for %s: %v", name, err)
 		return nil
 	}
 	return iamTags(out.Tags)

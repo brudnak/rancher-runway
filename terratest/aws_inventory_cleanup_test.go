@@ -100,7 +100,9 @@ func TestAWSCleanupCandidateProtection(t *testing.T) {
 		{name: "wrong region", edit: func(i *awsResourceView) { i.Region = "us-west-2" }, blocked: true},
 		{name: "recorded run", records: []panelRunRecord{{RunID: "old-run"}}, blocked: true},
 		{name: "recorded prefix", edit: func(i *awsResourceView) { i.Name = "recorded-prefix-h1" }, records: []panelRunRecord{{RunID: "another", AWSPrefix: "recorded-prefix"}}, blocked: true},
-		{name: "global IAM", edit: func(i *awsResourceView) { i.Type = "IAM role" }, blocked: true},
+		{name: "global IAM", edit: func(i *awsResourceView) { i.Type = "IAM role"; i.Region = "global" }, blocked: false},
+		{name: "IAM must be global", edit: func(i *awsResourceView) { i.Type = "IAM role" }, blocked: true},
+		{name: "recorded IAM", edit: func(i *awsResourceView) { i.Type = "IAM role"; i.Region = "global" }, records: []panelRunRecord{{RunID: "old-run"}}, blocked: true},
 		{name: "DNS", edit: func(i *awsResourceView) { i.Type = "Route53 record" }, blocked: true},
 	}
 	for _, tc := range cases {
