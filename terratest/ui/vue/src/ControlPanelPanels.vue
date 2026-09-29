@@ -2,7 +2,7 @@
   <section v-if="issuesOpened" v-show="activeTab === 'issues'" class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 text-zinc-900 shadow-sm dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-100 sm:p-5">
     <IssueRadarPanel />
   </section>
-  <section v-if="helmOpened" v-show="activeTab === 'helm'" class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 text-zinc-900 shadow-sm dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-100 sm:p-5">
+  <section v-if="helmOpened" v-show="activeTab === 'helm'" class="min-w-0" aria-label="Helm Lab workspace">
     <HelmLabPanel />
   </section>
   <section
@@ -80,18 +80,12 @@
     <SettingsPanel />
   </section>
 
-  <section
-    v-show="activeTab === 'k3d'"
-    class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20 sm:p-5"
-  >
-    <K3DLabPanel />
+  <section v-if="k3dOpened" v-show="activeTab === 'k3d'" class="min-w-0" aria-label="K3D Lab workspace">
+    <K3DLabPanel :active="activeTab === 'k3d'" />
   </section>
 
-  <section
-    v-show="activeTab === 'steve'"
-    class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20 sm:p-5"
-  >
-    <SteveLabPanel />
+  <section v-if="steveOpened" v-show="activeTab === 'steve'" class="min-w-0" aria-label="Steve Lab workspace">
+    <SteveLabPanel :active="activeTab === 'steve'" />
   </section>
 </template>
 
@@ -110,6 +104,8 @@ import PreflightPanel from "./PreflightPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";
 import SteveLabPanel from "./SteveLabPanel.vue";
 import WorkspaceRunsPanel from "./WorkspaceRunsPanel.vue";
+const k3dOpened = ref(false), steveOpened = ref(false);
+watch(activeTab, tab => { if (tab === "k3d") k3dOpened.value = true; if (tab === "steve") steveOpened.value = true; }, { immediate: true });
 const helmOpened = ref(false);
 const issuesOpened = ref(false);
 watch(activeTab, tab => { if (tab === "issues") issuesOpened.value = true; }, { immediate: true });

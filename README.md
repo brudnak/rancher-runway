@@ -229,18 +229,41 @@ The app protects active work:
 
 ### Helm Lab
 
-Helm Lab builds Rancher Helm commands, values files, and self-contained setup
-scripts inside the desktop app. Copy commands directly, or use **Export values**,
-**Download script**, or **Download command’s values.yaml** to save into your
-Downloads folder. The app confirms the saved filename and keeps existing files
-by adding a number to new copies. Exports are readable and writable only by your
-user account because they can contain passwords and environment values.
+Helm Lab is Runway’s native three-step release workbench: choose a chart and
+destination, configure values, then review and export a pinned plan. It reads the
+index, defaults, and schema directly from official Rancher chart repositories.
+Each archive’s SHA-256 is verified against its index entry. It does not require a
+local Helm installation or contact a cluster. Unavailable versions and failed
+lookups block export instead of substituting another chart’s defaults.
 
-For a command that uses `values.yaml`, place the downloaded companion file in
-your terminal’s working directory with that exact name. Review a downloaded
-setup script before running it with `sh setup.sh` from its folder. Chart metadata
-loads online; your edits remain in the current app session. Import YAML to reuse
-saved values.
+Settings are grouped by purpose, with essentials shown first and all chart values
+available through search or “more settings.” Certificate choices reveal related
+inputs. Editable starting points, memory-only undo/redo, YAML import, inline type
+checks, and actionable release checks help prepare a plan. Use **⌘/Ctrl K** to
+find a setting and **⌘/Ctrl Enter** to review. Explicit values remain in exports
+even when they match chart defaults; an imported `extraEnv: []` clears installed
+environment variables. Revert an override to inherit instead.
+
+Search understands both readable setting names and exact Helm keys. The overrides
+filter spans all categories. Review lists blocking details separately from cluster
+prerequisites, and each issue takes you to its setting. **⌘/Ctrl Z** and
+**⌘/Ctrl Shift Z** undo and redo plan edits outside text fields; text fields retain
+their native undo behavior. Both themes support keyboard focus, reduced motion,
+and compact window layouts.
+
+Copy the runbook, Helm command, or complete values YAML, or export **setup.sh** or
+**values.yaml** into Downloads. Existing files are preserved with numbered names.
+Exports have private file permissions, and the runbook uses a private temporary
+values file that is removed on exit. Secret-bearing previews are hidden until
+revealed; copied and exported content includes the actual values. Edits and undo
+history stay in memory for the current session and are not stored in a URL or
+browser storage.
+
+For a command using `values.yaml`, place its companion file in your terminal’s
+working directory with that exact name. Review exported scripts before running
+`sh setup.sh`. The workbench does not execute them. Merge upgrades use Helm 3.14+
+`--reset-then-reuse-values`; dry runs also require Helm 3.14+ for `--hide-secret`.
+Checks guide preparation but do not inspect cluster readiness or installed values.
 
 ### Issue Radar
 
@@ -441,13 +464,18 @@ K3D Lab is a lightweight local Kubernetes launcher. Use it when you want one or
 more local k3d clusters with stable kubeconfig files and Kubernetes API
 endpoints for manual testing.
 
-- Pick a K3s image tag from the app's version list.
-- Leave the API port on Auto unless you need a fixed endpoint.
+- Pick a suggested K3s image tag or enter an exact tag.
+- Leave the API port on Automatic unless you need a fixed endpoint. The form
+  flags ports reserved by your existing K3D sessions before launch.
 - Start multiple k3d clusters side by side when you need separate local
   Kubernetes targets.
-- Copy the API endpoint, copy the kubeconfig path, or save a kubeconfig file to
-  Downloads from the cluster card.
-- Stop, restart, or delete each cluster from the app.
+- Search and filter sessions by status, version, ID, or endpoint.
+- Copy a ready-to-use `kubectl --kubeconfig ... get nodes` command, copy the API
+  endpoint or file paths, or save the kubeconfig to Downloads.
+- Use a session's settings as the next launch draft, with an automatic port
+  and an Undo option.
+- Stop, restart, or remove each cluster from its card. Removal requires the
+  session ID and lets you preserve local files for inspection.
 
 K3D Lab is intentionally independent from cloud run slots. It shares the local
 port reservation pool with Steve Lab so local endpoints do not collide.
@@ -460,9 +488,15 @@ for running Rancher tests from this app.
 
 - Pick a Steve release tag or paste a branch, tag, or commit.
 - The app inspects Steve's `go.mod` when it can and suggests a compatible K3s
-  image tag.
-- Steve Lab keeps one active Steve endpoint at a time. Launching again replaces
-  the current Steve cluster and run files.
+  image tag. Manual selections stay pinned until you choose **Use suggested**.
+- Choose the Standard profile for API exploration or Observe to enable
+  metrics. **Runtime & networking** contains the port, metrics interval,
+  environment variables, and extra arguments. Enter one `NAME=value` or one
+  argument per line; spaces inside an argument are preserved without shell
+  expansion.
+- Steve Lab keeps one active Steve endpoint at a time. Launching again opens
+  a replacement review identifying the active sessions. Confirming removes
+  those clusters and run folders before starting the new build.
 - The endpoint is HTTPS-only to avoid Steve's local HTTP redirect behavior.
   Tools such as Bruno, Postman, or curl may need TLS verification disabled for
   the local self-signed certificate.
@@ -471,8 +505,15 @@ for running Rancher tests from this app.
   includes a dashboard fallback UI. The useful API surface for testing is still
   under `/v1/...`.
 
-Steve Lab saves the k3d kubeconfig for the run and can copy the endpoint or save
-the kubeconfig to Downloads from the run card.
+Steve Lab saves the k3d kubeconfig for the run. Session cards collect the
+endpoint, kubeconfig, runtime logs, local file locations, and SQLite snapshot
+export. **Use these settings** restores the ref, version, metrics, and runtime
+overrides into an editable draft while assigning a new port automatically.
+
+Both labs share a searchable Activity viewer with issue filtering, line
+wrapping, pause/resume, and copying of matching output. Status checks pause
+when a tab is inactive. If a refresh fails, the last successful workspace stays
+visible and lifecycle actions wait for a fresh check.
 
 ## Configuration Notes
 

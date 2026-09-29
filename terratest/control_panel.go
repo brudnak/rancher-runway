@@ -56,6 +56,7 @@ type localControlPanel struct {
 	imageLookup             *imageLookupService
 	prBuildVerifier         *prBuildVerifierService
 	issueRadar              *issueRadarService
+	helmCatalog             helmLabCatalogService
 
 	// cleanupBatchRunner is nil in production. Tests may replace it with a
 	// deterministic runner so the batch coordinator can be exercised without
@@ -65,6 +66,8 @@ type localControlPanel struct {
 	rancherTokens             map[int]string
 	downstreamKubeconfigCache map[string]string
 	clusterSnapshot           map[string]clusterView
+	clusterDiscovery          panelDiscoverySnapshot[panelClusterState]
+	awsDiscovery              panelDiscoverySnapshot[panelAWSInventoryState]
 }
 
 type ControlPanelServerOptions struct {
@@ -122,16 +125,19 @@ type panelSessionState struct {
 }
 
 type panelClusterState struct {
-	Items []clusterView `json:"items"`
+	Items      []clusterView `json:"items"`
+	Refreshing bool          `json:"refreshing"`
+	UpdatedAt  *time.Time    `json:"updatedAt,omitempty"`
 }
 
 type panelAWSInventoryState struct {
-	UpdatedAt time.Time         `json:"updatedAt"`
-	Region    string            `json:"region"`
-	Owner     string            `json:"owner,omitempty"`
-	Queries   []string          `json:"queries"`
-	Items     []awsResourceView `json:"items"`
-	Error     string            `json:"error,omitempty"`
+	Refreshing bool              `json:"refreshing"`
+	UpdatedAt  time.Time         `json:"updatedAt,omitzero"`
+	Region     string            `json:"region"`
+	Owner      string            `json:"owner,omitempty"`
+	Queries    []string          `json:"queries"`
+	Items      []awsResourceView `json:"items"`
+	Error      string            `json:"error,omitempty"`
 }
 
 type awsResourceView struct {
@@ -231,6 +237,10 @@ const (
 )
 
 type panelOperationState struct {
+	// InProcess marks an orchestration goroutine owned by this panel instance.
+	// Its child PID can exit between steps without ending the operation.
+	InProcess bool `json:"-"`
+
 	Running    bool
 	PID        int
 	StartedAt  *time.Time
@@ -430,6 +440,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/kubeconfig/save", p.handleKubeconfigSave)
 	mux.HandleFunc("/api/helm-command", p.handleHelmCommandDownload)
 	mux.HandleFunc("/api/helm-lab/save", p.handleHelmLabSave)
+	mux.HandleFunc("/api/helm-lab/catalog", p.handleHelmLabCatalog)
 	mux.HandleFunc("/api/issue-radar", p.handleIssueRadar)
 	mux.HandleFunc("/api/issue-radar/milestones", p.handleIssueRadarMilestones)
 	mux.HandleFunc("/api/issue-radar/history", p.handleIssueRadarHistory)
@@ -1476,8 +1487,6 @@ func (p *localControlPanel) buildState() panelState {
 	for _, record := range workspace.Runs {
 		activeRunIDs[safeRunPathSegment(record.RunID)] = true
 	}
-	clusters := p.discoverClusters()
-	p.rememberClusterSnapshot(clusters)
 	return panelState{
 		Panel: panelSessionState{
 			SessionID:            p.sessionID,
@@ -1495,14 +1504,12 @@ func (p *localControlPanel) buildState() panelState {
 		LinodeCleanup: p.snapshotOperationForRuns(panelOperationLinodeCleanup, activeRunIDs),
 		Steve:         p.steveLabPanelState(false),
 		K3D:           p.k3dLabPanelState(false),
-		Clusters: panelClusterState{
-			Items: clusters,
-		},
-		AWS:          p.discoverAWSInventory(workspace.Runs),
-		AWSCleanup:   p.snapshotAWSCleanup(),
-		Cleanup:      p.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs),
-		CleanupBatch: p.snapshotCleanupBatch(),
-		Costs:        discoverCostHistory(),
+		Clusters:      p.clusterDiscoveryState(),
+		AWS:           p.awsDiscoveryState(workspace.Runs),
+		AWSCleanup:    p.snapshotAWSCleanup(),
+		Cleanup:       p.snapshotOperationForRuns(panelOperationCleanup, activeRunIDs),
+		CleanupBatch:  p.snapshotCleanupBatch(),
+		Costs:         discoverCostHistory(),
 	}
 }
 
@@ -1515,7 +1522,7 @@ func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, ac
 	defer p.mu.Unlock()
 
 	op := p.operationLocked(name)
-	if op.Running && op.PID > 0 && !processAlive(op.PID) {
+	if op.Running && !op.InProcess && op.PID > 0 && !processAlive(op.PID) {
 		p.markOperationStaleLocked(name, op,
 			"operation process exited before reporting completion",
 			"[control-panel] Operation process exited before reporting completion; status marked stale.",
@@ -2481,6 +2488,10 @@ func runKubectlContext(ctx context.Context, kubeconfigPath string, args ...strin
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// --request-timeout bounds each HTTP request, not discovery retries or
+	// credential plugins. Bound the entire process as well.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "kubectl", append([]string{"--kubeconfig", kubeconfigPath, "--request-timeout=5s"}, args...)...)
 	cmd.WaitDelay = time.Second
 	output, err := cmd.CombinedOutput()
@@ -2515,7 +2526,10 @@ func readTerraformFlatOutputsWithModule(repoRoot string, statePath string, dataD
 		args = append(args, "-state="+statePath)
 	}
 	args = append(args, "flat_outputs")
-	cmd := exec.Command("terraform", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "terraform", args...)
+	cmd.WaitDelay = time.Second
 	cmd.Dir = strings.TrimSpace(moduleDir)
 	if cmd.Dir == "" {
 		cmd.Dir = filepath.Join(repoRoot, "modules", "aws")
@@ -2525,6 +2539,9 @@ func readTerraformFlatOutputsWithModule(repoRoot string, statePath string, dataD
 	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("terraform output stopped: %w", ctxErr)
+		}
 		return nil, fmt.Errorf("terraform output failed: %w (%s)", err, strings.TrimSpace(string(output)))
 	}
 

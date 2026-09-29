@@ -374,6 +374,7 @@ const handleGpuReminderCleanup = () => {
 };
 
 const logModalKind = computed(() => {
+  if (logs.mode === "steveLive" || logs.mode === "steveLog") return "Steve logs";
   if (logs.mode === "docker") return "Docker logs";
   if (logs.mode === "setup") return "Setup logs";
   if (logs.mode === "linodeSetup") return "Linode setup logs";
@@ -398,6 +399,8 @@ const logModalTitle = computed(() => {
 });
 
 const logModalSubtitle = computed(() => {
+  if (logs.mode === "steveLive") return "Steve Lab • local runtime • live log refresh";
+  if (logs.mode === "steveLog") return "Steve Lab • local runtime • log snapshot";
   if (logs.mode === "docker") {
     const cluster = state.value?.clusters?.items?.find(c => c.id === logs.clusterId);
     return cluster?.loadBalancer ? `root@${cluster.loadBalancer} • docker logs rancher` : `${logs.clusterId} • docker logs rancher`;

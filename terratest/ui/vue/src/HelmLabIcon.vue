@@ -1,6 +1,21 @@
 <script setup>
 defineProps({ name: String });
 const paths = {
+  boxes: 'm12 2 8 4-8 4-8-4 8-4ZM4 6v9l8 5 8-5V6M12 10v10M8 4l8 4',
+  server: 'M4 3h16v7H4zM4 14h16v7H4zM7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6',
+  play: 'm8 4 12 8-12 8V4Z',
+  stop: 'M6 6h12v12H6z',
+  pause: 'M8 4v16M16 4v16',
+  folder: 'M3 7V5h6l2 2h10v13H3V7Z',
+  external: 'M14 3h7v7M21 3 10 14M10 4H4v16h16v-6',
+  clock: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 7v5l3 2',
+  trash: 'M3 6h18M8 6V3h8v3M5 6l1 15h12l1-15M10 10v7M14 10v7',
+  branch: 'M6 3v12a4 4 0 0 0 4 4h8M6 7h9a3 3 0 0 0 3-3M3 3h6M15 3h6M15 19h6',
+  close: 'm6 6 12 12M6 18 18 6',
+  'arrow-left': 'M20 12H4m6-6-6 6 6 6',
+  eye: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
+  'eye-off': 'm3 3 18 18M10 5c6-1 12 7 12 7a24 24 0 0 1-4 4M6 6a24 24 0 0 0-4 6s4 7 10 7a12 12 0 0 0 5-1M10 10a3 3 0 0 0 4 4',
+  file: 'M5 3h9l5 5v13H5V3Zm9 0v6h5M8 13h8M8 17h6',
   terminal: 'm5 7 5 5-5 5M13 17h6',
   copy: 'M9 9h11v11H9zM5 15H3V3h12v2',
   refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.6-2L20 8M4 16l2.3 3A7 7 0 0 0 18 17',
@@ -10,6 +25,18 @@ const paths = {
   download: 'M12 3v12m-4-4 4 4 4-4M4 16v5h16v-5',
   layers: 'm12 3 10 5-10 5L2 8l10-5M2 12l10 5 10-5M2 16l10 5 10-5',
   arrow: 'M4 12h16m-6-6 6 6-6 6',
+  compass: 'M12 2 22 12 12 22 2 12 12 2Zm4 6-2 6-6 2 2-6 6-2Z',
+  diamond: 'm12 3 9 7-9 11-9-11 9-7ZM3 10h18M12 3l4 7-4 11-4-11 4-7Z',
+  globe: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3a18 18 0 0 0 0 18 18 18 0 0 0 0-18Z',
+  pulse: 'M2 12h5l3-8 4 16 3-8h5',
+  sliders: 'M4 7h9m4 0h3M4 17h3m4 0h9M13 4v6M7 14v6',
+  undo: 'M9 5 4 10l5 5M4 10h10a6 6 0 0 1 6 6v3',
+  redo: 'm15 5 5 5-5 5M20 10H10a6 6 0 0 0-6 6v3',
+  flask: 'M9 3h6M10 3v7L4 20h16l-6-10V3M7 15h10',
+  key: 'M14 5a5 5 0 1 1-3 9L4 21H1v-3l7-7a5 5 0 0 1 6-6ZM16 8h.01',
+  lock: 'M6 10h12v11H6zM8 10V6a4 4 0 0 1 8 0v4M12 14v3',
+  upload: 'M12 16V3m-4 4 4-4 4 4M4 17v4h16v-4',
+  signal: 'm12 3 10 18H2L12 3ZM12 9v5M12 17h.01',
 };
 </script>
 <template><svg class="hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="paths[name] || paths.terminal" /></svg></template>

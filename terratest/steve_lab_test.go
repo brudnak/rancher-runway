@@ -142,6 +142,7 @@ func TestSteveEndpointArgsAndEnvIncludeMetricsOverrides(t *testing.T) {
 		Kubeconfig:                   "/tmp/steve-kubeconfig.yaml",
 		HTTPSPort:                    6080,
 		SQLCache:                     true,
+		SQLCacheFlag:                 true,
 		EnableMetrics:                true,
 		MetricsUpdateIntervalSeconds: 7,
 		ExtraEnv:                     []string{"STEVE_EXPERIMENT=enabled"},
@@ -149,7 +150,6 @@ func TestSteveEndpointArgsAndEnvIncludeMetricsOverrides(t *testing.T) {
 	}
 
 	wantArgs := []string{
-		"run", "main.go",
 		"--kubeconfig", "/tmp/steve-kubeconfig.yaml",
 		"--http-listen-port", "0",
 		"--https-listen-port", "6080",

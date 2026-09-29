@@ -8,6 +8,9 @@
   </div>
 
   <div class="aws-inventory grid min-w-0 gap-3">
+    <p v-if="inventory.refreshing" class="text-sm text-zinc-500 dark:text-zinc-400" role="status">
+      {{ inventory.updatedAt ? 'Refreshing AWS inventory in the background. Showing the last completed scan.' : 'Scanning AWS resources in the background…' }}
+    </p>
     <div v-if="inventory.error" class="aws-warning">
       <strong>Inventory is incomplete.</strong> Review all covers only the candidates currently listed.
       <details class="mt-2"><summary>Scan details</summary><p class="mt-2 break-words">{{ inventory.error }}</p></details>
@@ -51,7 +54,7 @@
       </details>
     </section>
 
-    <p v-if="!items.length" class="rounded-xl border border-zinc-200 p-4 text-sm text-zinc-500 dark:border-white/10">No matching AWS resources found for the recorded run prefixes or Owner tag.</p>
+    <p v-if="!items.length" class="rounded-xl border border-zinc-200 p-4 text-sm text-zinc-500 dark:border-white/10">{{ inventory.refreshing ? 'Waiting for AWS inventory to finish.' : 'No matching AWS resources found for the recorded run prefixes or Owner tag.' }}</p>
     <template v-else>
       <div class="flex flex-wrap items-center gap-2">
         <span v-for="badge in countBadges" :key="badge.type" class="rounded-md bg-zinc-100 px-2 py-1 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">{{ badge.type }}: {{ badge.count }}</span>
@@ -138,7 +141,7 @@ const allSelected = computed(() => candidates.value.length > 0 && selected.value
 const results = computed(() => cleanup.value.results || []);
 const completedCount = computed(() => results.value.filter(item => ['deleted','failed','blocked'].includes(item.status)).length);
 const updatedLabel = computed(() => inventory.value.updatedAt ? `Updated ${new Date(inventory.value.updatedAt).toLocaleTimeString()}` : '');
-const summary = computed(() => state.value?.aws ? `${items.value.length} matching AWS resources in ${inventory.value.region || 'the configured region'}. ${inventory.value.owner ? `Owner ${inventory.value.owner}.` : 'Owner tag not configured.'}` : 'Loading AWS inventory…');
+const summary = computed(() => inventory.value.updatedAt ? `${items.value.length} matching AWS resources in ${inventory.value.region || 'the configured region'}. ${inventory.value.owner ? `Owner ${inventory.value.owner}.` : 'Owner tag not configured.'}` : 'Loading AWS inventory…');
 const countBadges = computed(() => {
   const counts = items.value.reduce((all,item) => { all[item.type] = (all[item.type] || 0) + 1; return all; }, {});
   return Object.entries(counts).sort(([a],[b]) => a.localeCompare(b)).map(([type,count]) => ({type,count}));
@@ -175,4 +178,3 @@ const confirmCleanup = async () => {
 };
 onUnmounted(() => { clearTimeout(expiryTimer); reviewDialog.value?.close(); });
 </script>
-

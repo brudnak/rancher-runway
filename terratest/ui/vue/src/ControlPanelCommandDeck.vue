@@ -199,13 +199,15 @@ const tiles = computed(() => {
         key: "exposure",
         tone: runs.length ? "emerald" : "zinc",
         eyebrow: "AWS exposure",
-        title: "No resources shown",
-        detail: runs.length
+        title: state.value?.aws?.refreshing ? "Checking AWS resources" : "No resources shown",
+        detail: state.value?.aws?.refreshing
+          ? "AWS inventory is refreshing in the background. Resources have not been ruled out."
+          : runs.length
           ? "Recorded slots are available; AWS inventory currently has no matching visible resources."
           : "No AWS resources are expected before an approved setup run.",
-        meta: "Quiet",
-        action: runs.length ? "destroy" : "setup",
-        actionLabel: runs.length ? "Open destroy" : "Open setup",
+        meta: state.value?.aws?.refreshing ? "Checking" : "Quiet",
+        action: state.value?.aws?.refreshing ? "aws" : runs.length ? "destroy" : "setup",
+        actionLabel: state.value?.aws?.refreshing ? "Open inventory" : runs.length ? "Open destroy" : "Open setup",
       };
 
   return [safetyTile, runTile, exposureTile];

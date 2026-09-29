@@ -815,7 +815,7 @@ func (p *localControlPanel) operationLocked(name panelOperationName) *panelOpera
 func (p *localControlPanel) anyOperationRunningLocked() bool {
 	for _, name := range allPanelOperationNames() {
 		op := p.operationLocked(name)
-		if name != panelOperationCleanupBatch && op.Running && op.PID > 0 && !processAlive(op.PID) {
+		if name != panelOperationCleanupBatch && op.Running && !op.InProcess && op.PID > 0 && !processAlive(op.PID) {
 			p.markOperationStaleLocked(name, op,
 				"operation process exited before reporting completion",
 				"[control-panel] Operation process exited before reporting completion; status marked stale.",
@@ -836,7 +836,7 @@ func (p *localControlPanel) conflictingOperationRunningLocked(operation panelOpe
 	}
 	for _, name := range conflictingPanelOperationNames(operation) {
 		op := p.operationLocked(name)
-		if op.Running && op.PID > 0 && !processAlive(op.PID) {
+		if op.Running && !op.InProcess && op.PID > 0 && !processAlive(op.PID) {
 			p.markOperationStaleLocked(name, op,
 				"operation process exited before reporting completion",
 				"[control-panel] Operation process exited before reporting completion; status marked stale.",

@@ -10,17 +10,17 @@ const config = { repo: 'prime', release: 'rancher', namespace: 'cattle-system', 
 const channel = { repo: 'https://example.com/charts', devel: true };
 const fields = fieldsFor({ values: { bootstrapPassword: '', image: { pullPolicy: 'IfNotPresent' }, replicas: 3, hostname: '', agentTLSMode: '', annotations: {}, tolerations: [] } });
 const build = (overrides = initialOverrides(), env = [], changes = {}) => buildOutput({ ...config, ...changes }, channel, '2.16.0-head', fields, overrides, env);
-test('local defaults produce a pinned Prime head upgrade', () => {
+test('empty defaults avoid injecting credentials; commands pin the selected version', () => {
  const result = build();
  assert.match(result.command, /--reset-then-reuse-values/);
  assert.match(result.command, /--version '2.16.0-head'/);
  assert.match(result.command, /--devel/);
- assert.match(result.command, /--set 'replicas=1'/);
- assert.match(result.command, /--set-string 'bootstrapPassword=admin'/);
+ assert.deepEqual(initialOverrides(), {});
+ assert.doesNotMatch(result.command, /bootstrapPassword|--set/);
  assert.doesNotMatch(result.command, /--values/);
 });
 test('file mode preserves string types, nested values, lists and environment', () => {
- const result = build({ ...initialOverrides(), annotations: 'example.com/key: "123"', tolerations: '- key: dedicated' }, [{ name: 'PORT', value: '8080' }], { delivery: 'file' });
+ const result = build({ replicas: '1', 'image.pullPolicy': 'Always', annotations: 'example.com/key: "123"', tolerations: '- key: dedicated' }, [{ name: 'PORT', value: '8080' }], { delivery: 'file' });
  const values = parse(result.yaml);
  assert.equal(values.replicas, 1);
  assert.equal(values.image.pullPolicy, 'Always');
@@ -84,11 +84,11 @@ test('YAML import round-trips nested values, types, maps and environment pairs',
  assert.throws(() => importValues('unknown: yes', fields), /Unknown chart values/);
  assert.throws(() => importValues('extraEnv:\n- name: X\n  valueFrom: {}', fields), /name\/value/);
  assert.throws(() => importValues('__proto__:\n  polluted: true', fields), /Unsupported key/);
- assert.deepEqual(importValues('{}', fields), {overrides: {}, env: []});
+ assert.deepEqual(importValues('{}', fields), {overrides: {}, env: [], envExplicit: false});
 });
 test('documented maps stay intact and dotted map keys survive export', () => {
  const mapFields = fieldsFor({values:{annotations:{'example.com/key': 'default'}}, options:[{path:'annotations', default:{}}]});
- assert.deepEqual(mapFields.map(f => f.path), ['annotations']);
+ assert.equal(mapFields.find(f => f.path === 'annotations').type, 'yaml');
  const result = buildOutput(config, channel, '1.0.0', mapFields, {annotations:'example.com/key: custom'}, []);
  assert.equal(parse(result.yaml).annotations['example.com/key'], 'custom');
  const dottedFields = fieldsFor({values:{settings:{'example.com/key':'default'}}});
@@ -96,12 +96,12 @@ test('documented maps stay intact and dotted map keys survive export', () => {
  assert.equal(parse(dottedResult.allYaml).settings['example.com/key'], 'custom');
  assert.ok(dottedResult.command.includes('settings.example\\.com/key=custom'));
 });
-test('unchanged typed values are omitted and field errors are available inline', () => {
+test('typed default comparison and inline field errors', () => {
  const field = fields.find(f => f.path === 'replicas');
  assert.equal(changedField(field, {replicas:'3.0'}), false);
  assert.equal(changedField(field, {replicas:'0'}), true);
  assert.match(fieldErrors(fields, {replicas:'1.5'}).replicas, /whole number/);
- const boolField = fieldsFor({values:{debug:false}})[0];
+ const boolField = fieldsFor({values:{debug:false}}).find(f => f.path === 'debug');
  assert.throws(() => buildOutput(config, channel, '1.0.0', [boolField], {debug:'maybe'}, []), /true or false/);
 });
 
@@ -153,4 +153,35 @@ test('version search matches release and app versions; preview tokens preserve s
   assert.equal(codeTokens(text).map(token=>token.text).join(''),text);
   assert.equal(codeTokens(text,true).map(token=>token.text).join(''),text);
  }
+});
+
+test('explicit defaults override installed values and round-trip without disappearing', () => {
+ const imported = importValues('replicas: 3\nimage:\n  pullPolicy: IfNotPresent\nannotations: {}\nextraEnv: []\n', fields);
+ assert.deepEqual(imported.overrides, {replicas:'3','image.pullPolicy':'IfNotPresent',annotations:'{}'});
+ assert.equal(imported.envExplicit, true);
+ for (const delivery of ['set', 'file']) {
+  const result = build(imported.overrides, imported.env, { delivery, envExplicit: imported.envExplicit });
+  assert.deepEqual(parse(result.allYaml), {replicas:3,image:{pullPolicy:'IfNotPresent'},annotations:{},extraEnv:[]});
+  assert.deepEqual(parse(result.yaml).extraEnv, []);
+ }
+});
+test('schema-only optional fields, nullable values and dictionary keys survive import/export', () => {
+ assert.equal(fieldsFor({values:{replicas:3},schema:null}).find(field=>field.path==='replicas').type,'number');
+ const chartFields = fieldsFor({values:{labels:{'app.kubernetes.io/part-of':'rancher'}, optional:null}, schema:{type:'object',properties:{optional:{type:['string','null']},added:{type:'integer',minimum:1}}}});
+ const imported = importValues('optional: null\nadded: 2\nlabels:\n  app.kubernetes.io/part-of: demo\n', chartFields);
+ const output = buildOutput(config,channel,'2.15.2',chartFields,imported.overrides,[]);
+ assert.deepEqual(parse(output.allYaml),{optional:null,added:2,labels:{'app.kubernetes.io/part-of':'demo'}});
+ assert.deepEqual(parse(output.yaml).optional,null);
+ assert.equal(chartFields.find(f=>f.path==='bootstrapPassword').value,undefined);
+});
+test('unsafe nested keys, YAML alias cycles and NUL shell values are rejected', () => {
+ assert.throws(()=>importValues('annotations:\n  constructor: bad',fields),/Unsupported key/);
+ assert.throws(()=>build({annotations:'nested:\n  __proto__: bad'}),/Unsupported key/);
+ assert.throws(()=>build({tolerations:'- prototype: bad'}),/Unsupported key/);
+ assert.throws(()=>build({annotations:'a: &a\n  b: *a'}),/nesting|alias/i);
+ assert.throws(()=>build({hostname:'x\0y'}),/NUL/);
+ assert.throws(()=>build({},[{name:'X',value:'x\0y'}]),/NUL/);
+ assert.throws(()=>buildOutput(config,channel,'latest',fields,{},[]),/exact chart/);
+ assert.match(build({},[],{dryRun:true}).command,/--hide-secret/);
+ assert.match(buildSetupScript(build()),/umask 077/);
 });

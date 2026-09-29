@@ -1,6 +1,7 @@
 import { ref, reactive, computed, watch } from "vue";
 import { writeTextToClipboard } from "./clipboard.js";
 import { readJSON } from "./read-json.mjs";
+import { createSingleFlight } from "./local-lab.mjs";
 import {
   escapeHtml,
   highlightLogLine,
@@ -861,14 +862,14 @@ export const streamSteveLogs = (run, options = {}) => {
   logs.statusText = `Refreshing live Steve logs for ${run.runId}...`;
 
   const generation = livePollGeneration;
-  const poll = async () => {
+  const poll = createSingleFlight(async () => {
+    if (generation !== livePollGeneration || logs.mode !== "steveLive") return;
     try {
       const params = new URLSearchParams({ runId: run.runId });
-      const response = await apiFetch(`/api/steve/logs?${params.toString()}`);
+      const data = await readJSON(signal => apiFetch(`/api/steve/logs?${params.toString()}`, { signal }), { label: "Steve log refresh" });
       if (generation !== livePollGeneration || logs.mode !== "steveLive") {
         return;
       }
-      const data = await response.json();
       logs.rawText = data.text || "";
       logs.liveState = "live";
       renderLogViewer();
@@ -883,7 +884,7 @@ export const streamSteveLogs = (run, options = {}) => {
       renderLogViewer();
       logs.statusText = message;
     }
-  };
+  });
 
   poll();
   streamPollTimer = window.setInterval(poll, 3000);

@@ -6,7 +6,6 @@ const props = defineProps({ modelValue: String, versions: Array, latest: String,
 const emit = defineEmits(['update:modelValue']);
 const root = ref(null), trigger = ref(null), searchInput = ref(null), open = ref(false), query = ref('');
 const matches = computed(() => filterVersions(props.versions || [], query.value));
-const custom = computed(() => query.value.trim() && !/\s/.test(query.value.trim()) && !props.versions?.some(item => item.version === query.value.trim()));
 async function toggle() {
   open.value = !open.value;
   if (open.value) { query.value = ''; await nextTick(); searchInput.value?.focus(); }
@@ -36,11 +35,11 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', outside));
     </button>
     <p class="hl-help">{{ modelValue ? 'Pinned to this version.' : 'The generated command is pinned to the latest resolved version.' }}</p>
     <div v-if="open" id="hl-version-popover" class="hl-version-popover" role="region" aria-label="Choose chart version">
-      <div class="hl-version-search"><HelmLabIcon name="search" /><input ref="searchInput" v-model="query" type="search" aria-label="Search chart versions" placeholder="Search versions or enter a custom version" autocomplete="off" spellcheck="false"></div>
+      <div class="hl-version-search"><HelmLabIcon name="search" /><input ref="searchInput" v-model="query" type="search" aria-label="Search chart versions" placeholder="Find a published chart version…" autocomplete="off" spellcheck="false"></div>
       <div class="hl-version-options">
         <button type="button" data-version-option class="hl-version-option" :aria-pressed="!modelValue" @click="select('')"><span><strong>Use latest</strong><small>{{ latest }}</small></span><HelmLabIcon v-if="!modelValue" name="check" /></button>
         <button v-for="item in matches.slice(0, 50)" :key="item.version" type="button" data-version-option class="hl-version-option" :aria-pressed="modelValue === item.version" @click="select(item.version)"><span><strong>{{ item.version }}</strong><small v-if="item.created">Published {{ new Date(item.created).toLocaleDateString() }}</small></span><HelmLabIcon v-if="modelValue === item.version" name="check" /></button>
-        <button v-if="custom" type="button" data-version-option class="hl-version-option hl-custom-version" @click="select(query.trim())"><span><strong>Use “{{ query.trim() }}”</strong><small>Custom version · values use the latest chart as a reference</small></span><HelmLabIcon name="arrow" /></button>
+        <p v-if="!matches.length" class="hl-empty">No published chart matches. Try the version number or a shorter commit prefix.</p>
       </div>
       <div class="hl-version-footer"><span>{{ matches.length }} published versions{{ matches.length > 50 ? ' · showing 50; type to narrow' : '' }}</span><button type="button" class="hl-text-button" @click="close">Done</button></div>
     </div>

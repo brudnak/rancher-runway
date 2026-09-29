@@ -51,6 +51,7 @@ type steveLabRunRecord struct {
 	LogPath                      string    `json:"logPath,omitempty"`
 	KeepCluster                  bool      `json:"keepCluster"`
 	SQLCache                     bool      `json:"sqlCache"`
+	SQLCacheFlag                 bool      `json:"sqlCacheFlag,omitempty"`
 	EnableMetrics                bool      `json:"enableMetrics,omitempty"`
 	MetricsUpdateIntervalSeconds int       `json:"metricsUpdateIntervalSeconds,omitempty"`
 	ExtraEnv                     []string  `json:"extraEnv,omitempty"`
@@ -750,6 +751,7 @@ func (p *localControlPanel) startSteveLab(req steveLabStartRequest) error {
 	}
 	op := p.operationLocked(panelOperationSteveLab)
 	op.Running = true
+	op.InProcess = true
 	op.PID = 0
 	op.StartedAt = &now
 	op.FinishedAt = nil
@@ -774,6 +776,7 @@ func (p *localControlPanel) startSteveLab(req steveLabStartRequest) error {
 	p.persistOperationsLocked()
 	if err := p.writeSteveLabRunRecord(record); err != nil {
 		op.Running = false
+		op.InProcess = false
 		op.Error = err.Error()
 		p.persistOperationsLocked()
 		return err
@@ -811,20 +814,11 @@ func (p *localControlPanel) runSteveLabSteps(record *steveLabRunRecord) error {
 		record.SteveCommit = commit
 	}
 
-	// Check if the downloaded Steve version supports SQL Cache
-	hasSQLCache := false
-	if _, err := os.Stat(filepath.Join(record.SourceDir, "pkg", "sqlcache")); err == nil {
-		hasSQLCache = true
+	if err := p.prepareSteveEndpoint(record); err != nil {
+		return err
 	}
-	record.SQLCache = hasSQLCache
 	record.UpdatedAt = time.Now()
 	_ = p.writeSteveLabRunRecord(*record)
-
-	if hasSQLCache {
-		p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Detected SQL cache support in Steve version")
-	} else {
-		p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Resolved Steve commit "+record.SteveCommit)
-	}
 
 	if err := p.runSteveLabCommand(record, record.RunDir, "k3d", "cluster", "create", record.ClusterName, "--image", k3sImage(record.K3SVersion), "--wait", "--timeout", "180s"); err != nil {
 		return err
@@ -1022,21 +1016,20 @@ func (p *localControlPanel) runSteveLabCommandWithEnv(record *steveLabRunRecord,
 	wg.Wait()
 	record.UpdatedAt = time.Now()
 	_ = p.writeSteveLabRunRecord(*record)
-	return cmd.Wait()
+	err = cmd.Wait()
+	p.clearOperationPID(panelOperationSteveLab, cmd.Process.Pid)
+	return err
 }
 
 func (p *localControlPanel) startSteveEndpoint(record *steveLabRunRecord) error {
-	goPath, err := resolveLocalToolPath("go")
-	if err != nil {
-		return err
-	}
+	binaryPath := steveEndpointBinaryPath(record)
 	args := steveEndpointArgs(record)
-	p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] $ go "+strings.Join(args, " "))
+	p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] $ "+binaryPath+" "+strings.Join(args, " "))
 	logFile, err := os.OpenFile(record.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to open Steve log: %w", err)
 	}
-	cmd := exec.Command(goPath, args...)
+	cmd := exec.Command(binaryPath, args...)
 	cmd.Dir = record.SourceDir
 	cmd.Env = localToolEnv(steveEndpointEnv(record))
 	cmd.Stdout = logFile
@@ -1046,6 +1039,7 @@ func (p *localControlPanel) startSteveEndpoint(record *steveLabRunRecord) error 
 		_ = logFile.Close()
 		return fmt.Errorf("failed to start Steve endpoint: %w", err)
 	}
+	p.setOperationPID(panelOperationSteveLab, cmd.Process.Pid)
 	record.StevePID = cmd.Process.Pid
 	record.Status = "starting"
 	record.UpdatedAt = time.Now()
@@ -1054,8 +1048,16 @@ func (p *localControlPanel) startSteveEndpoint(record *steveLabRunRecord) error 
 	p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Logs "+record.LogPath)
 	go p.watchSteveEndpointProcess(*record, cmd, logFile)
 	if err := waitForLocalPort(record.HTTPSPort, cmd.Process.Pid, 2*time.Minute); err != nil {
-		_ = interruptProcessTree(cmd.Process.Pid)
-		return err
+		if processAlive(cmd.Process.Pid) {
+			_ = interruptProcessTree(cmd.Process.Pid)
+		} else {
+			record.StevePID = 0
+		}
+		p.clearOperationPID(panelOperationSteveLab, cmd.Process.Pid)
+		if tail := steveLogTail(record.LogPath); tail != "" {
+			p.appendOperationOutput(panelOperationSteveLab, "[steve-lab] Startup log tail:\n"+tail)
+		}
+		return steveEndpointFailure(record, err)
 	}
 	record.Status = "serving"
 	record.UpdatedAt = time.Now()
@@ -1066,12 +1068,11 @@ func (p *localControlPanel) startSteveEndpoint(record *steveLabRunRecord) error 
 
 func steveEndpointArgs(record *steveLabRunRecord) []string {
 	args := []string{
-		"run", "main.go",
 		"--kubeconfig", record.Kubeconfig,
 		"--http-listen-port", fmt.Sprintf("%d", record.HTTPPort),
 		"--https-listen-port", fmt.Sprintf("%d", record.HTTPSPort),
 	}
-	if record.SQLCache {
+	if record.SQLCacheFlag {
 		args = append(args, "--sql-cache")
 	}
 	if record.EnableMetrics {
@@ -1110,7 +1111,7 @@ func (p *localControlPanel) watchSteveEndpointProcess(record steveLabRunRecord, 
 	current.UpdatedAt = time.Now()
 	if err != nil && current.Status != "stopped" && current.Status != "cleaned" {
 		current.Status = "failed"
-		current.Error = "Steve endpoint exited: " + err.Error()
+		current.Error = steveEndpointFailure(&current, fmt.Errorf("Steve endpoint exited: %w", err)).Error()
 	} else if current.Status == "serving" {
 		current.Status = "stopped"
 	}
@@ -1239,6 +1240,7 @@ func (p *localControlPanel) finishSteveLabOperation(err error) {
 	defer p.mu.Unlock()
 	op := p.operationLocked(panelOperationSteveLab)
 	op.Running = false
+	op.InProcess = false
 	op.PID = 0
 	finished := time.Now()
 	op.FinishedAt = &finished
