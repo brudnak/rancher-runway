@@ -13,3 +13,8 @@ export function moveLibraryPackage(library,id,bucketId,index){
  destination.splice(index==null?destination.length:Math.max(0,Math.min(index,destination.length)),0,id);return next;
 }
 export function reorderLibraryBucket(library,id,delta){const next=structuredClone(library),index=next.buckets.findIndex(b=>b.id===id),target=index+delta;if(index>=0&&target>=0&&target<next.buckets.length){const [bucket]=next.buckets.splice(index,1);next.buckets.splice(target,0,bucket)}return next;}
+export function deleteLibraryBucket(library,id){
+ const next=structuredClone(library),index=next.buckets.findIndex(b=>b.id===id);
+ if(id==='unfiled'||index<0)throw new Error('Choose an existing milestone bucket.');
+ const [bucket]=next.buckets.splice(index,1);next.unfiled.push(...bucket.packageIds);return next;
+}

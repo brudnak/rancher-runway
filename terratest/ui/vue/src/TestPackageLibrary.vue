@@ -1,7 +1,7 @@
 <script setup>
 import {computed,ref} from 'vue';
 import Icon from './HelmLabIcon.vue';
-import {libraryGroups,moveLibraryPackage,reorderLibraryBucket} from './test-package-library.mjs';
+import {libraryGroups,moveLibraryPackage,reorderLibraryBucket,deleteLibraryBucket} from './test-package-library.mjs';
 import {newPackageRecordID,packageStatus} from './test-packages.mjs';
 const props=defineProps({library:Object,packages:Array,visible:Array,selectedId:String,busy:Boolean});
 const emit=defineEmits(['select','save','export']);
@@ -11,7 +11,7 @@ const visibleIds=computed(()=>new Set((props.visible||[]).map(p=>p.id)));
 function copy(){return JSON.parse(JSON.stringify(props.library));}
 function create(){if(props.busy||!newName.value.trim())return;const next=copy();next.buckets.push({id:newPackageRecordID(),name:newName.value.trim(),packageIds:[]});emit('save',next);creating.value=false;newName.value='';}
 function rename(id){if(props.busy||!renameText.value.trim())return;const next=copy();next.buckets.find(b=>b.id===id).name=renameText.value.trim();emit('save',next);renaming.value='';}
-function remove(id){const next=copy(),b=next.buckets.find(b=>b.id===id);if(!b||b.packageIds.length)return;next.buckets=next.buckets.filter(b=>b.id!==id);emit('save',next);}
+function remove(id){if(props.busy)return;emit('save',deleteLibraryBucket(props.library,id));}
 function move(id,bucket,index){if(props.busy)return;emit('save',moveLibraryPackage(copy(),id,bucket,index));moving.value='';dragged.value='';}
 function toggle(id){const next=new Set(collapsed.value);next.has(id)?next.delete(id):next.add(id);collapsed.value=next;}
 function drop(event,bucket,index){event.preventDefault();if(dragged.value)move(dragged.value,bucket,index);}
@@ -21,7 +21,7 @@ function drop(event,bucket,index){event.preventDefault();if(dragged.value)move(d
  <div class="pl-organization"><span>Milestone buckets</span><button type="button" :disabled="busy" @click="creating=!creating" aria-label="Create milestone bucket"><Icon name="plus"/></button></div>
  <form v-if="creating" class="pl-inline" @submit.prevent="create"><label>Milestone name<input v-model="newName" maxlength="120" required placeholder="v2.16.0 · Frameworks" :disabled="busy"/></label><button :disabled="busy||!newName.trim()">Create bucket</button><button type="button" @click="creating=false">Cancel</button></form>
  <section v-for="(group,groupIndex) in groups" :key="group.id" class="pl-bucket" :aria-label="group.name+' packages'" @dragover.prevent @drop="drop($event,group.id)">
-  <header><button type="button" class="pl-heading" :aria-expanded="!collapsed.has(group.id)" @click="toggle(group.id)"><Icon name="folder"/><strong>{{group.name}}</strong><span>{{group.packages.length}}</span></button><details class="pl-menu"><summary :aria-label="'Options for '+group.name"><Icon name="sliders"/></summary><div @click="$event.currentTarget.closest('details')?.removeAttribute('open')"><template v-if="group.id!=='unfiled'"><button type="button" :disabled="busy" @click="renaming=group.id;renameText=group.name">Rename bucket</button><button type="button" :disabled="busy||groupIndex===0" @click="emit('save',reorderLibraryBucket(copy(),group.id,-1))">Move bucket up</button><button type="button" :disabled="busy||groupIndex===groups.length-2" @click="emit('save',reorderLibraryBucket(copy(),group.id,1))">Move bucket down</button><button type="button" :disabled="busy||group.packages.length>0" @click="remove(group.id)">Remove empty bucket</button></template><button type="button" :disabled="busy||!group.packages.length" @click="emit('export',group.id)">Export this bucket…</button></div></details></header>
+  <header><button type="button" class="pl-heading" :aria-expanded="!collapsed.has(group.id)" @click="toggle(group.id)"><Icon name="folder"/><strong>{{group.name}}</strong><span>{{group.packages.length}}</span></button><details class="pl-menu"><summary :aria-label="'Options for '+group.name"><Icon name="sliders"/></summary><div @click="$event.currentTarget.closest('details')?.removeAttribute('open')"><template v-if="group.id!=='unfiled'"><button type="button" :disabled="busy" @click="renaming=group.id;renameText=group.name">Rename bucket</button><button type="button" :disabled="busy||groupIndex===0" @click="emit('save',reorderLibraryBucket(copy(),group.id,-1))">Move bucket up</button><button type="button" :disabled="busy||groupIndex===groups.length-2" @click="emit('save',reorderLibraryBucket(copy(),group.id,1))">Move bucket down</button><button type="button" :disabled="busy" title="Packages move to Unfiled, keeping their order and history." @click="remove(group.id)">Delete bucket</button></template><button type="button" :disabled="busy||!group.packages.length" @click="emit('export',group.id)">Export this bucket…</button></div></details></header>
   <form v-if="renaming===group.id" class="pl-inline" @submit.prevent="rename(group.id)"><label>Bucket name<input v-model="renameText" maxlength="120" required/></label><button :disabled="busy">Save name</button><button type="button" @click="renaming=''">Cancel</button></form>
   <div v-if="!collapsed.has(group.id)" class="pl-items">
    <p v-if="!group.packages.length" class="pl-empty">Move a package here to prepare this milestone.</p>

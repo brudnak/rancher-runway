@@ -4,7 +4,7 @@ Test Packages keeps an issue's manual test plan, reproduction attempts, fix vali
 
 ## Milestone library
 
-The library groups packages into named milestone buckets such as **v2.16.0 · Frameworks**, with an **Unfiled** area for new and imported investigations. Create a bucket, rename it when release plans change, and use its menu to reorder it. Empty buckets can be removed. Buckets are local organization; renaming or moving one does not update a GitHub milestone.
+The library groups packages into named milestone buckets such as **v2.16.0 · Frameworks**, with an **Unfiled** area for new and imported investigations. Create a bucket, rename it when release plans change, and use its menu to reorder it. Delete any bucket from its menu; its packages move to the end of Unfiled in their existing order, preserving their plans, sessions, and evidence. Unfiled itself cannot be deleted. Buckets are local organization; renaming or moving one does not update a GitHub milestone.
 
 Drag a package to another bucket or position, or use its **Move to bucket**, **Move package up**, and **Move package down** actions. Package identity, saved plans, recovery drafts, and preserved sessions stay intact. Search and status filters apply inside the buckets. Placement and order are stored in the private `.library.json` index separately from package revisions. Concurrent organization changes are rejected; refresh before retrying.
 
