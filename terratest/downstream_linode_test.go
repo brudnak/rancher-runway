@@ -6,7 +6,36 @@ import (
 	"testing"
 
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
+	"github.com/spf13/viper"
 )
+
+func TestSetupLinodeDownstreamPlansRequiresTokenAndDefersToPanel(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	t.Setenv("LINODE_TOKEN", "")
+	t.Setenv("LINODE_ACCESS_TOKEN", "")
+	t.Setenv(deferSetupDownstreamsEnv, "")
+	t.Setenv(configuredDownstreamLinodePlansEnv, `[{"enabled":false}]`)
+	if plans, err := setupLinodeDownstreamPlans(1); err != nil || len(plans) != 0 {
+		t.Fatalf("disabled plans must not require credentials: %+v %v", plans, err)
+	}
+	t.Setenv(configuredDownstreamLinodePlansEnv, `[{"enabled":true,"distribution":"rke2"}]`)
+	if _, err := setupLinodeDownstreamPlans(1); err == nil {
+		t.Fatal("enabled plans must fail before AWS provisioning without a token")
+	}
+	viper.Set("linode.access_token", "test-token")
+	if plans, err := setupLinodeDownstreamPlans(1); err != nil || len(plans) != 1 || plans[0].Distribution != "rke2" {
+		t.Fatalf("enabled plan should run during direct setup: %+v %v", plans, err)
+	}
+	t.Setenv(deferSetupDownstreamsEnv, "1")
+	if plans, err := setupLinodeDownstreamPlans(1); err != nil || len(plans) != 0 {
+		t.Fatalf("panel must schedule downstreams separately: %+v %v", plans, err)
+	}
+	t.Setenv(configuredDownstreamLinodePlansEnv, `[{"enabled":true},{"enabled":false}]`)
+	if _, err := setupLinodeDownstreamPlans(1); err == nil {
+		t.Fatal("panel deferral must not bypass plan validation")
+	}
+}
 
 func TestRenderLinodeDownstreamResources(t *testing.T) {
 	cfg := downstreamProvisioningConfig{

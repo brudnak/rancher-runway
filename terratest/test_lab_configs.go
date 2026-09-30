@@ -217,8 +217,8 @@ func (s *testLabService) configAction(req testLabRequest) (any, error) {
 		}
 		return lib, nil
 	case "folder-delete":
-		if req.Confirm != "DELETE FOLDER" {
-			return nil, fmt.Errorf("type DELETE FOLDER to remove this empty folder")
+		if req.Confirm != typedConfirmationPhrase {
+			return nil, fmt.Errorf("type confirm to remove this empty folder")
 		}
 		for _, f := range lib.Files {
 			if f.Folder == req.ID {
@@ -307,8 +307,8 @@ func (s *testLabService) configAction(req testLabRequest) (any, error) {
 			return nil, fmt.Errorf("saved config not found")
 		}
 		f := lib.Files[index]
-		if req.Confirm != "DELETE CONFIG" || req.Revision != f.Revision {
-			return nil, fmt.Errorf("reload this config and confirm DELETE CONFIG")
+		if req.Confirm != typedConfirmationPhrase || req.Revision != f.Revision {
+			return nil, fmt.Errorf("reload this config and type confirm to delete it")
 		}
 		// Remove the bytes first: a failed manifest write must not retain credentials
 		// while reporting successful cleanup. A retry handles a missing file.

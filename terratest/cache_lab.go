@@ -27,6 +27,7 @@ const cacheLabMaxDB = int64(2 << 30)
 var cacheLabIDPattern = regexp.MustCompile(`^[a-f0-9]{24}$`)
 
 type cacheLabWorkspace struct {
+	ClusterID     string               `json:"clusterId,omitempty"`
 	ID            string               `json:"id"`
 	Name          string               `json:"name"`
 	URL           string               `json:"url"`
@@ -98,11 +99,12 @@ type cacheLabLibrary struct {
 	Job        cacheLabJob         `json:"job"`
 }
 type cacheLabService struct {
-	mu      sync.Mutex
-	root    string
-	library cacheLabLibrary
-	tokens  map[string]string
-	cancel  context.CancelFunc
+	resolveCluster func(string, string, string, string) (string, error)
+	mu             sync.Mutex
+	root           string
+	library        cacheLabLibrary
+	tokens         map[string]string
+	cancel         context.CancelFunc
 	// Tests replace command execution; production always uses argument arrays.
 	runner cacheLabCommandRunner
 }
@@ -126,6 +128,7 @@ func (p *localControlPanel) cacheLabService() (*cacheLabService, error) {
 	}
 	s, err := newCacheLabService(root)
 	if err == nil {
+		s.resolveCluster = p.resolveLabCluster
 		p.cacheLab = s
 	}
 	return s, err
@@ -265,6 +268,7 @@ func cacheLabText(value string, max int) string {
 }
 
 type cacheLabRequest struct {
+	ClusterID      string            `json:"clusterId,omitempty"`
 	Action         string            `json:"action"`
 	Workspace      string            `json:"workspace"`
 	Snapshot       string            `json:"snapshot"`
@@ -304,6 +308,17 @@ func (p *localControlPanel) handleCacheLab(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if r.Method == http.MethodGet {
+		if s.resolveCluster != nil {
+			candidates, candidateErr := p.labClusterCandidates()
+			if candidateErr != nil {
+				http.Error(w, candidateErr.Error(), 500)
+				return
+			}
+			if err := s.backfillClusters(candidates); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		writeJSON(w, map[string]any{"library": s.library, "root": s.root, "keychain": runtime.GOOS == "darwin"})
@@ -361,6 +376,21 @@ func (s *cacheLabService) mutate(req cacheLabRequest) (result any, returnedErr e
 		}
 	}()
 	switch req.Action {
+	case "assign-cluster":
+		if strings.TrimSpace(req.ClusterID) == "" {
+			return nil, fmt.Errorf("choose a cluster workspace")
+		}
+		if s.library.Job.Running && s.library.Job.Workspace == w.ID {
+			return nil, fmt.Errorf("wait for capture before changing this association")
+		}
+		id, err := s.resolveClusterID(req.ClusterID, *w)
+		if err != nil {
+			return nil, err
+		}
+		if w.ClusterID != "" && id != w.ClusterID && s.workspaceHasSnapshotsLocked(w.ID) {
+			return nil, fmt.Errorf("this workspace has snapshots; create another workspace for a different cluster")
+		}
+		w.ClusterID = id
 	case "select-pod":
 		if s.library.Job.Running && s.library.Job.Workspace == w.ID {
 			return nil, fmt.Errorf("capture is in progress")
@@ -421,8 +451,8 @@ func (s *cacheLabService) mutate(req cacheLabRequest) (result any, returnedErr e
 			w.View.Folder = name
 		}
 	case "delete-folder":
-		if req.Confirm != "remove folder" {
-			return nil, fmt.Errorf("type remove folder to confirm")
+		if req.Confirm != typedConfirmationPhrase {
+			return nil, fmt.Errorf("type confirm to remove this folder")
 		}
 		for i := range s.library.Snapshots {
 			v := &s.library.Snapshots[i]
@@ -469,7 +499,10 @@ func (s *cacheLabService) mutate(req cacheLabRequest) (result any, returnedErr e
 			}
 		}
 		w.Queries = queries
-	case "snapshot":
+	case "snapshot", "rename-snapshot":
+		if req.Action == "rename-snapshot" && strings.TrimSpace(req.Name) == "" {
+			return nil, fmt.Errorf("enter a snapshot name")
+		}
 		found := false
 		for i := range s.library.Snapshots {
 			v := &s.library.Snapshots[i]
@@ -477,9 +510,11 @@ func (s *cacheLabService) mutate(req cacheLabRequest) (result any, returnedErr e
 				if req.Name != "" {
 					v.Name = cacheLabText(req.Name, 140)
 				}
-				v.Notes = cacheLabText(req.Notes, 8000)
-				v.Folder = cacheLabText(req.Folder, 80)
-				v.Favorite = req.Favorite
+				if req.Action != "rename-snapshot" {
+					v.Notes = cacheLabText(req.Notes, 8000)
+					v.Folder = cacheLabText(req.Folder, 80)
+					v.Favorite = req.Favorite
+				}
 				found = true
 			}
 		}
@@ -487,18 +522,14 @@ func (s *cacheLabService) mutate(req cacheLabRequest) (result any, returnedErr e
 			return nil, fmt.Errorf("snapshot not found")
 		}
 	case "delete-snapshot", "delete-workspace", "clear-workspace":
+		if req.ClusterID != "" && w.ClusterID != req.ClusterID {
+			return nil, fmt.Errorf("cache workspace cluster association changed; review cleanup again")
+		}
 		if s.library.Job.Running && s.library.Job.Workspace == w.ID {
 			return nil, fmt.Errorf("wait for the capture to finish or cancel it before cleanup")
 		}
-		phrase := "delete snapshot"
-		if req.Action == "delete-workspace" {
-			phrase = "delete workspace"
-		}
-		if req.Action == "clear-workspace" {
-			phrase = "delete snapshots"
-		}
-		if req.Confirm != phrase {
-			return nil, fmt.Errorf("type %s to confirm", phrase)
+		if req.Confirm != typedConfirmationPhrase {
+			return nil, fmt.Errorf("type confirm to clean up the selected local data")
 		}
 		if req.Action == "delete-workspace" && w.RememberToken {
 			if _, err := cacheLabKeychain("delete", w.ID, ""); err != nil {
@@ -753,18 +784,14 @@ func (p *localControlPanel) cacheLabSteve(s *cacheLabService, runID string) (any
 	if !ok {
 		return nil, fmt.Errorf("Steve session not found")
 	}
-	s.mu.Lock()
-	workspace := ""
-	for _, v := range s.library.Workspaces {
-		if v.Kind == "steve" && v.URL == record.RunID {
-			workspace = v.ID
-		}
+	clusterID, err := p.resolveLabCluster(localLabClusterWorkspaceID("steve", record.RunID), "", "", "")
+	if err != nil {
+		return nil, err
 	}
-	if workspace == "" {
-		workspace = cacheLabID()
-		s.library.Workspaces = append(s.library.Workspaces, cacheLabWorkspace{ID: workspace, Kind: "steve", URL: record.RunID, Name: "Steve · " + record.SteveRef, Connected: true, CreatedAt: time.Now().UTC(), Folders: []string{}, Queries: []cacheLabSavedQuery{}})
+	workspace, err := s.prepareSteveWorkspace(record, clusterID)
+	if err != nil {
+		return nil, err
 	}
-	s.mu.Unlock()
 	ctx, id, err := s.beginJob(workspace, "Snapshotting Steve cache")
 	if err != nil {
 		return nil, err

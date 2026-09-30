@@ -215,13 +215,24 @@ func (s *cacheLabService) saveWorkspace(ctx context.Context, req cacheLabRequest
 	if old != nil && old.Kind != profile.Kind {
 		return nil, fmt.Errorf("create another workspace to change the connection type")
 	}
-	if old != nil && old.URL != profile.URL {
-		for _, snapshot := range s.library.Snapshots {
-			if snapshot.Workspace == old.ID {
-				return nil, fmt.Errorf("this workspace already has snapshots; create a new workspace for a different source URL")
-			}
+	if old != nil {
+		// Older clients omit clusterId; preserve an established association when
+		// editing connection credentials or a nickname.
+		if profile.ClusterID == "" {
+			profile.ClusterID = old.ClusterID
+		}
+		if s.workspaceHasSnapshotsLocked(old.ID) && (old.URL != profile.URL || old.Kubeconfig != profile.Kubeconfig || old.Context != profile.Context || old.Cluster != profile.Cluster) {
+			return nil, fmt.Errorf("this workspace already has snapshots; create a new workspace for a different source or context")
 		}
 	}
+	clusterID, err := s.resolveClusterID(profile.ClusterID, profile)
+	if err != nil {
+		return nil, err
+	}
+	if old != nil && old.ClusterID != "" && old.ClusterID != clusterID && s.workspaceHasSnapshotsLocked(old.ID) {
+		return nil, fmt.Errorf("this workspace already has snapshots; create a new workspace for a different cluster")
+	}
+	profile.ClusterID = clusterID
 	// Never merge by token or display name: two contexts may use the same proxy.
 	if old == nil {
 		if len(s.library.Workspaces) >= 100 {
@@ -257,10 +268,8 @@ func (s *cacheLabService) saveWorkspace(ctx context.Context, req cacheLabRequest
 			return nil, err
 		}
 	}
-	if profile.Kind == "rancher" {
-		s.tokens[profile.ID] = token
-	}
 	profile.Connected = true
+	manifestBefore, _ := json.Marshal(s.library)
 	if old != nil {
 		*old = profile
 	} else {
@@ -268,7 +277,11 @@ func (s *cacheLabService) saveWorkspace(ctx context.Context, req cacheLabRequest
 	}
 	s.library.Active = profile.ID
 	if err = s.persistLocked(); err != nil {
+		_ = json.Unmarshal(manifestBefore, &s.library)
 		return nil, err
+	}
+	if profile.Kind == "rancher" {
+		s.tokens[profile.ID] = token
 	}
 	encoded, _ := json.Marshal(profile)
 	var response cacheLabWorkspace

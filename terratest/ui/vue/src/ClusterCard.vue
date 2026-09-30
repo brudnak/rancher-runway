@@ -5,7 +5,7 @@
     <div class="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2 text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
-          <span>{{ cluster.name }}</span>
+          <span>{{ clusterDisplayName(cluster.id, cluster.name) }}</span>
           <span v-if="cluster.version" class="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-semibold text-zinc-600 dark:border-white/10 dark:bg-white/[0.05] dark:text-zinc-300">
             {{ isDownstream ? 'Kubernetes version' : 'Requested Rancher' }} {{ cluster.version }}
           </span>
@@ -57,6 +57,8 @@
         </span>
       </div>
     </div>
+
+    <ClusterWorkspaceCard :cluster="cluster" embedded />
 
     <!-- Collapsible Detailed Meta Panel -->
     <div v-if="!isClusterCollapsed" class="mt-4 min-w-0 border-t border-zinc-100 pt-4 dark:border-white/5">
@@ -277,6 +279,8 @@ import {
   podsFor,
 } from "../../static/control_panel_utils.js";
 import DeployedImageDetails from "./DeployedImageDetails.vue";
+import ClusterWorkspaceCard from "./ClusterWorkspaceCard.vue";
+import { clusterDisplayName } from "./cluster-workspace-store.mjs";
 
 const props = defineProps({
   cluster: {

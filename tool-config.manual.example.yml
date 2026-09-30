@@ -29,6 +29,26 @@ deployment:
 
 total_has: 2
 
+# Optional Linode downstream clusters. These flags only control downstream creation;
+# the management Rancher deployments are still created by the setup above.
+# This example has total_has: 2, so provide two entries in rancher.helm_commands order.
+# For total_has: 1, keep only the first entry. Each enabled entry creates one
+# single-node downstream after its management Rancher is ready.
+# Supply LINODE_TOKEN or LINODE_ACCESS_TOKEN in the environment.
+downstream:
+  linode:
+    plans:
+      # Downstream managed by the FIRST Rancher deployment.
+      - enabled: false # Set true to create this downstream cluster.
+        distribution: k3s # k3s or rke2, independent of management deployment.type.
+        kubernetes_version: "" # Empty selects Rancher's supported default for this distro.
+        region: us-ord
+        instance_type: g6-standard-2
+        image: linode/ubuntu22.04
+      # No downstream for the SECOND Rancher deployment.
+      # Omitted settings use built-in defaults, independently for each entry.
+      - enabled: false
+
 user:
   first_name: ""
   last_name: ""

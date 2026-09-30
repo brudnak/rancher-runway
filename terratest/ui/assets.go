@@ -31,3 +31,6 @@ var ControlPanelClustersJS string
 
 //go:embed static/control_panel.css
 var ControlPanelCSS string
+
+//go:embed static/control_panel_components.css
+var ControlPanelComponentsCSS string

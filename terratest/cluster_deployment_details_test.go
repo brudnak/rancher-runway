@@ -186,6 +186,7 @@ func TestKubeconfigBackedManagementClusterExcludesDownstream(t *testing.T) {
 }
 
 func TestHandleClusterDeploymentDetailsGuardsRequest(t *testing.T) {
+	t.Setenv("RANCHER_RUNWAY_WORKSPACE", t.TempDir())
 	panel := &localControlPanel{token: "secret"}
 
 	t.Run("authorization", func(t *testing.T) {

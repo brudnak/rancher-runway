@@ -281,8 +281,8 @@ func (s *testLabService) githubAction(ctx context.Context, req testLabRequest) (
 		defer s.mu.Unlock()
 		return s.library.GitHub, s.persistLocked()
 	case "github-disconnect":
-		if req.Confirm != "DISCONNECT" {
-			return nil, fmt.Errorf("confirm DISCONNECT to forget the saved connection")
+		if req.Confirm != typedConfirmationPhrase {
+			return nil, fmt.Errorf("type confirm to forget the saved connection")
 		}
 		if _, err := s.keychain("delete", "github", ""); err != nil {
 			return nil, err
@@ -332,8 +332,8 @@ func (s *testLabService) githubAction(ctx context.Context, req testLabRequest) (
 		if err != nil {
 			return nil, err
 		}
-		if req.Confirm != repo.FullName {
-			return nil, fmt.Errorf("confirm the repository's owner/name")
+		if req.Confirm != typedConfirmationPhrase {
+			return nil, fmt.Errorf("type confirm to connect this repository")
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -356,8 +356,8 @@ func (s *testLabService) githubAction(ctx context.Context, req testLabRequest) (
 		if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$`).MatchString(req.Name) {
 			return nil, fmt.Errorf("enter a repository name using letters, numbers, dots, dashes, or underscores")
 		}
-		if req.Confirm != gh.Login+"/"+req.Name {
-			return nil, fmt.Errorf("confirm the exact owner/name of the new private repository")
+		if req.Confirm != typedConfirmationPhrase {
+			return nil, fmt.Errorf("type confirm to create this private repository")
 		}
 		var repo testLabRepo
 		if err := s.githubAPI(ctx, "POST", "/user/repos", map[string]any{"name": req.Name, "private": true, "auto_init": true, "description": "Dedicated Rancher Runway test workspace"}, &repo); err != nil {

@@ -1,5 +1,9 @@
 <template>
-  <div class="grid min-w-0 gap-4">
+  <div class="cluster-home grid min-w-0 gap-4">
+    <header class="cluster-home-hero"><div><span class="cluster-home-eyebrow"><Icon name="layers"/>RANCHER RUNWAY / CLUSTER WORKSPACES</span><h2>Clusters<span>.</span></h2><p>The environment, the experiments, and everything you learned. Together.</p></div><div class="cluster-home-totals"><span><strong>{{ items.length }}</strong> discovered</span><span><strong>{{ retainedWorkspaces.length }}</strong> retained & external</span></div></header>
+    <div class="cluster-home-search"><label><Icon name="search"/><input v-model="clusterSearch" type="search" aria-label="Search cluster workspaces" placeholder="Find a cluster, nickname, hostname, or run…"/></label><button type="button" @click="refreshClusterWorkspaces"><Icon name="refresh"/>Refresh history</button></div>
+    <div v-if="clusterWorkspaceError" class="cluster-home-error" role="alert">{{ clusterWorkspaceError }} <button type="button" @click="refreshClusterWorkspaces">Try again</button></div>
+    <template v-if="!clusterSearch.trim()">
     <RefreshStatus v-if="!cleanupRunning" :refreshing="state.clusters?.refreshing" label="cluster status" />
     <!-- Active operation is running teardown -->
     <div
@@ -121,15 +125,23 @@
         </div>
       </div>
     </div>
+    </template>
+    <div v-else-if="!cleanupRunning" class="cluster-home-results"><p class="cluster-home-caption">{{ matchingLive.length + matchingRetained.length }} matching workspaces</p><ClusterCard v-for="cluster in matchingLive" :key="cluster.id" :cluster="cluster"/><div v-if="!matchingLive.length&&!matchingRetained.length" class="cluster-home-empty"><Icon name="search"/><h3>No workspaces match.</h3><p>Try a nickname, cluster ID, Rancher URL, or run ID.</p><button type="button" @click="clusterSearch=''">Clear search</button></div></div>
+    <section v-if="matchingRetained.length" class="cluster-home-retained"><header><span class="cluster-home-eyebrow">SAVED WORK HAS A HOME</span><h3>Retained & external workspaces</h3><p>Explore the same test results and snapshots saved in your labs, including environments no longer in the live cluster list.</p></header><ClusterWorkspaceCard v-for="cluster in matchingRetained" :key="cluster.id" :cluster="cluster"/></section>
   </div>
 </template>
 
 <script setup>
 import RefreshStatus from './RefreshStatus.vue';
 import { initialDiscovery } from './panel-presentation.mjs';
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
+import Icon from "./HelmLabIcon.vue";
+import ClusterWorkspaceCard from "./ClusterWorkspaceCard.vue";
+import { refreshTestPackageSummaries } from "./test-packages-store.mjs";
+import { useClusterWorkspaces,refreshClusterWorkspaces,selectedClusterWorkspaceId,clusterDisplayName } from "./cluster-workspace-store.mjs";
 import {
   state,
+  activeTab,
   activeClusterRunKey,
   activeClusterHAKey,
   openCleanupLogs,
@@ -139,6 +151,15 @@ import {
   sameRunKey,
 } from "../../static/control_panel_utils.js";
 import ClusterCard from "./ClusterCard.vue";
+
+const {clusterWorkspaces,clusterWorkspaceError}=useClusterWorkspaces();
+watch(activeTab,tab=>{if(tab==='clusters')refreshTestPackageSummaries().catch(()=>{});},{immediate:true});
+const clusterSearch=ref('');
+const retainedWorkspaces=computed(()=>clusterWorkspaces.value.filter(cluster=>!items.value.some(live=>live.id===cluster.id)));
+const matches=cluster=>{const words=clusterSearch.value.toLowerCase().trim().split(/\s+/).filter(Boolean);const text=[clusterDisplayName(cluster.id,cluster.name),cluster.nickname,cluster.id,cluster.runId,cluster.url,cluster.rancherUrl,cluster.version].filter(Boolean).join(' ').toLowerCase();return words.every(word=>text.includes(word));};
+const matchingLive=computed(()=>items.value.filter(matches));
+const matchingRetained=computed(()=>retainedWorkspaces.value.filter(matches));
+
 
 // Styling classes
 const activeTabClass = "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-200";
@@ -276,6 +297,13 @@ const selectHA = haKey => {
   activeClusterHAKey.value = haKey;
 };
 
+watch([selectedClusterWorkspaceId,()=>items.value.map(item=>item.id).join(','),()=>clusterWorkspaces.value.map(item=>item.id).join(',')],async([id])=>{
+ if(!id)return;const live=items.value.find(item=>item.id===id);clusterSearch.value='';
+ if(live){selectRun(clusterRunKey(live));selectHA(clusterHAKey(live));}
+ await nextTick();const target=Array.from(document.querySelectorAll('[data-cluster-workspace-id]')).find(element=>element.dataset.clusterWorkspaceId===id);
+ if(target){target.scrollIntoView({block:'start',behavior:'auto'});target.focus({preventScroll:true});selectedClusterWorkspaceId.value='';}
+},{flush:'post',immediate:true});
+
 // Synchronize selectors with store states
 watch(clusterGroups, (newVal) => {
   if (newVal.length) {
@@ -346,3 +374,7 @@ const haCountLabel = ha => {
       : `${downstreamCount} downstream`;
 };
 </script>
+
+<style scoped>
+.cluster-home{color:var(--runway-ink)}.cluster-home-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:30px;border:1px solid var(--runway-border);border-radius:20px;background:radial-gradient(ellipse at right top,color-mix(in srgb,var(--runway-accent) 9%,transparent),transparent 58%),var(--runway-card)}.cluster-home-eyebrow{display:flex;gap:9px;align-items:center;letter-spacing:.16em;font-size:10px;font-weight:700;color:var(--runway-muted)}.cluster-home svg{width:18px;height:18px;flex-shrink:0}.cluster-home-hero h2{font-size:42px;letter-spacing:-.05em;line-height:1.1;margin:14px 0}.cluster-home-hero h2 span{color:var(--runway-accent)}.cluster-home-hero p,.cluster-home-retained header p{color:var(--runway-muted);font-size:13px;line-height:1.7;margin:0}.cluster-home-totals{display:flex;gap:25px;flex-shrink:0}.cluster-home-totals span{display:grid;gap:4px;font-size:11px;color:var(--runway-muted)}.cluster-home-totals strong{color:var(--runway-ink);font-size:27px;letter-spacing:-.04em}.cluster-home-search{display:flex;gap:12px;align-items:center}.cluster-home-search label{display:flex;gap:10px;align-items:center;flex:1;background:var(--runway-soft);border:1px solid var(--runway-border);border-radius:10px;padding:0 14px;color:var(--runway-muted)}.cluster-home-search input{width:100%;min-width:0;padding:13px 0;background:transparent;border:0;color:var(--runway-ink);font-size:13px}.cluster-home-search button,.cluster-home-empty button{display:inline-flex;align-items:center;gap:8px;background:var(--runway-raised);color:var(--runway-ink);border:1px solid var(--runway-border);border-radius:10px;padding:12px 15px;font-size:12px;font-weight:600;cursor:pointer}.cluster-home-error{border:1px solid var(--runway-border);border-radius:10px;padding:14px;background:var(--runway-card);color:var(--runway-danger,#df7480);font-size:12px}.cluster-home-error button{margin-left:10px;text-decoration:underline}.cluster-home-caption{font-size:12px;color:var(--runway-muted);margin:0}.cluster-home-results,.cluster-home-retained{display:grid;gap:16px;min-width:0}.cluster-home-retained{padding-top:15px}.cluster-home-retained header h3{font-size:21px;letter-spacing:-.025em;margin:7px 0}.cluster-home-empty{padding:40px;display:grid;justify-items:center;gap:12px;color:var(--runway-muted);border:1px solid var(--runway-border);border-radius:14px}.cluster-home-empty h3{color:var(--runway-ink);font-size:20px;margin:0}.cluster-home-empty p{margin:0;font-size:12px}@media(max-width:800px){.cluster-home-hero{align-items:flex-start;flex-direction:column;padding:24px}.cluster-home-search{align-items:stretch;flex-direction:column}.cluster-home-search button{align-self:flex-start}.cluster-home-hero h2{font-size:36px}}
+</style>

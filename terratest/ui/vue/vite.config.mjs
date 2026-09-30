@@ -9,11 +9,15 @@ export default defineConfig({
   plugins: [vue()],
   build: {
     emptyOutDir: false,
+    cssCodeSplit: false,
     outDir: resolve(__dirname, "../static"),
     rollupOptions: {
       input: resolve(__dirname, "src/control_panel_header.js"),
       output: {
         entryFileNames: "control_panel_header_vue.js",
+        assetFileNames: asset => asset.names?.some(name => name.endsWith('.css'))
+          ? "control_panel_components.css"
+          : "assets/[name]-[hash][extname]",
         codeSplitting: false,
       },
     },

@@ -96,6 +96,18 @@ func (p *localControlPanel) resolveCleanupBatchRunIDs(requested []string, all bo
 }
 
 func (p *localControlPanel) startCleanupBatch(runIDs []string) error {
+	return p.startCleanupBatchWithLabCleanup(runIDs, false, false)
+}
+
+func (p *localControlPanel) startCleanupBatchWithLabCleanup(runIDs []string, tests, cache bool) error {
+	options := map[string]panelLabCleanupOptions{}
+	for _, id := range runIDs {
+		option, err := p.freezeRunLabCleanup(id, tests, cache)
+		if err != nil {
+			return err
+		}
+		options[id] = option
+	}
 	if len(runIDs) == 0 {
 		return fmt.Errorf("cleanup batch requires at least one recorded run")
 	}
@@ -139,11 +151,15 @@ func (p *localControlPanel) startCleanupBatch(runIDs []string) error {
 	p.persistOperationsLocked()
 	p.mu.Unlock()
 
-	go p.runCleanupBatch(append([]string(nil), runIDs...))
+	go p.runCleanupBatchWithLabCleanup(append([]string(nil), runIDs...), options)
 	return nil
 }
 
 func (p *localControlPanel) runCleanupBatch(runIDs []string) {
+	p.runCleanupBatchWithLabCleanup(runIDs, nil)
+}
+
+func (p *localControlPanel) runCleanupBatchWithLabCleanup(runIDs []string, options map[string]panelLabCleanupOptions) {
 	for index, runID := range runIDs {
 		p.mu.Lock()
 		batch := p.operationLocked(panelOperationCleanupBatch)
@@ -163,7 +179,7 @@ func (p *localControlPanel) runCleanupBatch(runIDs []string) {
 		if errors.Is(err, errCleanupBatchCanceled) {
 			break
 		}
-		p.finishCleanupBatchItem(runID, err)
+		p.finishCleanupBatchItemWithLabCleanup(runID, err, options[runID])
 
 		p.mu.Lock()
 		canceled := p.operationLocked(panelOperationCleanupBatch).CancelRequested
@@ -189,8 +205,16 @@ func (p *localControlPanel) runCleanupBatchItem(runID string) error {
 }
 
 func (p *localControlPanel) finishCleanupBatchItem(runID string, runErr error) {
+	p.finishCleanupBatchItemWithLabCleanup(runID, runErr, panelLabCleanupOptions{})
+}
+
+func (p *localControlPanel) finishCleanupBatchItemWithLabCleanup(runID string, runErr error, options panelLabCleanupOptions) {
+	p.mu.Lock()
+	canceled := p.operationLocked(panelOperationCleanupBatch).CancelRequested
+	p.mu.Unlock()
 	if runErr == nil {
 		p.removeRunRecord(runID)
+		p.finishRunLabCleanup(runID, options, panelOperationCleanupBatch, canceled)
 	} else {
 		p.updateRunRecordStatus(runID, "cleanup_failed")
 	}

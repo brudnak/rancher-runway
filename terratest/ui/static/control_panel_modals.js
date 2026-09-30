@@ -8,14 +8,14 @@ export const createTypedConfirmation = ({
   errorEl,
   cancelEl,
   submitEl
-}) => ({ title, body, typedValue, confirmText, accentText = 'Confirmation required' }) => new Promise(resolve => {
+}) => ({ title, body, confirmText, accentText = 'Confirmation required' }) => new Promise(resolve => {
   if (!modalEl) {
     resolve(false)
     return
   }
 
   let settled = false
-  const expected = String(typedValue || '').trim().toLowerCase()
+  const expected = 'confirm'
 
   const cleanup = result => {
     if (settled) {
@@ -35,8 +35,8 @@ export const createTypedConfirmation = ({
 
   const cancel = () => cleanup(false)
   const submit = () => {
-    if (String(inputEl.value || '').trim().toLowerCase() !== expected) {
-      errorEl.textContent = `Type ${typedValue} to confirm.`
+    if (inputEl.value !== expected) {
+      errorEl.textContent = `Type ${expected} to continue.`
       inputEl.focus()
       inputEl.select()
       return
@@ -63,9 +63,12 @@ export const createTypedConfirmation = ({
   accentEl.textContent = accentText
   titleEl.textContent = title
   bodyEl.textContent = body
-  promptEl.textContent = `Type "${typedValue}" to continue`
+  promptEl.textContent = `Type ${expected} to continue.`
   submitEl.textContent = confirmText
   inputEl.value = ''
+  inputEl.placeholder = expected
+  inputEl.autocapitalize = 'none'
+  inputEl.spellcheck = false
   errorEl.textContent = ''
   modalEl.classList.remove('hidden')
   modalEl.classList.add('flex')

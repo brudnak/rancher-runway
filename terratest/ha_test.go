@@ -39,6 +39,10 @@ func runHARKE2Setup(t *testing.T) {
 	if totalHAs < 1 {
 		t.Fatal("total_has must be at least 1")
 	}
+	downstreamPlans, err := setupLinodeDownstreamPlans(totalHAs)
+	if err != nil {
+		t.Fatalf("Downstream config preflight failed before provisioning infrastructure: %v", err)
+	}
 	if err := settings.ValidateAWSPrefixConfig(); err != nil {
 		t.Fatalf("AWS prefix preflight failed: %v", err)
 	}
@@ -138,6 +142,11 @@ func runHARKE2Setup(t *testing.T) {
 	}
 
 	logHASummary(totalHAs, outputs, resolvedPlans)
+	if len(downstreamPlans) > 0 && !t.Failed() {
+		log.Printf("[downstream] Waiting for management readiness before provisioning configured Linode downstreams")
+		waitForConfiguredHAsReady(t, totalHAs, outputs)
+		provisionConfiguredLinodeDownstreamPlans(t, downstreamPlans, linodeAccessToken())
+	}
 }
 
 func TestHACleanup(t *testing.T) {

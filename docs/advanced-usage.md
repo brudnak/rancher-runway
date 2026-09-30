@@ -40,6 +40,69 @@ For GoLand, configure the package as
 `^TestHaSetup$`, `^TestHAWaitReady$`, `^TestLinodeDockerWaitReady$`,
 `^TestHAControlPanel$`, or `^TestHACleanup$`.
 
+## Configured Linode Downstreams
+
+For `deployment.type: ha-rke2`, enable a downstream in `tool-config.yml` and
+run the usual setup command. `TestHaSetup` checks the downstream configuration
+and token before provisioning AWS infrastructure, then waits for management
+Rancher readiness and provisions the enabled downstreams. Each enabled row
+creates one single-node cluster. The desktop panel uses the same plans and
+keeps readiness and downstream provisioning as separate tracked operations.
+
+For one Rancher (`total_has: 1`):
+
+```yaml
+downstream:
+  linode:
+    plans:
+      - enabled: true
+        distribution: k3s # Or rke2; independent of the management cluster distro.
+        kubernetes_version: "" # Optional: Rancher's supported default for this distro.
+        region: us-ord
+        instance_type: g6-standard-2
+        image: linode/ubuntu22.04
+```
+
+Supply the token through `LINODE_TOKEN` or `LINODE_ACCESS_TOKEN`. Existing
+`linode.access_token` config also works. Environment variables take precedence.
+No Linode root password or Docker Hub setting is needed for these downstreams.
+
+```bash
+.github/scripts/run-with-cancel-cleanup.sh \
+  go test -v -run '^TestHaSetup$' -timeout 120m -count=1 ./terratest
+```
+
+The timeout covers management setup, readiness, and downstream provisioning.
+In GitHub Actions, keep the token in the setup step's environment alongside
+the same Terraform state settings you already use. No second command is needed.
+
+Provide one plan per `total_has` row, in the same order as the Rancher versions
+or manual Helm commands. Use `enabled: false` for rows without a downstream;
+this does not disable their management Rancher deployment. With `total_has: 1`,
+include only one entry, even when the management cluster has three server nodes.
+Omitting the section disables downstream creation. Missing distro, region,
+instance type, and image fields use the built-in defaults shown above, independently
+for each entry. A pinned Kubernetes
+version must match the selected distro and be offered by that Rancher instance.
+See the [auto](../tool-config.auto.example.yml) and
+[manual](../tool-config.manual.example.yml) examples for two-row configurations.
+
+To provision or retry configured downstreams on an existing management run:
+
+```bash
+go test -v -run '^TestHAProvisionConfiguredLinodeDownstreams$' -timeout 35m -count=1 ./terratest
+```
+
+Reuse the run's config, Terraform state, output directory, and
+`HA_RANCHER_RUN_ID` when set. Recorded active downstreams are reused. The panel's
+frozen `RANCHER_RUNWAY_DOWNSTREAM_LINODE_PLANS` environment takes precedence over
+the file. `TestHACleanup` attempts downstream cleanup before destroying management
+infrastructure; `TestHADeleteLinodeDownstream` deletes only the downstreams.
+
+`TestHAProvisionLinodeDownstream` remains the legacy entry point: it enables K3s
+on every Rancher using `LINODE_REGION`, `LINODE_INSTANCE_TYPE`, `LINODE_IMAGE`,
+and `K3S_VERSION`, rather than reading these plans.
+
 ## AWS SSM Readiness
 
 Runway executes EC2 installation commands through AWS Systems Manager (SSM).

@@ -36,6 +36,7 @@ type testLabCatalog struct {
 	Entries   []testLabEntry `json:"entries"`
 }
 type testLabPlan struct {
+	ClusterID string    `json:"clusterId,omitempty"`
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Host      string    `json:"host"`
@@ -54,6 +55,7 @@ type testLabResult struct {
 	Elapsed float64 `json:"elapsed"`
 }
 type testLabRun struct {
+	ClusterID  string          `json:"clusterId,omitempty"`
 	ID         string          `json:"id"`
 	Name       string          `json:"name"`
 	Host       string          `json:"host"`
@@ -77,6 +79,7 @@ type testLabLibrary struct {
 	GitHub  testLabGitHub  `json:"github"`
 }
 type testLabRequest struct {
+	ClusterID  string               `json:"clusterId,omitempty"`
 	Action     string               `json:"action"`
 	ID         string               `json:"id"`
 	Name       string               `json:"name"`
@@ -98,23 +101,24 @@ type testLabRequest struct {
 	Bundle     *testLabConfigBundle `json:"bundle,omitempty"`
 }
 type testLabService struct {
-	mu           sync.Mutex
-	root         string
-	library      testLabLibrary
-	busy         bool
-	catalogError string
-	cancel       context.CancelFunc
-	logs         map[string]string
-	keychain     func(string, string, string) (string, error)
-	client       *http.Client
-	githubMu     sync.Mutex
-	credential   testLabCredential
-	device       testLabDevice
-	configRoot   string
-	exportRoot   string
-	configMu     sync.Mutex
-	sourceMu     sync.Mutex
-	sourceIndex  *testLabSourceIndex
+	resolveCluster func(string, string, string, string) (string, error)
+	mu             sync.Mutex
+	root           string
+	library        testLabLibrary
+	busy           bool
+	catalogError   string
+	cancel         context.CancelFunc
+	logs           map[string]string
+	keychain       func(string, string, string) (string, error)
+	client         *http.Client
+	githubMu       sync.Mutex
+	credential     testLabCredential
+	device         testLabDevice
+	configRoot     string
+	exportRoot     string
+	configMu       sync.Mutex
+	sourceMu       sync.Mutex
+	sourceIndex    *testLabSourceIndex
 }
 
 func (p *localControlPanel) testLabService() (*testLabService, error) {
@@ -129,6 +133,7 @@ func (p *localControlPanel) testLabService() (*testLabService, error) {
 	}
 	s, err := newTestLabService(root)
 	if err == nil {
+		s.resolveCluster = p.resolveLabCluster
 		p.testLab = s
 	}
 	return s, err
@@ -282,6 +287,17 @@ func (p *localControlPanel) handleTestLab(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if r.Method == http.MethodGet {
+		if s.resolveCluster != nil {
+			candidates, candidateErr := p.labClusterCandidates()
+			if candidateErr != nil {
+				http.Error(w, candidateErr.Error(), 500)
+				return
+			}
+			if err := s.backfillClusters(candidates); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		writeJSON(w, map[string]any{"library": s.library, "catalogBusy": s.busy, "catalogError": s.catalogError, "keychain": runtime.GOOS == "darwin"})
@@ -332,6 +348,8 @@ func (s *testLabService) mutate(req testLabRequest) (any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch req.Action {
+	case "rename-run", "rename-plan", "assign-cluster":
+		return s.updateClusterRecordLocked(req)
 	case "cancel":
 		if s.cancel != nil {
 			s.cancel()
@@ -361,13 +379,17 @@ func (s *testLabService) mutate(req testLabRequest) (any, error) {
 		if _, err = s.commandsLocked(req); err != nil {
 			return nil, err
 		}
+		clusterID, err := s.resolveClusterID(req.ClusterID, host)
+		if err != nil {
+			return nil, err
+		}
 		id := cacheLabID()
 		if req.Remember {
 			if _, err = s.keychain("write", "plan-"+id, req.Config); err != nil {
 				return nil, err
 			}
 		}
-		plan := testLabPlan{ID: id, Name: cacheLabText(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: req.Selection, Tags: req.Tags, Timeout: req.Timeout, SavedAt: time.Now(), HasConfig: req.Remember}
+		plan := testLabPlan{ClusterID: clusterID, ID: id, Name: cacheLabText(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: req.Selection, Tags: req.Tags, Timeout: req.Timeout, SavedAt: time.Now(), HasConfig: req.Remember}
 		s.library.Plans = append(s.library.Plans, plan)
 		if err = s.persistLocked(); err != nil {
 			s.library.Plans = s.library.Plans[:len(s.library.Plans)-1]
@@ -393,8 +415,8 @@ func (s *testLabService) mutate(req testLabRequest) (any, error) {
 		}
 		return nil, fmt.Errorf("plan not found")
 	case "delete-plan":
-		if req.Confirm != "DELETE PLAN" {
-			return nil, fmt.Errorf("type DELETE PLAN to remove the saved plan")
+		if req.Confirm != typedConfirmationPhrase {
+			return nil, fmt.Errorf("type confirm to remove the saved plan")
 		}
 		for i, plan := range s.library.Plans {
 			if plan.ID == req.ID {
@@ -417,11 +439,14 @@ func (s *testLabService) mutate(req testLabRequest) (any, error) {
 		}
 		return nil, fmt.Errorf("plan not found")
 	case "delete-run":
-		if req.Confirm != "DELETE RUN" {
-			return nil, fmt.Errorf("type DELETE RUN to remove this local result")
+		if req.Confirm != typedConfirmationPhrase {
+			return nil, fmt.Errorf("type confirm to remove this local result")
 		}
 		for i, run := range s.library.Runs {
 			if run.ID == req.ID {
+				if req.ClusterID != "" && run.ClusterID != req.ClusterID {
+					return nil, fmt.Errorf("test result cluster association changed; review cleanup again")
+				}
 				if run.Status == "running" {
 					return nil, fmt.Errorf("stop this run first")
 				}

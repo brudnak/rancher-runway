@@ -272,11 +272,7 @@ func (p *localControlPanel) prepareAWSCleanup(ctx context.Context, refs []awsCle
 	sort.SliceStable(plan.Items, func(i, j int) bool {
 		return awsCleanupOrder(plan.Items[i].Resource.Type) < awsCleanupOrder(plan.Items[j].Resource.Type)
 	})
-	noun := "resources"
-	if len(plan.Items) == 1 {
-		noun = "resource"
-	}
-	plan.Confirmation = fmt.Sprintf("delete %d %s", len(plan.Items), noun)
+	plan.Confirmation = typedConfirmationPhrase
 	plan.ExpiresAt = time.Now().Add(5 * time.Minute)
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -332,8 +328,8 @@ func (p *localControlPanel) startAWSCleanup(token, confirm string) error {
 	if plan == nil || token != plan.Token || time.Now().After(plan.ExpiresAt) {
 		return fmt.Errorf("Cleanup review expired or was replaced. Review the resources again.")
 	}
-	if len(plan.Items) == 0 || confirm != plan.Confirmation {
-		return fmt.Errorf("Type the exact confirmation from the cleanup review.")
+	if len(plan.Items) == 0 || confirm != typedConfirmationPhrase {
+		return fmt.Errorf("Type %s to confirm cleanup.", typedConfirmationPhrase)
 	}
 	if p.anyOperationRunningLocked() {
 		return fmt.Errorf("Another operation is running. Wait for it to finish.")

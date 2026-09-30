@@ -1,5 +1,5 @@
 import {folderContainsPackage} from './test-lab-folders.mjs';
-export const emptyTestDraft = () => ({name:'', ref:'main', sha:'', selection:[], tags:'validation,infra.any,cluster.any', timeout:30});
+export const emptyTestDraft = () => ({name:'', clusterId:'', ref:'main', sha:'', selection:[], tags:'validation,infra.any,cluster.any', timeout:30});
 export function filterTests(entries=[], query='', category='', file='') {
  const words=String(query).toLowerCase().trim().split(/\s+/).filter(Boolean);
  return entries.filter(e=>(!file||e.file===file)&&folderContainsPackage(category,e.package)&&words.every(w=>`${e.package} ${e.file||''} ${e.suite} ${e.test} ${e.description||''} ${e.constraint||''}`.toLowerCase().includes(w)));

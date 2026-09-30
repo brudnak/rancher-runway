@@ -7,7 +7,7 @@ Test Lab is under **Local tools** and in the Home directory. This initial versio
 1. Load `main`, a branch, a tag, or a commit from public `rancher/tests`. Runway resolves the ref to a full commit SHA and reads its source archive. Discovery does not compile or execute the repository.
 2. Search the `validation` catalog. Select whole test entry points/suites or individual statically discoverable testify methods. Source links use the pinned SHA. Dynamically generated subtests appear only when executing; some suites also create names through helpers that cannot be discovered statically.
 3. Select a detected Rancher or enter its hostname. Sign in with a local Rancher password on the default **URL + password** tab, or choose **URL + API token** to paste a Rancher **user** token. Supply the suite's required `cattle-config.yml`. The guided fields cover the common connection section; YAML editing preserves provider-specific fields and comments. Use **Cattle-config library** for reusable templates and **Browse READMEs** for the selected revision’s READMEs, kept beside the test catalog.
-4. Set Go build tags and a per-suite timeout. Review exact commands, source revision, and target. Type `RUN <hostname>` to execute locally.
+4. Set Go build tags and a per-suite timeout. Review exact commands, source revision, and target. Type `confirm` to execute locally.
 5. Follow Activity & results, pause the log view, inspect failed test events, or copy a result summary. Stopping may interrupt suite cleanup; inspect the target afterward.
 
 Local test code runs as the current user. Isolating working files and environment is **not** an OS security sandbox. Only run revisions and tests you trust, against a target you are authorized to modify. Integration tests can provision resources, change authentication, remove resources, and incur charges. The local runner does not take Runway's infrastructure lifecycle lock; do not run modifying tests against a Rancher still being provisioned or cleaned up.
@@ -25,6 +25,18 @@ Each slash separates a test/subtest matching level. Runway anchors names, escape
 The runner uses Go JSON output, `-count=1`, `-buildvcs=false`, `-parallel=1`, and `-p=2`. Build constraints are checked against selected tags before starting. Compiler/package prerequisites can still fail. The timeout applies per suite, with ten additional minutes to bound compilation and module downloads. Go can download the toolchain required by `go.mod`. Modules use the public Go proxy; VCS fallback is disabled. Suites needing private modules or external tools may require further support.
 
 On macOS, install Go and Xcode Command Line Tools (or Xcode). Before compiling tests, Runway locates the selected macOS SDK and checks that the C compiler can read the system headers needed by Go's native dependencies. It explicitly configures `SDKROOT` and Apple's compiler shims in the isolated environment, so launches from Finder do not depend on shell setup. An explicit `DEVELOPER_DIR` is honored; shell compiler overrides and flags are not inherited. A missing or broken SDK stops the run with installation guidance before module downloads or test execution.
+
+### Connected cluster history
+
+Use [Test Packages](test-packages.md) to keep a larger issue investigation: write manual cases, preserve reproduction and validation sessions, and attach finished Test Lab runs alongside Cache Lab evidence. Package-owned evidence copies survive ordinary lab cleanup.
+
+Test runs and saved plans link to stable cluster IDs. **Clusters** shows the same results alongside that cluster's Cache Lab snapshots. Set a cluster nickname there or in either lab; every view uses the updated name while IDs, recorded targets, and versions remain visible. Activity and saved plans are grouped by cluster. Opening a result or snapshot from Clusters goes directly to that item in its lab.
+
+Runway associates a known Rancher URL or pinned kubeconfig/context only when the match is unambiguous. Existing unlinked records are migrated using the same rule. If a hostname has been reused by multiple cluster histories, select the intended cluster explicitly. Renaming a cluster never moves files or changes credentials. Result and snapshot renames and deletions operate on the shared records, so changes appear everywhere.
+
+Destroy keeps this local history by default. Its separate **Test Lab** and **Cache Lab** cleanup options remove linked test results/logs and cache workspaces/snapshots only after infrastructure cleanup succeeds for the selected run. Failed or canceled destroys preserve history; active lab work is retained with a warning. Saved test plans and reusable cattle-config templates are retained. Historical cluster workspaces stay available after infrastructure is gone.
+
+Cluster names and stable IDs are saved in the private local `automation-output/control-panel/cluster-workspaces.json` manifest. Credentials remain in their existing lab stores. Saved work is stored on the computer running Runway, not uploaded to Kubernetes.
 
 ### Storage and credentials
 

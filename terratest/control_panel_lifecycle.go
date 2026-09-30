@@ -319,6 +319,23 @@ func (p *localControlPanel) startCleanupForRun(runID string) error {
 }
 
 func (p *localControlPanel) startCleanupForRunWithBatch(runID string, batchChild bool, completion chan<- error) error {
+	return p.startCleanupForRunWithOptions(runID, batchChild, completion, panelLabCleanupOptions{})
+}
+
+func (p *localControlPanel) startCleanupForRunWithLabCleanup(runID string, tests, cache bool) error {
+	record, ok := p.readRunRecord(runID)
+	if !ok {
+		return fmt.Errorf("cleanup requires a recorded run: %s", runID)
+	}
+	runID = record.RunID
+	options, err := p.freezeRunLabCleanup(runID, tests, cache)
+	if err != nil {
+		return err
+	}
+	return p.startCleanupForRunWithOptions(runID, false, nil, options)
+}
+
+func (p *localControlPanel) startCleanupForRunWithOptions(runID string, batchChild bool, completion chan<- error, options panelLabCleanupOptions) error {
 	record, ok := p.readRunRecord(runID)
 	if !ok {
 		return fmt.Errorf("cleanup requires a recorded run: %s", runID)
@@ -337,6 +354,7 @@ func (p *localControlPanel) startCleanupForRunWithBatch(runID string, batchChild
 		SuccessLine: "[control-panel] Cleanup completed successfully",
 		BatchChild:  batchChild,
 		Completion:  completion,
+		LabCleanup:  options,
 	})
 	if err == nil && !batchChild {
 		p.clearCompletedCleanupBatch()
@@ -377,6 +395,7 @@ func (p *localControlPanel) abortOperation(operation panelOperationName, runID s
 			batch.UpdatedAt = &now
 		}
 	}
+	op.CancelRequested = true
 	pid := op.PID
 	if operation == panelOperationSteveLab {
 		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for %s run %s. Local k3d cluster and run files may need cleanup.", operation, op.RunID))
@@ -440,6 +459,7 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 	}
 
 	op.Running = true
+	op.CancelRequested = false
 	op.PID = 0
 	op.StartedAt = &now
 	op.FinishedAt = nil
@@ -620,6 +640,9 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 		env = append(env, runIDEnv+"="+runID)
 	}
 	env = append(env, panelNonInteractiveEnv+"=1")
+	if operation == panelOperationSetup {
+		env = panelEnvWithValue(env, deferSetupDownstreamsEnv, "1")
+	}
 	if slotID != "" {
 		env = append(env, "HA_RANCHER_RUN_SLOT="+slotID)
 	}
@@ -717,6 +740,7 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 	p.mu.Lock()
 	op := p.operationLocked(spec.Operation)
 	runID = op.RunID
+	canceled := op.CancelRequested
 	op.Running = false
 	op.PID = 0
 	finishedAt := time.Now()
@@ -742,6 +766,9 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 
 	if !spec.BatchChild {
 		p.updateRunStatusAfterOperation(spec.Operation, runID, nil)
+	}
+	if !spec.BatchChild && (spec.Operation == panelOperationCleanup || spec.Operation == panelOperationLinodeCleanup) {
+		p.finishRunLabCleanup(runID, spec.LabCleanup, spec.Operation, canceled)
 	}
 	if shouldRunAfterSuccess {
 		spec.AfterSuccess()

@@ -454,6 +454,20 @@ func TestHandleControlPanelStaticAssetBlocksUnknownAssets(t *testing.T) {
 	}
 }
 
+func TestHandleControlPanelStaticAssetServesComponentStyles(t *testing.T) {
+	panel := &localControlPanel{token: "token"}
+	request := httptest.NewRequest(http.MethodGet, "/static/control_panel_components.css", nil)
+	request.Header.Set("X-Control-Panel-Token", "token")
+	recorder := httptest.NewRecorder()
+	panel.handleControlPanelStaticAsset(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Header().Get("Content-Type"), "text/css") {
+		t.Fatalf("component stylesheet unavailable: status %d, type %q", recorder.Code, recorder.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(recorder.Body.String(), ".cluster-workspace") {
+		t.Fatal("embedded component stylesheet does not contain the cluster workspace styles")
+	}
+}
+
 func TestPruneStaleDownstreamKubeconfigsRemovesMissingClusters(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", workspace)

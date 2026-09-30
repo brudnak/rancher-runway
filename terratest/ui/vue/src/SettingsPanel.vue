@@ -94,7 +94,6 @@ const disableReminders = async () => {
   const confirmed = await requestTypedConfirmation({
     title: "Disable GPU reminders?",
     body: "GPU worker nodes can create meaningful cloud cost when left running. Close-time GPU warnings still appear, but timed reminders will stop until you enable them again.",
-    typedValue: "disable gpu reminders",
     confirmText: "Disable reminders",
     accentText: "GPU cost warning",
   });

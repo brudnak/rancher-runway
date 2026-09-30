@@ -230,14 +230,18 @@
         {{ dangerConfirm.body }}
       </p>
       <label class="mt-5 grid gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200">
-        <span id="dangerConfirmPrompt">Type <code class="font-semibold text-rose-600 dark:text-rose-400">{{ dangerConfirm.typedValue }}</code> to confirm</span>
+        <span id="dangerConfirmPrompt" class="typed-confirm-prompt">Type <strong>{{ CONFIRMATION_TEXT }}</strong> to continue.</span>
         <input
           id="dangerConfirmInput"
           type="text"
           v-model="dangerConfirm.input"
-          @keydown.enter="submitDangerConfirm"
+          @keydown.enter.prevent="submitDangerConfirm"
+          :placeholder="CONFIRMATION_TEXT"
           autocomplete="off"
-          class="w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100"
+          autocapitalize="none"
+          autocorrect="off"
+          spellcheck="false"
+          class="typed-confirm-input w-full rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm font-medium text-zinc-950 outline-none focus:border-emerald-400 dark:border-white/10 dark:bg-zinc-950/50 dark:text-zinc-100"
         />
       </label>
       <div v-if="dangerConfirm.error" id="dangerConfirmError" class="mt-3 min-h-5 text-sm font-semibold text-rose-600 dark:text-rose-300">
@@ -254,9 +258,10 @@
         <button
           type="button"
           @click="submitDangerConfirm"
-          class="rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400"
+          :disabled="!isConfirmed(dangerConfirm.input)"
+          class="rounded-lg bg-rose-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm shadow-rose-500/20 hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Confirm
+          {{ dangerConfirm.confirmText || "Continue" }}
         </button>
       </div>
     </section>
@@ -332,6 +337,7 @@
 
 <script setup>
 import AppBuildStamp from "./AppBuildStamp.vue";
+import { CONFIRMATION_TEXT, isConfirmed } from "./confirmation.mjs";
 import { computed, nextTick, ref, watch, onMounted, onUnmounted } from "vue";
 import {
   state,

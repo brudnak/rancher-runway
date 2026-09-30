@@ -57,6 +57,17 @@ func CurrentLinodeDownstreamPlans(total int) []LinodeDownstreamPlan {
 	return plans
 }
 
+// ReadLinodeDownstreamPlans validates the file as written before provisioning.
+// The editor's Current helper pads/truncates rows for display and must not be
+// used here: doing so silently discards malformed or misaligned config.
+func ReadLinodeDownstreamPlans(total int) ([]LinodeDownstreamPlan, error) {
+	var plans []LinodeDownstreamPlan
+	if err := viper.UnmarshalKey(DownstreamLinodeConfigKey, &plans); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", DownstreamLinodeConfigKey, err)
+	}
+	return NormalizeLinodeDownstreamPlans(plans, total)
+}
+
 func NormalizeLinodeDownstreamPlans(plans []LinodeDownstreamPlan, total int) ([]LinodeDownstreamPlan, error) {
 	if total < 0 {
 		return nil, fmt.Errorf("downstream Linode plan count cannot be negative")

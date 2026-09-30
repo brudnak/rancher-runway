@@ -258,7 +258,7 @@ func TestTestLabGitHubDevicePollingAndDisconnect(t *testing.T) {
 		t.Fatal("disconnected without confirmation")
 	}
 	before := calls
-	if _, err = s.githubAction(context.Background(), testLabRequest{Action: "github-disconnect", Confirm: "DISCONNECT"}); err != nil {
+	if _, err = s.githubAction(context.Background(), testLabRequest{Action: "github-disconnect", Confirm: typedConfirmationPhrase}); err != nil {
 		t.Fatal(err)
 	}
 	if calls != before {
@@ -422,7 +422,7 @@ func nativeValue() int { return int(C.nativeValue()) }
 	if _, err := s.startRun(req); err == nil {
 		t.Fatal("executed without review confirmation")
 	}
-	req.Confirm = "RUN example.test"
+	req.Confirm = typedConfirmationPhrase
 	value, err := s.startRun(req)
 	if err != nil {
 		t.Fatal(err)
@@ -463,7 +463,7 @@ func TestTestLabLocalRunnerMissingSDK(t *testing.T) {
 		"validation/example/example_test.go": "package example\nimport \"testing\"\nfunc TestSuite(t *testing.T) { t.Fatal(\"must not execute\") }\n",
 	})
 	req := testLabFixtureRequest()
-	req.Confirm = "RUN example.test"
+	req.Confirm = typedConfirmationPhrase
 	value, err := s.startRun(req)
 	if err != nil {
 		t.Fatal(err)
@@ -563,7 +563,7 @@ func TestTestLabCreateRepositoryIsPrivateAndExplicit(t *testing.T) {
 	if _, err := s.githubAction(context.Background(), req); err == nil || calls != 0 {
 		t.Fatal("created without explicit confirmation")
 	}
-	req.Confirm = "fixture/test-runner"
+	req.Confirm = typedConfirmationPhrase
 	if _, err := s.githubAction(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}

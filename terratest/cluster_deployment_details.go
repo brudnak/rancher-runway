@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"sort"
@@ -72,7 +73,9 @@ func (p *localControlPanel) handleClusterDeploymentDetails(w http.ResponseWriter
 		}
 	}
 
-	writeJSON(w, p.collectClusterDeploymentDetails(ctx, cluster))
+	details := p.collectClusterDeploymentDetails(ctx, cluster)
+	p.rememberTestPackageDeploymentDetails(details)
+	writeJSON(w, details)
 }
 
 // rememberClusterSnapshot keeps the already-discovered state response available
@@ -92,6 +95,9 @@ func (p *localControlPanel) rememberClusterSnapshot(clusters []clusterView) {
 	p.mu.Lock()
 	p.clusterSnapshot = snapshot
 	p.mu.Unlock()
+	if err := p.rememberClusterWorkspaces(clusters); err != nil {
+		log.Printf("[control-panel] Could not save cluster workspace metadata: %v", err)
+	}
 }
 
 func (p *localControlPanel) clusterFromSnapshot(clusterID string) (clusterView, bool) {

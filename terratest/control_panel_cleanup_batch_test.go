@@ -91,11 +91,11 @@ func TestHandleCleanupBatchValidatesShapeAndConfirmation(t *testing.T) {
 		body      string
 		wantError string
 	}{
-		{name: "all and selected", body: `{"all":true,"runIds":["run-a"],"confirm":"destroy all"}`, wantError: "mutually exclusive"},
-		{name: "legacy and selected", body: `{"runId":"run-a","runIds":["run-a"],"confirm":"destroy selected"}`, wantError: "cannot be combined"},
-		{name: "wrong all confirmation", body: `{"all":true,"confirm":"destroy"}`, wantError: "destroy all"},
-		{name: "wrong selected confirmation", body: `{"runIds":["run-a"],"confirm":"destroy"}`, wantError: "destroy selected"},
-		{name: "empty selected", body: `{"runIds":[],"confirm":"destroy selected"}`, wantError: "at least one runId"},
+		{name: "all and selected", body: `{"all":true,"runIds":["run-a"],"confirm":"confirm"}`, wantError: "mutually exclusive"},
+		{name: "legacy and selected", body: `{"runId":"run-a","runIds":["run-a"],"confirm":"confirm"}`, wantError: "cannot be combined"},
+		{name: "wrong all confirmation", body: `{"all":true,"confirm":"destroy"}`, wantError: "typed confirmation must equal confirm"},
+		{name: "wrong selected confirmation", body: `{"runIds":["run-a"],"confirm":"destroy"}`, wantError: "typed confirmation must equal confirm"},
+		{name: "empty selected", body: `{"runIds":[],"confirm":"confirm"}`, wantError: "at least one runId"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -270,7 +270,7 @@ func TestHandleAbortOperationAcceptsCleanupBatchName(t *testing.T) {
 		Running: true,
 		RunIDs:  []string{"run-a"},
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/operations/abort", strings.NewReader(`{"operation":"cleanupBatch","confirm":"stop"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/operations/abort", strings.NewReader(`{"operation":"cleanupBatch","confirm":"confirm"}`))
 	request.Header.Set("X-Control-Panel-Token", "token")
 	recorder := httptest.NewRecorder()
 

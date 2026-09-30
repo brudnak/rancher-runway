@@ -91,6 +91,10 @@ func (s *testLabService) review(req testLabRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	clusterID, err := s.resolveClusterID(req.ClusterID, host)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	commands, err := s.commandsLocked(req)
@@ -101,15 +105,19 @@ func (s *testLabService) review(req testLabRequest) (any, error) {
 	if goErr != nil {
 		goPath = ""
 	}
-	return map[string]any{"host": host, "sha": req.SHA, "commands": commands, "goPath": goPath, "goVersion": s.library.Catalog.GoVersion, "confirmation": "RUN " + host, "warnings": []string{"These are integration tests. They may create, change, or delete resources and incur cloud costs.", "Individual tests still run suite setup and cleanup. Review provider-specific requirements in the linked source.", "External test code runs as your local user. Runway isolates its working files and environment, but this is not an OS sandbox.", "Canceling stops execution; it cannot guarantee that a test's cleanup completes."}}, nil
+	return map[string]any{"host": host, "clusterId": clusterID, "sha": req.SHA, "commands": commands, "goPath": goPath, "goVersion": s.library.Catalog.GoVersion, "confirmation": typedConfirmationPhrase, "warnings": []string{"These are integration tests. They may create, change, or delete resources and incur cloud costs.", "Individual tests still run suite setup and cleanup. Review provider-specific requirements in the linked source.", "External test code runs as your local user. Runway isolates its working files and environment, but this is not an OS sandbox.", "Canceling stops execution; it cannot guarantee that a test's cleanup completes."}}, nil
 }
 func (s *testLabService) startRun(req testLabRequest) (any, error) {
 	host, secrets, err := testLabConfig(req.Config)
 	if err != nil {
 		return nil, err
 	}
-	if req.Confirm != "RUN "+host {
-		return nil, fmt.Errorf("review this run and type RUN followed by the exact hostname")
+	if req.Confirm != typedConfirmationPhrase {
+		return nil, fmt.Errorf("review this run and type confirm to start it")
+	}
+	clusterID, err := s.resolveClusterID(req.ClusterID, host)
+	if err != nil {
+		return nil, err
 	}
 	goPath, err := resolveLocalToolPath("go")
 	if err != nil {
@@ -128,7 +136,7 @@ func (s *testLabService) startRun(req testLabRequest) (any, error) {
 		return nil, err
 	}
 	id := cacheLabID()
-	run := testLabRun{ID: id, Name: cacheLabText(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: append([]string{}, req.Selection...), Tags: req.Tags, Timeout: req.Timeout, Status: "running", Stage: "Preparing isolated source", StartedAt: time.Now(), Results: []testLabResult{}}
+	run := testLabRun{ClusterID: clusterID, ID: id, Name: cacheLabText(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: append([]string{}, req.Selection...), Tags: req.Tags, Timeout: req.Timeout, Status: "running", Stage: "Preparing isolated source", StartedAt: time.Now(), Results: []testLabResult{}}
 	if run.Name == "" {
 		run.Name = fmt.Sprintf("%s · %d suite(s)", host, len(commands))
 	}

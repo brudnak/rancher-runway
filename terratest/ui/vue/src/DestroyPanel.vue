@@ -4,6 +4,7 @@
     <nav class="ops-view-tabs" aria-label="Destroy views"><button :aria-current="activeDestroyTab==='slots'?'page':undefined" :class="{selected:activeDestroyTab==='slots'}" @click="setActiveDestroyTab('slots')"><Icon name="trash"/>Run cleanup<span class="ops-count">{{ runs.length }}</span></button><button :aria-current="activeDestroyTab==='costs'?'page':undefined" :class="{selected:activeDestroyTab==='costs'}" @click="setActiveDestroyTab('costs')"><Icon name="pulse"/>Costs & local data<span class="ops-count">{{ state?.costs?.recordCount??state?.costs?.entries?.length??0 }}</span></button></nav>
     <div v-show="activeDestroyTab === 'slots'" id="destroySlotsPane">
       <section class="destroy-route"><div><span class="ops-eyebrow">RECORDED RUNS</span><h3>Clean up with the original run context.</h3><p>Choose a run or a batch. Runway uses each recorded Terraform target, keeps failures available to retry, and saves eligible AWS estimates after successful management cleanup.</p><details><summary>How downstream cleanup works</summary><p>For an HA run, cleanup attempts recorded Linode downstream clusters first. It then proceeds to AWS management Terraform destroy even when a downstream deletion fails. Warnings identify Linode resources that may need manual cleanup and may still generate charges. A run record is removed only after management Terraform destroy succeeds.</p></details></div><ol><li><span>01</span><strong>Choose</strong><small>One run or a batch</small></li><li><span>02</span><strong>Confirm</strong><small>Review the exact targets</small></li><li><span>03</span><strong>Follow through</strong><small>Results, leftovers, estimates</small></li></ol></section>
+      <section v-if="runs.length" class="destroy-lab-options" aria-labelledby="destroy-lab-options-title"><div class="destroy-lab-options-heading"><Icon name="bookmark"/><div><h3 id="destroy-lab-options-title">Keep the work after the environment is gone.</h3><p>Test history and cache snapshots are retained by default. You can still find them under Clusters after destroy.</p></div><span>{{ cleanupLabOptions.testLab||cleanupLabOptions.cacheLab?'Optional cleanup selected':'History retained' }}</span></div><div class="destroy-lab-choice-grid"><label><input v-model="cleanupLabOptions.testLab" type="checkbox" :disabled="bulkActionsLocked"/><span><strong>Also delete linked Test Lab history</strong><small>Local results and activity logs for the runs you destroy. Saved test plans and cattle-config templates stay in your library.</small></span></label><label><input v-model="cleanupLabOptions.cacheLab" type="checkbox" :disabled="bulkActionsLocked"/><span><strong>Also delete linked Cache Lab data</strong><small>Saved workspaces, connections, queries, and snapshot files for the runs you destroy. Original imported files stay in place.</small></span></label></div><p class="destroy-lab-scope" v-if="labScopeRunIds.length"><strong>{{ labScopeRunIds.length===1?'Selected run':'Selected runs' }}: {{ labScopeRunIds.join(', ') }}</strong><span>{{ labScopeCounts.testRuns }} test results · {{ labScopeCounts.testPlans }} saved plans kept · {{ labScopeCounts.cacheWorkspaces }} cache workspaces · {{ labScopeCounts.snapshots }} snapshots</span></p><p class="destroy-lab-scope" v-else>Choose a run or batch to see its linked data. The confirmation shows the exact scope before anything is deleted.</p><p class="destroy-lab-retention">{{ cleanupLabOptions.testLab?'Linked Test Lab history will be included in your cleanup review.':'Test Lab history stays available.' }} {{ cleanupLabOptions.cacheLab?'Linked Cache Lab files will be included in your cleanup review.':'Cache Lab workspaces and snapshots stay available.' }} Optional cleanup runs only after a successful destroy. Active lab work is kept. Other clusters’ data is unaffected.</p></section>
       <div
         v-if="runs.length"
         class="destroy-selection-bar"
@@ -217,6 +218,7 @@
                 </span>
               </div>
               <div v-if="run.updatedAt" class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">Updated {{ timeLabel(run.updatedAt) }}</div>
+              <div v-if="clustersForRun(run.runId).length" class="destroy-cluster-links"><span>Cluster workspaces</span><button v-for="cluster in clustersForRun(run.runId)" :key="cluster.id" type="button" @click="openClusterWorkspace(cluster.id)"><Icon name="layers"/>{{ clusterDisplayName(cluster.id,cluster.name) }}<Icon name="arrow"/></button></div>
               <p class="destroy-run-summary">{{ hostnameLabel(run) }} · {{ versionsLabel(run) }}</p><details class="destroy-run-details"><summary>Run details</summary><div class="mt-3 grid gap-2 text-sm text-zinc-700 dark:text-zinc-300 md:grid-cols-2">
                 <div><span class="font-semibold">Slot:</span> {{ run.slotId || run.slotName || "not recorded" }}</div>
                 <div><span class="font-semibold">Rancher instances:</span> {{ run.totalHAs || 1 }}</div>
@@ -325,6 +327,7 @@
 import { computed, ref } from "vue";
 import Icon from "./HelmLabIcon.vue";
 import CostHistoryPanel from "./CostHistoryPanel.vue";
+import {useClusterWorkspaces,openClusterWorkspace,clusterDisplayName} from "./cluster-workspace-store.mjs";
 import {
   state,
   setActivePanelTab,
@@ -335,6 +338,7 @@ import {
   cleanupStarting,
   cleanupBatchStarting,
   cleanupSelectionLocked,
+  cleanupLabOptions,
   pendingAbortOperation,
   dismissedCleanupResultKey,
   costResetting,
@@ -353,6 +357,11 @@ import {
   resetCostLedger,
   cleanLocalArtifacts,
 } from "./store.js";
+
+const {clusterWorkspaces}=useClusterWorkspaces();
+const clustersForRun=id=>clusterWorkspaces.value.filter(cluster=>String(cluster.runId||'')===String(id||'')&&id);
+const labScopeRunIds=computed(()=>selectedCleanupRunIds.value.length?selectedCleanupRunIds.value.filter(id=>runs.value.some(run=>String(run.runId)===String(id))):runs.value.some(run=>String(run.runId)===String(selectedRunId.value))?[selectedRunId.value]:[]);
+const labScopeCounts=computed(()=>{const entries=clusterWorkspaces.value.filter(cluster=>labScopeRunIds.value.includes(cluster.runId));const count=key=>new Set(entries.flatMap(cluster=>(cluster[key]||[]).map(item=>item.id))).size;return {testRuns:count('testRuns'),testPlans:count('testPlans'),cacheWorkspaces:count('cacheWorkspaces'),snapshots:count('snapshots')};});
 
 const secondaryButtonClass = "ops-button";
 const disabledButtonClass = "ops-button";
@@ -737,3 +746,7 @@ const artifactsStatusText = computed(() => {
   return "Ready: no recorded run slots remain and no shared workspace residue is blocking setup.";
 });
 </script>
+
+<style scoped>
+.destroy-lab-options{margin:22px 0;padding:21px;border:1px solid var(--runway-border);border-radius:15px;background:var(--runway-card);color:var(--runway-ink)}.destroy-lab-options-heading{display:flex;align-items:flex-start;gap:12px}.destroy-lab-options-heading>svg{color:var(--runway-accent);width:21px;height:21px;flex-shrink:0;margin-top:3px}.destroy-lab-options-heading>div{flex:1}.destroy-lab-options h3{font-size:16px;letter-spacing:-.02em;margin:0}.destroy-lab-options p{color:var(--runway-muted);font-size:12px;line-height:1.65;margin:6px 0 0}.destroy-lab-options-heading>span{font-size:10px;border:1px solid var(--runway-border);padding:5px 9px;border-radius:99px;color:var(--runway-muted);white-space:nowrap}.destroy-lab-choice-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:17px 0}.destroy-lab-choice-grid label{display:flex;gap:11px;align-items:flex-start;cursor:pointer;padding:15px;border:1px solid var(--runway-border);border-radius:10px;background:var(--runway-soft)}.destroy-lab-choice-grid label:has(input:checked){border-color:var(--runway-accent);background:color-mix(in srgb,var(--runway-accent) 5%,var(--runway-soft))}.destroy-lab-choice-grid input{width:16px;height:16px;flex-shrink:0;accent-color:var(--runway-accent);margin-top:3px}.destroy-lab-choice-grid strong{font-size:12px;font-weight:650}.destroy-lab-choice-grid small{display:block;font-size:11px;color:var(--runway-muted);line-height:1.65;margin-top:5px}.destroy-lab-scope{display:flex;flex-wrap:wrap;gap:5px 16px;padding:11px 0;border-top:1px solid var(--runway-border)}.destroy-lab-scope strong{font-size:11px;font-weight:600;overflow-wrap:anywhere}.destroy-lab-scope span{font-size:11px}.destroy-lab-retention{font-size:11px!important}.destroy-cluster-links{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.destroy-cluster-links>span{font-size:10px;color:var(--runway-muted);padding:4px 0;margin-right:4px}.destroy-cluster-links button{display:inline-flex;align-items:center;gap:6px;font-size:10px;color:var(--runway-accent);background:var(--runway-soft);border:1px solid var(--runway-border);border-radius:6px;padding:4px 7px;max-width:100%;overflow-wrap:anywhere}.destroy-cluster-links svg{width:12px;height:12px;flex-shrink:0}@media(max-width:850px){.destroy-lab-choice-grid{grid-template-columns:1fr}.destroy-lab-options-heading{flex-wrap:wrap}.destroy-lab-options-heading>span{margin-left:33px}}
+</style>

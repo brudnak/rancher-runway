@@ -569,7 +569,15 @@ wrapping, pause/resume, and copying of matching output. Status checks pause
 when a tab is inactive. If a refresh fails, the last successful workspace stays
 visible and lifecycle actions wait for a fresh check.
 
+## Test Packages
+
+Create a personal issue workspace from **Issue Radar**, **Clusters**, or **Test Packages**. Write manual cases, preserve reproduction and fix-validation sessions with recorded environment details, and attach existing Test Lab results or Cache Lab evidence. Link the fix pull request, look it up on GitHub for its title and linked issue, and let validation sessions record the fix and head commit they tested. Each session keeps the plan it started with; later edits do not rewrite that history. The Overview derives plan → reproduction → fix → validation progress with a suggested next step; it never sets the package status or a case outcome.
+
+Preview a Markdown report for GitHub, export a portable package, or explicitly back up that same format to a private GitHub repository. Imports create independent local copies and never execute tests. Attached evidence survives cleanup of the original lab record. See [Test Packages](docs/test-packages.md) for the workflow, archive format, storage, and first-version limits.
+
 ## Cache Lab
+
+Cache Lab snapshots and Test Lab results share a cluster home in **Clusters**. Stable cluster IDs keep links intact, while a shared nickname makes the same environment easy to recognize everywhere. Cluster history remains available after infrastructure cleanup unless you select its optional Test Lab or Cache Lab cleanup in **Destroy**. Saved plans and config templates are retained.
 
 Cache Lab keeps a persistent local workspace for each Rancher source. Connect
 with a Rancher URL and password by default, choose the **URL + API token**
@@ -657,6 +665,9 @@ you are most likely to care about:
 
 - `deployment.type` chooses `ha-rke2`, `hosted-tenant-k3s`, or
   `linode-docker-cattle`.
+- `downstream.linode.plans` enables a single-node K3s or RKE2 downstream per
+  HA RKE2 Rancher. Both the app and direct `TestHaSetup` provision enabled plans
+  after management readiness. See [downstream config and CI examples](docs/advanced-usage.md#configured-linode-downstreams).
 - `rancher.mode` is usually `auto`, where the app resolves chart, image,
   supported RKE2 version, and installer checksum details.
 - `rancher.version` or `rancher.versions` selects the Rancher build or builds.

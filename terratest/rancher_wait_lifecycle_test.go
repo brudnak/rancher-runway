@@ -32,7 +32,11 @@ func TestHAWaitReady(t *testing.T) {
 	if len(outputs) == 0 {
 		t.Fatal("No outputs received from terraform")
 	}
+	waitForConfiguredHAsReady(t, totalHAs, outputs)
+}
 
+func waitForConfiguredHAsReady(t *testing.T, totalHAs int, outputs map[string]string) {
+	t.Helper()
 	timeout := durationFromEnv("RANCHER_READY_TIMEOUT", 25*time.Minute)
 	initialDelay := durationFromEnv("RANCHER_READY_INITIAL_DELAY", 30*time.Second)
 	settleDelay := durationFromEnv("RANCHER_READY_SETTLE_DELAY", 30*time.Second)

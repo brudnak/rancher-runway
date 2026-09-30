@@ -2,12 +2,13 @@
 import {computed,nextTick,onBeforeUnmount,onMounted,ref,useId} from 'vue';
 import Icon from './HelmLabIcon.vue';
 import {apiFetch} from './store.js';
+import {clusterDisplayName} from './cluster-workspace-store.mjs';
 import {filterRancherTargets,rancherConnectionURL,rancherTestHost} from './rancher-connection.mjs';
 const props=defineProps({purpose:{type:String,required:true},url:{type:String,default:''},disabled:Boolean});
 const emit=defineEmits(['select']);
 const targets=ref([]),query=ref(''),loading=ref(false),loaded=ref(false),error=ref(''),open=ref(false),toggleRef=ref(null);
 const listId=useId();
-const matches=computed(()=>filterRancherTargets(targets.value,query.value));
+const matches=computed(()=>filterRancherTargets(targets.value.map(t=>({...t,name:clusterDisplayName(t.id,t.name)})),query.value));
 let controller,disposed=false;
 async function refresh(){
  if(loading.value)return;controller=new AbortController();loading.value=true;error.value='';const timer=setTimeout(()=>controller.abort(),15000);

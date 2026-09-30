@@ -12,6 +12,9 @@ import (
 
 const configuredDownstreamLinodePlansEnv = "RANCHER_RUNWAY_DOWNSTREAM_LINODE_PLANS"
 
+// The panel schedules readiness and downstream provisioning as separate jobs.
+const deferSetupDownstreamsEnv = "RANCHER_RUNWAY_DEFER_SETUP_DOWNSTREAMS"
+
 type downstreamProvisioningConfig struct {
 	ClusterName       string
 	MachineName       string
@@ -42,12 +45,28 @@ func configuredLinodeDownstreamPlans(totalHAs int) ([]settings.LinodeDownstreamP
 		return normalized, nil
 	}
 
-	plans := settings.CurrentLinodeDownstreamPlans(totalHAs)
-	normalized, err := settings.NormalizeLinodeDownstreamPlans(plans, totalHAs)
+	normalized, err := settings.ReadLinodeDownstreamPlans(totalHAs)
 	if err != nil {
 		return nil, fmt.Errorf("invalid configured downstream Linode plans: %w", err)
 	}
 	return normalized, nil
+}
+
+func setupLinodeDownstreamPlans(totalHAs int) ([]settings.LinodeDownstreamPlan, error) {
+	plans, err := configuredLinodeDownstreamPlans(totalHAs)
+	if err != nil {
+		return nil, err
+	}
+	if !settings.AnyLinodeDownstreamPlanEnabled(plans) {
+		return nil, nil
+	}
+	if strings.TrimSpace(linodeAccessToken()) == "" {
+		return nil, fmt.Errorf("enabled downstream Linode plans require LINODE_TOKEN, LINODE_ACCESS_TOKEN, or linode.access_token")
+	}
+	if os.Getenv(deferSetupDownstreamsEnv) == "1" {
+		return nil, nil
+	}
+	return plans, nil
 }
 
 func legacyLinodeDownstreamPlans(totalHAs int) ([]settings.LinodeDownstreamPlan, error) {

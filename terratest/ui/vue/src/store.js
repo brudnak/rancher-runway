@@ -3,6 +3,7 @@ import { writeTextToClipboard } from "./clipboard.js";
 import { resumableTab, workspaceTools } from "./home-workspace.mjs";
 import { readJSON } from "./read-json.mjs";
 import { createSingleFlight } from "./local-lab.mjs";
+import { CONFIRMATION_TEXT, isConfirmed } from "./confirmation.mjs";
 import {
   escapeHtml,
   highlightLogLine,
@@ -66,7 +67,6 @@ export const dangerConfirm = reactive({
   show: false,
   title: "",
   body: "",
-  typedValue: "",
   confirmText: "",
   accentText: "Confirmation required",
   input: "",
@@ -102,6 +102,9 @@ export const preflightChecking = ref(false);
 export const selectedCleanupRunId = ref("");
 export const selectedCleanupRunIds = ref([]);
 export const cleanupStarting = ref(false);
+export const cleanupLabOptions = reactive({testLab:false,cacheLab:false});
+const snapshotLabCleanup = () => ({cleanupTestLab:cleanupLabOptions.testLab,cleanupCacheLab:cleanupLabOptions.cacheLab});
+const labCleanupDescription = options => ` After successful infrastructure cleanup, ${options.cleanupTestLab ? "linked Test Lab results and logs will be deleted" : "Test Lab results will be kept"}, and ${options.cleanupCacheLab ? "linked Cache Lab workspaces and snapshots will be deleted" : "Cache Lab snapshots will be kept"}. Active lab work is preserved. Saved test plans and config templates are kept.`;
 export const cleanupBatchStarting = ref(false);
 export const downstreamRetryingRunId = ref("");
 export const dismissedCleanupResultKey = ref("");
@@ -501,11 +504,10 @@ export const hideManualLinodeCleanupWarning = () => {
 };
 
 // Dangerous confirmation modal controller
-export const requestTypedConfirmation = ({ title, body, typedValue, confirmText, accentText = "Confirmation required" }) =>
+export const requestTypedConfirmation = ({ title, body, confirmText, accentText = "Confirmation required" }) =>
   new Promise(resolve => {
     dangerConfirm.title = title;
     dangerConfirm.body = body;
-    dangerConfirm.typedValue = typedValue;
     dangerConfirm.confirmText = confirmText;
     dangerConfirm.accentText = accentText;
     dangerConfirm.input = "";
@@ -525,9 +527,9 @@ export const closeDangerConfirm = result => {
 };
 
 export const submitDangerConfirm = () => {
-  const expected = String(dangerConfirm.typedValue || "").trim().toLowerCase();
-  if (String(dangerConfirm.input || "").trim().toLowerCase() !== expected) {
-    dangerConfirm.error = `Type ${dangerConfirm.typedValue} to confirm.`;
+  if (!dangerConfirm.show) return;
+  if (!isConfirmed(dangerConfirm.input)) {
+    dangerConfirm.error = `Type ${CONFIRMATION_TEXT} to continue.`;
     return;
   }
   closeDangerConfirm(true);
@@ -1215,7 +1217,6 @@ export const abortOperation = async (operation, runId = "", options = {}) => {
         : downstreamAbort
           ? "This stops only downstream provisioning. The ready management Rancher and its run record stay intact; any partial Linode resources remain recorded for retry or destroy."
           : `This asks the local ${label} test process to stop and preserves Terraform state plus the run record. It does not destroy AWS resources.`,
-      typedValue: "stop",
       confirmText: cleanupBatchAbort ? "Stop destroy batch" : "Request stop",
       accentText: cleanupBatchAbort ? "Cleanup interruption" : "Confirmation required",
     });
@@ -1230,7 +1231,7 @@ export const abortOperation = async (operation, runId = "", options = {}) => {
   try {
     await apiFetch("/api/operations/abort", {
       method: "POST",
-      body: JSON.stringify({ operation, runId, confirm: "stop" }),
+      body: JSON.stringify({ operation, runId, confirm: CONFIRMATION_TEXT }),
     });
     if (operation === "cleanupBatch") {
       state.value = {
@@ -1257,8 +1258,7 @@ export const stopOperationThenOpenDestroy = async (operation, runId = "") => {
   const label = operation === "setup" ? "setup" : "readiness";
   const confirmed = await requestTypedConfirmation({
     title: `Stop ${label}, then open destroy?`,
-    body: `This requests a stop for the running ${label} process and moves run ${targetRunId || "this slot"} into the Destroy tab. Cleanup still requires its own typed "destroy" confirmation. For an HA run, cleanup attempts any recorded Linode downstream clusters first, then proceeds to AWS management Terraform destroy. If downstream deletion fails, AWS destroy continues and the panel warns that Linode resources may require manual cleanup.`,
-    typedValue: "confirm",
+    body: `This requests a stop for the running ${label} process and moves run ${targetRunId || "this slot"} into the Destroy tab. Cleanup requires a separate review and confirmation. For an HA run, cleanup attempts any recorded Linode downstream clusters first, then proceeds to AWS management Terraform destroy. If downstream deletion fails, AWS destroy continues and the panel warns that Linode resources may require manual cleanup.`,
     confirmText: "Stop and open destroy",
     accentText: "Stop before destroy",
   });
@@ -1303,7 +1303,6 @@ export const retryDownstream = async runId => {
   const confirmed = await requestTypedConfirmation({
     title: `Retry downstream provisioning for run ${targetRunId}?`,
     body: "The management Rancher is already ready. This retries only the frozen Linode downstream plan and may create billable Linode resources; it does not rerun or destroy management setup.",
-    typedValue: "retry downstream",
     confirmText: "Retry downstream",
     accentText: "Linode provisioning retry",
   });
@@ -1313,7 +1312,7 @@ export const retryDownstream = async runId => {
   try {
     await apiFetch("/api/downstream/retry", {
       method: "POST",
-      body: JSON.stringify({ runId: targetRunId, confirm: "retry downstream" }),
+      body: JSON.stringify({ runId: targetRunId, confirm: CONFIRMATION_TEXT }),
     });
     state.value = {
       ...(state.value || {}),
@@ -1362,12 +1361,12 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
     return;
   }
 
+  const labCleanup = snapshotLabCleanup();
   const confirmed = await requestTypedConfirmation({
     title: `Destroy run ${targetRunId}?`,
-    body: linodeRun
+    body: (linodeRun
       ? "This runs Terraform destroy from the selected Linode run state. It deletes the Linode instance and its AWS Route53 record, then removes the run slot only after destroy succeeds."
-      : "Cleanup attempts any recorded Linode downstream clusters first, then proceeds to Terraform destroy for the AWS management infrastructure. If downstream deletion fails, AWS destroy still continues and you will be warned that Linode resources may require manual cleanup. The run slot is removed after management Terraform destroy succeeds.",
-    typedValue: "destroy",
+      : "Cleanup attempts any recorded Linode downstream clusters first, then proceeds to Terraform destroy for the AWS management infrastructure. If downstream deletion fails, AWS destroy still continues and you will be warned that Linode resources may require manual cleanup. The run slot is removed after management Terraform destroy succeeds.") + labCleanupDescription(labCleanup),
     confirmText: "Start destroy",
     accentText: linodeRun ? "Linode destroy confirmation" : "Downstream-first destroy confirmation",
   });
@@ -1380,7 +1379,7 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
   try {
     await apiFetch("/api/cleanup", {
       method: "POST",
-      body: JSON.stringify({ confirm: "destroy", runId: targetRunId }),
+      body: JSON.stringify({ confirm: CONFIRMATION_TEXT, runId: targetRunId, ...labCleanup }),
     });
     cleanupStarting.value = false;
     refreshStatus.value = "Destroy requested...";
@@ -1419,16 +1418,15 @@ export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRun
     return;
   }
 
-  const confirmationText = all ? "destroy all" : "destroy selected";
   const preview = requestedRunIds.slice(0, 6).join(", ");
   const remaining = requestedRunIds.length - Math.min(requestedRunIds.length, 6);
   const targetSummary = remaining > 0 ? `${preview}, and ${remaining} more` : preview;
+  const labCleanup = snapshotLabCleanup();
   const confirmed = await requestTypedConfirmation({
     title: all
       ? `Destroy all ${requestedRunIds.length} run slots?`
       : `Destroy ${requestedRunIds.length} selected run slot${requestedRunIds.length === 1 ? "" : "s"}?`,
-    body: `For each HA management run, cleanup attempts any recorded Linode downstream clusters first, then proceeds to AWS management Terraform destroy even if downstream deletion fails. Any remaining Linode resources are reported for manual cleanup. Linode Docker slots use their recorded Linode and Route53 Terraform destroy. Cleanup runs sequentially for this fixed set: ${targetSummary}. Slots whose management Terraform destroy succeeds are removed; Terraform failures stay recorded and the batch continues with the remaining targets.`,
-    typedValue: confirmationText,
+    body: `For each HA management run, cleanup attempts any recorded Linode downstream clusters first, then proceeds to AWS management Terraform destroy even if downstream deletion fails. Any remaining Linode resources are reported for manual cleanup. Linode Docker slots use their recorded Linode and Route53 Terraform destroy. Cleanup runs sequentially for this fixed set: ${targetSummary}. Slots whose management Terraform destroy succeeds are removed; Terraform failures stay recorded and the batch continues with the remaining targets.` + labCleanupDescription(labCleanup),
     confirmText: all ? "Destroy all slots" : "Destroy selected slots",
     accentText: all ? "Destroy every recorded slot" : "Bulk destroy confirmation",
   });
@@ -1461,8 +1459,8 @@ export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRun
     const response = await apiFetch("/api/cleanup", {
       method: "POST",
       body: JSON.stringify(all
-        ? { all: true, confirm: "destroy all" }
-        : { runIds: currentTargets, confirm: "destroy selected" }),
+        ? { all: true, confirm: CONFIRMATION_TEXT, ...labCleanup }
+        : { runIds: currentTargets, confirm: CONFIRMATION_TEXT, ...labCleanup }),
     });
     const payload = await response.json();
 
@@ -1528,7 +1526,6 @@ export const resetCostLedger = async () => {
   const confirmed = await requestTypedConfirmation({
     title: "Reset cost history database?",
     body: "This deletes the local SQLite cost ledger and starts a fresh empty one. It does not destroy AWS resources, remove run slots, or change Terraform state.",
-    typedValue: "reset costs",
     confirmText: "Reset cost DB",
     accentText: "Local data reset",
   });
@@ -1540,7 +1537,7 @@ export const resetCostLedger = async () => {
   try {
     const response = await apiFetch("/api/costs/reset", {
       method: "POST",
-      body: JSON.stringify({ confirm: "reset costs" }),
+      body: JSON.stringify({ confirm: CONFIRMATION_TEXT }),
     });
     const payload = await response.json();
     state.value = {
@@ -1566,7 +1563,6 @@ export const cleanLocalArtifacts = async () => {
   const confirmed = await requestTypedConfirmation({
     title: "Clean artifacts after destroy?",
     body: "This backup cleanup removes ignored local run residue only after recorded slots are gone. It keeps cost history and will not destroy AWS resources.",
-    typedValue: "clean local artifacts",
     confirmText: "Clean artifacts",
     accentText: "Local cleanup",
   });
@@ -1577,7 +1573,7 @@ export const cleanLocalArtifacts = async () => {
   try {
     const response = await apiFetch("/api/local-artifacts/clean", {
       method: "POST",
-      body: JSON.stringify({ confirm: "clean local artifacts" }),
+      body: JSON.stringify({ confirm: CONFIRMATION_TEXT }),
     });
     const payload = await response.json();
     state.value = {

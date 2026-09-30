@@ -1,5 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { readJSON } from './read-json.mjs';
+import { CONFIRMATION_TEXT } from './confirmation.mjs';
 import { writeTextToClipboard } from './clipboard.js';
 import { createSingleFlight, visibleRecords } from './local-lab.mjs';
 
@@ -85,7 +86,7 @@ export function useLocalLab(kind, isActive) {
   async function abortAction() {
     if (aborting.value || !operation.value.running) return;
     aborting.value=true;
-    try {await request('/api/operations/abort',{method:'POST',body:JSON.stringify({operation:kind==='k3d'?'k3dLab':'steveLab',runId:operation.value.runId || '',confirm:'stop'})});notify('Stop requested. Following the action until it finishes.','warning');}
+    try {await request('/api/operations/abort',{method:'POST',body:JSON.stringify({operation:kind==='k3d'?'k3dLab':'steveLab',runId:operation.value.runId || '',confirm:CONFIRMATION_TEXT})});notify('Stop requested. Following the action until it finishes.','warning');}
     catch(failure) {notify(failure.message,'error');}
     finally {await refresh(true);aborting.value=false;}
   }

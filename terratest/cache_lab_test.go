@@ -247,13 +247,13 @@ func TestCacheLabCleanupConfirmsAndStaysWithinWorkspace(t *testing.T) {
 	if _, err = s.mutate(cacheLabRequest{Action: "delete-workspace", Workspace: w.ID, Confirm: "wrong"}); err == nil {
 		t.Fatal("cleanup did not require confirmation")
 	}
-	if _, err = s.mutate(cacheLabRequest{Action: "delete-snapshot", Workspace: w.ID, Snapshot: b.ID, Confirm: "delete snapshot"}); err != nil {
+	if _, err = s.mutate(cacheLabRequest{Action: "delete-snapshot", Workspace: w.ID, Snapshot: b.ID, Confirm: typedConfirmationPhrase}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = s.snapshotLocked(b.ID); err != nil {
 		t.Fatal("deleted another workspace snapshot")
 	}
-	if _, err = s.mutate(cacheLabRequest{Action: "delete-workspace", Workspace: w.ID, Confirm: "delete workspace"}); err != nil {
+	if _, err = s.mutate(cacheLabRequest{Action: "delete-workspace", Workspace: w.ID, Confirm: typedConfirmationPhrase}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err = s.snapshotLocked(a.ID); err == nil {
@@ -425,7 +425,7 @@ func TestCacheLabCaptureLockAndTimeout(t *testing.T) {
 	if _, _, err = s.beginJob(w.ID, "Another"); err == nil {
 		t.Fatal("concurrent capture accepted")
 	}
-	if _, err = s.mutate(cacheLabRequest{Action: "delete-workspace", Workspace: w.ID, Confirm: "delete workspace"}); err == nil {
+	if _, err = s.mutate(cacheLabRequest{Action: "delete-workspace", Workspace: w.ID, Confirm: typedConfirmationPhrase}); err == nil {
 		t.Fatal("deleted workspace during capture")
 	}
 	if _, err = s.mutate(cacheLabRequest{Action: "cancel"}); err != nil {
@@ -490,7 +490,7 @@ func TestCacheLabFolderRenameAndViewPersistence(t *testing.T) {
 	if saved.View.CompareTable != "sample" || saved.View.Folder != "Investigation" || reopened.library.Snapshots[0].Folder != "Investigation" {
 		t.Fatal("renamed folder or comparison state lost")
 	}
-	if _, err := s.mutate(cacheLabRequest{Action: "delete-folder", Workspace: w.ID, Folder: "Investigation", Confirm: "remove folder"}); err != nil {
+	if _, err := s.mutate(cacheLabRequest{Action: "delete-folder", Workspace: w.ID, Folder: "Investigation", Confirm: typedConfirmationPhrase}); err != nil {
 		t.Fatal(err)
 	}
 	if s.library.Snapshots[0].Folder != "" {

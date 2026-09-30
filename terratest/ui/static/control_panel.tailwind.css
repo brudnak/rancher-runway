@@ -1232,6 +1232,9 @@ details[open] > summary .setup-log-toggle-open {
 .lab-confirm > p { color:var(--lab-muted); font-size:.75rem; line-height:1.7; margin:.55rem 0; }
 .lab-confirm > label:not(.lab-check-label) { display:block; margin:1rem 0 .7rem; }
 .lab-confirm > label > input:not([type=checkbox]) { margin-top:.5rem; }
+.typed-confirm-prompt { word-spacing:normal; letter-spacing:normal; text-transform:none; }
+.typed-confirm-prompt strong { font-family:inherit; font-weight:650; }
+.typed-confirm-label input, .typed-confirm-input { display:block; max-width:26rem; word-spacing:normal; letter-spacing:normal; text-transform:none; }
 .local-lab .lab-danger { color:var(--lab-error); border-color:var(--lab-error); }
 .local-lab .lab-danger:hover:not(:disabled) { background:var(--lab-error); color:var(--lab-card); }
 .lab-check-label { display:flex; align-items:center; gap:.55rem; margin:.8rem 0 .35rem; }
@@ -2065,3 +2068,9 @@ body[data-workspace] #controlPanelPanelsVue>section[class*=border-zinc]{backgrou
 .test-reference-heading{border-bottom:1px solid var(--runway-border)}
 .test-reference-heading .test-caption{display:block;font-size:9px;margin-top:7px}
 @media(max-width:760px){.test-explorer-title .test-eyebrow{display:block}.test-categories .test-explorer-filters>button{width:auto}.test-explorer-legend{display:none}.test-catalog-location code{font-size:10px}}
+
+/* Shared cluster homes keep investigation records together without moving files. */
+.test-history .test-history-group,.test-saved-cluster-group>.test-history-group{display:flex;align-items:center;justify-content:space-between;gap:.6rem;margin:.8rem 0 .5rem;padding:.5rem .2rem;color:var(--runway-ink);font-size:.8rem;font-weight:650;overflow-wrap:anywhere}
+.test-history-group span{color:var(--runway-muted);font-size:.7rem;font-weight:500}
+.test-history-filter{display:grid;gap:.35rem;font-size:.74rem;color:var(--runway-muted);padding-bottom:.6rem}.test-history-filter select{width:100%;padding:.5rem;border:1px solid var(--runway-border);border-radius:8px;background:var(--runway-input);color:var(--runway-ink)}
+.test-saved-cluster-group+.test-saved-cluster-group{margin-top:1.5rem}

@@ -35,14 +35,7 @@
     </div>
   </section>
 
-  <section
-    v-show="activeTab === 'clusters'"
-    class="min-w-0 overflow-hidden rounded-xl border border-zinc-200 bg-white p-4 shadow-sm shadow-zinc-200/60 dark:border-white/10 dark:bg-zinc-900/80 dark:shadow-black/20 sm:p-5"
-  >
-    <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-      <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Clusters</h2>
-      <div class="text-sm text-zinc-500 dark:text-zinc-400">{{ refreshStatus }}</div>
-    </div>
+  <section v-show="activeTab === 'clusters'" class="min-w-0" aria-label="Cluster workspaces">
     <ClustersPanel />
   </section>
 
@@ -87,6 +80,8 @@
 
   <section v-if="testsOpened" v-show="activeTab === 'tests'" class="min-w-0" aria-label="Test Lab workspace"><TestLabPanel :active="activeTab === 'tests'" /></section>
 
+  <section v-if="packagesOpened" v-show="activeTab === 'packages'" class="min-w-0" aria-label="Test Packages workspace"><TestPackagesPanel :active="activeTab === 'packages'" /></section>
+
   <section v-if="cacheOpened" v-show="activeTab === 'cache'" class="min-w-0" aria-label="Cache Lab workspace"><CacheLabPanel :active="activeTab === 'cache'" /></section>
 
   <section v-if="steveOpened" v-show="activeTab === 'steve'" class="min-w-0" aria-label="Steve Lab workspace">
@@ -109,10 +104,13 @@ import PRBuildVerifierPanel from "./PRBuildVerifierPanel.vue";
 import PreflightPanel from "./PreflightPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";
 import TestLabPanel from "./TestLabPanel.vue";
+import TestPackagesPanel from "./TestPackagesPanel.vue";
 import CacheLabPanel from "./CacheLabPanel.vue";
 import SteveLabPanel from "./SteveLabPanel.vue";
 import WorkspaceRunsPanel from "./WorkspaceRunsPanel.vue";
 const testsOpened = ref(false);
+const packagesOpened = ref(false);
+watch(activeTab, tab => { if (tab === "packages") packagesOpened.value = true; }, { immediate: true });
 watch(activeTab, tab => { if (tab === "tests") testsOpened.value = true; }, { immediate: true });
 const k3dOpened = ref(false), steveOpened = ref(false), cacheOpened = ref(false);
 watch(activeTab, tab => { if (tab === "cache") cacheOpened.value = true; }, { immediate: true });

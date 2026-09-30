@@ -61,6 +61,11 @@ type localControlPanel struct {
 	cacheLab                *cacheLabService
 	testLabMu               sync.Mutex
 	testLab                 *testLabService
+	testPackagesMu          sync.Mutex
+	testPackages            *testPackageService
+	testPackageEnvironments map[string]testPackageEnvironment // guarded by mu; never rewrites preserved sessions
+	clusterWorkspacesMu     sync.Mutex
+	clusterWorkspaces       map[string]clusterWorkspaceRecord
 
 	// cleanupBatchRunner is nil in production. Tests may replace it with a
 	// deterministic runner so the batch coordinator can be exercised without
@@ -277,6 +282,7 @@ type panelCommandSpec struct {
 	AllowWhileDone bool
 	BatchChild     bool
 	Completion     chan<- error
+	LabCleanup     panelLabCleanupOptions
 }
 
 type kubectlPodList struct {
@@ -456,7 +462,9 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/run-slots/start", p.handleRunSlotStart)
 	mux.HandleFunc("/api/operations/abort", p.handleAbortOperation)
 	mux.HandleFunc("/api/test-lab", p.handleTestLab)
+	mux.HandleFunc("/api/test-packages", p.handleTestPackages)
 	mux.HandleFunc("/api/rancher/targets", p.handleRancherTargets)
+	mux.HandleFunc("/api/cluster-workspaces", p.handleClusterWorkspaces)
 	mux.HandleFunc("/api/rancher/token", p.handleRancherToken)
 	mux.HandleFunc("/api/cache-lab", p.handleCacheLab)
 	mux.HandleFunc("/api/cache-lab/import", p.handleCacheLab)
@@ -792,6 +800,10 @@ var controlPanelStaticAssets = map[string]controlPanelStaticAsset{
 	"/static/control_panel.css": {
 		ContentType: "text/css; charset=utf-8",
 		Body:        ui.ControlPanelCSS,
+	},
+	"/static/control_panel_components.css": {
+		ContentType: "text/css; charset=utf-8",
+		Body:        ui.ControlPanelComponentsCSS,
 	},
 	"/static/control_panel.js": {
 		ContentType: "application/javascript; charset=utf-8",
@@ -1268,8 +1280,8 @@ func (p *localControlPanel) handleDownstreamRetry(w http.ResponseWriter, r *http
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "retry downstream" {
-		http.Error(w, "typed confirmation must equal retry downstream", http.StatusBadRequest)
+	if req.Confirm != typedConfirmationPhrase {
+		http.Error(w, "typed confirmation must equal "+typedConfirmationPhrase, http.StatusBadRequest)
 		return
 	}
 	if err := p.startConfiguredDownstreamsForRun(req.RunID); err != nil {
@@ -1299,8 +1311,8 @@ func (p *localControlPanel) handleAbortOperation(w http.ResponseWriter, r *http.
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "stop" {
-		http.Error(w, "typed confirmation must equal stop", http.StatusBadRequest)
+	if req.Confirm != typedConfirmationPhrase {
+		http.Error(w, "typed confirmation must equal "+typedConfirmationPhrase, http.StatusBadRequest)
 		return
 	}
 
@@ -1329,16 +1341,18 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		Confirm string   `json:"confirm"`
-		RunID   string   `json:"runId"`
-		RunIDs  []string `json:"runIds"`
-		All     bool     `json:"all"`
+		Confirm         string   `json:"confirm"`
+		RunID           string   `json:"runId"`
+		RunIDs          []string `json:"runIds"`
+		All             bool     `json:"all"`
+		CleanupTestLab  bool     `json:"cleanupTestLab"`
+		CleanupCacheLab bool     `json:"cleanupCacheLab"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	confirm := strings.TrimSpace(strings.ToLower(req.Confirm))
+	confirm := req.Confirm
 	batchRequested := req.All || req.RunIDs != nil
 	if strings.TrimSpace(req.RunID) != "" && batchRequested {
 		http.Error(w, "runId cannot be combined with all or runIds", http.StatusBadRequest)
@@ -1349,12 +1363,8 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if batchRequested {
-		expectedConfirmation := "destroy selected"
-		if req.All {
-			expectedConfirmation = "destroy all"
-		}
-		if confirm != expectedConfirmation {
-			http.Error(w, "typed confirmation must equal "+expectedConfirmation, http.StatusBadRequest)
+		if confirm != typedConfirmationPhrase {
+			http.Error(w, "typed confirmation must equal "+typedConfirmationPhrase, http.StatusBadRequest)
 			return
 		}
 
@@ -1363,7 +1373,7 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := p.startCleanupBatch(runIDs); err != nil {
+		if err := p.startCleanupBatchWithLabCleanup(runIDs, req.CleanupTestLab, req.CleanupCacheLab); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
@@ -1374,13 +1384,13 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if confirm != "cleanup" && confirm != "destroy" {
-		http.Error(w, "typed confirmation must equal destroy", http.StatusBadRequest)
+	if confirm != typedConfirmationPhrase {
+		http.Error(w, "typed confirmation must equal "+typedConfirmationPhrase, http.StatusBadRequest)
 		return
 	}
 
 	if strings.TrimSpace(req.RunID) != "" {
-		if err := p.startCleanupForRun(req.RunID); err != nil {
+		if err := p.startCleanupForRunWithLabCleanup(req.RunID, req.CleanupTestLab, req.CleanupCacheLab); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
@@ -1388,7 +1398,12 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := p.startCleanup(); err != nil {
+	record, ok := p.readCurrentRunRecord()
+	if !ok {
+		http.Error(w, "cleanup requires a recorded run", http.StatusConflict)
+		return
+	}
+	if err := p.startCleanupForRunWithLabCleanup(record.RunID, req.CleanupTestLab, req.CleanupCacheLab); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -1417,8 +1432,8 @@ func (p *localControlPanel) handleCostLedgerReset(w http.ResponseWriter, r *http
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "reset costs" {
-		http.Error(w, "typed confirmation must equal reset costs", http.StatusBadRequest)
+	if req.Confirm != typedConfirmationPhrase {
+		http.Error(w, "typed confirmation must equal "+typedConfirmationPhrase, http.StatusBadRequest)
 		return
 	}
 
@@ -1454,8 +1469,8 @@ func (p *localControlPanel) handleLocalArtifactsClean(w http.ResponseWriter, r *
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(strings.ToLower(req.Confirm)) != "clean local artifacts" {
-		http.Error(w, "typed confirmation must equal clean local artifacts", http.StatusBadRequest)
+	if req.Confirm != typedConfirmationPhrase {
+		http.Error(w, "typed confirmation must equal "+typedConfirmationPhrase, http.StatusBadRequest)
 		return
 	}
 

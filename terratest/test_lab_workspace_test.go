@@ -37,7 +37,7 @@ func TestTestLabConfigLibraryCopiesAndCleanup(t *testing.T) {
 	if err != nil || v2.(map[string]any)["config"] != raw {
 		t.Fatal("restart/copy isolation failed", err)
 	}
-	if _, err = s.configAction(testLabRequest{Action: "folder-delete", ID: folder, Confirm: "DELETE FOLDER"}); err == nil {
+	if _, err = s.configAction(testLabRequest{Action: "folder-delete", ID: folder, Confirm: typedConfirmationPhrase}); err == nil {
 		t.Fatal("deleted populated folder")
 	}
 	req := testLabRequest{Action: "config-save", ID: f.ID, Name: f.Name, Folder: folder, Revision: f.Revision, Config: copy}
@@ -67,8 +67,8 @@ func TestTestLabConfigLibraryCopiesAndCleanup(t *testing.T) {
 	if _, err = s.configAction(testLabRequest{Action: "config-delete", ID: f.ID, Revision: updated.Revision}); err == nil {
 		t.Fatal("deleted without confirmation")
 	}
-	act(testLabRequest{Action: "config-delete", ID: f.ID, Revision: updated.Revision, Confirm: "DELETE CONFIG"})
-	act(testLabRequest{Action: "folder-delete", ID: folder, Confirm: "DELETE FOLDER"})
+	act(testLabRequest{Action: "config-delete", ID: f.ID, Revision: updated.Revision, Confirm: typedConfirmationPhrase})
+	act(testLabRequest{Action: "folder-delete", ID: folder, Confirm: typedConfirmationPhrase})
 	files, _ = filepath.Glob(filepath.Join(s.configRoot, "*.yml"))
 	if len(files) != 0 {
 		t.Fatal("credential file remains")

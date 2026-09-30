@@ -173,8 +173,13 @@ func TestAWSCleanupRejectsStaleChangedAndUnconfirmedPlans(t *testing.T) {
 		return plan
 	}
 	plan := prepare()
-	if err := p.startAWSCleanup(plan.Token, "delete"); err == nil {
-		t.Fatal("missing exact confirmation accepted")
+	if plan.Confirmation != typedConfirmationPhrase {
+		t.Fatalf("review confirmation = %q, want %q", plan.Confirmation, typedConfirmationPhrase)
+	}
+	for _, phrase := range []string{"", "delete", "delete 1 resource", "CONFIRM", " confirm "} {
+		if err := p.startAWSCleanup(plan.Token, phrase); err == nil {
+			t.Fatalf("invalid exact confirmation %q accepted", phrase)
+		}
 	}
 	if err := p.startAWSCleanup("wrong", plan.Confirmation); err == nil {
 		t.Fatal("wrong token accepted")
@@ -311,7 +316,7 @@ func TestAWSCleanupHandlersRequireAuthMethodAndStrictBody(t *testing.T) {
 	req.Header.Set("X-Control-Panel-Token", "token")
 	w := httptest.NewRecorder()
 	p.handleAWSCleanupPreview(w, req)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "delete 1 resource") || strings.Contains(w.Body.String(), "scope") {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"confirmation": "confirm"`) || strings.Contains(w.Body.String(), "scope") {
 		t.Fatalf("preview response: %s", w.Body.String())
 	}
 }

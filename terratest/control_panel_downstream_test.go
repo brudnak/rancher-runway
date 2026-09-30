@@ -98,6 +98,24 @@ func TestPanelCommandEnvPassesFrozenDownstreamPlans(t *testing.T) {
 	}
 }
 
+func TestPanelSetupDefersConfiguredDownstreamsUntilReadiness(t *testing.T) {
+	panel := newDownstreamPanelTest(t)
+	t.Setenv(deferSetupDownstreamsEnv, "0")
+	env := panel.panelCommandEnv(panelOperationSetup)
+	count := 0
+	for _, value := range env {
+		if strings.HasPrefix(value, deferSetupDownstreamsEnv+"=") {
+			count++
+			if value != deferSetupDownstreamsEnv+"=1" {
+				t.Fatalf("setup did not defer downstreams: %s", value)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected one deferral override, got %d", count)
+	}
+}
+
 func TestDownstreamFailurePreservesReadyManagementRun(t *testing.T) {
 	panel := newDownstreamPanelTest(t)
 	panel.writeCurrentRunRecord(panelRunRecord{
@@ -220,7 +238,7 @@ func TestHandleDownstreamRetryRequiresConfirmation(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	panel.handleDownstreamRetry(recorder, request)
 
-	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "retry downstream") {
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "typed confirmation must equal confirm") {
 		t.Fatalf("retry response = %d %q", recorder.Code, recorder.Body.String())
 	}
 }

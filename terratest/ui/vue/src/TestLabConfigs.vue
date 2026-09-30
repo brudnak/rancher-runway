@@ -2,6 +2,7 @@
 import {computed,nextTick,onBeforeUnmount,onMounted,reactive,ref,watch} from 'vue';
 import Icon from './HelmLabIcon.vue';
 import Confirm from './LocalLabConfirm.vue';
+import {CONFIRMATION_TEXT} from './confirmation.mjs';
 import Editor from './TestLabEditor.vue';
 import Transfer from './TestLabTransfer.vue';
 import {inspectConfig} from './test-lab-workspace.mjs';
@@ -41,11 +42,11 @@ async function saveDraft(){
 }
 async function saveAndContinue(){const next=pendingSwitch.value;const clean=await perform(saveDraft);if(clean)applyDraft(next);}
 async function duplicate(file){await perform(async()=>{const value=await props.request('config-load',{id:file.id});replace({id:'',revision:'',name:(file.name.slice(0,85)+' copy'),folder:file.folder,config:value.config});});}
-function remove(file){if(!file)return;dialog.value={title:'Delete this cattle-config?',message:`Permanently remove “${file.name}” and its saved YAML from this computer. Run working copies and Rancher resources stay in place.`,phrase:'DELETE CONFIG',button:'Delete config',run:async()=>{await props.request('config-delete',{id:file.id,revision:file.revision,confirm:'DELETE CONFIG'});await reload();if(draft.value?.id===file.id){draft.value=null;baseline.value='';pendingSwitch.value=null;}notice.value='Cattle-config deleted.';}};}
+function remove(file){if(!file)return;dialog.value={key:`config:${file.id}`,title:'Delete this cattle-config?',message:`Permanently remove “${file.name}” and its saved YAML from this computer. Run working copies and Rancher resources stay in place.`,button:'Delete config',run:async()=>{await props.request('config-delete',{id:file.id,revision:file.revision,confirm:CONFIRMATION_TEXT});await reload();if(draft.value?.id===file.id){draft.value=null;baseline.value='';pendingSwitch.value=null;}notice.value='Cattle-config deleted.';}};}
 async function editFolder(folder){Object.assign(folderEdit,{open:true,id:folder?.id||'',name:folder?.name||''});await nextTick();folderField.value?.focus();}
 async function saveFolder(){await perform(async()=>{const result=await props.request('folder-save',{id:folderEdit.id,name:folderEdit.name});const created=result.folders.find(f=>!library.value.folders.some(old=>old.id===f.id));await reload();folderEdit.open=false;if(created){selectedFolder.value=created.id;expanded[created.id]=true;focusRow(`folder:${created.id}`);}notice.value=created?'Folder created. Add configs from its action menu.':'Folder renamed.';});}
-function removeFolder(folder){dialog.value={title:'Delete this folder?',message:`Remove the empty folder “${folder.name}” from your local library.`,phrase:'DELETE FOLDER',button:'Delete folder',run:async()=>{await props.request('folder-delete',{id:folder.id,confirm:'DELETE FOLDER'});await reload();notice.value='Folder deleted.';}};}
-async function confirm(){const d=dialog.value;await perform(async()=>{await d.run();dialog.value=null;});}
+function removeFolder(folder){dialog.value={key:`folder:${folder.id}`,title:'Delete this folder?',message:`Remove the empty folder “${folder.name}” from your local library.`,button:'Delete folder',run:async()=>{await props.request('folder-delete',{id:folder.id,confirm:CONFIRMATION_TEXT});await reload();notice.value='Folder deleted.';}};}
+async function confirm(){const d=dialog.value;if(!d)return;await perform(async()=>{await d.run();dialog.value=null;});}
 async function focusRow(key){focusKey.value=key;await nextTick();const el=Array.from(tree.value?.querySelectorAll('[role=treeitem]')||[]).find(el=>el.dataset.key===key);el?.focus({preventScroll:true});el?.scrollIntoView({block:'nearest',inline:'nearest'});}
 function activate(row){focusKey.value=row.key;if(row.kind==='folder'){selectedFolder.value=row.id;expanded[row.id]=!row.open;}else open(row);}
 function treeKey(event,row){
@@ -125,7 +126,7 @@ onBeforeUnmount(()=>{window.removeEventListener('pointerdown',outsideMenu);windo
    </div>
   </div>
   <div class="test-library-status" role="status"><Icon :name="notice?'check':'lock'"/><span>{{ notice||'Saved privately on this computer. Export only when you choose.' }}</span><span v-if="pending">Working…</span></div>
-  <Confirm v-if="dialog" :title="dialog.title" :message="dialog.message" :phrase="dialog.phrase" :button-label="dialog.button" :busy="pending" @cancel="dialog=null" @confirm="confirm"/>
+  <Confirm v-if="dialog" :key="dialog.key" :title="dialog.title" :message="dialog.message" :button-label="dialog.button" :busy="pending" @cancel="dialog=null" @confirm="confirm"/>
   <details class="test-storage-note"><summary><Icon name="lock"/>Storage & portability</summary><p>Saved YAML can contain tokens and provider credentials. Runway keeps it outside the repository in an owner-only directory (0700), with owner-only files (0600). OS backups may include these files. Exports are unencrypted and include every saved value.</p><code>{{ storage }}</code><p>Individual configs export as YAML. Folders and full libraries use versioned .runway-cattle-configs.json bundles. Import always adds copies and preserves comments; it never overwrites existing files.</p></details>
  </section>
  <Teleport to="body"><div v-if="menu" class="test-lab test-explorer-menu-layer" :style="{left:menu.x+'px',top:menu.y+'px'}"><div ref="menuElement" role="menu" :aria-label="`Actions for ${menu.row.name}`" class="test-explorer-menu" @keydown="menuKey"><div class="test-explorer-menu-title">{{ menu.row.name }}</div><button v-for="action in menuActions" :key="action.label" role="menuitem" tabindex="-1" :disabled="action.disabled" :class="{'test-danger':action.danger}" @click="closeMenu(true);action.run()"><Icon :name="action.icon"/>{{ action.label }}</button></div></div></Teleport>

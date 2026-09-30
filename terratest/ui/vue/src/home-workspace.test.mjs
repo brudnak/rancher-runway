@@ -39,7 +39,7 @@ test('tool discovery and resume navigation use real destinations and useful task
   assert.equal(resumableTab('lifecycle'), 'runs');
   for (const id of ['home', 'unknown', null, 'javascript:alert(1)']) assert.equal(resumableTab(id), '');
   assert.equal(resumableTab('steve'), 'steve');
-  assert.deepEqual(filterWorkspaceTools('SQL cache').map(tool => tool.id), ['cache', 'steve']);
+  assert.deepEqual(filterWorkspaceTools('SQL cache').map(tool => tool.id), ['clusters', 'cache', 'steve']);
   assert.deepEqual(filterWorkspaceTools('  K3s  LOCAL ').map(tool => tool.id), ['k3d']);
   assert.ok(filterWorkspaceTools('costs').some(tool => tool.id === 'destroy'));
   assert.deepEqual(filterWorkspaceTools('not-a-real-tool'), []);
