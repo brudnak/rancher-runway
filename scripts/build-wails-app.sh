@@ -120,7 +120,12 @@ fi
   fi
   build_ldflags="${build_ldflags} -X 'github.com/brudnak/ha-rancher-rke2/internal/buildinfo.Commit=${build_commit}'"
   build_ldflags="${build_ldflags} -X 'github.com/brudnak/ha-rancher-rke2/internal/buildinfo.BuildDate=${build_date}'"
-  RANCHER_RUNWAY_REPO="${repo_root}" HA_RANCHER_REPO="${repo_root}" "${wails_bin}" build -ldflags "${build_ldflags}"
+  # Runway builds its embedded UI files above; desktop/wails has no embed
+  # directories for Wails to create. Skip that optional scan: Wails 2.12's
+  # bundled Go type reader cannot read Go 1.27 export data and otherwise exits
+  # with `package "context" without types` before the real build starts.
+  # Bindings, frontend compilation, and Go compilation still run normally.
+  RANCHER_RUNWAY_REPO="${repo_root}" HA_RANCHER_REPO="${repo_root}" "${wails_bin}" build -skipembedcreate -ldflags "${build_ldflags}"
 )
 
 echo "Built ${repo_root}/desktop/wails/build/bin/Rancher Runway.app"

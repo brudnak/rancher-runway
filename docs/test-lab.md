@@ -6,7 +6,7 @@ Test Lab is under **Local tools** and in the Home directory. This initial versio
 
 1. Load `main`, a branch, a tag, or a commit from public `rancher/tests`. Runway resolves the ref to a full commit SHA and reads its source archive. Discovery does not compile or execute the repository.
 2. Search the `validation` catalog. Select whole test entry points/suites or individual statically discoverable testify methods. Source links use the pinned SHA. Dynamically generated subtests appear only when executing; some suites also create names through helpers that cannot be discovered statically.
-3. Select a detected Rancher or enter its hostname. Sign in with a local Rancher password on the default **URL + password** tab, or choose **URL + API token** to paste a Rancher **user** token. Supply the suite's required `cattle-config.yml`. The guided fields cover the common connection section; YAML editing preserves provider-specific fields and comments. Use **Cattle-config library** for reusable templates and **Field guide** for the selected revision’s READMEs.
+3. Select a detected Rancher or enter its hostname. Sign in with a local Rancher password on the default **URL + password** tab, or choose **URL + API token** to paste a Rancher **user** token. Supply the suite's required `cattle-config.yml`. The guided fields cover the common connection section; YAML editing preserves provider-specific fields and comments. Use **Cattle-config library** for reusable templates and **Browse READMEs** for the selected revision’s READMEs, kept beside the test catalog.
 4. Set Go build tags and a per-suite timeout. Review exact commands, source revision, and target. Type `RUN <hostname>` to execute locally.
 5. Follow Activity & results, pause the log view, inspect failed test events, or copy a result summary. Stopping may interrupt suite cleanup; inspect the target afterward.
 
@@ -44,9 +44,9 @@ The app blocks normal close while a local test is active. After a crash or force
 
 Delete saved plans/results through their confirmed local cleanup actions. Deleting a result never deletes Rancher resources.
 
-### Field guide and full YAML editor
+### Inline READMEs and full YAML editor
 
-**Field guide** indexes README files anywhere under `validation` in the cached, pinned source archive (85 at the initial tested revision). Search titles, paths, and content; filter to guides in selected packages and their parent directories; switch between rendered Markdown and exact raw Markdown. Relative links to other indexed READMEs stay in the viewer. Code blocks have a copy action. Raw HTML is escaped and images are links, so opening a guide does not run scripts or load external images. The viewer supports common headings, lists, quotes, tables, inline formatting, and fenced examples; use Raw MD for unsupported Markdown extensions.
+The explorer indexes README files anywhere under `validation` in the cached, pinned source archive (85 at the initial tested revision). Search titles and paths; filter to guides in selected packages and their parent directories; switch between rendered Markdown and exact raw Markdown. Relative links to other indexed READMEs stay in the reader. Code blocks have a copy action. Raw HTML is escaped and images are links, so opening a guide does not run scripts or load external images. The reader supports common headings, lists, quotes, tables, inline formatting, and fenced examples; use Raw MD for unsupported Markdown extensions.
 
 The YAML editor provides line numbers, syntax colors, two-space indentation, automatic indentation on Enter, Find, cursor position, and local syntax diagnostics. Esc then Tab leaves the editor. Guided connection edits use the YAML document model to retain comments and other sections. Drafts and README state survive background polling and workspace navigation within the app; unsaved drafts are not persisted across app closure.
 
@@ -119,3 +119,24 @@ For a repository created through Runway, **Delete repository on GitHub…** disp
 ### Remaining cloud work
 
 Workflow review/install/update, per-run encrypted secret delivery and cleanup, dispatch correlation, remote cancellation, result ingestion, and private-network reachability checks are the next execution milestone. They are deliberately shown as unavailable, not simulated by a successful connection. GitHub App registration and live end-to-end testing are also still needed. No user's real repository or Rancher was changed while implementing or verifying this initial version.
+
+### Browse files and read alongside tests
+
+The catalog's **Validation explorer** shows test files and READMEs inside their
+actual folders. **Find folders or files** filters as you type, retaining parent
+folders for context. Entering `vai` reveals the `steve/vai` folder and its files.
+Use **Tests** or **READMEs** to narrow file types, or **All files** to see both.
+Documentation-only folders and the root README are included.
+
+Click a test file to see its runnable suites and individual cases in the center.
+This does not select or run anything. A suite can span several files: the view
+shows cases in the selected file and explains when selecting the whole suite
+also includes other cases. Click a folder to browse tests in it and its children,
+or **All runnable tests** to clear the file/folder filter.
+
+Click a README in the explorer to open it alongside the tests. Rendered Markdown,
+raw Markdown, copy actions, and internal README links stay in the reader. The
+explorer highlights the open document while preserving the selected test file.
+**README & guides** opens the package's guide or identifies the nearest parent
+guide. Raw Go source is not shown. On narrow windows the reader stacks below
+the catalog; documentation and file navigation never change run selections.

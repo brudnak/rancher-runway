@@ -87,3 +87,8 @@ scripts/build-wails-app.sh
 scripts/install-wails-app.sh
 scripts/install.sh
 ```
+
+The desktop build prepares Runway's embedded UI assets before invoking Wails
+and skips Wails' optional embed-directory scan. This avoids the Wails 2.12
+`package "context" without types` error with Go 1.27; bindings, frontend, and
+application compilation still run. No Go downgrade or cache deletion is needed.

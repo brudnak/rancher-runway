@@ -1,10 +1,13 @@
 package test
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type testLabReadme struct {
@@ -59,10 +63,17 @@ func (s *testLabService) sourceAction(req testLabRequest) (any, error) {
 	entries := append([]testLabEntry(nil), s.library.Catalog.Entries...)
 	s.mu.Unlock()
 	if !testLabSHA.MatchString(req.SHA) || req.SHA != sha {
-		return nil, fmt.Errorf("load the selected catalog revision before reading its documentation or checking configuration")
+		return nil, fmt.Errorf("load the selected catalog revision before reading its source or checking configuration")
 	}
 	s.sourceMu.Lock()
 	defer s.sourceMu.Unlock()
+	if req.Action == "source-file" {
+		content, err := testLabReadSourceFile(filepath.Join(s.root, sha+".tar.gz"), req.Path)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"sha": sha, "path": req.Path, "content": content, "language": "go"}, nil
+	}
 	if s.sourceIndex == nil || s.sourceIndex.SHA != sha {
 		dir, err := os.MkdirTemp(s.root, ".source-review-*")
 		if err != nil {
@@ -97,6 +108,90 @@ func (s *testLabService) sourceAction(req testLabRequest) (any, error) {
 	}
 	return s.sourceIndex.check(req.Config, packages), nil
 }
+
+// Read directly from the pinned, cached archive. This viewer never extracts or
+// executes repository code, and cannot address arbitrary local workspace files.
+func testLabReadSourceFile(archive, name string) (string, error) {
+	if len(name) > 1024 || !strings.HasPrefix(name, "validation/") || !strings.HasSuffix(name, ".go") || path.Clean(name) != name || strings.ContainsAny(name, "\\\x00\r\n") {
+		return "", fmt.Errorf("choose a Go source file under validation in this catalog")
+	}
+	info, err := os.Lstat(archive)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<20 {
+		return "", fmt.Errorf("cached test source is unavailable; refresh the catalog")
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		return "", fmt.Errorf("cached test source is unavailable; refresh the catalog")
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", fmt.Errorf("invalid test archive; refresh the catalog")
+	}
+	defer gz.Close()
+	// Bound all decompressed bytes, including tar headers and padding.
+	limited := &io.LimitedReader{R: gz, N: 256<<20 + 1}
+	tr := tar.NewReader(limited)
+	root, content, found := "", "", false
+	for count := 0; ; count++ {
+		h, err := tr.Next()
+		if limited.N <= 0 {
+			return "", fmt.Errorf("expanded test archive is too large")
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("test archive is incomplete; refresh the catalog")
+		}
+		if count >= 30000 {
+			return "", fmt.Errorf("too many archive entries")
+		}
+		// GitHub archives include a global PAX record for the commit ID. It
+		// is archive metadata, not a second repository root or source file.
+		if h.Typeflag == tar.TypeXGlobalHeader || h.Typeflag == tar.TypeXHeader {
+			continue
+		}
+		entry := strings.TrimSuffix(h.Name, "/")
+		if entry == "" || path.IsAbs(entry) || path.Clean(entry) != entry || strings.ContainsAny(entry, "\\\x00\r\n") || strings.HasPrefix(entry, "../") || entry == "." || entry == ".." {
+			return "", fmt.Errorf("unsafe archive path")
+		}
+		parts := strings.SplitN(entry, "/", 2)
+		if root == "" {
+			root = parts[0]
+		} else if root != parts[0] {
+			return "", fmt.Errorf("test archive has multiple source roots")
+		}
+		if h.Typeflag != tar.TypeDir && h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
+			return "", fmt.Errorf("test archive contains an unsupported entry")
+		}
+		if h.Size < 0 || h.Size > 16<<20 {
+			return "", fmt.Errorf("test archive entry is too large")
+		}
+		if len(parts) != 2 || parts[1] != name {
+			continue
+		}
+		if found || h.Typeflag == tar.TypeDir {
+			return "", fmt.Errorf("test source is not a unique regular file")
+		}
+		if h.Size > 2<<20 {
+			return "", fmt.Errorf("source file exceeds the 2 MiB viewer limit")
+		}
+		b, err := io.ReadAll(io.LimitReader(tr, 2<<20+1))
+		if err != nil || int64(len(b)) != h.Size {
+			return "", fmt.Errorf("test source is incomplete; refresh the catalog")
+		}
+		if !utf8.Valid(b) || strings.ContainsRune(string(b), '\x00') {
+			return "", fmt.Errorf("test source is not a UTF-8 text file")
+		}
+		content, found = string(b), true
+	}
+	if !found {
+		return "", fmt.Errorf("source file was not found in this catalog revision")
+	}
+	return content, nil
+}
+
 func testLabIndexSource(root, sha string) (*testLabSourceIndex, error) {
 	index := &testLabSourceIndex{SHA: sha, Docs: []testLabReadme{}, types: map[string]testLabDefinition{}, constants: map[string]testLabDefinition{}, positions: token.NewFileSet()}
 	totalDocs := 0

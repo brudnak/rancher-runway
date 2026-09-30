@@ -82,6 +82,7 @@ type testLabRequest struct {
 	Name       string               `json:"name"`
 	Ref        string               `json:"ref"`
 	SHA        string               `json:"sha"`
+	Path       string               `json:"path"`
 	Selection  []string             `json:"selection"`
 	Tags       string               `json:"tags"`
 	Timeout    int                  `json:"timeout"`
@@ -295,7 +296,7 @@ func (p *localControlPanel) handleTestLab(w http.ResponseWriter, r *http.Request
 	switch req.Action {
 	case "config-library", "config-save", "config-load", "config-delete", "folder-save", "folder-delete", "config-export", "config-import-preview", "config-import":
 		result, err = s.configAction(req)
-	case "source-docs", "preflight":
+	case "source-docs", "source-file", "preflight":
 		result, err = s.sourceAction(req)
 	case "catalog":
 		result, err = s.startCatalog(req.Ref)

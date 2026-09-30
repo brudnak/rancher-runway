@@ -315,6 +315,10 @@ func TestTestLabUpstreamArchive(t *testing.T) {
 	for _, e := range entries {
 		if e.ID == "validation/configmaps::TestConfigMapTestSuite/TestSteveGeneratedFields" {
 			found = true
+			content, err := testLabReadSourceFile(archive, e.File)
+			if err != nil || !strings.Contains(content, e.Test+"(") {
+				t.Fatalf("could not read the catalog's source file %s: %v", e.File, err)
+			}
 		}
 	}
 	if !found || len(entries) < 500 {
@@ -519,7 +523,7 @@ func TestTestLabRuntimeDataExcludedFromSource(t *testing.T) {
 func TestTestLabAPIProtectsLocalMetadata(t *testing.T) {
 	s := testLabFixture(t)
 	p := &localControlPanel{testLab: s, token: "test-panel-token"}
-	for _, action := range []string{"logs", "config-library", "config-load", "config-save", "config-delete", "folder-delete", "config-export", "config-import", "config-import-preview", "source-docs", "preflight"} {
+	for _, action := range []string{"logs", "config-library", "config-load", "config-save", "config-delete", "folder-delete", "config-export", "config-import", "config-import-preview", "source-docs", "source-file", "preflight"} {
 		for _, method := range []string{"GET", "POST"} {
 			body, _ := json.Marshal(testLabRequest{Action: action, ID: "fixture"})
 			req := httptest.NewRequest(method, "http://localhost/api/test-lab", strings.NewReader(string(body)))
