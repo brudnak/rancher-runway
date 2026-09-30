@@ -2,6 +2,26 @@
 
 Test Packages keeps an issue's manual test plan, reproduction attempts, fix validation, and lab evidence together. Open it under **Investigate & prepare**, choose **Create test package** on an Issue Radar card, or start from a cluster workspace. Packages are personal and local first; sharing and private backup are explicit actions.
 
+## Milestone library
+
+The library groups packages into named milestone buckets such as **v2.16.0 · Frameworks**, with an **Unfiled** area for new and imported investigations. Create a bucket, rename it when release plans change, and use its menu to reorder it. Empty buckets can be removed. Buckets are local organization; renaming or moving one does not update a GitHub milestone.
+
+Drag a package to another bucket or position, or use its **Move to bucket**, **Move package up**, and **Move package down** actions. Package identity, saved plans, recovery drafts, and preserved sessions stay intact. Search and status filters apply inside the buckets. Placement and order are stored in the private `.library.json` index separately from package revisions. Concurrent organization changes are rejected; refresh before retrying.
+
+Choose **Export this bucket** or **Export library** to review a bulk export. The ZIP follows bucket and package order and contains individual portable `.runway-test-package.json` bundles, Markdown reports, `library.json`, and a readable `README.md` index. Private notes and copied logs/databases are excluded by default; include them explicitly after reviewing their contents. Only saved plans and observations are exported. Exports use private file permissions and unique filenames in Downloads, with a 256 MiB total uncompressed limit. Export a smaller bucket or omit evidence when it exceeds that bound.
+
+Unzip the archive and import individual package bundles through the existing preview/import flow. This first bulk-export version does not import the ZIP or restore bucket placement automatically. Each package imports as an independent local copy in Unfiled; the included index records the original organization and order.
+
+## Link a case to Test Lab
+
+In the case editor, expand **Automation reference**, then **Choose Test Lab plan**. Save a plan in Test Lab first if none are available. Linking copies its selections, exact `rancher/tests` source commit, reference, build tags, and timeout into the case; it does not copy credentials. Save the package plan before starting a session. Existing sessions retain their original automation source, even if the plan or saved Test Lab plan changes later.
+
+In an active session, select the linked case and choose **Review & run in Test Lab**. Test Lab loads that frozen source and selection, sets the session's recorded Rancher target, and keeps its normal configuration/preflight/command review and typed execution confirmation. Supply credentials in Test Lab. Runs must match the recorded target and cluster, source, selection, tags, and timeout to remain linked. Use **Detach run from package** to perform a separate experiment with different options.
+
+When a linked run finishes, Runway automatically copies its result metadata and sanitized retained log into the originating session as case-scoped evidence. The metadata includes the exact source commit, selected tests, options, status, and test results. Completed package sessions, reports, baseline comparisons, and portable exports retain that evidence after Test Lab cleanup. The case outcome and session finding remain explicit tester decisions; a passing command does not automatically validate every manual assertion.
+
+A session cannot be finished while its linked run is awaiting preservation. If copying evidence fails, Test Lab displays the reason and keeps the original result. Opening or refreshing Test Packages retries unsaved finished results, including interrupted runs recovered after restart. Repeated preservation does not duplicate evidence. A removed package/session or an already completed session cannot be rewritten; use the original Test Lab result to document another active attempt.
+
 ## Plan, record, preserve
 
 1. Give the package a title, issue link, summary, and workflow status. Link the fix pull request when one exists, with an optional label; the link appears on the package heading and in reports. **Look up on GitHub** reads the pull request through the Test Lab GitHub connection and offers its title as the label and any issues it says it closes as the issue link. The lookup is explicit and read-only; nothing is saved until you save the plan, and it does not verify that those issues exist. Keep discussion notes and follow-up questions in Notes. Issue Radar may provide a shortened description; verify it against the original issue.

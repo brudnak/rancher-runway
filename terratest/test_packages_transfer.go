@@ -668,6 +668,9 @@ func testPackageWriteReportCase(out *strings.Builder, index int, c testPackageCa
 		fmt.Fprintf(out, "**Observed:** %s\n\n", testPackageMarkdownText(result.Notes))
 	}
 	fmt.Fprintf(out, "Automation: %s.\n\n", testPackageMarkdownText(c.Automation))
+	if a := c.AutomationSource; a != nil {
+		fmt.Fprintf(out, "Pinned automation: %s · rancher/tests@%s · tags: %s · timeout: %d minutes per suite.\n\n", testPackageMarkdownText(a.Name), a.SHA, testPackageMarkdownText(a.Tags), a.Timeout)
+	}
 	if c.AutomationURL != "" {
 		fmt.Fprintf(out, "Automation reference: %s\n\n", testPackageMarkdownText(c.AutomationURL))
 	}

@@ -136,7 +136,7 @@ func (s *testLabService) startRun(req testLabRequest) (any, error) {
 		return nil, err
 	}
 	id := cacheLabID()
-	run := testLabRun{ClusterID: clusterID, ID: id, Name: cacheLabText(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: append([]string{}, req.Selection...), Tags: req.Tags, Timeout: req.Timeout, Status: "running", Stage: "Preparing isolated source", StartedAt: time.Now(), Results: []testLabResult{}}
+	run := testLabRun{PackageLink: req.PackageLink, ClusterID: clusterID, ID: id, Name: cacheLabText(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: append([]string{}, req.Selection...), Tags: req.Tags, Timeout: req.Timeout, Status: "running", Stage: "Preparing isolated source", StartedAt: time.Now(), Results: []testLabResult{}}
 	if run.Name == "" {
 		run.Name = fmt.Sprintf("%s · %d suite(s)", host, len(commands))
 	}
@@ -193,7 +193,6 @@ func (s *testLabService) execute(ctx context.Context, run testLabRun, commands [
 			status = "failed"
 		}
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		r := s.runLocked(run.ID)
 		r.Status = status
 		r.Stage = "Finished"
@@ -210,6 +209,11 @@ func (s *testLabService) execute(ctx context.Context, run testLabRun, commands [
 		}
 		if err := s.persistLocked(); err != nil {
 			r.Error += " Run history could not be saved."
+		}
+		finished := *r
+		s.mu.Unlock()
+		if s.packageFinished != nil && finished.PackageLink != nil {
+			s.packageFinished(finished)
 		}
 	}()
 	if failure = os.MkdirAll(work, 0700); failure != nil {

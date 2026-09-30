@@ -5,7 +5,7 @@ import {CASE_OUTCOMES,packageDate} from './test-packages.mjs';
 import {caseStepProgress,changedCaseFields,evidenceForCase,nextCaseToCheck,outcomeLabel,resultForCase} from './test-package-comparison.mjs';
 
 const props=defineProps({session:{type:Object,required:true},caseId:String,observation:{type:String,default:''},busy:Boolean,observationBlocked:Boolean,baseline:Object});
-const emit=defineEmits(['select-case','update:observation','mark-step','outcome','save-observation','logs','attach-evidence']);
+const emit=defineEmits(['select-case','update:observation','mark-step','outcome','save-observation','logs','attach-evidence','run-automation']);
 const heading=ref(null),expandedBaseline=ref(false);
 const cases=computed(()=>props.session.cases||[]);
 const activeCase=computed(()=>cases.value.find(item=>item.id===props.caseId));
@@ -29,7 +29,7 @@ async function advance(){if(!nextCase.value||props.busy)return;emit('select-case
 
 <template>
   <section class="package-execution" aria-label="Case execution">
-    <div class="px-toolbar">
+    <div v-if="activeCase?.automationSource" class="px-automation"><div><strong>{{activeCase.automationSource.name}}</strong><small>rancher/tests@{{activeCase.automationSource.sha.slice(0,12)}} · {{activeCase.selection.length}} selections</small></div><button v-if="active" type="button" :disabled="busy" @click="$emit('run-automation',caseId)"><Icon name="play"/>Review & run in Test Lab</button><p>Finished results and logs are copied to this case. Review them before recording an outcome.</p></div><div class="px-toolbar">
       <div><span class="px-eyebrow">{{active?'WORK THROUGH THE PLAN':'PRESERVED CASE RESULTS'}}</span><strong>{{unrun?`${unrun} ${unrun===1?'case still needs':'cases still need'} an outcome`:'Every case has a recorded outcome'}}</strong></div>
       <button v-if="active&&nextCase" type="button" class="px-next" :disabled="busy" :title="nextCase.title" @click="advance">{{nextCase.blocked?'Revisit a blocked case':'Next unrun case'}}<Icon name="arrow"/></button>
     </div>
@@ -76,6 +76,8 @@ async function advance(){if(!nextCase.value||props.busy)return;emit('select-case
 </template>
 
 <style scoped>
+.px-automation{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid var(--runway-border);border-radius:10px;padding:15px;margin-bottom:18px;background:var(--runway-accent-soft)}.px-automation>div{flex:1;min-width:160px}.px-automation strong{display:block;font-size:12px}.px-automation small{display:block;font:10px ui-monospace,monospace;margin-top:6px;color:var(--runway-muted);overflow-wrap:anywhere}.px-automation p{width:100%;margin:0;color:var(--runway-muted);font-size:11px;line-height:1.6}.px-automation button{display:flex;align-items:center;gap:7px;font:12px inherit;background:var(--runway-card);border:1px solid var(--runway-border);border-radius:8px;padding:10px;color:var(--runway-accent);cursor:pointer}.px-automation button:disabled{opacity:.4}.px-automation svg{width:14px;height:14px}
+
 .package-execution{container:execution / inline-size;color:var(--runway-ink);border:1px solid var(--runway-border);border-radius:16px;overflow:hidden;margin:24px 0;background:var(--runway-card)}
 .package-execution button{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--runway-border);border-radius:9px;background:var(--runway-input);color:var(--runway-ink);padding:10px 13px;font:inherit;font-size:12px;line-height:1.5;cursor:pointer;transition:background .15s,border-color .15s}
 .package-execution button:hover:not(:disabled){background:var(--runway-raised);border-color:var(--runway-accent)}.package-execution button:disabled{opacity:.5;cursor:default}.package-execution :focus-visible{outline:2px solid var(--runway-accent);outline-offset:3px}.package-execution svg{width:16px;height:16px;flex-shrink:0}.package-execution .px-link{background:transparent;border:0;color:var(--runway-accent);padding:5px 0;font-size:11px}.package-execution .px-link:hover:not(:disabled){background:transparent;text-decoration:underline}.px-eyebrow{font-size:9px;line-height:1.5;font-weight:650;letter-spacing:.13em;color:var(--runway-muted)}

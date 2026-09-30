@@ -10,7 +10,7 @@ export function comparableCase(item) {
   return {
     title:text(item.title), preconditions:text(item.preconditions), expected:text(item.expected),
     automation:text(item.automation), automationUrl:text(item.automationUrl),
-    selection:array(item.selection),
+    selection:array(item.selection), automationSource:item.automationSource||null,
     steps:array(item.steps).map(step => ({id:text(step.id),instruction:text(step.instruction),expected:text(step.expected)})),
   };
 }
@@ -18,7 +18,7 @@ export function comparableCase(item) {
 export function changedCaseFields(before, after) {
   if (!before || !after) return [];
   const left=comparableCase(before), right=comparableCase(after);
-  const labels={title:'Title',preconditions:'Preconditions',expected:'Expected behavior',automation:'Automation status',automationUrl:'Automation reference',selection:'Automated selection',steps:'Steps'};
+  const labels={title:'Title',preconditions:'Preconditions',expected:'Expected behavior',automation:'Automation status',automationUrl:'Automation reference',selection:'Automated selection',automationSource:'Pinned automation source',steps:'Steps'};
   return Object.keys(labels).filter(key => JSON.stringify(left[key]) !== JSON.stringify(right[key])).map(key => labels[key]);
 }
 

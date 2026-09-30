@@ -70,14 +70,15 @@ type testPackage struct {
 	UpdatedAt  time.Time            `json:"updatedAt"`
 }
 type testPackageCase struct {
-	ID            string            `json:"id"`
-	Title         string            `json:"title"`
-	Preconditions string            `json:"preconditions"`
-	Expected      string            `json:"expected"`
-	Automation    string            `json:"automation"`
-	AutomationURL string            `json:"automationUrl,omitempty"`
-	Selection     []string          `json:"selection"`
-	Steps         []testPackageStep `json:"steps"`
+	ID               string                       `json:"id"`
+	Title            string                       `json:"title"`
+	Preconditions    string                       `json:"preconditions"`
+	Expected         string                       `json:"expected"`
+	Automation       string                       `json:"automation"`
+	AutomationURL    string                       `json:"automationUrl,omitempty"`
+	Selection        []string                     `json:"selection"`
+	AutomationSource *testPackageAutomationSource `json:"automationSource,omitempty"`
+	Steps            []testPackageStep            `json:"steps"`
 }
 type testPackageStep struct {
 	ID          string `json:"id"`
@@ -157,6 +158,9 @@ type testPackageEvidence struct {
 	Artifact    *testPackageArtifact `json:"artifact,omitempty"`
 }
 type testPackageRequest struct {
+	Library           *testPackageLibrary      `json:"library,omitempty"`
+	BucketID          string                   `json:"bucketId"`
+	IncludeEvidence   bool                     `json:"includeEvidence"`
 	Action            string                   `json:"action"`
 	ID                string                   `json:"id"`
 	Revision          string                   `json:"revision"`
@@ -204,10 +208,12 @@ type testPackageRequest struct {
 	Previous          bool                     `json:"previous"`
 }
 type testPackageService struct {
-	mu         sync.Mutex
-	root       string
-	exportRoot string
-	packages   map[string]testPackage
+	mu                sync.Mutex
+	root              string
+	exportRoot        string
+	packages          map[string]testPackage
+	library           testPackageLibrary
+	pendingAutomation map[string]testPackageRunLink
 }
 
 var errTestPackageConflict = errors.New("this package changed in another view; reload it before saving")
@@ -232,7 +238,7 @@ func newTestPackageService(root string) (*testPackageService, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	s := &testPackageService{root: root, packages: map[string]testPackage{}}
+	s := &testPackageService{root: root, packages: map[string]testPackage{}, pendingAutomation: map[string]testPackageRunLink{}}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil, err
@@ -259,6 +265,9 @@ func newTestPackageService(root string) (*testPackageService, error) {
 			return nil, fmt.Errorf("Test Package %s is invalid; existing files were preserved: %w", entry.Name(), err)
 		}
 		s.packages[pkg.ID] = normalizeTestPackage(pkg)
+	}
+	if err := s.loadPackageLibrary(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -398,6 +407,9 @@ func validateTestPackageCases(cases []testPackageCase) error {
 	for _, c := range cases {
 		if !cacheLabIDPattern.MatchString(c.ID) || ids[c.ID] || !packageText(c.Title, 240, true) || !packageText(c.Preconditions, 16000, false) || !packageText(c.Expected, 16000, false) || !packageEnum(c.Automation, "manual", "planned", "automated") || !packageURL(c.AutomationURL) || len(c.Steps) > 100 || len(c.Selection) > 500 {
 			return fmt.Errorf("invalid test case")
+		}
+		if err := validatePackageAutomation(c); err != nil {
+			return err
 		}
 		ids[c.ID] = true
 		stepIDs := map[string]bool{}
@@ -832,6 +844,11 @@ func (s *testPackageService) mutate(req testPackageRequest, environment *testPac
 					}
 				}
 			case "finish-session":
+				for _, link := range s.pendingAutomation {
+					if link.PackageID == pkg.ID && link.SessionID == session.ID {
+						return nil, fmt.Errorf("wait for the linked Test Lab run to finish before preserving this session")
+					}
+				}
 				if !packageEnum(req.Finding, "inconclusive", "reproduced", "not-reproduced", "validated", "not-validated") {
 					return nil, fmt.Errorf("choose a finding before completing this session")
 				}
@@ -1145,6 +1162,7 @@ func (p *localControlPanel) handleTestPackages(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if r.Method == http.MethodGet {
+		p.syncPackageRuns()
 		packages, err := s.list()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -1154,7 +1172,7 @@ func (p *localControlPanel) handleTestPackages(w http.ResponseWriter, r *http.Re
 		for _, pkg := range packages {
 			fingerprints[pkg.ID] = testPackagePlanFingerprint(testPackageEditablePlan(pkg))
 		}
-		writeJSON(w, map[string]any{"packages": packages, "planFingerprints": fingerprints})
+		writeJSON(w, map[string]any{"packages": packages, "planFingerprints": fingerprints, "library": s.packageLibrarySnapshot()})
 		return
 	}
 	var req testPackageRequest
@@ -1179,6 +1197,12 @@ func (p *localControlPanel) handleTestPackages(w http.ResponseWriter, r *http.Re
 	}
 	if err == nil {
 		switch req.Action {
+		case "library-save":
+			result, err = s.savePackageLibrary(req)
+		case "library-export":
+			result, err = s.exportPackageLibrary(req)
+		case "automation-prepare":
+			result, err = s.preparePackageAutomation(req)
 		case "draft-read", "draft-write", "draft-clear":
 			result, err = s.handleWritingDraft(req)
 		case "read-evidence":

@@ -1,6 +1,7 @@
 <script setup>
 import {computed, nextTick, ref} from 'vue';
 import Icon from './HelmLabIcon.vue';
+import Automation from './TestPackageAutomation.vue';
 import {MAX_CASE_STEPS, insertCaseStep, removeCaseStep, restoreCaseStep, caseWritingSummary} from './test-package-case-editor.mjs';
 
 const props = defineProps({modelValue:{type:Object,required:true}, number:{type:Number,default:1}, disabled:Boolean});
@@ -119,7 +120,7 @@ async function findMissingAction() {const step = steps.value[summary.value.missi
       <div v-if="summary.missingActions.length" class="pce-writing-hint"><Icon name="file"/><span>{{ summary.missingActions.length === 1 ? `Step ${summary.missingActions[0] + 1} needs an action before saving.` : `${summary.missingActions.length} steps still need an action before saving.` }}</span><button type="button" :disabled="disabled" @click="findMissingAction">Go to step</button></div>
 
       <label class="pce-overall"><span>Overall expected behavior <small>optional</small></span><textarea maxlength="16000" :value="modelValue.expected" :disabled="disabled" rows="2" placeholder="Describe the final behavior this case establishes…" @input="set('expected',$event.target.value)"/></label>
-      <details class="pce-automation"><summary><span class="pce-automation-icon"><Icon name="code"/></span><span><strong>Automation reference</strong><small>{{ automationLabel }}</small></span><Icon class="pce-disclosure" name="chevron"/></summary><div class="pce-automation-body"><label><span>Coverage</span><select :value="modelValue.automation" :disabled="disabled" @change="set('automation',$event.target.value)"><option value="manual">Manual</option><option value="planned">Automation planned</option><option value="automated">Automated coverage available</option></select></label><label><span>Test or pull request URL <small>optional</small></span><input :value="modelValue.automationUrl" :disabled="disabled" placeholder="https://github.com/rancher/tests/…" @input="set('automationUrl',$event.target.value)"/></label><p>This reference documents coverage. Attach Test Lab results to a session when you run the automation.</p></div></details>
+      <details class="pce-automation"><summary><span class="pce-automation-icon"><Icon name="code"/></span><span><strong>Automation reference</strong><small>{{ automationLabel }}</small></span><Icon class="pce-disclosure" name="chevron"/></summary><div class="pce-automation-body"><label><span>Coverage</span><select :value="modelValue.automation" :disabled="disabled" @change="set('automation',$event.target.value)"><option value="manual">Manual</option><option value="planned">Automation planned</option><option value="automated">Automated coverage available</option></select></label><label><span>Test or pull request URL <small>optional</small></span><input :value="modelValue.automationUrl" :disabled="disabled" placeholder="https://github.com/rancher/tests/…" @input="set('automationUrl',$event.target.value)"/></label><Automation :model-value="modelValue" :disabled="disabled" @update:model-value="$emit('update:modelValue',$event)"/></div></details>
     </div>
 
     <div v-if="mode === 'preview'" class="pce-preview" aria-label="Case preview">

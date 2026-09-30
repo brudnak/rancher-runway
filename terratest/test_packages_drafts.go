@@ -101,6 +101,9 @@ func validateTestPackageWritingDraft(draft testPackageWritingDraft) error {
 			if !cacheLabIDPattern.MatchString(c.ID) || ids[c.ID] || !packageText(c.Title, 240, false) || !packageText(c.Preconditions, 16000, false) || !packageText(c.Expected, 16000, false) || !packageEnum(c.Automation, "manual", "planned", "automated") || !packageText(c.AutomationURL, 2048, false) || len(c.Steps) > 100 || len(c.Selection) > 500 {
 				return fmt.Errorf("invalid or oversized case in writing draft")
 			}
+			if err := validatePackageAutomation(c); err != nil {
+				return err
+			}
 			ids[c.ID] = true
 			steps := map[string]bool{}
 			for _, step := range c.Steps {

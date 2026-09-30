@@ -573,7 +573,7 @@ visible and lifecycle actions wait for a fresh check.
 
 Create a personal issue workspace from **Issue Radar**, **Clusters**, or **Test Packages**. Write manual cases, preserve reproduction and fix-validation sessions with recorded environment details, and attach existing Test Lab results or Cache Lab evidence. Link the fix pull request, look it up on GitHub for its title and linked issue, and let validation sessions record the fix and head commit they tested. Each session keeps the plan it started with; later edits do not rewrite that history. The Overview derives plan → reproduction → fix → validation progress with a suggested next step; it never sets the package status or a case outcome.
 
-Preview a Markdown report for GitHub, export a portable package, or explicitly back up that same format to a private GitHub repository. Imports create independent local copies and never execute tests. Attached evidence survives cleanup of the original lab record. See [Test Packages](docs/test-packages.md) for the workflow, archive format, storage, and first-version limits.
+Preview a Markdown report for GitHub, export a portable package, or explicitly back up that same format to a private GitHub repository. Imports create independent local copies and never execute tests. Attached evidence survives cleanup of the original lab record. Organize packages into movable, ordered milestone buckets and export a bucket or the whole library. Link saved Test Lab plans to cases; reviewed local runs preserve their results and logs in the originating session. See [Test Packages](docs/test-packages.md) for the workflow, archive format, storage, and limits.
 
 ## Cache Lab
 

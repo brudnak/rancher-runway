@@ -55,21 +55,24 @@ type testLabResult struct {
 	Elapsed float64 `json:"elapsed"`
 }
 type testLabRun struct {
-	ClusterID  string          `json:"clusterId,omitempty"`
-	ID         string          `json:"id"`
-	Name       string          `json:"name"`
-	Host       string          `json:"host"`
-	SHA        string          `json:"sha"`
-	Ref        string          `json:"ref"`
-	Selection  []string        `json:"selection"`
-	Tags       string          `json:"tags"`
-	Timeout    int             `json:"timeout"`
-	Status     string          `json:"status"`
-	Stage      string          `json:"stage"`
-	StartedAt  time.Time       `json:"startedAt"`
-	FinishedAt time.Time       `json:"finishedAt,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	Results    []testLabResult `json:"results"`
+	PackageLink          *testPackageRunLink `json:"packageLink,omitempty"`
+	PackageEvidenceError string              `json:"packageEvidenceError,omitempty"`
+	PackageEvidenceSaved bool                `json:"packageEvidenceSaved,omitempty"`
+	ClusterID            string              `json:"clusterId,omitempty"`
+	ID                   string              `json:"id"`
+	Name                 string              `json:"name"`
+	Host                 string              `json:"host"`
+	SHA                  string              `json:"sha"`
+	Ref                  string              `json:"ref"`
+	Selection            []string            `json:"selection"`
+	Tags                 string              `json:"tags"`
+	Timeout              int                 `json:"timeout"`
+	Status               string              `json:"status"`
+	Stage                string              `json:"stage"`
+	StartedAt            time.Time           `json:"startedAt"`
+	FinishedAt           time.Time           `json:"finishedAt,omitempty"`
+	Error                string              `json:"error,omitempty"`
+	Results              []testLabResult     `json:"results"`
 }
 type testLabLibrary struct {
 	Version int            `json:"version"`
@@ -79,46 +82,48 @@ type testLabLibrary struct {
 	GitHub  testLabGitHub  `json:"github"`
 }
 type testLabRequest struct {
-	ClusterID  string               `json:"clusterId,omitempty"`
-	Action     string               `json:"action"`
-	ID         string               `json:"id"`
-	Name       string               `json:"name"`
-	Ref        string               `json:"ref"`
-	SHA        string               `json:"sha"`
-	Path       string               `json:"path"`
-	Selection  []string             `json:"selection"`
-	Tags       string               `json:"tags"`
-	Timeout    int                  `json:"timeout"`
-	Config     string               `json:"config"`
-	Confirm    string               `json:"confirm"`
-	Remember   bool                 `json:"remember"`
-	ClientID   string               `json:"clientId"`
-	Slug       string               `json:"slug"`
-	Repository string               `json:"repository"`
-	Folder     string               `json:"folder"`
-	Revision   string               `json:"revision"`
-	Scope      string               `json:"scope"`
-	Bundle     *testLabConfigBundle `json:"bundle,omitempty"`
+	PackageLink *testPackageRunLink  `json:"packageLink,omitempty"`
+	ClusterID   string               `json:"clusterId,omitempty"`
+	Action      string               `json:"action"`
+	ID          string               `json:"id"`
+	Name        string               `json:"name"`
+	Ref         string               `json:"ref"`
+	SHA         string               `json:"sha"`
+	Path        string               `json:"path"`
+	Selection   []string             `json:"selection"`
+	Tags        string               `json:"tags"`
+	Timeout     int                  `json:"timeout"`
+	Config      string               `json:"config"`
+	Confirm     string               `json:"confirm"`
+	Remember    bool                 `json:"remember"`
+	ClientID    string               `json:"clientId"`
+	Slug        string               `json:"slug"`
+	Repository  string               `json:"repository"`
+	Folder      string               `json:"folder"`
+	Revision    string               `json:"revision"`
+	Scope       string               `json:"scope"`
+	Bundle      *testLabConfigBundle `json:"bundle,omitempty"`
 }
 type testLabService struct {
-	resolveCluster func(string, string, string, string) (string, error)
-	mu             sync.Mutex
-	root           string
-	library        testLabLibrary
-	busy           bool
-	catalogError   string
-	cancel         context.CancelFunc
-	logs           map[string]string
-	keychain       func(string, string, string) (string, error)
-	client         *http.Client
-	githubMu       sync.Mutex
-	credential     testLabCredential
-	device         testLabDevice
-	configRoot     string
-	exportRoot     string
-	configMu       sync.Mutex
-	sourceMu       sync.Mutex
-	sourceIndex    *testLabSourceIndex
+	packageFinished func(testLabRun)
+	resolveCluster  func(string, string, string, string) (string, error)
+	mu              sync.Mutex
+	root            string
+	library         testLabLibrary
+	busy            bool
+	catalogError    string
+	cancel          context.CancelFunc
+	logs            map[string]string
+	keychain        func(string, string, string) (string, error)
+	client          *http.Client
+	githubMu        sync.Mutex
+	credential      testLabCredential
+	device          testLabDevice
+	configRoot      string
+	exportRoot      string
+	configMu        sync.Mutex
+	sourceMu        sync.Mutex
+	sourceIndex     *testLabSourceIndex
 }
 
 func (p *localControlPanel) testLabService() (*testLabService, error) {
@@ -133,6 +138,7 @@ func (p *localControlPanel) testLabService() (*testLabService, error) {
 	}
 	s, err := newTestLabService(root)
 	if err == nil {
+		s.packageFinished = p.preservePackageRun
 		s.resolveCluster = p.resolveLabCluster
 		p.testLab = s
 	}
@@ -319,7 +325,7 @@ func (p *localControlPanel) handleTestLab(w http.ResponseWriter, r *http.Request
 	case "review":
 		result, err = s.review(req)
 	case "run":
-		result, err = s.startRun(req)
+		result, err = p.startPackageLinkedRun(s, req)
 	case "targets":
 		p.mu.Lock()
 		targets := []clusterView{}
