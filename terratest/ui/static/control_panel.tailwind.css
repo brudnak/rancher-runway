@@ -2085,3 +2085,12 @@ body[data-workspace] .chrome-toolbar{gap:8px}
 body[data-workspace] .mw-hero h1,body[data-workspace] .tp-hero h2,body[data-workspace] .ops-hero h2{font-size:clamp(32px,3.5vw,46px);letter-spacing:-.045em}
 body[data-workspace] .mw-hero,body[data-workspace] .tp-hero{margin-bottom:24px}
 @media(prefers-reduced-motion:reduce){body[data-workspace] .chrome-button{transition:none}}
+
+/* One floating navigation surface, with app controls disclosed on demand. */
+.panel-nav-version{align-self:center;font-size:10px;color:var(--runway-muted);opacity:.7;white-space:nowrap;padding:0 9px 0 3px;font-variant-numeric:tabular-nums}
+.panel-nav-settings[aria-expanded=true]{background:var(--runway-accent-soft);color:var(--runway-accent);border-color:var(--runway-border)}
+.runway-menu-activity{position:absolute;top:8px;right:8px;width:5px;height:5px;border-radius:50%;background:var(--runway-gold)}
+body[data-workspace] #panelTabs{background:var(--runway-card);isolation:isolate}
+@media(max-width:760px){.panel-nav-version{font-size:9px;padding-right:4px}.panel-nav-primary{gap:2px}}
+
+.panel-nav::before{content:"";position:absolute;left:50%;transform:translateX(-50%);top:calc(-.75rem - 1px);height:calc(.75rem + 1px);width:100vw;background:var(--runway-soft);pointer-events:none;z-index:-1}

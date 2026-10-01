@@ -1,6 +1,8 @@
 <script setup>
 defineProps({ name: String });
 const paths = {
+  expand: 'M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5',
+  power: 'M12 2v10M6 5a9 9 0 1 0 12 0',
   database: 'M20 6c0 2-3.6 3-8 3S4 8 4 6s3.6-3 8-3 8 1 8 3ZM4 6v12c0 2 3.6 3 8 3s8-1 8-3V6M4 12c0 2 3.6 3 8 3s8-1 8-3',
   table: 'M3 4h18v16H3zM3 9h18M9 9v11M3 14h18',
   plus: 'M12 5v14M5 12h14',

@@ -12,11 +12,13 @@
           <span v-if="groupBusy(group).length" class="tab-status tab-status--busy" :data-group-status="group.id" aria-hidden="true"></span>
         </button>
       </div>
-      <button type="button" class="panel-nav-mobile" :aria-expanded="Boolean(menu)" aria-controls="workspace-picker" @click="toggleMenu('all', $event)"><Icon :name="currentTool.icon"/><span><small>{{ currentGroup?.label || 'Your workspace' }}</small><strong>{{ currentTool.label }}</strong></span><Icon name="chevron"/></button>
+      <button type="button" class="panel-nav-mobile" :aria-expanded="Boolean(menu) && menu !== 'app'" aria-controls="workspace-picker" @click="toggleMenu('all', $event)"><Icon :name="currentTool.icon"/><span><small>{{ currentGroup?.label || 'Your workspace' }}</small><strong>{{ currentTool.label }}</strong></span><Icon name="chevron"/></button>
       <button type="button" class="panel-nav-search" aria-label="Find a workspace" :aria-keyshortcuts="isMac ? 'Meta+j' : 'Control+j'" :aria-expanded="menu === 'all'" aria-controls="workspace-picker" @click="toggleMenu('all', $event)"><Icon name="search"/><span>Jump to…</span><kbd>{{ isMac ? '⌘' : 'Ctrl' }} J</kbd><span v-if="busyStatusAnnouncement" class="tab-status tab-status--busy panel-mobile-activity" aria-hidden="true"></span></button>
-      <button type="button" class="panel-nav-anchor panel-nav-settings" :aria-current="activeTab === 'settings' ? 'page' : undefined" aria-label="Settings" title="Settings" @click="navigate('settings')"><Icon name="sliders"/></button>
+      <button type="button" class="panel-nav-anchor panel-nav-settings" :aria-current="activeTab === 'settings' ? 'page' : undefined" aria-label="Runway menu" title="Runway menu" :aria-expanded="menu === 'app'" aria-controls="runway-app-menu" @click="toggleMenu('app', $event)"><Icon name="sliders"/><span v-if="lifecycleRunning" class="runway-menu-activity" aria-label="Operation running"></span></button>
+      <span class="panel-nav-version" :title="buildTitle(appBuild)" aria-label="Rancher Runway version">{{appBuild.version ? `v${String(appBuild.version).replace(/^v/i, '')}` : '—'}}</span>
     </div>
-    <section v-if="menu" id="workspace-picker" class="panel-workspace-picker" aria-label="Workspace switcher">
+    <RunwayAppMenu v-if="menu === 'app'" @settings="navigate('settings')" @dismiss="dismissMenu"/>
+    <section v-if="menu && menu !== 'app'" id="workspace-picker" class="panel-workspace-picker" aria-label="Workspace switcher">
       <div class="panel-picker-search"><Icon name="search"/><input ref="searchInput" v-model="query" type="search" autocomplete="off" spellcheck="false" aria-label="Search workspaces" placeholder="Find a tool, task, or keyword…" @keydown="searchKeys"/><button type="button" aria-label="Close workspace switcher" @click="dismissMenu"><Icon name="close"/><kbd>Esc</kbd></button></div>
       <div class="panel-picker-heading"><span>{{ query.trim() ? `${matches.length} matching ${matches.length === 1 ? 'workspace' : 'workspaces'}` : menu === 'all' ? 'ALL WORKSPACES' : selectedMenuGroup?.description }}</span><button v-if="menu !== 'all' && !query.trim()" type="button" @click="showAll">All workspaces <Icon name="arrow"/></button></div>
       <div v-if="visibleGroups.length" class="panel-picker-groups" :class="{ 'panel-picker-single': visibleGroups.length === 1 }" @keydown="resultKeys">
@@ -42,11 +44,13 @@
 </template>
 
 <script setup>
+import RunwayAppMenu from "./RunwayAppMenu.vue";
+import {buildTitle} from "./build-info.mjs";
 import Icon from './HelmLabIcon.vue';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { workspaceTool } from './home-workspace.mjs';
 import { navigationGroups, navigationGroup, matchingNavigationGroups, navigationFocusIndex } from './panel-navigation.mjs';
-import { state, activeTab, setActivePanelTab } from './store.js';
+import { state, activeTab, setActivePanelTab, appBuild, lifecycleRunning } from './store.js';
 const tabs = navigationGroups.flatMap(group => group.tabs);
 const navigation = ref(null), searchInput = ref(null), menu = ref(''), query = ref('');
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
@@ -62,7 +66,8 @@ function openMenu(id, target) {
     const picker = navigation.value?.querySelector('#workspace-picker');
     const bounds = picker?.getBoundingClientRect();
     if (bounds && (bounds.bottom > window.innerHeight || bounds.top < 64)) navigation.value?.closest('nav')?.scrollIntoView({block:'start'});
-    searchInput.value?.focus({preventScroll:true});
+    if (id === 'app') navigation.value?.querySelector('#runway-app-menu button')?.focus({preventScroll:true});
+    else searchInput.value?.focus({preventScroll:true});
   });
 }
 function toggleMenu(id, event) { if (menu.value === id) dismissMenu(); else openMenu(id, event.currentTarget); }
@@ -95,7 +100,7 @@ function outsidePointer(event) { if (menu.value && !navigation.value?.contains(e
 function outsideFocus(event) { if (menu.value && !navigation.value?.contains(event.target)) menu.value = ''; }
 function shortcut(event) {
   if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'j') {
-    event.preventDefault(); if (menu.value) dismissMenu(); else openMenu('all', document.activeElement);
+    event.preventDefault(); if (menu.value && menu.value !== 'app') dismissMenu(); else openMenu('all', document.activeElement);
   }
 }
 onMounted(() => { document.addEventListener('pointerdown', outsidePointer); document.addEventListener('focusin', outsideFocus); document.addEventListener('keydown', shortcut); });

@@ -1,3 +1,4 @@
+import { quitRunway } from "./quit-runway.mjs";
 import { ref, reactive, computed, watch, nextTick } from "vue";
 import { writeTextToClipboard } from "./clipboard.js";
 import { resumableTab, workspaceTools } from "./home-workspace.mjs";
@@ -1498,21 +1499,29 @@ export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRun
   }
 };
 
+export const quitError = ref("");
+export const quitPending = ref(false);
 export const stopPanel = async () => {
-  if (lifecycleRunning.value) {
-    refreshStatus.value = "Keep Rancher Runway open while a run is in progress.";
+  if (quitPending.value) return;
+  quitError.value = "";
+  if (lifecycleRunning.value || state.value?.testLab?.running) {
+    quitError.value = "A run is still active. Stop it in its workspace before quitting.";
     return;
   }
-  bootPending.value = true;
-  refreshStatus.value = "Stopping...";
-
+  quitPending.value = true;
   try {
-    await apiFetch("/api/shutdown", { method: "POST", body: "{}" });
-    window.setTimeout(() => window.close(), 250);
+    await quitRunway({
+      runtime: wailsRuntime(),
+      shutdown: () => apiFetch("/api/shutdown", { method: "POST", body: "{}" }),
+      closeBrowser: () => {
+        refreshStatus.value = "Runway stopped. You can close this browser tab.";
+        window.setTimeout(() => window.close(), 250);
+      },
+    });
   } catch (error) {
-    bootPending.value = false;
-    refreshStatus.value = error instanceof Error ? error.message : "Stop request failed.";
-    refresh();
+    quitError.value = error instanceof Error ? error.message : "Could not quit Runway.";
+  } finally {
+    quitPending.value = false;
   }
 };
 
@@ -1726,11 +1735,11 @@ watch(activeTab, tab => {
   document.body.dataset.workspace = tab;
   if (resumableTab(tab)) {
     previousWorkspaceTab.value = tab;
-    localStorage.setItem("rancherControlPanelTab", tab);
-  }
-  const setupEl = document.getElementById("setupTabPanel") || document.querySelector('[data-tab-panel="setup"]');
-  if (setupEl) {
-    setupEl.classList.toggle("hidden", tab !== "setup");
+    try {
+      localStorage.setItem("rancherControlPanelTab", tab);
+    } catch (_) {
+      // A storage failure must not interrupt navigation in the current session.
+    }
   }
 }, { immediate: true });
 

@@ -207,13 +207,10 @@
       background: rgb(24 24 27 / 0.86);
       box-shadow: 0 14px 38px rgb(0 0 0 / 0.28);
     }
-    [data-tab-panel]:not(.hidden) {
-      animation: panel-enter 160ms ease-out both;
-    }
-    @keyframes panel-enter {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
+    /* The server-rendered editor follows the same workspace state as navigation.
+       Keep its visibility independent of storage writes and entrance animations. */
+    [data-tab-panel="setup"] { display: none; }
+    body[data-workspace="setup"] [data-tab-panel="setup"] { display: block; }
     .dark .panel-chip-tone-emerald {
       border-color: rgb(16 185 129 / 0.25);
       background: rgb(16 185 129 / 0.1);
@@ -235,14 +232,17 @@
       color: rgb(254 205 211);
     }
     .panel-nav {
-      position: relative;
-      scroll-margin-top: 4rem;
+      position: sticky;
+      top: 0.75rem;
+      z-index: 40;
+      isolation: isolate;
+      scroll-margin-top: 0.75rem;
       border: 1px solid var(--runway-border);
       border-radius: 1rem;
       padding: 0.375rem;
       box-shadow: var(--runway-shadow);
     }
-    .panel-nav:has(.panel-workspace-picker) { z-index: 45; }
+    .panel-nav:has(.panel-workspace-picker, .runway-app-menu) { z-index: 45; }
     .workspace-nav { min-width: 0; }
     .panel-nav-primary { display: flex; align-items: stretch; gap: 0.375rem; }
     .panel-nav button { appearance: none; font: inherit; cursor: pointer; }
@@ -839,9 +839,8 @@
     }
     body[data-panel-fullscreen="true"] .panel-nav {
       position: sticky;
-      top: 4rem;
-      z-index: 30;
-      backdrop-filter: blur(16px);
+      top: 0.75rem;
+      z-index: 40;
     }
     body[data-panel-fullscreen="true"] #logModal {
       padding: 0.75rem;
@@ -849,7 +848,6 @@
   </style>
 </head>
 <body data-workspace="home" data-booting="true" class="min-h-screen overflow-x-hidden bg-zinc-100 text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
-  <div id="appIdentityVue" class="app-identity-bar"></div>
   <main class="min-h-screen px-4 py-5 sm:px-6 lg:px-8">
     <div class="panel-shell mx-auto max-w-[1680px]">
       <div id="controlPanelChromeVue"></div>
@@ -858,7 +856,7 @@
       <nav id="panelTabs" data-vue-owned="true" class="panel-nav mb-5" aria-label="Rancher Runway workspaces"></nav>
 
       <div class="grid min-w-0 gap-6">
-        <section data-tab-panel="setup" class="hidden control-panel-setup min-w-0">
+        <section id="setupTabPanel" data-tab-panel="setup" class="control-panel-setup min-w-0" aria-label="Setup workspace">
           {{.SetupEditorHTML}}
         </section>
 
