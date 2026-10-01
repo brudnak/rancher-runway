@@ -214,7 +214,7 @@ onBeforeUnmount(() => { requestID++; controller?.abort(); clearTimeout(loadTimer
 <template>
   <div ref="root" class="helmlab hl-workbench" :class="{ 'hl-in-flow': stage !== 'target' }">
     <header class="hl-masthead">
-      <div class="hl-brand"><span class="hl-emblem" aria-hidden="true"><HelmLabIcon name="compass" /></span><div><span class="hl-eyebrow">RANCHER RUNWAY / RELEASE WORKBENCH</span><h2>Helm Lab<span class="hl-title-period">.</span></h2><p>A clear path from chart to command.</p></div></div>
+      <div class="hl-brand"><span class="hl-emblem" aria-hidden="true"><HelmLabIcon name="compass" /></span><div><span class="hl-eyebrow">RANCHER RUNWAY / RELEASE WORKBENCH</span><h2>Helm Lab<span class="hl-title-period">.</span></h2><p>Configure chart values and preview your Helm command.</p></div></div>
       <div class="hl-tools"><button type="button" @click="findSetting"><HelmLabIcon name="search" /> Find a setting <kbd>{{ modKey }} K</kbd></button><div class="hl-history"><button type="button" :disabled="!canUndo" aria-label="Undo edit" :title="`Undo edit (${modKey} Z outside text fields)`" @click="travel('undo')"><HelmLabIcon name="undo" /></button><button type="button" :disabled="!canRedo" aria-label="Redo edit" :title="`Redo edit (${modKey} Shift Z outside text fields)`" @click="travel('redo')"><HelmLabIcon name="redo" /></button></div></div>
     </header>
     <div v-if="notice" class="hl-notice" :class="{ 'hl-alert': noticeError }" role="status"><HelmLabIcon :name="noticeError ? 'signal' : 'check'" /><span>{{ notice }}</span><button v-if="noticeUndo && canUndo" type="button" @click="travel('undo')">Undo</button><button type="button" aria-label="Dismiss notification" @click="notice = ''">×</button></div>

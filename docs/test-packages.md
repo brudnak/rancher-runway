@@ -2,6 +2,8 @@
 
 Test Packages keeps an issue's manual test plan, reproduction attempts, fix validation, and lab evidence together. Open it under **Investigate & prepare**, choose **Create test package** on an Issue Radar card, or start from a cluster workspace. Packages are personal and local first; sharing and private backup are explicit actions.
 
+Issue-linked package rows and their open overview include **Is this issue ready to test?**. The read-only scan checks issue/project status, linked pull requests, and whether merged fixes appear together in observed server and agent head images. See [Issue readiness](issue-readiness.md) for the evidence rules and limits.
+
 ## Milestone library
 
 The library groups packages into named milestone buckets such as **v2.16.0 · Frameworks**, with an **Unfiled** area for new and imported investigations. Create a bucket, rename it when release plans change, and use its menu to reorder it. Delete any bucket from its menu; its packages move to the end of Unfiled in their existing order, preserving their plans, sessions, and evidence. Unfiled itself cannot be deleted. Buckets are local organization; renaming or moving one does not update a GitHub milestone.
@@ -98,4 +100,3 @@ The GitHub integration must be configured and authorized for repository contents
 Packages live in the ignored runtime directory `automation-output/control-panel/test-packages`, with a private `package.json` per package and package-owned files beneath `artifacts/`. Writes are atomic and revisioned. Unfinished writing lives separately in a private `draft.json`, with its own revision and an 8 MiB bound; it is excluded from reports, portable bundles, and GitHub backup until saved as a plan or observation. Files are unencrypted on disk with private filesystem permissions; include them in your own backup policy. Invalid or unrecognized existing data is preserved and reported rather than replaced.
 
 The initial limits are 500 packages, 250 cases per package, 100 steps per case, 500 sessions per package, 250 evidence items per session, an 8 MiB manifest, 32 MiB per artifact, and 64 MiB of evidence per package. Portable bundles have their own bounded encoded size. Large database investigations should use selective evidence or separate packages.
-

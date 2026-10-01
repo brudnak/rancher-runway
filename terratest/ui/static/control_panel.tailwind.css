@@ -2074,3 +2074,14 @@ body[data-workspace] #controlPanelPanelsVue>section[class*=border-zinc]{backgrou
 .test-history-group span{color:var(--runway-muted);font-size:.7rem;font-weight:500}
 .test-history-filter{display:grid;gap:.35rem;font-size:.74rem;color:var(--runway-muted);padding-bottom:.6rem}.test-history-filter select{width:100%;padding:.5rem;border:1px solid var(--runway-border);border-radius:8px;background:var(--runway-input);color:var(--runway-ink)}
 .test-saved-cluster-group+.test-saved-cluster-group{margin-top:1.5rem}
+
+/* A quieter shared shell: the workspace leads, status is available on demand. */
+body[data-workspace] .panel-header{align-items:center;gap:12px;margin-bottom:14px}
+body[data-workspace] .chrome-button{min-height:34px;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:550;box-shadow:none;backdrop-filter:none}
+body[data-workspace] .chrome-button:hover{transform:none;box-shadow:none}
+body[data-workspace] .chrome-button-refresh{min-width:0}
+body[data-workspace] .chrome-toolbar{gap:8px}
+.dark body[data-workspace=home]{background-color:#10151c}
+body[data-workspace] .mw-hero h1,body[data-workspace] .tp-hero h2,body[data-workspace] .ops-hero h2{font-size:clamp(32px,3.5vw,46px);letter-spacing:-.045em}
+body[data-workspace] .mw-hero,body[data-workspace] .tp-hero{margin-bottom:24px}
+@media(prefers-reduced-motion:reduce){body[data-workspace] .chrome-button{transition:none}}

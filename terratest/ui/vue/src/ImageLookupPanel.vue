@@ -1,6 +1,6 @@
 <template>
   <div class="image-workspace il-workspace" :class="{ 'il-focus': detailFocus && detailVisible }">
-    <ImageWorkspaceHeader title="Image Lookup" eyebrow="Registry explorer" icon="boxes" description="Find the build. Explore the evidence. Keep the exact reference." :timestamp="searchedAtLabel"/>
+    <ImageWorkspaceHeader title="Image Lookup" eyebrow="Registry explorer" icon="boxes" description="Find builds and inspect their exact image references." :timestamp="searchedAtLabel"/>
 
 
     <form

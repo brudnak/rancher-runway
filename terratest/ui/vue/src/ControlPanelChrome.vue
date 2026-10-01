@@ -1,14 +1,13 @@
 <template>
   <header class="panel-header mb-5 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
     <div class="min-w-0">
-      <ControlPanelHeader v-if="activeTab !== 'home'" />
-      <div v-else class="home-chrome-label"><span class="home-chrome-dot"></span>Local workspace <span> / </span> Home</div>
+      <ControlPanelHeader />
       <div v-if="refreshError && activeTab !== 'home'" role="alert" :class="{ 'panel-refresh-alert': !bootPending }" class="mt-4 max-w-4xl rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-200">
         <div class="font-semibold">{{ bootPending ? 'Startup check could not finish' : 'Status could not refresh' }}</div>
         <p class="mt-1">{{ refreshError }}</p>
         <p class="mt-1">{{ bootPending ? 'Setup stays locked until a fresh safety check succeeds.' : 'Showing the last successful status. It may be out of date.' }}</p>
         <AppBuildStamp />
-        <button type="button" class="chrome-button mt-3" :disabled="refreshInFlight" @click="refreshChecks">{{ refreshInFlight ? 'Retrying…' : 'Retry checks' }}</button>
+        <button type="button" class="chrome-button mt-3" :disabled="refreshInFlight" @click="refreshWorkspace">{{ refreshInFlight ? 'Retrying…' : 'Retry checks' }}</button>
       </div>
       <div v-else-if="bootPending && activeTab !== 'home'" class="mt-4 max-w-4xl rounded-xl border border-sky-200 bg-white px-4 py-3 text-sm text-sky-900 shadow-sm dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-100">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-start">
@@ -76,7 +75,7 @@
 
       <button
         type="button"
-        @click="refreshChecks"
+        @click="refreshWorkspace"
         :disabled="manualRefreshInFlight"
         class="chrome-button chrome-button-primary chrome-button-refresh"
       >
@@ -95,10 +94,19 @@
       </button>
     </div>
   </header>
+  <IssueReadinessDialog />
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, onMounted, onBeforeUnmount } from "vue";
+import IssueReadinessDialog from './IssueReadinessDialog.vue';
+import {startDailyReadiness,stopDailyReadiness} from './daily-readiness-store.mjs';
+import {startMyWorkRefresh,stopMyWorkRefresh,refreshMyWork} from './my-work-store.mjs';
+onMounted(startMyWorkRefresh);
+onBeforeUnmount(stopMyWorkRefresh);
+function refreshWorkspace(){refreshChecks();void refreshMyWork({force:true});}
+onMounted(startDailyReadiness);
+onBeforeUnmount(stopDailyReadiness);
 import ControlPanelHeader from "./ControlPanelHeader.vue";
 import AppBuildStamp from "./AppBuildStamp.vue";
 import {
@@ -127,17 +135,17 @@ const stopBtnText = computed(() => {
   if (lifecycleRunning.value) {
     return 'Run in progress';
   }
-  return 'Stop panel';
+  return 'Quit Runway';
 });
 
 const stopBtnTitle = computed(() => {
   if (bootPending.value) {
-    return 'Startup safety check is still loading panel state.';
+    return 'Workspace status is still loading.';
   }
   if (lifecycleRunning.value) {
-    return 'Setup, readiness, or destroy is running. Leave the panel open until it finishes.';
+    return 'Setup, readiness, or destroy is running. Keep Runway open until it finishes.';
   }
-  return 'Stop the local control panel.';
+  return 'Quit Rancher Runway.';
 });
 
 const stopBtnClass = computed(() => {

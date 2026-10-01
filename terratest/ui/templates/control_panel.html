@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Rancher Runway Control Panel</title>
+  <title>Rancher Runway</title>
   <script>
     const controlPanelSearchParams = new URLSearchParams(window.location.search)
     const savedControlPanelTheme = localStorage.getItem('rancherControlPanelTheme')
@@ -854,9 +854,8 @@
     <div class="panel-shell mx-auto max-w-[1680px]">
       <div id="controlPanelChromeVue"></div>
 
-      <section id="commandDeck" data-vue-owned="true" class="mb-5 grid min-w-0 gap-3 md:grid-cols-3" aria-live="polite"></section>
 
-      <nav id="panelTabs" data-vue-owned="true" class="panel-nav mb-5" aria-label="Control panel sections"></nav>
+      <nav id="panelTabs" data-vue-owned="true" class="panel-nav mb-5" aria-label="Rancher Runway workspaces"></nav>
 
       <div class="grid min-w-0 gap-6">
         <section data-tab-panel="setup" class="hidden control-panel-setup min-w-0">

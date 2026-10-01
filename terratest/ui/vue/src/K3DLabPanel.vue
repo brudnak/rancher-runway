@@ -37,10 +37,10 @@ async function sessionAction({type,record,...extra}) {
 </script>
 
 <template>
-  <LocalLabFrame :lab="lab" title="K3D Lab" description="A small cluster. A wide-open playground.">
+  <LocalLabFrame :lab="lab" title="K3D Lab" description="Local K3s clusters in Docker.">
     <template #tool-actions><button v-if="missingK3D" type="button" :disabled="lab.blocked" @click="lab.action('install','/api/k3d/install',{},'k3d installation started. Follow Activity for progress.')"><LabIcon name="download" />{{ lab.pending==='install'?'Installing…':'Install k3d' }}</button></template>
     <template #configure>
-      <div class="lab-composer-heading"><div><span class="lab-eyebrow">LAUNCH PAD</span><h3>A cluster of your own.</h3></div><LabIcon name="boxes" /></div>
+      <div class="lab-composer-heading"><div><span class="lab-eyebrow">LAUNCH PAD</span><h3>Configure a cluster</h3></div><LabIcon name="boxes" /></div>
       <p class="lab-composer-intro">Kubernetes in Docker, with a dedicated API port and kubeconfig for each experiment.</p>
       <div class="lab-topology" aria-label="Docker runs K3s and exposes a Kubernetes API"><span><LabIcon name="server" /><strong>Docker</strong></span><i></i><span><LabIcon name="boxes" /><strong>K3s</strong></span><i></i><span><LabIcon name="terminal" /><strong>Your API</strong></span></div>
       <div v-if="draftNote" class="lab-draft-note" role="status"><p>{{ draftNote }}</p><button type="button" class="lab-text-button" :disabled="lab.blocked" @click="undoDraft"><LabIcon name="undo" />Undo draft change</button></div>

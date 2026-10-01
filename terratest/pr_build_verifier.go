@@ -89,6 +89,8 @@ type prBuildImageResult struct {
 	Digest         string             `json:"digest,omitempty"`
 	PlatformDigest string             `json:"platformDigest,omitempty"`
 	Platform       string             `json:"platform,omitempty"`
+	WebhookVersion string             `json:"webhookVersion,omitempty"`
+	ChartBranch    string             `json:"chartBranch,omitempty"`
 	BuildVersion   string             `json:"buildVersion,omitempty"`
 	SourceURL      string             `json:"sourceUrl,omitempty"`
 	Revision       string             `json:"revision,omitempty"`
@@ -99,6 +101,11 @@ type prBuildImageResult struct {
 
 type prBuildCommitMatch struct {
 	Verdict           string `json:"verdict"`
+	Pin               string `json:"pin,omitempty"`
+	EvidenceURL       string `json:"evidenceUrl,omitempty"`
+	ChartURL          string `json:"chartUrl,omitempty"`
+	ComponentImage    string `json:"componentImage,omitempty"`
+	ComponentDigest   string `json:"componentDigest,omitempty"`
 	Relation          string `json:"relation,omitempty"`
 	Reason            string `json:"reason"`
 	CandidateRevision string `json:"candidateRevision,omitempty"`
@@ -118,6 +125,7 @@ type prBuildTarget struct {
 }
 
 type prBuildGitHubPull struct {
+	Body           string `json:"body"`
 	Number         int    `json:"number"`
 	HTMLURL        string `json:"html_url"`
 	Title          string `json:"title"`
@@ -387,7 +395,7 @@ func normalizePRBuildPullRequest(target prBuildTarget, raw prBuildGitHubPull) (p
 
 func (s *prBuildVerifierService) fetchPullFromGitHub(ctx context.Context, target prBuildTarget) (prBuildGitHubPull, error) {
 	endpoint := fmt.Sprintf("/repos/%s/%s/pulls/%d", target.owner, target.repository, target.number)
-	jq := `{number:.number,html_url:.html_url,title:.title,state:.state,draft:.draft,merged:.merged,merged_at:.merged_at,merge_commit_sha:.merge_commit_sha,head:{sha:.head.sha,ref:.head.ref,repo:{full_name:.head.repo.full_name}},base:{sha:.base.sha,ref:.base.ref,repo:{full_name:.base.repo.full_name}}}`
+	jq := `{body:((.body // "")[0:16000]),number:.number,html_url:.html_url,title:.title,state:.state,draft:.draft,merged:.merged,merged_at:.merged_at,merge_commit_sha:.merge_commit_sha,head:{sha:.head.sha,ref:.head.ref,repo:{full_name:.head.repo.full_name}},base:{sha:.base.sha,ref:.base.ref,repo:{full_name:.base.repo.full_name}}}`
 	var result prBuildGitHubPull
 	if err := s.runGitHubJSON(ctx, endpoint, jq, &result, "pull request"); err != nil {
 		return prBuildGitHubPull{}, err
@@ -574,6 +582,18 @@ func (s *prBuildVerifierService) inspectImage(ctx context.Context, reference str
 		result.Error = imageLookupSafeError(err)
 		result.Match.Reason = "The registry lookup failed before provenance could be inspected."
 		return result
+	}
+	for _, entry := range response.Config.Env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "CATTLE_RANCHER_WEBHOOK_VERSION":
+			result.WebhookVersion = safeOCIProvenanceLabel(value)
+		case "CATTLE_CHART_DEFAULT_BRANCH":
+			result.ChartBranch = safeOCIProvenanceLabel(value)
+		}
 	}
 	labels := response.Config.Labels
 	result.Found = true

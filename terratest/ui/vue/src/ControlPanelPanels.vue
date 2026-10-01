@@ -1,5 +1,6 @@
 <template>
   <section v-show="activeTab === 'home'" aria-label="Home workspace" class="min-w-0"><HomePanel /></section>
+  <section v-if="myWorkOpened" v-show="activeTab === 'my-work'" class="min-w-0" aria-label="My Work workspace"><MyWorkPanel /></section>
   <section v-if="issuesOpened" v-show="activeTab === 'issues'" class="min-w-0 rounded-xl border border-zinc-200 bg-white p-4 text-zinc-900 shadow-sm dark:border-white/10 dark:bg-zinc-900/80 dark:text-zinc-100 sm:p-5">
     <IssueRadarPanel />
   </section>
@@ -91,6 +92,7 @@
 
 <script setup>
 import { ref, watch } from "vue";
+import MyWorkPanel from "./MyWorkPanel.vue";
 import HomePanel from "./HomePanel.vue";
 import HelmLabPanel from "./HelmLabPanel.vue";
 import IssueRadarPanel from "./IssueRadarPanel.vue";
@@ -108,6 +110,8 @@ import TestPackagesPanel from "./TestPackagesPanel.vue";
 import CacheLabPanel from "./CacheLabPanel.vue";
 import SteveLabPanel from "./SteveLabPanel.vue";
 import WorkspaceRunsPanel from "./WorkspaceRunsPanel.vue";
+const myWorkOpened = ref(false);
+watch(activeTab, tab => { if (tab === "my-work") myWorkOpened.value = true; }, { immediate: true });
 const testsOpened = ref(false);
 const packagesOpened = ref(false);
 watch(activeTab, tab => { if (tab === "packages") packagesOpened.value = true; }, { immediate: true });

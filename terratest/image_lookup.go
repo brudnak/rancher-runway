@@ -321,6 +321,7 @@ type imageLookupTarget struct {
 }
 
 type imageLookupSearchOptions struct {
+	movingHeadsOnly  bool // Internal complete moving-head discovery across community and Prime tags.
 	query            string
 	limit            int
 	includeArtifacts bool
@@ -2367,6 +2368,9 @@ func imageLookupPatchVersion(version string) bool {
 }
 
 func imageLookupTagMatchesOptions(tag imageLookupTag, options imageLookupSearchOptions) bool {
+	if options.movingHeadsOnly && !readinessHeadPattern.MatchString(tag.Name) {
+		return false
+	}
 	query := strings.ToLower(strings.TrimSpace(options.query))
 	if imageLookupPrimeHeadAliasQuery(query) {
 		if !tag.IsPrimeHead {

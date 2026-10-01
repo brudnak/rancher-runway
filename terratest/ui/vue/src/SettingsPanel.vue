@@ -3,11 +3,20 @@
     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
         <h2 class="text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">Settings</h2>
-        <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">Local panel preferences for this browser session.</p>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">Home layout, daily scans, and reminders.</p>
       </div>
       <div :class="statusClass">{{ disabled ? "GPU reminders off" : "GPU reminders on" }}</div>
     </div>
 
+    <section class="settings-home"><HomeLayoutPicker name="settings-home-layout" /></section>
+    <section class="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-5 dark:border-emerald-500/25 dark:bg-emerald-500/10">
+      <h3 class="text-base font-semibold">Daily issue readiness</h3>
+      <p class="mt-2 text-sm leading-6">Check your milestone each day for fixes in builds, QA templates, and missing test cases. Your report appears in My Work.</p>
+      <label class="mt-4 flex items-center gap-3 text-sm font-semibold"><input type="checkbox" :checked="dailyReadiness.enabled" :disabled="dailyReadinessBusy" @change="changeDailyReadiness('settings',$event.target.checked)"/>Scan My Work automatically each day</label>
+      <p class="mt-3 text-xs leading-5">Off by default. Uses your local calendar day and signed-in GitHub access. Saved for this workspace. Checks up to 100 open issues per scan; runs while Runway’s local server is open.</p>
+      <p v-if="dailyReadinessError" role="alert" class="mt-3 text-sm">{{dailyReadinessError}}</p>
+      <button type="button" class="mt-3 text-sm underline" @click="setActivePanelTab('my-work')">View My Work report ↗</button>
+    </section>
     <div class="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4 dark:border-rose-500/25 dark:bg-rose-500/10">
       <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div class="min-w-0">
@@ -51,13 +60,19 @@
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, watch } from "vue";
+import HomeLayoutPicker from "./HomeLayoutPicker.vue";
 import {
+  activeTab,
+  setActivePanelTab,
   gpuReminderSettings,
   saveGPUReminderSettings,
   showPanelNotice,
   requestTypedConfirmation,
 } from "./store.js";
+
+import {dailyReadiness,dailyReadinessError,dailyReadinessBusy,changeDailyReadiness,refreshDailyReadiness} from './daily-readiness-store.mjs';
+watch(activeTab,tab=>{if(tab==='settings')void refreshDailyReadiness();});
 
 const intervals = [
   { minutes: 15, label: "15 min" },
@@ -112,3 +127,7 @@ const setIntervalMinutes = minutes => {
   showPanelNotice("GPU reminders updated", `Reminder interval set to ${intervalLabel.value}.`);
 };
 </script>
+
+<style scoped>
+.settings-home{margin-top:24px;padding:24px;border:1px solid var(--runway-border);border-radius:16px;background:var(--runway-card)}
+</style>

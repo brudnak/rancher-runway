@@ -1,47 +1,16 @@
 <template>
-  <div class="min-w-0">
-    <div class="mb-4 flex flex-wrap items-center gap-2">
-      <div class="inline-flex items-center rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-500 shadow-sm dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400">
-        Local control panel
-      </div>
-    </div>
-
-    <h1 class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50 sm:text-3xl">
-      Rancher Runway Control Panel
-    </h1>
-    <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-      Local-only viewer for active Rancher Runway runs, downstream clusters, kubeconfigs, logs, and cleanup.
-    </p>
-    <div
-      v-if="sessionMeta"
-      class="mt-3 text-xs font-medium text-zinc-500 dark:text-zinc-400"
-      :title="panel?.configPath || ''"
-    >
-      {{ sessionMeta }}
-    </div>
-
-    <div class="mt-4 flex flex-wrap gap-2" aria-live="polite">
-      <span
-        v-for="chip in chips"
-        :key="chip.key"
-        :data-chip="chip.key"
-        class="panel-chip"
-        :class="chipToneClass(chip.tone)"
-      >
-        <span class="panel-chip-indicator" aria-hidden="true">
-          <span v-if="chip.running" class="spinner !h-3 !w-3 !border-[1.5px]"></span>
-          <span v-else class="panel-chip-dot"></span>
-        </span>
-        <span>{{ chip.label }}</span>
-        <span class="panel-chip-value" :class="{ 'panel-chip-freshness': chip.key === 'refreshed' }">{{ chip.value }}</span>
-      </span>
-    </div>
-
-    <div
-      v-if="panel?.starterConfigCreated"
-      class="mt-4 max-w-3xl rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-800 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-200"
-    >
-      Created starter config at {{ panel.configPath }}. Fill in the blocked setup values below before starting setup.
+  <div class="runway-status">
+    <div class="runway-status-current" aria-live="polite">
+      <span v-if="operationChip.running || operationChip.tone === 'rose'" class="panel-chip" :class="chipToneClass(operationChip.tone)"><span v-if="operationChip.running" class="spinner !h-3 !w-3"></span>{{ operationChip.label }} · {{ operationChip.value }}</span>
+      <span v-if="gpuChip" class="panel-chip panel-chip-tone-rose">{{ gpuChip.label }} · {{ gpuChip.value }}</span>
+      <details class="runway-status-details">
+        <summary>Workspace status</summary>
+        <div class="runway-status-popover">
+          <div class="runway-status-chips"><span v-for="chip in chips" :key="chip.key" :data-chip="chip.key" class="panel-chip" :class="chipToneClass(chip.tone)"><span v-if="chip.running" class="spinner !h-3 !w-3"></span>{{ chip.label }} <span class="panel-chip-value">{{ chip.value }}</span></span></div>
+          <p v-if="sessionMeta" :title="panel?.configPath || ''">{{ sessionMeta }}</p>
+          <p v-if="panel?.starterConfigCreated">Starter config: {{ panel.configPath }}. Complete the required values in Setup.</p>
+        </div>
+      </details>
     </div>
   </div>
 </template>
@@ -58,7 +27,7 @@ const sessionMeta = computed(() => {
   }
 
   const started = panel.value.startedAt ? new Date(panel.value.startedAt).toLocaleTimeString() : "";
-  const pieces = [`Panel ${panel.value.sessionId}`];
+  const pieces = [`Session ${panel.value.sessionId}`];
   if (started) {
     pieces.push(`started ${started}`);
   }
@@ -176,3 +145,7 @@ const chipToneClass = tone => ({
 })[tone] || "";
 
 </script>
+
+<style scoped>
+.runway-status-current{display:flex;align-items:center;flex-wrap:wrap;gap:10px;min-height:36px}.runway-status-details{position:relative;z-index:30}.runway-status-details summary{cursor:pointer;color:var(--runway-muted);font-size:12px;padding:8px 0}.runway-status-popover{position:absolute;left:0;top:40px;width:min(560px,calc(100vw - 64px));background:var(--runway-card);border:1px solid var(--runway-border);border-radius:12px;padding:18px;box-shadow:var(--runway-shadow)}.runway-status-chips{display:flex;flex-wrap:wrap;gap:8px}.runway-status-popover p{font-size:11px;color:var(--runway-muted);margin-top:14px;overflow-wrap:anywhere}.runway-status-details summary:focus-visible{outline:2px solid var(--runway-accent);outline-offset:3px}
+</style>

@@ -13,9 +13,11 @@ import (
 
 // Organization is separate from investigation revisions and frozen sessions.
 type testPackageBucket struct {
-	ID         string   `json:"id"`
-	Name       string   `json:"name"`
-	PackageIDs []string `json:"packageIds"`
+	SourceRepo      string   `json:"sourceRepo,omitempty"`
+	SourceMilestone int      `json:"sourceMilestone,omitempty"`
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	PackageIDs      []string `json:"packageIds"`
 }
 type testPackageLibrary struct {
 	Version  int                 `json:"version"`
@@ -62,6 +64,15 @@ func validatePackageLibrary(lib testPackageLibrary, packages map[string]testPack
 		return nil
 	}
 	for _, b := range lib.Buckets {
+
+		if (b.SourceRepo == "") != (b.SourceMilestone == 0) || b.SourceMilestone < 0 {
+			return fmt.Errorf("invalid bucket milestone source")
+		}
+		if b.SourceRepo != "" {
+			if _, err := issueRadarRepo(b.SourceRepo); err != nil {
+				return err
+			}
+		}
 		if !cacheLabIDPattern.MatchString(b.ID) || buckets[b.ID] || !packageText(b.Name, 120, true) {
 			return fmt.Errorf("invalid milestone bucket")
 		}

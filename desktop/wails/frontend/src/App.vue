@@ -1,7 +1,7 @@
 <template>
   <iframe
     id="panelFrame"
-    title="Rancher Runway Control Panel"
+    title="Rancher Runway"
     :hidden="!panelVisible"
     :src="panelURL || undefined"
     @load="handlePanelLoad"
@@ -13,7 +13,7 @@
     </section>
     <section class="copy">
       <p class="eyebrow">Rancher Runway</p>
-      <h1>Opening the local control panel</h1>
+      <h1>Opening Rancher Runway</h1>
       <p class="build-badge" :title="buildBadgeTitle">{{ buildBadgeText }}</p>
       <p id="status" :data-error="statusError ? 'true' : 'false'">{{ statusMessage }}</p>
       <button v-if="retryVisible" class="retry-button" type="button" @click="attachPanel">
@@ -137,11 +137,11 @@ const attachPanel = async () => {
       throw new Error(result.error);
     }
     if (!result?.url) {
-      throw new Error("The local control panel did not return a URL.");
+      throw new Error("Rancher Runway did not return a workspace URL.");
     }
 
     panelURL.value = await panelURLWithSystemTheme(result.url);
-    setStatus("Opening the control panel.");
+    setStatus("Opening Rancher Runway.");
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), true);
     retryVisible.value = true;

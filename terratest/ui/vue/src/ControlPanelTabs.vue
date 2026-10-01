@@ -18,7 +18,7 @@
     </div>
     <section v-if="menu" id="workspace-picker" class="panel-workspace-picker" aria-label="Workspace switcher">
       <div class="panel-picker-search"><Icon name="search"/><input ref="searchInput" v-model="query" type="search" autocomplete="off" spellcheck="false" aria-label="Search workspaces" placeholder="Find a tool, task, or keyword…" @keydown="searchKeys"/><button type="button" aria-label="Close workspace switcher" @click="dismissMenu"><Icon name="close"/><kbd>Esc</kbd></button></div>
-      <div class="panel-picker-heading"><span>{{ query.trim() ? `${matches.length} matching ${matches.length === 1 ? 'workspace' : 'workspaces'}` : menu === 'all' ? 'EVERYTHING IN ITS PLACE' : selectedMenuGroup?.description }}</span><button v-if="menu !== 'all' && !query.trim()" type="button" @click="showAll">All workspaces <Icon name="arrow"/></button></div>
+      <div class="panel-picker-heading"><span>{{ query.trim() ? `${matches.length} matching ${matches.length === 1 ? 'workspace' : 'workspaces'}` : menu === 'all' ? 'ALL WORKSPACES' : selectedMenuGroup?.description }}</span><button v-if="menu !== 'all' && !query.trim()" type="button" @click="showAll">All workspaces <Icon name="arrow"/></button></div>
       <div v-if="visibleGroups.length" class="panel-picker-groups" :class="{ 'panel-picker-single': visibleGroups.length === 1 }" @keydown="resultKeys">
         <section v-for="group in visibleGroups" :key="group.id" :aria-label="group.title">
           <h3>{{ group.title }}</h3>
@@ -35,7 +35,7 @@
         </section>
       </div>
       <div v-else class="panel-picker-empty"><Icon name="search"/><strong>No workspaces found</strong><p>Try “database”, “deploy”, “PR”, or “local”.</p><button type="button" @click="showAll">Browse all workspaces</button></div>
-      <footer class="panel-picker-footer"><span>Switch tools. Keep your place.</span><span><kbd>↑</kbd><kbd>↓</kbd> to move <kbd>Enter</kbd> to open</span></footer>
+      <footer class="panel-picker-footer"><span>Your work stays open.</span><span><kbd>↑</kbd><kbd>↓</kbd> to move <kbd>Enter</kbd> to open</span></footer>
     </section>
   </div>
   <span class="sr-only" aria-live="polite" aria-atomic="true">{{ busyStatusAnnouncement }}</span>

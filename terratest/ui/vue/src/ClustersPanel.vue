@@ -1,6 +1,6 @@
 <template>
   <div class="cluster-home grid min-w-0 gap-4">
-    <header class="cluster-home-hero"><div><span class="cluster-home-eyebrow"><Icon name="layers"/>RANCHER RUNWAY / CLUSTER WORKSPACES</span><h2>Clusters<span>.</span></h2><p>The environment, the experiments, and everything you learned. Together.</p></div><div class="cluster-home-totals"><span><strong>{{ items.length }}</strong> discovered</span><span><strong>{{ retainedWorkspaces.length }}</strong> retained & external</span></div></header>
+    <header class="cluster-home-hero"><div><span class="cluster-home-eyebrow"><Icon name="layers"/>RANCHER RUNWAY / CLUSTER WORKSPACES</span><h2>Clusters<span>.</span></h2><p>Cluster access, health, and test history.</p></div><div class="cluster-home-totals"><span><strong>{{ items.length }}</strong> discovered</span><span><strong>{{ retainedWorkspaces.length }}</strong> retained & external</span></div></header>
     <div class="cluster-home-search"><label><Icon name="search"/><input v-model="clusterSearch" type="search" aria-label="Search cluster workspaces" placeholder="Find a cluster, nickname, hostname, or run…"/></label><button type="button" @click="refreshClusterWorkspaces"><Icon name="refresh"/>Refresh history</button></div>
     <div v-if="clusterWorkspaceError" class="cluster-home-error" role="alert">{{ clusterWorkspaceError }} <button type="button" @click="refreshClusterWorkspaces">Try again</button></div>
     <template v-if="!clusterSearch.trim()">

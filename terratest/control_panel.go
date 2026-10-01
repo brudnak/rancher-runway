@@ -56,6 +56,7 @@ type localControlPanel struct {
 	imageLookup             *imageLookupService
 	prBuildVerifier         *prBuildVerifierService
 	issueRadar              *issueRadarService
+	dailyReadiness          *dailyReadinessService
 	helmCatalog             helmLabCatalogService
 	cacheLabMu              sync.Mutex
 	cacheLab                *cacheLabService
@@ -452,6 +453,10 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/helm-command", p.handleHelmCommandDownload)
 	mux.HandleFunc("/api/helm-lab/save", p.handleHelmLabSave)
 	mux.HandleFunc("/api/helm-lab/catalog", p.handleHelmLabCatalog)
+	mux.HandleFunc("/api/my-work", p.handleMyWork)
+	mux.HandleFunc("/api/my-work/refresh", p.handleRefreshMyWork)
+	mux.HandleFunc("/api/issue-readiness", p.handleIssueReadiness)
+	mux.HandleFunc("/api/issue-readiness/daily", p.handleDailyReadiness)
 	mux.HandleFunc("/api/issue-radar", p.handleIssueRadar)
 	mux.HandleFunc("/api/issue-radar/milestones", p.handleIssueRadarMilestones)
 	mux.HandleFunc("/api/issue-radar/history", p.handleIssueRadarHistory)
@@ -721,6 +726,7 @@ func (s *ControlPanelServer) Shutdown(ctx context.Context) error {
 	}
 	s.panel.stopCacheLab()
 	s.panel.stopTestLab()
+	s.panel.stopDailyReadiness()
 	err := s.panel.server.Shutdown(ctx)
 	s.cleanup()
 	return err
@@ -1508,6 +1514,7 @@ func (p *localControlPanel) handleShutdown(w http.ResponseWriter, r *http.Reques
 		time.Sleep(150 * time.Millisecond)
 		p.stopCacheLab()
 		p.stopTestLab()
+		p.stopDailyReadiness()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = p.server.Shutdown(shutdownCtx)

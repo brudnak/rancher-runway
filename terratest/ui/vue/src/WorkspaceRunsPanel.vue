@@ -270,9 +270,9 @@ const title = computed(() => runs.value.length
   : "No recorded runs");
 
 const summary = computed(() => activeOperations.value.length
-  ? `${activeOperations.value.length} lifecycle operation${activeOperations.value.length === 1 ? "" : "s"} active: ${activeOperations.value.map(item => item.label).join(", ")}. Each provider lane stays serialized against its own state.`
+  ? `${activeOperations.value.length} lifecycle operation${activeOperations.value.length === 1 ? "" : "s"} active: ${activeOperations.value.map(item => item.label).join(", ")}.`
   : runs.value.length
-    ? "Every slot below has isolated Terraform state, deployment output, kubeconfigs, AWS names, logs, and a dedicated destroy target."
+    ? "Provisioning progress, logs, and access for your saved runs."
     : "Use Setup to resolve and approve a Rancher Runway plan. The run will appear here before AWS resources are created.");
 
 const nextSetupLabel = computed(() => canStart.value

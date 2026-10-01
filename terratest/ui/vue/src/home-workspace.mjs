@@ -1,20 +1,21 @@
 // The home guide describes navigation, never launches infrastructure or commands.
 export const workspaceTools = [
-  { id: 'setup', label: 'Setup', group: 'operate', icon: 'compass', kind: 'Cloud', description: 'Choose a Rancher topology, resolve a plan, and review it before provisioning.', keywords: 'AWS RKE2 K3s hosted tenant Linode deploy install' },
-  { id: 'runs', label: 'Runs', group: 'operate', icon: 'layers', kind: 'Monitor', description: 'Follow provisioning, inspect recorded run slots, and find logs and run folders.', keywords: 'progress status Terraform safety preflight checks' },
-  { id: 'clusters', label: 'Clusters', group: 'operate', icon: 'server', kind: 'Inspect', description: 'Name your clusters, inspect health, and find their linked test results, saved plans, and SQL cache snapshots.', keywords: 'Kubernetes logs leader endpoint nickname history tests cache snapshots' },
-  { id: 'aws', label: 'AWS Inventory', group: 'operate', icon: 'globe', kind: 'Cloud', description: 'Find tagged orphaned AWS resources, understand protections, and review eligible leftovers for cleanup.', keywords: 'owner orphan resources cleanup EC2 IAM' },
-  { id: 'destroy', label: 'Destroy', group: 'operate', icon: 'trash', kind: 'Cleanup', description: 'Retire recorded runs and explore locally tracked AWS cost estimates, charts, backups, and workspace cleanup.', keywords: 'costs estimates chart graph CSV export import pricing ledger local data billing teardown delete' },
-  { id: 'images', label: 'Image Lookup', group: 'investigate', icon: 'boxes', kind: 'Read-only', description: 'Find Rancher builds and Prime pairs; inspect manifests, platforms, and build metadata.', keywords: 'registry digest tag SHA version Docker OCI' },
-  { id: 'pr-builds', label: 'PR Image Check', group: 'investigate', icon: 'branch', kind: 'Read-only', description: 'Trace a PR’s commit into published images and inspect the exact observed digest.', keywords: 'GitHub fix ancestry included verification' },
-  { id: 'helm', label: 'Helm Lab', group: 'investigate', icon: 'diamond', kind: 'Prepare', description: 'Shape chart values and export a reviewed Helm command, values file, or setup script.', keywords: 'chart YAML release upgrade install command' },
-  { id: 'cache', label: 'Cache Lab', group: 'investigate', icon: 'database', kind: 'Inspect', description: 'Capture a live Rancher SQL cache, organize SQLite snapshots, explore records, and compare changes.', keywords: 'database vacuum diff query kubeconfig token before after' },
-  { id: 'issues', label: 'Issue Radar', group: 'investigate', icon: 'pulse', kind: 'Plan', description: 'Understand issue ownership and workload, then create an AI assignment-planning prompt.', keywords: 'GitHub milestone triage team report history delegate' },
-  { id: 'packages', label: 'Test Packages', group: 'investigate', icon: 'folder', kind: 'Validate', description: 'Turn an issue into a living test plan. Preserve manual sessions, attach lab evidence, and share a report or portable package.', keywords: 'cases steps reproduction validation notes archive private backup bundles' },
-  { id: 'k3d', label: 'K3D Lab', group: 'local', icon: 'boxes', kind: 'Local', description: 'Create a local K3s cluster in Docker, get its kubeconfig, and stop or reuse it.', keywords: 'Kubernetes k3s experiment sandbox containers' },
-  { id: 'steve', label: 'Steve Lab', group: 'local', icon: 'flask', kind: 'Local', description: 'Run a Steve version against its own k3d cluster; inspect its endpoint, logs, and SQL cache.', keywords: 'API source ref development metrics SQLite experiment' },
-  { id: 'tests', label: 'Test Lab', group: 'local', icon: 'flask', kind: 'Validate', description: 'Explore validation tests and READMEs, reuse saved configs, check requirements, and follow local test results.', keywords: 'test suite cattle config templates folders README documentation preflight validation GitHub Actions runner regression' },
-  { id: 'settings', label: 'Settings', group: 'local', icon: 'sliders', kind: 'Preferences', description: 'Adjust local app preferences, including reminders for deployed GPU resources.', keywords: 'GPU reminder configuration' },
+  { id: 'setup', label: 'Setup', group: 'operate', icon: 'compass', kind: 'Cloud', description: 'Plan and review a Rancher environment.', keywords: 'AWS RKE2 K3s hosted tenant Linode deploy install' },
+  { id: 'runs', label: 'Runs', group: 'operate', icon: 'layers', kind: 'Monitor', description: 'Provisioning progress, logs, and saved runs.', keywords: 'progress status Terraform safety preflight checks' },
+  { id: 'clusters', label: 'Clusters', group: 'operate', icon: 'server', kind: 'Inspect', description: 'Cluster access, health, test history, and SQL cache snapshots.', keywords: 'Kubernetes logs leader endpoint nickname history tests cache snapshots' },
+  { id: 'aws', label: 'AWS Inventory', group: 'operate', icon: 'globe', kind: 'Cloud', description: 'Inspect AWS resources and review cleanup candidates.', keywords: 'owner orphan resources cleanup EC2 IAM' },
+  { id: 'destroy', label: 'Destroy', group: 'operate', icon: 'trash', kind: 'Cleanup', description: 'Remove environments and review recorded cost estimates.', keywords: 'costs estimates chart graph CSV export import pricing ledger local data billing teardown delete' },
+  { id: 'images', label: 'Image Lookup', group: 'investigate', icon: 'boxes', kind: 'Read-only', description: 'Rancher builds, image digests, and platform details.', keywords: 'Prime registry digest tag SHA version Docker OCI' },
+  { id: 'pr-builds', label: 'PR Image Check', group: 'investigate', icon: 'branch', kind: 'Read-only', description: 'Find builds that include a pull request.', keywords: 'GitHub fix ancestry included verification' },
+  { id: 'helm', label: 'Helm Lab', group: 'investigate', icon: 'diamond', kind: 'Prepare', description: 'Configure chart values and prepare Helm commands.', keywords: 'chart YAML release upgrade install command' },
+  { id: 'cache', label: 'Cache Lab', group: 'investigate', icon: 'database', kind: 'Inspect', description: 'Capture, query, and compare SQL cache snapshots.', keywords: 'SQLite database vacuum diff query kubeconfig token before after' },
+  { id: 'my-work', label: 'My Work', group: 'investigate', icon: 'folder', kind: 'Plan', description: 'Your milestone, test plans, and readiness briefing.', keywords: 'GitHub assigned unassigned owner milestone coverage progress remaining plans validation' },
+  { id: 'issues', label: 'Issue Radar', group: 'investigate', icon: 'pulse', kind: 'Plan', description: 'Issue ownership and workload by milestone.', keywords: 'GitHub milestone triage team report history delegate' },
+  { id: 'packages', label: 'Test Packages', group: 'investigate', icon: 'folder', kind: 'Validate', description: 'Organize test plans, sessions, and evidence.', keywords: 'cases steps reproduction validation notes archive private backup bundles' },
+  { id: 'k3d', label: 'K3D Lab', group: 'local', icon: 'boxes', kind: 'Local', description: 'Create and manage local K3s clusters in Docker.', keywords: 'Kubernetes k3s experiment sandbox containers' },
+  { id: 'steve', label: 'Steve Lab', group: 'local', icon: 'flask', kind: 'Local', description: 'Run Steve locally and inspect its API and SQL cache.', keywords: 'API source ref development metrics SQLite experiment' },
+  { id: 'tests', label: 'Test Lab', group: 'local', icon: 'flask', kind: 'Validate', description: 'Run validation tests and review results.', keywords: 'test suite cattle config templates folders README documentation preflight validation GitHub Actions runner regression' },
+  { id: 'settings', label: 'Settings', group: 'local', icon: 'sliders', kind: 'Preferences', description: 'Home layout, daily scans, and reminders.', keywords: 'GPU reminder configuration' },
 ];
 
 export const toolGroups = [
@@ -24,8 +25,8 @@ export const toolGroups = [
 ];
 
 export const guidedPaths = [
-  { id: 'issue', label: 'Validate an issue', icon: 'folder', description: 'Keep the plan, the reproduction, and the fix validation together.', steps: [
-    { tab: 'issues', title: 'Choose the issue', detail: 'Create a test package from an Issue Radar card, or start a package with your own issue link.' },
+  { id: 'issue', label: 'Validate an issue', icon: 'folder', description: 'Follow an issue from discovery and assignment through test preparation, reproduction, validation, and closure.', steps: [
+    { tab: 'my-work', title: 'Bring in your work', detail: 'Pull a milestone for yourself or prepare unassigned issues. Missing test packages get a starter in a milestone bucket.' },
     { tab: 'packages', title: 'Plan & preserve', detail: 'Write manual cases, record sessions against known versions, and attach existing lab evidence.' },
     { tab: 'packages', title: 'Report & share', detail: 'Preview a Markdown report, export a portable bundle, or back up to your private GitHub repository.' },
   ] },
@@ -47,7 +48,7 @@ export const guidedPaths = [
 ];
 
 export function workspaceTool(tab) { return workspaceTools.find(tool => tool.id === tab); }
-export function resumableTab(tab) { return workspaceTool(tab === 'lifecycle' ? 'runs' : tab)?.id || ''; }
+export function resumableTab(tab) { if(tab==='settings')return ''; return workspaceTool(tab === 'lifecycle' ? 'runs' : tab)?.id || ''; }
 export function filterWorkspaceTools(query) {
   const words = String(query || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
   return workspaceTools.filter(tool => words.every(word => `${tool.label} ${tool.description} ${tool.keywords} ${tool.kind}`.toLowerCase().includes(word)));

@@ -1,5 +1,6 @@
 <script setup>
 import RadarIcon from './HelmLabIcon.vue';
+import IssueReadiness from './IssueReadiness.vue';
 import { issueEffort } from './issue-radar-prompt.mjs';
 defineProps({ issue: { type: Object, required: true } });
 defineEmits(['open', 'copy', 'package']);
@@ -7,7 +8,7 @@ defineEmits(['open', 'copy', 'package']);
 
 <template>
   <article class="ir-issue">
-    <button type="button" class="ir-package-action" @click="$emit('package', issue)"><RadarIcon name="folder"/> Create test package</button>
+    <div class="ir-card-actions"><button type="button" class="ir-package-action" @click="$emit('package', issue)"><RadarIcon name="folder"/> Create test package</button><IssueReadiness :issue-url="issue.url" compact/></div>
     <div class="ir-row ir-issue-meta"><span class="font-mono">#{{ issue.number }}</span><span class="ir-kind" :data-kind="issue.kind">{{ issue.kind }}</span><button type="button" class="ir-copy-link" :aria-label="`Copy link to issue ${issue.number}`" title="Copy issue link" @click="$emit('copy', issue.url)"><RadarIcon name="copy"/></button></div>
     <a :href="issue.url" class="ir-issue-title" @click.prevent="$emit('open', issue.url)">{{ issue.title }} <span aria-hidden="true">↗</span></a>
     <div class="ir-tags"><span class="ir-tag ir-size-tag" :data-size="issue.qaSize" :class="{ 'ir-tag-warning': issue.qaSize === 'Lacks QA Size' || issue.sizeConflict }">{{ issue.sizeConflict ? (issue.qaNone ? 'QA/None · conflicting size' : 'Conflicting QA sizes') : issue.qaSize }}</span><span class="ir-tag" :class="{ 'ir-tag-warning': !issue.milestone }">{{ issue.milestone || 'No milestone' }}</span></div>
@@ -18,5 +19,5 @@ defineEmits(['open', 'copy', 'package']);
 </template>
 
 <style scoped>
-.ir-package-action{display:flex;align-items:center;gap:.45rem;margin:0 0 .8rem auto;padding:.4rem .55rem;border:1px solid var(--runway-border);border-radius:.5rem;background:var(--runway-card);color:var(--runway-accent);font-size:.75rem;font-weight:650;cursor:pointer}.ir-package-action:hover{background:var(--runway-raised)}.ir-package-action:focus-visible{outline:2px solid var(--runway-accent);outline-offset:3px}.ir-package-action svg{width:1rem;height:1rem}
+.ir-card-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.ir-package-action{display:flex;align-items:center;gap:.45rem;margin:0 0 .8rem 0;padding:.4rem .55rem;border:1px solid var(--runway-border);border-radius:.5rem;background:var(--runway-card);color:var(--runway-accent);font-size:.75rem;font-weight:650;cursor:pointer}.ir-package-action:hover{background:var(--runway-raised)}.ir-package-action:focus-visible{outline:2px solid var(--runway-accent);outline-offset:3px}.ir-package-action svg{width:1rem;height:1rem}
 </style>

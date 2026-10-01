@@ -1500,7 +1500,7 @@ export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRun
 
 export const stopPanel = async () => {
   if (lifecycleRunning.value) {
-    refreshStatus.value = "Cannot stop control panel while a run is in progress.";
+    refreshStatus.value = "Keep Rancher Runway open while a run is in progress.";
     return;
   }
   bootPending.value = true;

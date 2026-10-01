@@ -8,6 +8,8 @@ copy a `tool-config.yml`, run setup, open the local control panel, and clean up.
 
 - [AWS cleanup and local cost history](aws-cost-history.md)
 - [Test Packages: cases, preserved sessions, evidence, and sharing](test-packages.md)
+- [My Work: milestone intake and issue progress](my-work.md)
+- [Issue readiness: linked fixes and head image evidence](issue-readiness.md)
 - [Test Lab: validation tests and reusable cattle-configs](test-lab.md)
 
 - [Homebrew installation and release process](homebrew-release.md)

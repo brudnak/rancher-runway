@@ -1,6 +1,6 @@
 <template>
   <div class="image-workspace pr-workspace">
-    <ImageWorkspaceHeader title="PR Image Check" eyebrow="Commit to container" icon="branch" description="Trace a pull request into the images you can test." :timestamp="checkedAtLabel"/>
+    <ImageWorkspaceHeader title="PR Image Check" eyebrow="Commit to container" icon="branch" description="Check which builds include a pull request." :timestamp="checkedAtLabel"/>
     <form
       class="iw-search-form pr-search-form"
       :aria-busy="loading ? 'true' : 'false'"

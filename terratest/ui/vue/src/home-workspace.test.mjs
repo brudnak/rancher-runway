@@ -37,7 +37,7 @@ test('cleanup routes and local activity remain independent of cloud provisioning
 test('tool discovery and resume navigation use real destinations and useful task terms', () => {
   assert.equal(workspaceTools.length, new Set(workspaceTools.map(tool => tool.id)).size);
   assert.equal(resumableTab('lifecycle'), 'runs');
-  for (const id of ['home', 'unknown', null, 'javascript:alert(1)']) assert.equal(resumableTab(id), '');
+  for (const id of ['home', 'settings', 'unknown', null, 'javascript:alert(1)']) assert.equal(resumableTab(id), '');
   assert.equal(resumableTab('steve'), 'steve');
   assert.deepEqual(filterWorkspaceTools('SQL cache').map(tool => tool.id), ['clusters', 'cache', 'steve']);
   assert.deepEqual(filterWorkspaceTools('  K3s  LOCAL ').map(tool => tool.id), ['k3d']);

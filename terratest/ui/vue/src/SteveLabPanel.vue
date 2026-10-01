@@ -102,10 +102,10 @@ onBeforeUnmount(()=>{disposed=true;clearTimeout(refTimer);clearTimeout(logTimer)
 </script>
 
 <template>
-  <LocalLabFrame :lab="lab" title="Steve Lab" description="From a source ref to a living API.">
+  <LocalLabFrame :lab="lab" title="Steve Lab" description="Run and inspect Steve locally.">
     <template #configure>
-      <div class="lab-composer-heading"><div><span class="lab-eyebrow">LAUNCH PAD</span><h3>Make room to experiment.</h3></div><LabIcon name="flask" /></div>
-      <p class="lab-composer-intro">Build Steve, connect it to local Kubernetes, and explore its API with everything close by.</p>
+      <div class="lab-composer-heading"><div><span class="lab-eyebrow">LAUNCH PAD</span><h3>Configure Steve</h3></div><LabIcon name="flask" /></div>
+      <p class="lab-composer-intro">Choose a source ref and local Kubernetes configuration.</p>
       <div class="lab-topology" aria-label="Steve source is built locally and connects to K3s"><span><LabIcon name="branch" /><strong>Your ref</strong></span><i></i><span><LabIcon name="pulse" /><strong>Steve</strong></span><i></i><span><LabIcon name="boxes" /><strong>K3s</strong></span></div>
       <div v-if="draftNote" class="lab-draft-note" role="status"><p>{{ draftNote }}</p><button type="button" class="lab-text-button" :disabled="lab.blocked" @click="undoDraft"><LabIcon name="undo" />Undo draft change</button></div>
       <form class="lab-form" @submit.prevent="startRun(false)">
