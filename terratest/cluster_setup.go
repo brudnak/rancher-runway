@@ -452,7 +452,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, ingressControll
 		cmd = "sudo systemctl status rke2-server.service --no-pager"
 		statusOutput, statusErr := RunCommand(cmd, ip)
 		if statusErr == nil {
-			log.Printf("[setupFirstServerNode] Service status:\n%s", statusOutput)
+			log.Printf("[setupFirstServerNode] Service status:\n%s", redactDiagnosticOutput(statusOutput))
 		} else {
 			log.Printf("[setupFirstServerNode] Could not get service status: %v", statusErr)
 		}
@@ -460,7 +460,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, ingressControll
 		cmd = "sudo journalctl -u rke2-server.service --no-pager -n 100"
 		logsOutput, logsErr := RunCommand(cmd, ip)
 		if logsErr == nil {
-			log.Printf("[setupFirstServerNode] Recent logs:\n%s", logsOutput)
+			log.Printf("[setupFirstServerNode] Recent logs:\n%s", redactDiagnosticOutput(logsOutput))
 		} else {
 			log.Printf("[setupFirstServerNode] Could not get logs: %v", logsErr)
 		}
@@ -472,7 +472,7 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, ingressControll
 	log.Printf("[setupFirstServerNode] Checking initial service status...")
 	cmd = "sudo systemctl status rke2-server.service"
 	output, _ = RunCommand(cmd, ip)
-	log.Printf("[setupFirstServerNode] Service status:\n%s", output)
+	log.Printf("[setupFirstServerNode] Service status:\n%s", redactDiagnosticOutput(output))
 
 	log.Printf("[setupFirstServerNode] Waiting for RKE2 to initialize on %s (this may take several minutes)...", ip)
 	maxRetries := 30
@@ -501,12 +501,12 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, ingressControll
 			log.Printf("[setupFirstServerNode] Checking service status (attempt %d)...", i+1)
 			cmd = "sudo systemctl status rke2-server.service --no-pager"
 			statusOutput, _ := RunCommand(cmd, ip)
-			log.Printf("[setupFirstServerNode] Service status:\n%s", statusOutput)
+			log.Printf("[setupFirstServerNode] Service status:\n%s", redactDiagnosticOutput(statusOutput))
 
 			log.Printf("[setupFirstServerNode] Checking recent logs...")
 			cmd = "sudo journalctl -u rke2-server.service --no-pager -n 20"
 			logsOutput, _ := RunCommand(cmd, ip)
-			log.Printf("[setupFirstServerNode] Recent logs:\n%s", logsOutput)
+			log.Printf("[setupFirstServerNode] Recent logs:\n%s", redactDiagnosticOutput(logsOutput))
 		}
 
 		log.Printf("[setupFirstServerNode] Waiting 10 seconds before next check...")
@@ -517,11 +517,11 @@ func setupFirstServerNode(ip string, haOutputs TerraformOutputs, ingressControll
 
 	cmd = "sudo systemctl status rke2-server.service --no-pager"
 	output, _ = RunCommand(cmd, ip)
-	log.Printf("[setupFirstServerNode] Final service status:\n%s", output)
+	log.Printf("[setupFirstServerNode] Final service status:\n%s", redactDiagnosticOutput(output))
 
 	cmd = "sudo journalctl -u rke2-server.service --no-pager -n 50"
 	output, _ = RunCommand(cmd, ip)
-	log.Printf("[setupFirstServerNode] Last 50 log lines:\n%s", output)
+	log.Printf("[setupFirstServerNode] Last 50 log lines:\n%s", redactDiagnosticOutput(output))
 
 	cmd = "sudo ls -la /var/lib/rancher/rke2/server/"
 	output, _ = RunCommand(cmd, ip)
@@ -574,7 +574,7 @@ func logRemoteSetupDiagnostics(label, ip string) {
 		log.Printf("[%s] Could not collect remote setup diagnostics from %s: %v", label, ip, err)
 		return
 	}
-	log.Printf("[%s] Remote setup diagnostics for %s:\n%s", label, ip, output)
+	log.Printf("[%s] Remote setup diagnostics for %s:\n%s", label, ip, redactDiagnosticOutput(output))
 }
 
 func logRemoteRKE2Diagnostics(label, ip, unit string) {
@@ -584,7 +584,7 @@ func logRemoteRKE2Diagnostics(label, ip, unit string) {
 		log.Printf("[%s] Could not collect RKE2 diagnostics from %s: %v", label, ip, err)
 		return
 	}
-	log.Printf("[%s] RKE2 diagnostics for %s:\n%s", label, ip, output)
+	log.Printf("[%s] RKE2 diagnostics for %s:\n%s", label, ip, redactDiagnosticOutput(output))
 }
 
 func rke2RegistriesConfigContent(username, password string) string {
