@@ -155,3 +155,25 @@ test('leaving a tab cancels async work without applying stale errors or data',as
   assert.equal(await task.run(async()=>{throw new Error('current error')},()=>{},error=>events.push(error.message)),true);
   assert.deepEqual(events,['current error']);
 });
+
+test('a stale request failure cannot replace the success of the selected target',async()=>{
+  const task=createLatestTask(),old=deferred(),current=deferred(),values=[],errors=[];
+  const first=task.run(()=>old.promise,value=>values.push(value),error=>errors.push(error.message));
+  const second=task.run(()=>current.promise,value=>values.push(value),error=>errors.push(error.message));
+  current.resolve({clusterId:'new',version:'v2.16.0'});
+  assert.equal(await second,true);
+  old.reject(new Error('old cluster unavailable'));
+  assert.equal(await first,false);
+  assert.deepEqual(values,[{clusterId:'new',version:'v2.16.0'}]);
+  assert.deepEqual(errors,[]);
+});
+
+test('cancelled work that ignores abort cannot commit after a later successful run',async()=>{
+  const task=createLatestTask(),abandoned=deferred(),values=[];
+  const first=task.run(()=>abandoned.promise,value=>values.push(value));
+  task.cancel();
+  await task.run(async()=>({clusterId:'replacement'}),value=>values.push(value));
+  abandoned.resolve({clusterId:'removed'});
+  assert.equal(await first,false);
+  assert.deepEqual(values,[{clusterId:'replacement'}]);
+});

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -177,7 +178,7 @@ func TestTestLabSavedConfigAndRestart(t *testing.T) {
 	if _, err = s.mutate(testLabRequest{Action: "delete-plan", ID: plan.ID}); err == nil {
 		t.Fatal("deleted without confirmation")
 	}
-	id := cacheLabID()
+	id := cachelab.ID()
 	s.library.Runs = []testLabRun{{ID: id, Status: "running"}}
 	s.persistLocked()
 	work := filepath.Join(s.root, "work-"+id)

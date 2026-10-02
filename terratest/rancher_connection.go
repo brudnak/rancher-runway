@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"net"
 	"net/http"
@@ -47,13 +48,13 @@ func (p *localControlPanel) rancherConnectionTargets() []rancherConnectionTarget
 		if c.Type == "downstream" || c.Role == "downstream" {
 			continue
 		}
-		base, err := cacheLabURL(c.RancherURL)
+		base, err := cachelab.URL(c.RancherURL)
 		if err != nil || base == "" {
 			continue
 		}
 		target := rancherConnectionTarget{ID: c.ID, Name: c.Name, URL: base, Version: c.Version, RunID: c.RunID, Role: c.Role, Provisioning: c.Provisioning, Reachable: c.Reachable, CacheSupported: c.Role != "docker" && c.Type != "linode"}
 		if target.Name == "" {
-			target.Name = cacheLabSourceLabel(base)
+			target.Name = cachelab.SourceLabel(base)
 		}
 		if target.CacheSupported && c.KubeconfigPath != "" {
 			if info, err := os.Stat(c.KubeconfigPath); err == nil && info.Mode().IsRegular() {
@@ -92,13 +93,14 @@ func (p *localControlPanel) handleRancherTargets(w http.ResponseWriter, r *http.
 }
 
 type rancherTokenRequest struct {
-	URL        string `json:"url"`
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	TTLMinutes int64  `json:"ttlMinutes"`
-	Purpose    string `json:"purpose"`
-	Insecure   bool   `json:"insecure"`
-	CAPEM      string `json:"caPem"`
+	UseBootstrapPassword bool   `json:"useBootstrapPassword"`
+	URL                  string `json:"url"`
+	Username             string `json:"username"`
+	Password             string `json:"password"`
+	TTLMinutes           int64  `json:"ttlMinutes"`
+	Purpose              string `json:"purpose"`
+	Insecure             bool   `json:"insecure"`
+	CAPEM                string `json:"caPem"`
 }
 type rancherTokenResult struct {
 	Token       string `json:"token"`
@@ -118,7 +120,7 @@ type rancherTokenResponse struct {
 var rancherCredentialID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
 func (in *rancherTokenRequest) validate() error {
-	base, err := cacheLabURL(in.URL)
+	base, err := cachelab.URL(in.URL)
 	if err != nil {
 		return errors.New("Enter a Rancher URL without credentials, a query, or a fragment.")
 	}
@@ -144,8 +146,8 @@ func (in *rancherTokenRequest) validate() error {
 	if in.TTLMinutes < 1 || in.TTLMinutes > 30*24*60 {
 		return errors.New("Choose a token expiry between one minute and 30 days.")
 	}
-	if in.Purpose != "cache" && in.Purpose != "test" {
-		return errors.New("Choose Cache Lab or Test Lab for this token.")
+	if in.Purpose != "cache" && in.Purpose != "test" && in.Purpose != "downstream" {
+		return errors.New("Choose Cache Lab, Test Lab, or downstream creation for this token.")
 	}
 	return nil
 }
@@ -169,6 +171,10 @@ func (p *localControlPanel) handleRancherToken(w http.ResponseWriter, r *http.Re
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
 		http.Error(w, "Expected one token request.", 400)
+		return
+	}
+	if err := p.useConfiguredRancherPassword(&in); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
 	if err := in.validate(); err != nil {
@@ -209,6 +215,8 @@ func generateRancherConnectionToken(ctx context.Context, in rancherTokenRequest)
 	purpose := "Cache Lab"
 	if in.Purpose == "test" {
 		purpose = "Test Lab"
+	} else if in.Purpose == "downstream" {
+		purpose = "Downstream creation"
 	}
 	description := "Rancher Runway · " + purpose + " · " + time.Now().UTC().Format(time.RFC3339)
 	login, err := rancherCredentialRequest(ctx, client, http.MethodPost, in.URL+"/v3-public/localProviders/local?action=login", "", map[string]any{"username": in.Username, "password": in.Password, "responseType": "token", "ttl": int64(5 * time.Minute / time.Millisecond), "description": "Rancher Runway · temporary sign-in"}, "sign-in")

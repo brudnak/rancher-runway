@@ -3,6 +3,7 @@ package test
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"net/url"
 	"os"
 	"reflect"
@@ -183,7 +184,7 @@ func (s *testPackageService) preserveAutomationEvidence(run testLabRun, e testPa
 			return fmt.Errorf("run target changed; result remains in Test Lab")
 		}
 		session.Evidence = append(session.Evidence, e)
-		pkg.Revision = cacheLabID()
+		pkg.Revision = cachelab.ID()
 		pkg.UpdatedAt = time.Now().UTC()
 		if err := validateTestPackage(pkg); err != nil {
 			return err

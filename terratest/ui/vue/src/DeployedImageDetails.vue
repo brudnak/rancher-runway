@@ -384,7 +384,7 @@
 
 <script setup>
 import AppBuildStamp from "./AppBuildStamp.vue";
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { apiFetch } from "./store.js";
 
 const inspectionCache = new Map();
@@ -396,7 +396,9 @@ const webhookEnvironmentKeys = [
   "WEBHOOK_VERSION",
 ];
 
+const emit = defineEmits(['observed']);
 const props = defineProps({
+  refreshKey: {type: Number, default: 0},
   cluster: {
     type: Object,
     required: true,
@@ -463,6 +465,7 @@ const loadLiveDetails = async () => {
       signal: controller.signal,
     });
     liveDetails.value = await response.json();
+    emit('observed', liveDetails.value);
   } catch (error) {
     if (error?.name !== "AbortError") {
       liveDetailsError.value = error instanceof Error ? error.message : "Could not collect live cluster details.";
@@ -474,6 +477,8 @@ const loadLiveDetails = async () => {
     }
   }
 };
+
+watch(() => props.refreshKey, () => { void loadLiveDetails(); });
 
 const liveDetailsCollectedAt = computed(() => String(liveDetails.value?.collectedAt || ""));
 const liveDetailsWarnings = computed(() => Array.isArray(liveDetails.value?.warnings)

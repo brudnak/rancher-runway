@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"errors"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ func TestTestPackageLibraryMovesPreserveHistoryAndRestart(t *testing.T) {
 	a := packageTestStart(t, s, packageTestPlan(t, s))
 	b := packageTestPlan(t, s)
 	lib := s.packageLibrarySnapshot()
-	lib.Buckets = []testPackageBucket{{ID: cacheLabID(), Name: "v2.16.0", PackageIDs: []string{b.ID, a.ID}}}
+	lib.Buckets = []testPackageBucket{{ID: cachelab.ID(), Name: "v2.16.0", PackageIDs: []string{b.ID, a.ID}}}
 	lib.Unfiled = []string{}
 	old := lib
 	result, err := s.savePackageLibrary(testPackageRequest{Library: &lib})
@@ -50,7 +51,7 @@ func TestTestPackageLibraryRejectsDuplicateAndMissingMembership(t *testing.T) {
 	s := packageTestService(t)
 	pkg := packageTestPlan(t, s)
 	lib := s.packageLibrarySnapshot()
-	lib.Buckets = []testPackageBucket{{ID: cacheLabID(), Name: "Next", PackageIDs: []string{pkg.ID}}}
+	lib.Buckets = []testPackageBucket{{ID: cachelab.ID(), Name: "Next", PackageIDs: []string{pkg.ID}}}
 	if _, err := s.savePackageLibrary(testPackageRequest{Library: &lib}); err == nil {
 		t.Fatal("duplicate placement accepted")
 	}
@@ -75,7 +76,7 @@ func TestTestPackageLibraryBulkExportPortableAndPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	lib := s.packageLibrarySnapshot()
-	lib.Buckets = []testPackageBucket{{ID: cacheLabID(), Name: "v2.16.0", PackageIDs: []string{pkg.ID}}}
+	lib.Buckets = []testPackageBucket{{ID: cachelab.ID(), Name: "v2.16.0", PackageIDs: []string{pkg.ID}}}
 	lib.Unfiled = []string{}
 	result, err := s.savePackageLibrary(testPackageRequest{Library: &lib})
 	if err != nil {
@@ -134,7 +135,7 @@ func TestTestPackageLibraryBulkEvidenceOptIn(t *testing.T) {
 	s.exportRoot = t.TempDir()
 	pkg := packageTestStart(t, s, packageTestPlan(t, s))
 	raw := []byte("retained sample log")
-	e := testPackageEvidence{ID: cacheLabID(), Kind: "test-run", Name: "Regression result", SourceID: cacheLabID(), CaseID: pkg.Cases[0].ID, CapturedAt: pkg.CreatedAt, AttachedAt: pkg.UpdatedAt, Metadata: json.RawMessage(`{}`), Artifact: packageArtifact(cacheLabID()+".log", "text/plain", raw)}
+	e := testPackageEvidence{ID: cachelab.ID(), Kind: "test-run", Name: "Regression result", SourceID: cachelab.ID(), CaseID: pkg.Cases[0].ID, CapturedAt: pkg.CreatedAt, AttachedAt: pkg.UpdatedAt, Metadata: json.RawMessage(`{}`), Artifact: packageArtifact(cachelab.ID()+".log", "text/plain", raw)}
 	pkg = packageTestMutation(t, s, testPackageRequest{Action: "attach-evidence", ID: pkg.ID, Revision: pkg.Revision, SessionID: pkg.Sessions[0].ID}, nil, &e, raw)
 	lib := s.packageLibrarySnapshot()
 	for _, include := range []bool{false, true} {

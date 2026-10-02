@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -47,7 +48,7 @@ func TestTestLabLocalDeleteConfirmation(t *testing.T) {
 	for _, action := range []string{"delete-plan", "delete-run"} {
 		t.Run(action, func(t *testing.T) {
 			s := testLabFixture(t)
-			id := cacheLabID()
+			id := cachelab.ID()
 			s.library.Plans = []testLabPlan{{ID: id}}
 			s.library.Runs = []testLabRun{{ID: id, Status: "failed"}}
 			req := testLabRequest{Action: action, ID: id}

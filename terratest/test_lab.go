@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"net/http"
 	"os"
 	"os/exec"
@@ -105,6 +106,7 @@ type testLabRequest struct {
 	Bundle      *testLabConfigBundle `json:"bundle,omitempty"`
 }
 type testLabService struct {
+	workers         *panelWorkers
 	packageFinished func(testLabRun)
 	resolveCluster  func(string, string, string, string) (string, error)
 	mu              sync.Mutex
@@ -132,12 +134,13 @@ func (p *localControlPanel) testLabService() (*testLabService, error) {
 	if p.testLab != nil {
 		return p.testLab, nil
 	}
-	root, err := absoluteFromWorkingDir(filepath.Join(automationOutputDir(), "control-panel", "test-lab"))
+	root, err := absoluteFromWorkingDir(durableDataPath("test-lab"))
 	if err != nil {
 		return nil, err
 	}
 	s, err := newTestLabService(root)
 	if err == nil {
+		s.workers = &p.workers
 		s.packageFinished = p.preservePackageRun
 		s.resolveCluster = p.resolveLabCluster
 		p.testLab = s
@@ -165,7 +168,7 @@ func newTestLabService(root string) (*testLabService, error) {
 	}
 	for i := range s.library.Runs {
 		r := &s.library.Runs[i]
-		if !cacheLabIDPattern.MatchString(r.ID) {
+		if !cachelab.IDPattern.MatchString(r.ID) {
 			return nil, fmt.Errorf("invalid run record")
 		}
 		if r.Status == "running" {
@@ -179,12 +182,12 @@ func newTestLabService(root string) (*testLabService, error) {
 	// directories are removed; results live separately in the library.
 	dirs, _ := filepath.Glob(filepath.Join(root, "work-*"))
 	for _, dir := range dirs {
-		if cacheLabIDPattern.MatchString(strings.TrimPrefix(filepath.Base(dir), "work-")) {
+		if cachelab.IDPattern.MatchString(strings.TrimPrefix(filepath.Base(dir), "work-")) {
 			_ = os.RemoveAll(dir)
 		}
 	}
 	for _, p := range s.library.Plans {
-		if !cacheLabIDPattern.MatchString(p.ID) {
+		if !cachelab.IDPattern.MatchString(p.ID) {
 			return nil, fmt.Errorf("invalid saved plan")
 		}
 	}
@@ -362,7 +365,7 @@ func (s *testLabService) mutate(req testLabRequest) (any, error) {
 		}
 		return map[string]bool{"ok": true}, nil
 	case "logs":
-		if !cacheLabIDPattern.MatchString(req.ID) {
+		if !cachelab.IDPattern.MatchString(req.ID) {
 			return nil, fmt.Errorf("invalid run")
 		}
 		log := s.logs[req.ID]
@@ -389,13 +392,13 @@ func (s *testLabService) mutate(req testLabRequest) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		id := cacheLabID()
+		id := cachelab.ID()
 		if req.Remember {
 			if _, err = s.keychain("write", "plan-"+id, req.Config); err != nil {
 				return nil, err
 			}
 		}
-		plan := testLabPlan{ClusterID: clusterID, ID: id, Name: cacheLabText(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: req.Selection, Tags: req.Tags, Timeout: req.Timeout, SavedAt: time.Now(), HasConfig: req.Remember}
+		plan := testLabPlan{ClusterID: clusterID, ID: id, Name: cachelab.Text(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: req.Selection, Tags: req.Tags, Timeout: req.Timeout, SavedAt: time.Now(), HasConfig: req.Remember}
 		s.library.Plans = append(s.library.Plans, plan)
 		if err = s.persistLocked(); err != nil {
 			s.library.Plans = s.library.Plans[:len(s.library.Plans)-1]

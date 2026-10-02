@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"os/exec"
 	"regexp"
@@ -266,7 +267,7 @@ func testPackageLiveLogError(ctx context.Context, err error) error {
 	}
 }
 
-func testPackageLogTargets(ctx context.Context, connection testPackageLogConnection, run cacheLabCommandRunner) ([]testPackageLogTarget, error) {
+func testPackageLogTargets(ctx context.Context, connection testPackageLogConnection, run cachelab.CommandRunner) ([]testPackageLogTarget, error) {
 	out := &testPackageLogBuffer{}
 	args := append(connection.args(), "get", "pods", "--namespace=cattle-system", "-o", "json")
 	if err := run(ctx, args, nil, out); err != nil {
@@ -420,7 +421,7 @@ func (p *localControlPanel) handleTestPackageLogs(ctx context.Context, s *testPa
 	return p.testPackageLogsWithRunner(ctx, s, req, runTestPackageLogCommand)
 }
 
-func (p *localControlPanel) testPackageLogsWithRunner(ctx context.Context, s *testPackageService, req testPackageRequest, run cacheLabCommandRunner) (any, error) {
+func (p *localControlPanel) testPackageLogsWithRunner(ctx context.Context, s *testPackageService, req testPackageRequest, run cachelab.CommandRunner) (any, error) {
 	if !packageEnum(req.Action, "log-targets", "capture-logs") {
 		return nil, fmt.Errorf("unknown log snapshot action")
 	}
@@ -535,7 +536,7 @@ func (p *localControlPanel) testPackageLogsWithRunner(ctx context.Context, s *te
 	if err != nil {
 		return nil, err
 	}
-	evidence := testPackageEvidence{ID: cacheLabID(), Kind: "pod-logs", Name: map[string]string{"rancher": "Rancher", "webhook": "Webhook"}[target.Component] + " logs · " + target.Pod, Description: req.Description, SourceID: target.PodUID, ClusterID: record.ID, CapturedAt: completed, AttachedAt: time.Now().UTC(), CaseID: req.CaseID, StepID: req.StepID, Metadata: encoded}
+	evidence := testPackageEvidence{ID: cachelab.ID(), Kind: "pod-logs", Name: map[string]string{"rancher": "Rancher", "webhook": "Webhook"}[target.Component] + " logs · " + target.Pod, Description: req.Description, SourceID: target.PodUID, ClusterID: record.ID, CapturedAt: completed, AttachedAt: time.Now().UTC(), CaseID: req.CaseID, StepID: req.StepID, Metadata: encoded}
 	if req.Previous {
 		evidence.Name += " · previous instance"
 	}

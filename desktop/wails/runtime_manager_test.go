@@ -31,6 +31,7 @@ func TestInstallManagedRuntimeSwitchesVersionsAndPreservesMutableState(t *testin
 	writeRuntimeTestFile(t, filepath.Join(workspaceRoot, "tool-config.yml"), "saved config\n")
 	writeRuntimeTestFile(t, filepath.Join(workspaceRoot, ".tool-config-before-import-123.yml"), "previous config\n")
 	writeRuntimeTestFile(t, filepath.Join(workspaceRoot, "terratest", "automation-output", "control-panel", "run.json"), "saved run\n")
+	writeRuntimeTestFile(t, filepath.Join(workspaceRoot, "terratest", "runway-data", "cluster-history", "event.json"), "saved evidence\n")
 	writeRuntimeTestFile(t, filepath.Join(workspaceRoot, "modules", "aws", "terraform.tfstate"), "saved state\n")
 	writeRuntimeTestFile(t, filepath.Join(workspaceRoot, "local-only.txt"), "do not migrate\n")
 
@@ -54,6 +55,7 @@ func TestInstallManagedRuntimeSwitchesVersionsAndPreservesMutableState(t *testin
 		t.Fatal("import backup must remain private after upgrade")
 	}
 	assertRuntimeTestFile(t, filepath.Join(workspaceRoot, "terratest", "automation-output", "control-panel", "run.json"), "saved run\n")
+	assertRuntimeTestFile(t, filepath.Join(workspaceRoot, "terratest", "runway-data", "cluster-history", "event.json"), "saved evidence\n")
 	assertRuntimeTestFile(t, filepath.Join(workspaceRoot, "modules", "aws", "terraform.tfstate"), "saved state\n")
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "local-only.txt")); !os.IsNotExist(err) {
 		t.Fatalf("non-mutable runtime file was migrated; stat error = %v", err)

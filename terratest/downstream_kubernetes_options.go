@@ -12,8 +12,9 @@ import (
 )
 
 type downstreamKubernetesRelease struct {
-	ID      string `json:"id"`
-	Version string `json:"version"`
+	ServerArgs map[string]any `json:"serverArgs"`
+	ID         string         `json:"id"`
+	Version    string         `json:"version"`
 }
 
 func resolveDownstreamKubernetesVersion(rancherURL, bearerToken, distribution, requested string) (string, error) {

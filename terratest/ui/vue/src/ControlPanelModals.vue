@@ -19,7 +19,7 @@
         </h2>
         <AppBuildStamp />
         <p id="manualLinodeCleanupWarningBody" class="mt-2 text-sm leading-6 text-zinc-700 dark:text-zinc-300">
-          Cleanup could not fully remove the recorded downstream Linode clusters. AWS management destroy continued, but affected Linode resources may still be running and generating charges. Review the warning below and delete any remaining resources manually in Linode.
+          Downstream deletion needs attention. Affected resources may still be running and generating charges. Review the operation result below. New Destroy operations stop on downstream cleanup failure and retain management access; resolve the failure before retrying.
         </p>
       </div>
       <div class="px-6 py-5">
@@ -416,7 +416,7 @@ const logModalSubtitle = computed(() => {
   if (logs.mode === "readiness") return state.value?.readiness?.command || "go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest";
   if (logs.mode === "downstream") return state.value?.downstream?.command || "go test -v -run ^TestHAProvisionConfiguredLinodeDownstreams$ -timeout 35m -count=1 ./terratest";
   if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") return "go test -v -run ^TestHACleanup$ -timeout 60m -count=1 ./terratest";
-  if (logs.mode === "cleanupBatch") return "Attempts recorded Linode downstream cleanup before each HA run's Terraform destroy; AWS destroy continues when Linode cleanup needs manual follow-up";
+  if (logs.mode === "cleanupBatch") return "Removes tracked downstreams before each run’s Terraform destroy; management stays available if downstream cleanup fails";
   return `${logs.namespace} • ${logs.clusterId} • ${logs.mode === "live" ? "live stream" : "tail snapshot"}`;
 });
 

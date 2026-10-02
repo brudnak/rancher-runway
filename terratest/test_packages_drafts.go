@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"os"
 	"path/filepath"
 	"time"
@@ -98,7 +99,7 @@ func validateTestPackageWritingDraft(draft testPackageWritingDraft) error {
 		}
 		ids := map[string]bool{}
 		for _, c := range plan.Cases {
-			if !cacheLabIDPattern.MatchString(c.ID) || ids[c.ID] || !packageText(c.Title, 240, false) || !packageText(c.Preconditions, 16000, false) || !packageText(c.Expected, 16000, false) || !packageEnum(c.Automation, "manual", "planned", "automated") || !packageText(c.AutomationURL, 2048, false) || len(c.Steps) > 100 || len(c.Selection) > 500 {
+			if !cachelab.IDPattern.MatchString(c.ID) || ids[c.ID] || !packageText(c.Title, 240, false) || !packageText(c.Preconditions, 16000, false) || !packageText(c.Expected, 16000, false) || !packageEnum(c.Automation, "manual", "planned", "automated") || !packageText(c.AutomationURL, 2048, false) || len(c.Steps) > 100 || len(c.Selection) > 500 {
 				return fmt.Errorf("invalid or oversized case in writing draft")
 			}
 			if err := validatePackageAutomation(c); err != nil {
@@ -107,7 +108,7 @@ func validateTestPackageWritingDraft(draft testPackageWritingDraft) error {
 			ids[c.ID] = true
 			steps := map[string]bool{}
 			for _, step := range c.Steps {
-				if !cacheLabIDPattern.MatchString(step.ID) || steps[step.ID] || !packageText(step.Instruction, 16000, false) || !packageText(step.Expected, 16000, false) {
+				if !cachelab.IDPattern.MatchString(step.ID) || steps[step.ID] || !packageText(step.Instruction, 16000, false) || !packageText(step.Expected, 16000, false) {
 					return fmt.Errorf("invalid or oversized step in writing draft")
 				}
 				steps[step.ID] = true
@@ -125,7 +126,7 @@ func validateTestPackageWritingDraft(draft testPackageWritingDraft) error {
 	seen := map[string]bool{}
 	for _, observation := range draft.Observations {
 		key := observation.SessionID + "/" + observation.CaseID
-		if !cacheLabIDPattern.MatchString(observation.SessionID) || !cacheLabIDPattern.MatchString(observation.CaseID) || seen[key] || !packageText(observation.BaseNotes, 32000, false) || !packageText(observation.Notes, 32000, false) {
+		if !cachelab.IDPattern.MatchString(observation.SessionID) || !cachelab.IDPattern.MatchString(observation.CaseID) || seen[key] || !packageText(observation.BaseNotes, 32000, false) || !packageText(observation.Notes, 32000, false) {
 			return fmt.Errorf("invalid or oversized observation draft")
 		}
 		seen[key] = true
@@ -142,7 +143,7 @@ func (s *testPackageService) readWritingDraftLocked(id string, pkg testPackage) 
 		return testPackageWritingDraft{}, fmt.Errorf("writing draft could not be read; its existing file was preserved: %w", err)
 	}
 	var envelope testPackageDraftEnvelope
-	if err := decodeTestPackage(raw, &envelope); err != nil || envelope.Version != 1 || !cacheLabIDPattern.MatchString(envelope.Draft.Revision) || envelope.Draft.UpdatedAt == nil || envelope.Draft.UpdatedAt.IsZero() {
+	if err := decodeTestPackage(raw, &envelope); err != nil || envelope.Version != 1 || !cachelab.IDPattern.MatchString(envelope.Draft.Revision) || envelope.Draft.UpdatedAt == nil || envelope.Draft.UpdatedAt.IsZero() {
 		return testPackageWritingDraft{}, fmt.Errorf("writing draft is invalid; its existing file was preserved")
 	}
 	if err := validateTestPackageWritingDraft(envelope.Draft); err != nil {
@@ -199,7 +200,7 @@ func (s *testPackageService) handleWritingDraft(req testPackageRequest) (any, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pkg, ok := s.packages[req.ID]
-	if !ok || !cacheLabIDPattern.MatchString(req.ID) {
+	if !ok || !cachelab.IDPattern.MatchString(req.ID) {
 		return nil, fmt.Errorf("test package not found")
 	}
 	draft, err := s.readWritingDraftLocked(req.ID, pkg)
@@ -231,7 +232,7 @@ func (s *testPackageService) handleWritingDraft(req testPackageRequest) (any, er
 	}
 	// A durable empty revision is a tombstone: a late request with the old
 	// revision can never resurrect text that another view already discarded.
-	draft.Revision = cacheLabID()
+	draft.Revision = cachelab.ID()
 	now := time.Now().UTC()
 	draft.UpdatedAt = &now
 	raw, err := json.MarshalIndent(testPackageDraftEnvelope{Version: 1, Draft: draft}, "", "  ")

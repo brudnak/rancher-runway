@@ -223,6 +223,7 @@ runtime_excludes=(
   --exclude .terraform
   --exclude .terraform.lock.hcl
   --exclude automation-output
+  --exclude runway-data
   --exclude 'high-availability-*'
   --exclude '*.log'
   --exclude '*.tfstate'

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"os"
 	"path/filepath"
@@ -391,7 +392,7 @@ func (s *testPackageService) saveTestPackageExport(title string, bundle, report 
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		return nil, err
 	}
-	prefix := cacheLabID()[:8] + "-" + cacheLabFileLabel(title)
+	prefix := cachelab.ID()[:8] + "-" + cachelab.FileLabel(title)
 	names := []string{prefix + ".runway-test-package.json", prefix + "-report.md"}
 	written := []string{}
 	success := false

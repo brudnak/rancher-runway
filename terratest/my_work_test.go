@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"net/url"
 	"reflect"
 	"strings"
@@ -71,7 +72,7 @@ func TestMyWorkDoesNotMovePackagesFromManualBuckets(t *testing.T) {
 	pkg := packageTestPlan(t, s)
 	pkg = packageTestMutation(t, s, testPackageRequest{Action: "update", ID: pkg.ID, Revision: pkg.Revision, Title: pkg.Title, IssueURL: workIssue(123, "open").URL, Status: pkg.Status, Cases: pkg.Cases}, nil, nil, nil)
 	lib := s.packageLibrarySnapshot()
-	lib.Buckets = []testPackageBucket{{ID: cacheLabID(), Name: "Manual regression", PackageIDs: []string{pkg.ID}}}
+	lib.Buckets = []testPackageBucket{{ID: cachelab.ID(), Name: "Manual regression", PackageIDs: []string{pkg.ID}}}
 	lib.Unfiled = []string{}
 	if _, err := s.savePackageLibrary(testPackageRequest{Library: &lib}); err != nil {
 		t.Fatal(err)

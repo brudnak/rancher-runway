@@ -1,13 +1,13 @@
 <template>
-  <article class="min-w-0 overflow-hidden rounded-2xl border border-zinc-200 p-4 shadow-sm dark:border-white/10"
+  <article :data-cluster-workspace-id="cluster.id" tabindex="-1" class="min-w-0 overflow-hidden rounded-2xl border border-zinc-200 p-4 shadow-sm dark:border-white/10"
     :class="isDownstream ? 'border-l-4 border-l-emerald-500 bg-emerald-50/50 dark:bg-emerald-500/[0.04]' : (isHostedTenant && cluster.role === 'host' ? 'border-l-4 border-l-sky-500 bg-sky-50/50 dark:bg-sky-500/[0.04]' : 'bg-white dark:bg-white/[0.03]')"
   >
     <div class="flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
       <div class="min-w-0">
         <div class="flex flex-wrap items-center gap-2 text-lg font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
           <span>{{ clusterDisplayName(cluster.id, cluster.name) }}</span>
-          <span v-if="cluster.version" class="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-semibold text-zinc-600 dark:border-white/10 dark:bg-white/[0.05] dark:text-zinc-300">
-            {{ isDownstream ? 'Kubernetes version' : 'Requested Rancher' }} {{ cluster.version }}
+          <span v-if="currentVersion || cluster.version" class="rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 text-xs font-semibold text-zinc-600 dark:border-white/10 dark:bg-white/[0.05] dark:text-zinc-300">
+            {{ isDownstream ? 'Kubernetes' : currentVersion ? 'Observed Rancher' : 'Originally requested' }} {{ (isDownstream ? cluster.version : currentVersion) || cluster.version }}
           </span>
           <span class="inline-flex items-center rounded-md bg-zinc-100 px-2 py-1 text-xs font-semibold text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">
             {{ isDownstream ? 'Downstream' : (isHostedTenant ? 'Host' : (isLinodeDocker ? 'Linode Docker' : 'Local')) }}
@@ -21,6 +21,29 @@
         </div>
       </div>
       <div class="flex min-w-0 flex-wrap items-center gap-2 lg:max-w-sm lg:justify-end">
+
+        <button type="button" @click="toggleCluster" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">
+          {{ isClusterCollapsed ? 'Show details' : 'Hide details' }}
+        </button>
+        <span class="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold" :class="statusFor(cluster).className">
+          <span v-if="cluster.provisioning" class="spinner mr-2"></span>{{ statusFor(cluster).label }}
+        </span>
+      </div>
+    </div>
+
+    <div v-show="!isClusterCollapsed">
+      <RancherOperations v-if="!isDownstream && cluster.rancherUrl" :cluster="cluster" unified-history @history="section = 'history'" @completed="detailsRevision++" />
+      <nav class="cluster-tabs" role="tablist" aria-label="Cluster details">
+        <button v-for="item in sections" :key="item.id" :id="`${cluster.id}-tab-${item.id}`" type="button" role="tab" :aria-selected="section === item.id" :aria-controls="`${cluster.id}-panel-${item.id}`" :tabindex="section === item.id ? 0 : -1" @click="section = item.id" @keydown="navigateTabs($event, item.id)">{{ item.label }} <span v-if="item.id === 'workloads'">{{ pods.length }}</span></button>
+      </nav>
+      <section v-show="section === 'overview'" :id="`${cluster.id}-panel-overview`" role="tabpanel" :aria-labelledby="`${cluster.id}-tab-overview`" class="cluster-section">
+        <div class="cluster-summary"><div><small>Rancher</small><a v-if="cluster.rancherUrl" href="#" @click.prevent="openExternalURL(cluster.rancherUrl)">{{ cluster.rancherUrl }} ↗</a><span v-else>URL not recorded</span></div><div><small>Deployment</small><span>{{ cluster.runId || 'External cluster' }}</span></div><div><small>Originally requested</small><span>{{ cluster.version || 'Not recorded' }}</span></div></div>
+        <DeployedImageDetails :key="cluster.id" :cluster="cluster" :pods="pods" :deployment-details="cluster.deploymentDetails || null" :refresh-key="detailsRevision" @observed="observedDetails = $event" />
+      </section>
+      <section v-show="section === 'saved'" :id="`${cluster.id}-panel-saved`" role="tabpanel" :aria-labelledby="`${cluster.id}-tab-saved`"><ClusterWorkspaceCard :cluster="cluster" embedded /></section>
+      <section v-show="section === 'history'" :id="`${cluster.id}-panel-history`" role="tabpanel" :aria-labelledby="`${cluster.id}-tab-history`"><ClusterEvidenceHistory :cluster-id="cluster.id" :active="!isClusterCollapsed && section === 'history'" /></section>
+      <section v-show="section === 'access'" :id="`${cluster.id}-panel-access`" role="tabpanel" :aria-labelledby="`${cluster.id}-tab-access`" class="cluster-section">
+        <div class="cluster-access-actions">
         <template v-if="isLinodeDocker">
           <span class="text-sm text-zinc-500 dark:text-zinc-400">No kubeconfig for Docker install</span>
           <button type="button" @click="loadDockerLogs(cluster)" class="inline-flex min-h-11 items-center justify-center rounded-lg border border-zinc-200 bg-white px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">Docker logs</button>
@@ -49,19 +72,7 @@
           </div>
         </template>
 
-        <button type="button" @click="toggleCluster" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">
-          {{ isClusterCollapsed ? 'Show details' : 'Hide details' }}
-        </button>
-        <span class="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold" :class="statusFor(cluster).className">
-          <span v-if="cluster.provisioning" class="spinner mr-2"></span>{{ statusFor(cluster).label }}
-        </span>
-      </div>
-    </div>
-
-    <ClusterWorkspaceCard :cluster="cluster" embedded />
-
-    <!-- Collapsible Detailed Meta Panel -->
-    <div v-if="!isClusterCollapsed" class="mt-4 min-w-0 border-t border-zinc-100 pt-4 dark:border-white/5">
+        </div>
       <div class="grid min-w-0 gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <!-- Rancher URL -->
         <div class="min-w-0">
@@ -131,13 +142,9 @@
         </div>
       </div>
 
-      <DeployedImageDetails
-        :key="cluster.id"
-        :cluster="cluster"
-        :pods="pods"
-        :deployment-details="cluster.deploymentDetails || null"
-      />
-
+      </section>
+      <section v-show="section === 'workloads'" :id="`${cluster.id}-panel-workloads`" role="tabpanel" :aria-labelledby="`${cluster.id}-tab-workloads`" class="cluster-section">
+      <p v-if="isLinodeDocker" class="text-sm">This Docker installation has no Kubernetes pod list. Open Docker logs from Access & commands.</p>
       <!-- Leader tracking summary -->
       <div v-if="!isLinodeDocker" class="mt-4 border-t border-zinc-100 pt-4 dark:border-white/5">
         <div v-if="currentLeader" class="text-sm text-zinc-600 dark:text-zinc-400">
@@ -248,12 +255,13 @@
       <div v-else-if="cluster.provisioning" class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
         <span class="spinner mr-2"></span>{{ cluster.provisioningMessage || 'Provisioning downstream cluster' }}
       </div>
+      </section>
     </div>
   </article>
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, ref, nextTick } from "vue";
 import {
   apiFetch,
   kubeconfigPathActionFeedback,
@@ -279,7 +287,9 @@ import {
   podsFor,
 } from "../../static/control_panel_utils.js";
 import DeployedImageDetails from "./DeployedImageDetails.vue";
+import ClusterEvidenceHistory from "./ClusterEvidenceHistory.vue";
 import ClusterWorkspaceCard from "./ClusterWorkspaceCard.vue";
+import RancherOperations from "./RancherOperations.vue";
 import { clusterDisplayName } from "./cluster-workspace-store.mjs";
 
 const props = defineProps({
@@ -288,6 +298,19 @@ const props = defineProps({
     required: true,
   },
 });
+
+const section = ref('overview');
+const observedDetails = ref(null);
+const detailsRevision = ref(0);
+const currentVersion = computed(() => (observedDetails.value?.details || observedDetails.value || props.cluster.deploymentDetails)?.rancherVersion || '');
+const sections = [{id:'overview',label:'Overview'},{id:'workloads',label:'Workloads'},{id:'saved',label:'Saved work'},{id:'history',label:'Cluster history'},{id:'access',label:'Access & commands'}];
+async function navigateTabs(event, id) {
+  const index = sections.findIndex(item => item.id === id);
+  const target = {ArrowRight:(index+1)%sections.length, ArrowLeft:(index+sections.length-1)%sections.length, Home:0, End:sections.length-1}[event.key];
+  if (target === undefined) return;
+  event.preventDefault(); section.value = sections[target].id;
+  await nextTick(); document.getElementById(`${props.cluster.id}-tab-${section.value}`)?.focus();
+}
 
 const isDownstream = computed(() => props.cluster.type === "downstream");
 const isHostedTenant = computed(() => props.cluster.role || props.cluster.deploymentType === "hosted-tenant-k3s");
@@ -588,3 +611,7 @@ const handleCopyGPUCommand = async (index, command) => {
   flashGPUCommandCopy(props.cluster.id, index, copied ? "success" : "error");
 };
 </script>
+
+<style scoped>
+.cluster-tabs{display:flex;gap:22px;overflow-x:auto;border-bottom:1px solid #71717a40;margin-top:20px}.cluster-tabs button{flex-shrink:0;padding:14px 2px;font-size:13px;font-weight:600;border-bottom:2px solid transparent;color:#71717a}.cluster-tabs button[aria-selected=true]{border-color:#10b981;color:#047857}.cluster-tabs span{margin-left:7px;font-size:11px;opacity:.7}.cluster-tabs button:focus-visible{outline:2px solid #10b981;outline-offset:-3px}.cluster-section{padding:20px 0 4px}.cluster-summary{display:grid;grid-template-columns:2fr 1fr 1fr;gap:20px;font-size:13px}.cluster-summary>div{display:flex;flex-direction:column;gap:6px;min-width:0;overflow-wrap:anywhere}.cluster-summary small{font-size:11px;color:#71717a}.cluster-summary a{color:#047857}.cluster-access-actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:24px;align-items:center}:global(.dark .cluster-tabs button){color:#a0aab7}:global(.dark .cluster-tabs button[aria-selected=true]),:global(.dark .cluster-summary a){color:#7ddbc0}@media(max-width:700px){.cluster-summary{grid-template-columns:1fr}.cluster-tabs{gap:16px}}
+</style>

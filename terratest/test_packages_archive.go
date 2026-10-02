@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"net/http"
 	"net/url"
@@ -41,7 +42,7 @@ type testPackageGitHubContent struct {
 }
 
 func testPackageArchivePath(id string) (string, error) {
-	if !cacheLabIDPattern.MatchString(id) {
+	if !cachelab.IDPattern.MatchString(id) {
 		return "", errors.New("choose a valid archived package")
 	}
 	return testPackageArchiveDirectory + "/" + id + ".runway-test-package.json", nil

@@ -39,6 +39,9 @@
   <section v-show="activeTab === 'clusters'" class="min-w-0" aria-label="Cluster workspaces">
     <ClustersPanel />
   </section>
+  <section v-if="historyOpened" v-show="activeTab === 'history'" class="min-w-0" aria-label="Retained cluster history"><ClusterHistoryPanel /></section>
+
+  <section v-if="linodeOpened" v-show="activeTab === 'linode'" class="min-w-0" aria-label="Linode resources"><LinodeInventoryPanel :active="activeTab === 'linode'" /></section>
 
   <section
     v-show="activeTab === 'aws'"
@@ -97,8 +100,14 @@ import HomePanel from "./HomePanel.vue";
 import HelmLabPanel from "./HelmLabPanel.vue";
 import IssueRadarPanel from "./IssueRadarPanel.vue";
 import { activeTab, refreshStatus, openLogModal } from "./store.js";
+import LinodeInventoryPanel from "./LinodeInventoryPanel.vue";
+const linodeOpened=ref(false);
+watch(activeTab,tab=>{if(tab==='linode')linodeOpened.value=true;},{immediate:true});
 import AwsInventoryPanel from "./AwsInventoryPanel.vue";
 import ClustersPanel from "./ClustersPanel.vue";
+import ClusterHistoryPanel from "./ClusterHistoryPanel.vue";
+const historyOpened = ref(false);
+watch(activeTab,tab=>{if(tab==='history')historyOpened.value=true;},{immediate:true});
 import DestroyPanel from "./DestroyPanel.vue";
 import ImageLookupPanel from "./ImageLookupPanel.vue";
 import K3DLabPanel from "./K3DLabPanel.vue";

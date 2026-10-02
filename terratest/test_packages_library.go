@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,7 +28,7 @@ type testPackageLibrary struct {
 }
 
 func (s *testPackageService) loadPackageLibrary() error {
-	s.library = testPackageLibrary{Version: 1, Revision: cacheLabID(), Buckets: []testPackageBucket{}, Unfiled: []string{}}
+	s.library = testPackageLibrary{Version: 1, Revision: cachelab.ID(), Buckets: []testPackageBucket{}, Unfiled: []string{}}
 	raw, err := testPackageReadBounded(filepath.Join(s.root, ".library.json"), 1<<20)
 	if os.IsNotExist(err) {
 		return nil
@@ -41,7 +42,7 @@ func (s *testPackageService) loadPackageLibrary() error {
 	return validatePackageLibrary(s.library, nil)
 }
 func validatePackageLibrary(lib testPackageLibrary, packages map[string]testPackage) error {
-	if lib.Version != 1 || !cacheLabIDPattern.MatchString(lib.Revision) || len(lib.Buckets) > 100 {
+	if lib.Version != 1 || !cachelab.IDPattern.MatchString(lib.Revision) || len(lib.Buckets) > 100 {
 		return fmt.Errorf("invalid package library")
 	}
 	seen := map[string]bool{}
@@ -51,7 +52,7 @@ func validatePackageLibrary(lib testPackageLibrary, packages map[string]testPack
 			return fmt.Errorf("too many package references")
 		}
 		for _, id := range ids {
-			if !cacheLabIDPattern.MatchString(id) || seen[id] {
+			if !cachelab.IDPattern.MatchString(id) || seen[id] {
 				return fmt.Errorf("invalid or duplicate package placement")
 			}
 			seen[id] = true
@@ -73,7 +74,7 @@ func validatePackageLibrary(lib testPackageLibrary, packages map[string]testPack
 				return err
 			}
 		}
-		if !cacheLabIDPattern.MatchString(b.ID) || buckets[b.ID] || !packageText(b.Name, 120, true) {
+		if !cachelab.IDPattern.MatchString(b.ID) || buckets[b.ID] || !packageText(b.Name, 120, true) {
 			return fmt.Errorf("invalid milestone bucket")
 		}
 		buckets[b.ID] = true
@@ -151,7 +152,7 @@ func (s *testPackageService) savePackageLibrary(req testPackageRequest) (any, er
 	if count != len(s.packages) {
 		return nil, fmt.Errorf("library membership changed; refresh before organizing")
 	}
-	lib.Revision = cacheLabID()
+	lib.Revision = cachelab.ID()
 	raw, err := json.MarshalIndent(lib, "", "  ")
 	if err != nil {
 		return nil, err
@@ -240,7 +241,7 @@ func (s *testPackageService) exportPackageLibrary(req testPackageRequest) (any, 
 			if err != nil {
 				return nil, err
 			}
-			prefix := fmt.Sprintf("%03d-%s/%03d-%s-%s", i+1, cacheLabFileLabel(b.Name), j+1, cacheLabFileLabel(pkg.Title), id[:8])
+			prefix := fmt.Sprintf("%03d-%s/%03d-%s-%s", i+1, cachelab.FileLabel(b.Name), j+1, cachelab.FileLabel(pkg.Title), id[:8])
 			if err = put(prefix+".runway-test-package.json", raw); err != nil {
 				return nil, err
 			}
@@ -293,7 +294,7 @@ func (s *testPackageService) exportPackageLibrary(req testPackageRequest) (any, 
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		return nil, err
 	}
-	name := cacheLabID()[:8] + "-" + cacheLabFileLabel(strings.TrimSpace(title)) + ".runway-test-packages.zip"
+	name := cachelab.ID()[:8] + "-" + cachelab.FileLabel(strings.TrimSpace(title)) + ".runway-test-packages.zip"
 	path := filepath.Join(directory, name)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {

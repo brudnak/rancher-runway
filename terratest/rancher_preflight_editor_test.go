@@ -1,6 +1,7 @@
 package test
 
 import (
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -865,8 +866,8 @@ func TestNormalizePreflightVersionsCanonicalizesHeadWithoutChangingExactTags(t *
 
 func TestNormalizeVersionInputDoesNotStripDockerNamespace(t *testing.T) {
 	const image = "vteam/rancher:v2.16-head"
-	if got := normalizeVersionInput(image); got != image {
-		t.Fatalf("normalizeVersionInput(%q) = %q", image, got)
+	if got := imagelookup.NormalizeVersionInput(image); got != image {
+		t.Fatalf("imagelookup.NormalizeVersionInput(%q) = %q", image, got)
 	}
 }
 

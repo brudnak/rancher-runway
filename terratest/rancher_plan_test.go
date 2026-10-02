@@ -2,6 +2,7 @@ package test
 
 import (
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -226,12 +227,12 @@ func TestParseRegistryImageUsesDockerHubForNamespaceShorthand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			registry, repository, tag, err := parseRegistryImage(tt.image)
+			registry, repository, tag, err := imagelookup.ParseRegistryImage(tt.image)
 			if err != nil {
-				t.Fatalf("parseRegistryImage returned error: %v", err)
+				t.Fatalf("imagelookup.ParseRegistryImage returned error: %v", err)
 			}
 			if registry != tt.wantRegistry || repository != tt.wantRepository || tag == "" {
-				t.Fatalf("parseRegistryImage(%q) = registry %q, repository %q, tag %q", tt.image, registry, repository, tag)
+				t.Fatalf("imagelookup.ParseRegistryImage(%q) = registry %q, repository %q, tag %q", tt.image, registry, repository, tag)
 			}
 		})
 	}

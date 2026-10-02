@@ -12,8 +12,7 @@ type cleanupDestroyResult struct {
 	Warning string
 }
 
-// runCleanupDestroyPhases keeps downstream cleanup best-effort while preserving
-// management infrastructure cleanup as the authoritative success or failure.
+// Downstream deletion must finish while management and its credentials still exist.
 func runCleanupDestroyPhases(cleanupDownstreams func() error, destroyManagement func() error, cleanupLocalArtifacts func()) (cleanupDestroyResult, error) {
 	if cleanupDownstreams == nil {
 		return cleanupDestroyResult{}, fmt.Errorf("downstream cleanup function must not be nil")
@@ -29,6 +28,7 @@ func runCleanupDestroyPhases(cleanupDownstreams func() error, destroyManagement 
 	if err := cleanupDownstreams(); err != nil {
 		result.Warning = manualLinodeCleanupWarning(err)
 		log.Print(cleanupWarningLogLine(result.Warning))
+		return result, fmt.Errorf("downstream cleanup failed; management infrastructure and local records retained: %w", err)
 	}
 	if err := destroyManagement(); err != nil {
 		return result, err
@@ -42,9 +42,8 @@ func manualLinodeCleanupWarning(err error) string {
 	if err != nil {
 		detail = compactCleanupWarningText(err.Error())
 	}
-	return compactCleanupWarningText("Automatic deletion of recorded Linode downstream resources failed. " +
-		"AWS management cleanup will continue. Any Linode resources that remain after this operation must be removed manually; " +
-		"if AWS cleanup also fails, fix management access and retry. Details: " + detail)
+	return compactCleanupWarningText("Automatic downstream cleanup failed. Management destroy has stopped. " +
+		"Keep management access and fix downstream deletion before retrying. Details: " + detail)
 }
 
 func cleanupWarningLogLine(warning string) string {

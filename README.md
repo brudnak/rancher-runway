@@ -214,6 +214,72 @@ Use the app tabs as the main lifecycle:
   Terraform paths, hostnames, and destroy shortcuts.
 - **Clusters** shows Rancher URLs, kubeconfig paths or Linode IPs, reachability,
   pod visibility, recent logs, and active leader details.
+  Each deployed management Rancher also exposes **Upgrade Rancher / Create
+  downstream cluster**. Upgrade discovery reads the running server version and
+  published chart catalogs; stable paths enforce sequential minor releases and
+  latest-patch prerequisites. RC, alpha, patch-head, next-minor head, and custom
+  images use an explicit experimental review. Plans record the chart and server
+  and agent digests, recheck installed state, run a Helm server dry-run, preserve
+  existing values, and watch readiness and pod/image changes. A management
+  kubeconfig and a Helm release named `rancher` in `cattle-system` are required;
+  Docker upgrades are not handled by this workflow. Backups and compatibility
+  review remain the operator's responsibility; no automatic data rollback runs.
+  **Create downstream** supports Linode and AWS EC2 with RKE2 or K3s, querying
+  Rancher's enabled driver schema and live Kubernetes versions. Choose an
+  existing cloud credential, enter a new one, or click **Use Runway environment
+  credentials**. Linode reuses `LINODE_TOKEN`, `LINODE_ACCESS_TOKEN`, or
+  `linode.access_token`; AWS reuses the configured access key / `AWS_ACCESS_KEY_ID`
+  and `AWS_SECRET_ACCESS_KEY`. Temporary AWS session credentials are rejected
+  rather than silently dropping their session token. New credentials are stored
+  in Rancher; Runway excludes supplied secrets from local records and exports.
+  Provisioning uses `fleet-default` and one, three, or five all-role nodes.
+  **History & evidence** persists upgrade versions, rollout snapshots, checks,
+  outcomes, and created resource IDs under
+  `runway-data/rancher-operations/`. Download Markdown for
+  an issue or JSON, or copy the evidence. Keep Runway open during operations;
+  interrupted runs show an unknown outcome after restart, and failed provisioning
+  retains recorded partial resources for inspection and cleanup in Rancher.
+
+- **Retained History** keeps removed cluster workspaces out of the live Clusters
+  page. Browse their linked tests, saved plans, cache snapshots, and packages;
+  group by an explicit or linked package milestone, falling back to the recorded
+  Rancher version. Add entries or edit names, versions, milestones, and notes.
+  **Move to Trash** hides a retained workspace and **Restore** brings it back,
+  including after an app restart. These actions preserve independently stored
+  lab and package evidence and never destroy infrastructure. Live or still-recorded
+  environments must be removed through their lifecycle controls first.
+  While Runway is open, discovery retains changes to cluster/pod/image metadata;
+  reachable Kubernetes clusters also get exact server, Kubernetes, webhook, and
+  Helm revision observations every five minutes. Opening deployment details
+  records those observations immediately. Commands from saved install scripts
+  and upgrade invocations are retained with credential/path redaction. The
+  **Environment archive** shows these events and operation records, with JSON
+  export. Unknown or failed observations never imply an exact version.
+  Events are atomic private JSON files under
+  `runway-data/cluster-history/`, independent of run cleanup.
+  Existing destroyed clusters cannot be backfilled from unavailable servers.
+  **Delete permanently** in Trash requires the exact cluster ID plus
+  `DELETE PERMANENTLY`, validated by the backend. It removes the environment
+  archive and its Rancher operation records; independent lab/package evidence
+  stays in its own library. A minimal ID-only suppression marker prevents stale
+  observations from resurrecting the deleted archive.
+
+Retained history, Rancher operation evidence, Test Lab, Cache Lab, and Test
+Packages use the private `runway-data/` directory beside `automation-output/`.
+On startup, existing libraries migrate by atomic rename; conflicting old/new
+copies stop migration without overwriting either copy. Run cleanup preserves the
+legacy `control-panel/` directory as well, including lifecycle/session records
+and the cost ledger. Desktop runtime upgrades preserve `runway-data/`; release
+bundles exclude it. Rebuildable caches already held inside a lab library move
+with that library to preserve its existing layout.
+
+Background discovery, history collection, Rancher operations, lab jobs, and
+lifecycle workers share an application lifecycle. Shutdown stops accepting new
+work, cancels cancellable tasks, and drains final record writes before removing
+the session or restoring the working directory. Existing lifecycle subprocesses
+are drained, not forcibly killed. Detached Steve endpoints remain running.
+History probes run separately from the cluster-status discovery worker.
+
 - **AWS Inventory** shows resources associated with recorded slots and owner
   tags. Search by name, ID, run, or tag; filter by resource type and cleanup
   eligibility. Review individual leftovers, a selection, or the visible
@@ -779,6 +845,55 @@ for prerequisites and retry commands.
 Development Wails builds store the checkout path in ignored local build hints.
 Release builds instead stage checksum-verified, versioned runtime assets in Application
 Support and do not depend on the checkout.
+
+## Backend Organization
+
+Backend extraction is incremental. The application currently composes services in
+`terratest/control_panel.go`; infrastructure test entry points remain in `terratest`.
+The extracted packages do not import `terratest`. The panel supplies application
+state and identity resolution through constructors and callbacks:
+
+| Package | Responsibility |
+| --- | --- |
+| `internal/imagelookup` | Registry search, image inspection, tags, provenance, and bounded command execution |
+| `internal/prbuild` | PR-image verification and related issue-readiness evidence; depends on image lookup |
+| `internal/cachelab` | Snapshot storage, SQLite queries and comparisons, capture jobs, and library synchronization |
+| `internal/server` | HTTP handlers for those services, strict request decoding, and request-origin checks |
+| `internal/workspace` | Retained-data paths, migration, and runtime-data module boundaries |
+| `internal/history` | Atomic observation files and chronological reads |
+| `internal/operations` | Worker admission, cancellation, and shutdown draining |
+| `internal/awspricing` | AWS price-catalog queries using the existing environment credentials |
+| `internal/localtools` | Local executable discovery and subprocess environment construction |
+| `internal/registrycatalog` | Shared preferred-registry ordering |
+
+Service tests live beside their implementation. The remaining panel adapters bind
+these services to authentication, cluster identity, workspace paths, and worker
+ownership. Application integration tests stay in `terratest`.
+
+Cache Lab exposes detached library snapshots for ordinary reads and a locked
+callback for evidence preservation. Callers must not mutate callback data or
+re-enter the service from that callback. Its constructor accepts the worker manager,
+cluster resolver, and command runner; consumers do not access its mutex or storage
+fields. PR verification owns each readiness scan's evidence cache and image reuse.
+Daily scheduling and saved reports remain application responsibilities.
+
+Dependencies flow from the panel to HTTP handlers and services. Services never
+import the HTTP layer or the application package. An architecture test enforces
+these import boundaries. Remaining backend domains should move as complete
+components, including tests, instead of adding more sibling files in `terratest`.
+
+Keep new files focused on one responsibility. Before extending a large file,
+consider whether the new behavior belongs in an existing domain module or an
+independent package. Keep pure package tests beside their implementation and
+application integration tests in `terratest`.
+
+Run `make test-regression` for the local regression suite: frontend tests, internal
+package tests with the race detector, selected backend lifecycle/history tests,
+runtime-data preparation, and desktop runtime migration. This target uses temporary
+fixtures and fake services; it does not provision infrastructure. The same target
+runs in the local regression GitHub Actions workflow. Use `make test-web` for just
+the frontend tests. The broader `make test` target also includes the repository's
+other Go tests and their existing environment requirements.
 
 ## Advanced Usage
 

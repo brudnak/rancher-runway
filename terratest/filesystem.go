@@ -3,6 +3,7 @@ package test
 import (
 	"errors"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/workspace"
 	"log"
 	"net"
 	"os"
@@ -114,7 +115,17 @@ func cleanupAutomationOutput() {
 		RemoveFolder(filepath.Join(automationOutputDir(), "runs", runID))
 		return
 	}
-	RemoveFolder(automationOutputDir())
+	// Legacy runs have no run ID. Preserve app-owned records (including old
+	// libraries awaiting migration); only remove disposable output siblings.
+	entries, err := os.ReadDir(automationOutputDir())
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.Name() != "control-panel" {
+			RemoveFolder(filepath.Join(automationOutputDir(), entry.Name()))
+		}
+	}
 }
 
 func automationOutputDir() string {
@@ -134,21 +145,7 @@ func automationOutputPath(name string) string {
 // ensureGoDataModule keeps downloaded source in runtime workspaces out of
 // Runway's package discovery and Wails' go mod tidy. It does not alter caches,
 // and child test sources still use their own go.mod with GOWORK=off.
-func ensureGoDataModule(root string) error {
-	f, err := os.OpenFile(filepath.Join(root, "go.mod"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if os.IsExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	_, writeErr := f.WriteString("// Generated runtime data; excluded from Runway source discovery.\nmodule rancher-runway.local/runtime-data\n")
-	closeErr := f.Close()
-	if writeErr != nil {
-		return writeErr
-	}
-	return closeErr
-}
+func ensureGoDataModule(root string) error { return workspace.EnsureDataModule(root) }
 
 func CreateInstallScript(helmCommand, haDir, ingressDaemonSetName string) {
 	installScript := fmt.Sprintf(`#!/bin/bash

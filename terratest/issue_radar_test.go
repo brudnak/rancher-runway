@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -28,7 +29,7 @@ func radarResponse(t *testing.T, value any) []byte {
 	return append([]byte("HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n\r\n"), payload...)
 }
 
-func radarRunner(t *testing.T, callback func(*url.URL) ([]byte, error)) imageLookupCommandRunner {
+func radarRunner(t *testing.T, callback func(*url.URL) ([]byte, error)) imagelookup.CommandRunner {
 	t.Helper()
 	return func(ctx context.Context, command string, args, env []string, limit int64) ([]byte, error) {
 		if command != "gh" || len(args) < 12 || args[0] != "api" {

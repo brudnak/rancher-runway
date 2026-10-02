@@ -32,8 +32,11 @@ func TestDeployedClusterImageDetailsAreBundled(t *testing.T) {
 	detailSource := controlPanelVueSource(t, "DeployedImageDetails.vue")
 
 	for _, marker := range []string{
-		"Requested Rancher",
-		"Kubernetes version",
+		"Originally requested",
+		"Observed Rancher",
+		"Kubernetes",
+		"ClusterEvidenceHistory",
+		`role="tablist"`,
 		"DeployedImageDetails",
 		`:key="cluster.id"`,
 	} {

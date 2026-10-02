@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"errors"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -20,12 +21,12 @@ func TestResolvePreferredRancherImageSettingsUsesFirstCompletePair(t *testing.T)
 	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
 
 	var calls []string
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		calls = append(calls, reference)
 		if !strings.HasPrefix(reference, "docker.io/") {
-			return rancherImageProvenance{Reference: reference}, false, nil
+			return imagelookup.Provenance{Reference: reference}, false, nil
 		}
-		provenance := rancherImageProvenance{Reference: reference, Digest: "sha256:" + strings.Repeat("a", 64)}
+		provenance := imagelookup.Provenance{Reference: reference, Digest: "sha256:" + strings.Repeat("a", 64)}
 		if strings.Contains(reference, "/rancher:") {
 			provenance.BuildVersion = "v2.14-head-build-991"
 			provenance.SourceURL = "https://github.com/rancher/rancher"
@@ -64,9 +65,9 @@ func TestResolvePreferredRancherImageSettingsFailsClosedForSelectedRegistry(t *t
 	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
 
 	var calls []string
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		calls = append(calls, reference)
-		return rancherImageProvenance{Reference: reference}, strings.Contains(reference, "rancher-agent"), nil
+		return imagelookup.Provenance{Reference: reference}, strings.Contains(reference, "rancher-agent"), nil
 	}
 
 	_, err := resolvePreferredRancherImageSettings("2.14-head", []string{"stgregistry.suse.com"})
@@ -88,12 +89,12 @@ func TestResolvePreferredRancherImageSettingsValidatesPrimeHeadProvenance(t *tes
 
 	sha := strings.Repeat("a", 40)
 	tag := "v2.15.1-" + sha + "-head"
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		repository := "rancher/rancher"
 		if strings.Contains(reference, "rancher-agent") {
 			repository = "rancher/rancher-agent"
 		}
-		return rancherImageProvenance{
+		return imagelookup.Provenance{
 			Reference:          reference,
 			SourceURL:          "https://github.com/rancher/rancher",
 			Revision:           sha,
@@ -119,12 +120,12 @@ func TestResolvePatchHeadStagingBundlePinsNewestCompletePair(t *testing.T) {
 	}
 	var callsMu sync.Mutex
 	var calls []string
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		callsMu.Lock()
 		calls = append(calls, reference)
 		callsMu.Unlock()
 		if !strings.HasPrefix(reference, "stgregistry.suse.com/") {
-			return rancherImageProvenance{}, false, errors.New("patch alias inspected a non-staging image")
+			return imagelookup.Provenance{}, false, errors.New("patch alias inspected a non-staging image")
 		}
 		sha := newestSHA
 		if strings.Contains(reference, olderSHA) {
@@ -135,7 +136,7 @@ func TestResolvePatchHeadStagingBundlePinsNewestCompletePair(t *testing.T) {
 		if strings.Contains(reference, "rancher-agent") {
 			repository = "rancher/rancher-agent"
 		}
-		return rancherImageProvenance{
+		return imagelookup.Provenance{
 			Reference:          reference,
 			Digest:             "sha256:" + strings.Repeat(string(sha[0]), 64),
 			CreatedAt:          created[sha],
@@ -172,14 +173,14 @@ func TestResolvePatchHeadStagingBundleRejectsMismatchedCanonicalPair(t *testing.
 	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
 
 	sha := strings.Repeat("a", 40)
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		canonicalSHA := sha
 		repository := "rancher/rancher"
 		if strings.Contains(reference, "rancher-agent") {
 			canonicalSHA = strings.Repeat("b", 40)
 			repository = "rancher/rancher-agent"
 		}
-		return rancherImageProvenance{
+		return imagelookup.Provenance{
 			Reference:          reference,
 			CreatedAt:          time.Date(2026, 8, 23, 0, 0, 0, 0, time.UTC),
 			CanonicalReference: repository + ":v2.15.1-" + canonicalSHA + "-head",
@@ -199,21 +200,21 @@ func TestResolvePatchHeadStagingBundleSkipsNewerIncompletePair(t *testing.T) {
 
 	newerSHA := strings.Repeat("a", 40)
 	olderSHA := strings.Repeat("b", 40)
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		sha := olderSHA
 		createdAt := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
 		if strings.Contains(reference, newerSHA) {
 			sha = newerSHA
 			createdAt = createdAt.Add(24 * time.Hour)
 			if strings.Contains(reference, "rancher-agent") {
-				return rancherImageProvenance{Reference: reference}, false, nil
+				return imagelookup.Provenance{Reference: reference}, false, nil
 			}
 		}
 		repository := "rancher/rancher"
 		if strings.Contains(reference, "rancher-agent") {
 			repository = "rancher/rancher-agent"
 		}
-		return rancherImageProvenance{
+		return imagelookup.Provenance{
 			Reference:          reference,
 			CreatedAt:          createdAt,
 			SourceURL:          "https://github.com/rancher/rancher-prime",
@@ -241,15 +242,15 @@ func TestResolvePatchHeadStagingBundleFailsClosedOnLookupError(t *testing.T) {
 
 	newerSHA := strings.Repeat("a", 40)
 	olderSHA := strings.Repeat("b", 40)
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		if strings.Contains(reference, newerSHA) {
-			return rancherImageProvenance{Reference: reference}, false, errors.New("registry returned 429 Too Many Requests")
+			return imagelookup.Provenance{Reference: reference}, false, errors.New("registry returned 429 Too Many Requests")
 		}
 		repository := "rancher/rancher"
 		if strings.Contains(reference, "rancher-agent") {
 			repository = "rancher/rancher-agent"
 		}
-		return rancherImageProvenance{
+		return imagelookup.Provenance{
 			Reference:          reference,
 			CreatedAt:          time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC),
 			SourceURL:          "https://github.com/rancher/rancher-prime",
@@ -275,7 +276,7 @@ func TestResolvePatchHeadStagingBundleRequiresBothCreationTimestamps(t *testing.
 	sha := strings.Repeat("a", 40)
 	for _, missingRole := range []string{"server", "agent"} {
 		t.Run(missingRole, func(t *testing.T) {
-			inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+			inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 				role := "server"
 				repository := "rancher/rancher"
 				if strings.Contains(reference, "rancher-agent") {
@@ -286,7 +287,7 @@ func TestResolvePatchHeadStagingBundleRequiresBothCreationTimestamps(t *testing.
 				if role == missingRole {
 					createdAt = time.Time{}
 				}
-				return rancherImageProvenance{
+				return imagelookup.Provenance{
 					Reference:          reference,
 					CreatedAt:          createdAt,
 					SourceURL:          "https://github.com/rancher/rancher-prime",
@@ -358,8 +359,8 @@ func stubPatchHeadTagList(t *testing.T, tags []string) {
 func TestValidateExactHeadImagePairRejectsWrongCanonicalRepositories(t *testing.T) {
 	tag := "v2.15.1-" + strings.Repeat("a", 40) + "-head"
 	err := validateExactHeadImagePair(tag,
-		rancherImageProvenance{CanonicalReference: "rancher/rancher-agent:" + tag},
-		rancherImageProvenance{CanonicalReference: "rancher/rancher-agent:" + tag},
+		imagelookup.Provenance{CanonicalReference: "rancher/rancher-agent:" + tag},
+		imagelookup.Provenance{CanonicalReference: "rancher/rancher-agent:" + tag},
 	)
 	if err == nil || !strings.Contains(err.Error(), "unexpected canonical repositories") {
 		t.Fatalf("expected canonical repository roles to be enforced, got %v", err)
@@ -368,7 +369,7 @@ func TestValidateExactHeadImagePairRejectsWrongCanonicalRepositories(t *testing.
 
 func TestValidatePatchHeadServerProvenanceRejectsMismatchedOSSRevision(t *testing.T) {
 	sha := strings.Repeat("a", 40)
-	err := validatePatchHeadServerProvenance("2.15.1-"+sha+"-head", rancherImageProvenance{
+	err := imagelookup.ValidatePatchHeadServerProvenance("2.15.1-"+sha+"-head", imagelookup.Provenance{
 		SourceURL:   "https://github.com/rancher/rancher-prime",
 		OSSRevision: strings.Repeat("b", 40),
 	})
@@ -381,12 +382,12 @@ func TestInspectExplicitRancherImagePairRecordsBothDigests(t *testing.T) {
 	previousInspector := inspectPreferredRancherImage
 	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
 
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		digestCharacter := "a"
 		if strings.Contains(reference, "rancher-agent") {
 			digestCharacter = "b"
 		}
-		return rancherImageProvenance{
+		return imagelookup.Provenance{
 			Reference:          reference,
 			Digest:             "sha256:" + strings.Repeat(digestCharacter, 64),
 			SourceURL:          "https://github.com/rancher/rancher-prime",
@@ -417,12 +418,12 @@ func TestInspectExplicitRancherImagePairRejectsMismatchedAgentProvenance(t *test
 	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
 
 	tag := "v2.14.5-" + strings.Repeat("d", 40) + "-head"
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		canonical := "rancher/rancher:" + tag
 		if strings.Contains(reference, "rancher-agent") {
 			canonical = "rancher/rancher-agent:v2.14.5-" + strings.Repeat("e", 40) + "-head"
 		}
-		return rancherImageProvenance{Reference: reference, CanonicalReference: canonical}, true, nil
+		return imagelookup.Provenance{Reference: reference, CanonicalReference: canonical}, true, nil
 	}
 
 	_, err := inspectExplicitRancherImagePair(
@@ -440,9 +441,9 @@ func TestResolvePreferredRancherImageSettingsSurfacesLookupErrorWithoutFallback(
 	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector })
 
 	var calls []string
-	inspectPreferredRancherImage = func(_ context.Context, reference string) (rancherImageProvenance, bool, error) {
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		calls = append(calls, reference)
-		return rancherImageProvenance{}, false, errors.New("registry returned 429 Too Many Requests")
+		return imagelookup.Provenance{}, false, errors.New("registry returned 429 Too Many Requests")
 	}
 
 	_, err := resolvePreferredRancherImageSettings("head", []string{"stgregistry.suse.com", "docker.io"})
@@ -494,7 +495,7 @@ func TestRancherImageSourceCommitURLRequiresCanonicalLabels(t *testing.T) {
 }
 
 func TestSafeOCIProvenanceLabelFlattensControlWhitespaceAndBoundsLength(t *testing.T) {
-	got := safeOCIProvenanceLabel("  build\nvalue\t\x00" + strings.Repeat("x", 600))
+	got := imagelookup.SafeOCIProvenanceLabel("  build\nvalue\t\x00" + strings.Repeat("x", 600))
 	if strings.ContainsAny(got, "\n\r\t") {
 		t.Fatalf("provenance label retained control whitespace: %q", got)
 	}
@@ -509,14 +510,14 @@ func TestInspectRancherImageReferenceWithServiceExtractsProvenanceAndMapsNotFoun
 	service := newImageLookupTestService(t, registryServer)
 	revision := strings.Repeat("d", 40)
 	reference, digest := pushImageLookupSourceFixture(t, registryServer, "v2.14-head", map[string]string{
-		imageLookupVersionLabel:            "v2.14-head-build-42",
-		imageLookupSourceLabel:             "https://github.com/rancher/rancher",
-		imageLookupRevisionLabel:           revision,
-		imageLookupOSSRevisionLabel:        strings.Repeat("e", 40),
-		imageLookupCanonicalReferenceLabel: "rancher/rancher:v2.14-head",
+		imagelookup.VersionLabel:            "v2.14-head-build-42",
+		imagelookup.SourceLabel:             "https://github.com/rancher/rancher",
+		imagelookup.RevisionLabel:           revision,
+		imagelookup.OSSRevisionLabel:        strings.Repeat("e", 40),
+		imagelookup.CanonicalReferenceLabel: "rancher/rancher:v2.14-head",
 	})
 
-	provenance, found, err := inspectRancherImageReferenceWithService(context.Background(), service, reference)
+	provenance, found, err := imagelookup.InspectProvenance(context.Background(), service, reference)
 	if err != nil {
 		t.Fatalf("inspect fixture: %v", err)
 	}
@@ -525,7 +526,7 @@ func TestInspectRancherImageReferenceWithServiceExtractsProvenanceAndMapsNotFoun
 	}
 
 	missingReference := imageLookupTestServerHost(t, registryServer) + "/rancher/rancher:missing"
-	missing, found, err := inspectRancherImageReferenceWithService(context.Background(), service, missingReference)
+	missing, found, err := imagelookup.InspectProvenance(context.Background(), service, missingReference)
 	if err != nil || found || missing.Reference != missingReference {
 		t.Fatalf("missing tag mapping: found=%v provenance=%#v err=%v", found, missing, err)
 	}

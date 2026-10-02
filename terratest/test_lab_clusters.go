@@ -3,6 +3,7 @@ package test
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"strings"
 	"time"
 )
@@ -218,7 +219,7 @@ func (p *localControlPanel) labClusterRecords() (map[string]clusterLabData, erro
 	if err = tests.backfillClusters(candidates); err != nil {
 		return nil, err
 	}
-	if err = cache.backfillClusters(candidates); err != nil {
+	if err = cacheLabBackfill(cache, candidates); err != nil {
 		return nil, err
 	}
 	records := map[string]clusterLabData{}
@@ -240,14 +241,14 @@ func (p *localControlPanel) labClusterRecords() (map[string]clusterLabData, erro
 		records[r.ClusterID] = data
 	}
 	tests.mu.Unlock()
-	cache.mu.Lock()
-	for _, w := range cache.library.Workspaces {
+	cacheLibrary := cache.Library()
+	for _, w := range cacheLibrary.Workspaces {
 		if w.ClusterID == "" {
 			continue
 		}
 		data := records[w.ClusterID]
-		record := clusterLabCacheWorkspace{ID: w.ID, ClusterID: w.ClusterID, Name: w.Name, URL: w.URL, Kind: w.Kind, Active: cache.library.Job.Running && cache.library.Job.Workspace == w.ID}
-		for _, snapshot := range cache.library.Snapshots {
+		record := clusterLabCacheWorkspace{ID: w.ID, ClusterID: w.ClusterID, Name: w.Name, URL: w.URL, Kind: w.Kind, Active: cacheLibrary.Job.Running && cacheLibrary.Job.Workspace == w.ID}
+		for _, snapshot := range cacheLibrary.Snapshots {
 			if snapshot.Workspace != w.ID {
 				continue
 			}
@@ -258,7 +259,7 @@ func (p *localControlPanel) labClusterRecords() (map[string]clusterLabData, erro
 		data.CacheWorkspaces = append(data.CacheWorkspaces, record)
 		records[w.ClusterID] = data
 	}
-	cache.mu.Unlock()
+
 	return records, nil
 }
 
@@ -299,14 +300,12 @@ func (p *localControlPanel) cleanupLabClusters(ids []string, cleanupTests, clean
 		if err != nil {
 			warnings = append(warnings, "Cache Lab cleanup unavailable: "+err.Error())
 		} else {
-			s.mu.Lock()
-			workspaces := append([]cacheLabWorkspace(nil), s.library.Workspaces...)
-			s.mu.Unlock()
+			workspaces := s.Library().Workspaces
 			for _, workspace := range workspaces {
 				if !selected[workspace.ClusterID] {
 					continue
 				}
-				if _, err := s.mutate(cacheLabRequest{Action: "delete-workspace", Workspace: workspace.ID, ClusterID: workspace.ClusterID, Confirm: typedConfirmationPhrase}); err != nil {
+				if _, err := s.Mutate(cachelab.Request{Action: "delete-workspace", Workspace: workspace.ID, ClusterID: workspace.ClusterID, Confirm: typedConfirmationPhrase}); err != nil {
 					warnings = append(warnings, fmt.Sprintf("Cache workspace %s retained: %v", workspace.Name, err))
 				}
 			}

@@ -2,6 +2,7 @@ package test
 
 import (
 	"encoding/json"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"os"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ func packageTestCompletedBaseline(t *testing.T, s *testPackageService) testPacka
 	pkg = packageTestMutation(t, s, testPackageRequest{Action: "mark-step", ID: pkg.ID, Revision: pkg.Revision, SessionID: session.ID, CaseID: c.ID, StepID: c.Steps[0].ID, Done: true}, nil, nil, nil)
 	pkg = packageTestMutation(t, s, testPackageRequest{Action: "case-result", ID: pkg.ID, Revision: pkg.Revision, SessionID: session.ID, CaseID: c.ID, Outcome: "failed", Notes: "The resource was missing"}, nil, nil, nil)
 	raw := []byte("A preserved baseline log\n")
-	proof := testPackageEvidence{ID: cacheLabID(), Kind: "test-run", Name: "Baseline test output", CaseID: c.ID, StepID: c.Steps[0].ID, CapturedAt: time.Now().UTC(), AttachedAt: time.Now().UTC(), Metadata: json.RawMessage(`{}`), Artifact: packageArtifact(cacheLabID()+".log", "text/plain", raw)}
+	proof := testPackageEvidence{ID: cachelab.ID(), Kind: "test-run", Name: "Baseline test output", CaseID: c.ID, StepID: c.Steps[0].ID, CapturedAt: time.Now().UTC(), AttachedAt: time.Now().UTC(), Metadata: json.RawMessage(`{}`), Artifact: packageArtifact(cachelab.ID()+".log", "text/plain", raw)}
 	pkg = packageTestMutation(t, s, testPackageRequest{Action: "attach-evidence", ID: pkg.ID, Revision: pkg.Revision, SessionID: session.ID}, nil, &proof, raw)
 	return packageTestMutation(t, s, testPackageRequest{Action: "finish-session", ID: pkg.ID, Revision: pkg.Revision, SessionID: session.ID, Finding: "reproduced", Conclusion: "Resource visibility reproduced"}, nil, nil, nil)
 }
@@ -67,7 +68,7 @@ func TestTestPackageBaselineRejectsUnpreservedAndPartialSources(t *testing.T) {
 	if _, err := s.mutate(request, &env, nil, nil); err == nil || !strings.Contains(err.Error(), "finish the baseline") {
 		t.Fatalf("active source was accepted: %v", err)
 	}
-	request.BaselineSessionID = cacheLabID()
+	request.BaselineSessionID = cachelab.ID()
 	if _, err := s.mutate(request, &env, nil, nil); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("missing source was accepted: %v", err)
 	}
@@ -147,7 +148,7 @@ func TestTestPackageBaselineComparisonUsesIdentityAndContent(t *testing.T) {
 	}
 	// Equal title and position cannot substitute for a missing stable identity.
 	oldID := candidate.Cases[0].ID
-	candidate.Cases[0].ID = cacheLabID()
+	candidate.Cases[0].ID = cachelab.ID()
 	candidate.Results[0].CaseID = candidate.Cases[0].ID
 	rows = testPackageCompareCases(candidate)
 	if len(rows) != 2 || rows[0].CaseID != oldID || rows[0].Content != "Missing from candidate" || rows[1].Content != "Added in candidate" {
@@ -159,8 +160,8 @@ func TestTestPackageBaselineStrictValidationAndLegacyCompatibility(t *testing.T)
 	s := packageTestService(t)
 	pkg := packageTestCandidate(t, s, packageTestCompletedBaseline(t, s))
 	for name, mutate := range map[string]func(*testPackage){
-		"foreign result":   func(p *testPackage) { p.Sessions[1].Baseline.Results[0].CaseID = cacheLabID() },
-		"foreign evidence": func(p *testPackage) { p.Sessions[1].Baseline.Evidence[0].StepID = cacheLabID() },
+		"foreign result":   func(p *testPackage) { p.Sessions[1].Baseline.Results[0].CaseID = cachelab.ID() },
+		"foreign evidence": func(p *testPackage) { p.Sessions[1].Baseline.Evidence[0].StepID = cachelab.ID() },
 		"capture before completion": func(p *testPackage) {
 			p.Sessions[1].Baseline.CapturedAt = p.Sessions[1].Baseline.StartedAt.Add(-time.Hour)
 		},

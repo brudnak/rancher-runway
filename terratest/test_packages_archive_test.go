@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"net/http"
 	"strings"
@@ -199,7 +200,7 @@ func TestTestPackageArchiveRejectsStaleLocalAndRemoteConflicts(t *testing.T) {
 	inspection := value.(map[string]any)
 	req.Action = "archive-backup"
 	req.ReviewToken = inspection["reviewToken"].(string)
-	pkg.Revision = cacheLabID()
+	pkg.Revision = cachelab.ID()
 	pkg.Title = "Changed after review"
 	if err = s.saveLocked(pkg); err != nil {
 		t.Fatal(err)
@@ -233,7 +234,7 @@ func TestTestPackageArchiveRejectsStaleLocalAndRemoteConflicts(t *testing.T) {
 func TestTestPackageArchiveFixedPathsLargeBlobAndRedirectGuard(t *testing.T) {
 	github, mock := testPackageArchiveMockService(t)
 	repo := testLabRepo{FullName: "fixture/private-archive", Private: true, DefaultBranch: "main"}
-	id := cacheLabID()
+	id := cachelab.ID()
 	path, _ := testPackageArchivePath(id)
 	mock.files[path] = []byte(strings.Repeat("a", (1<<20)+100))
 	raw, record, err := testPackageReadArchive(context.Background(), github, repo, id)
@@ -294,7 +295,7 @@ func TestTestPackageArchivePreservesUnrecognizedRemoteFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bundle.Package.ID = cacheLabID()
+	bundle.Package.ID = cachelab.ID()
 	raw, _ := json.Marshal(bundle)
 	mock.files[path] = raw
 	if _, err := p.handleTestPackageTransfer(context.Background(), s, req); err == nil {

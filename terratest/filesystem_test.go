@@ -34,7 +34,7 @@ func TestAutomationOutputDirFallsBackToPackageDirectory(t *testing.T) {
 	}
 }
 
-func TestCleanupAutomationOutputRemovesWorkspaceFolder(t *testing.T) {
+func TestCleanupAutomationOutputPreservesLegacyAppData(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", workspace)
 
@@ -48,8 +48,8 @@ func TestCleanupAutomationOutputRemovesWorkspaceFolder(t *testing.T) {
 
 	cleanupAutomationOutput()
 
-	if _, err := os.Stat(outputDir); !os.IsNotExist(err) {
-		t.Fatalf("expected automation output dir to be removed, stat err=%v", err)
+	if _, err := os.Stat(filepath.Join(outputDir, "control-panel", "stale.yaml")); err != nil {
+		t.Fatalf("legacy app data was removed: %v", err)
 	}
 }
 

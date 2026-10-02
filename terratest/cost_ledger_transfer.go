@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"math"
 	"net/http"
 	"os"
@@ -230,7 +231,7 @@ func writeCostDownload(directory string, raw []byte, name string) (map[string]an
 	if err := os.MkdirAll(directory, 0755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(directory, cacheLabID()[:8]+"-"+name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(filepath.Join(directory, cachelab.ID()[:8]+"-"+name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, err
 	}

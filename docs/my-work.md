@@ -1,6 +1,6 @@
 # My Work
 
-My Work is a personal issue workspace for following a milestone from intake through test preparation and validation. The Home screen introduces that journey and shows a small summary of the latest saved snapshot.
+My Work is a personal issue workspace for following releases and milestones from intake through test preparation and validation. Home shows release trackers, upcoming checkpoints, and recent work. The combined queue groups linked milestones while individual milestone intake remains available.
 
 Choose a repository and GitHub milestone, then select **Assigned to me**, **Unassigned**, or **Entire milestone**. For assigned work, Runway can use the authenticated GitHub account or a username you enter. Labels are optional. Pulling reads the milestone and its issues from GitHub; it does not edit GitHub.
 
@@ -13,3 +13,21 @@ The remaining-work chart records up to 60 observations for the same repository, 
 Use [Test Packages](test-packages.md) to edit plans, manage bucket placement, and export individual packages or the full library.
 
 The daily briefing above the milestone intake reports observed build availability, **QA template found on GitHub**, and missing locally saved test cases. Enable automatic scans in Settings, or use **Scan now**. Reports retain their scope and time across restarts; their scope refresh updates the intake snapshot while preserving package placement. See [Issue readiness](issue-readiness.md) for evidence rules and scan limits.
+
+## Release trackers
+
+Home now keeps release trackers above recent work. A tracker groups multiple GitHub milestones, their package buckets, and an editable release schedule. Choose **Add tracker** and a release month (the current month is suggested). The name defaults to “October 2026”, for example, and remains editable. Optionally upload the whole release planner to fill the chosen release’s dates, review the editable checkboxes, and create the tracker. Milestone linking, notes, holidays, and custom dates are available under **More options**; they are not required to create a tracker. Each milestone has its own owner scope. Saving verifies new milestone links against GitHub and prepares starter packages using the same placement-preserving rules as individual milestone intake.
+
+Dates, notes, holidays, and archive status belong to Runway. Editing them does not change GitHub. **Refresh issues** updates linked issue snapshots without replacing local dates or creating additional packages. Existing individual milestone intake and daily scanning remain available under the My Work disclosures. Select a linked milestone and choose **Scan this milestone** to use it as the daily scan scope.
+
+My Work combines issues across active trackers, deduplicates shared issues, and filters by release and milestone. Click an issue title to inspect its description, saved cases, and actions beside the queue. Readiness observations show compact rows; expand workflow and evidence when needed. Archived trackers are excluded from the combined queue. Deleting a tracker removes its schedule and links while preserving package buckets and test evidence.
+
+The schedule editor includes checkboxes for Bug complete, Feature complete, Code freeze, Charts QA sign-off, Charts UnRC, Charts release, and Release. New trackers select Bug complete by default; all options can be unchecked, renamed, and edited. Unchecked checkpoints keep their saved details but disappear from timelines and countdowns. Custom dates have the same on/off control. Existing trackers retain their current enabled dates.
+
+Shared checkpoints apply to every linked milestone. A milestone-specific checkpoint with the same name overrides the shared checkpoint for that milestone. Working-day counts use Monday–Friday, exclude today, include the target date, and skip the tracker's explicit holiday dates. Holidays are entered as YYYY-MM-DD; planner holiday mentions are not automatically applied to your calendar.
+
+**Import plan** accepts pasted text, text files, PDF files with selectable text, Word DOCX files, and Confluence’s HTML/MIME Word `.doc` export. Document extraction runs locally in the browser without a Confluence connection or an external AI service. The importer proposes dates with source excerpts, shows existing dates for matching checkpoint names, and leaves unchanged dates unselected. Edit the proposed names, dates, and milestone assignments, add selected rows to the draft, then save the tracker. Re-importing never silently overwrites the saved schedule.
+
+Imports are limited to 20 MB and PDFs to 100 pages. Scanned/image-only PDFs require text pasted from another source; OCR and binary legacy Word `.doc` files are not supported. Confluence’s text-based `.doc` exports are supported. Use full dates such as `16 Oct 2026`, `October 16, 2026`, or `2026-10-16`. Ambiguous numeric dates are not guessed. Complex table layouts can mix labels, so review every proposed checkpoint before applying it.
+
+Month-scoped imports use the planner’s release heading and year, not just the month of each date: November feature-complete dates in October stay with November. Only release checkpoints are proposed automatically; holiday and lifecycle notes are excluded. If no release headings are available, the importer explicitly reports calendar-month matching for review. Changing the month while creating a tracker rescans the uploaded plan and replaces its imported dates. Identified product versions are suggestions for milestone linking, not verified GitHub links.

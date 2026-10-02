@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -90,7 +91,7 @@ func TestTestPackageEvidenceSurvivesLabDeletionAndImportsAsCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.testLab = lab
-	run := testLabRun{ID: cacheLabID(), ClusterID: "cluster-a", Name: "VAI regression", Status: "failed", StartedAt: time.Now().Add(-time.Minute), FinishedAt: time.Now(), Results: []testLabResult{{Name: "TestVAI", Status: "fail"}}}
+	run := testLabRun{ID: cachelab.ID(), ClusterID: "cluster-a", Name: "VAI regression", Status: "failed", StartedAt: time.Now().Add(-time.Minute), FinishedAt: time.Now(), Results: []testLabResult{{Name: "TestVAI", Status: "fail"}}}
 	lab.library.Runs = []testLabRun{run}
 	path := filepath.Join(lab.root, run.ID+".log")
 	if err = os.WriteFile(path, []byte("failure token-abc:secret123\n"), 0600); err != nil {
@@ -149,7 +150,7 @@ func TestTestPackageStrictValidationAndFailurePreserveData(t *testing.T) {
 	pkg := packageTestStart(t, s, packageTestPlan(t, s))
 	oldRevision := pkg.Revision
 	invalid := cloneTestPackage(pkg)
-	invalid.Sessions[0].Results[0].Steps[0].StepID = cacheLabID()
+	invalid.Sessions[0].Results[0].Steps[0].StepID = cachelab.ID()
 	if validateTestPackage(invalid) == nil {
 		t.Fatal("foreign step accepted")
 	}
@@ -243,24 +244,27 @@ func TestTestPackageEnvironmentAndCacheProvenance(t *testing.T) {
 	}
 	s := packageTestService(t)
 	pkg := packageTestStart(t, s, packageTestPlan(t, s))
-	proof := testPackageEvidence{ID: cacheLabID(), Kind: "note", Name: "Other cluster", ClusterID: "wrong-cluster", Metadata: json.RawMessage(`{}`), CapturedAt: time.Now(), AttachedAt: time.Now()}
+	proof := testPackageEvidence{ID: cachelab.ID(), Kind: "note", Name: "Other cluster", ClusterID: "wrong-cluster", Metadata: json.RawMessage(`{}`), CapturedAt: time.Now(), AttachedAt: time.Now()}
 	if _, err = s.mutate(testPackageRequest{Action: "attach-evidence", ID: pkg.ID, Revision: pkg.Revision, SessionID: pkg.Sessions[0].ID}, nil, &proof, nil); err == nil {
 		t.Fatal("cross-cluster evidence accepted")
 	}
-	cache, err := newCacheLabService(t.TempDir())
+	cache, err := cachelab.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.cacheLab = cache
-	workspace := cacheLabWorkspace{ID: cacheLabID(), ClusterID: "cluster-a"}
-	snapshot := cacheLabSnapshot{ID: cacheLabID(), Workspace: workspace.ID, Name: "Baseline", CreatedAt: time.Now(), Bytes: 64, Tables: 2}
-	cache.library.Workspaces = []cacheLabWorkspace{workspace}
-	cache.library.Snapshots = []cacheLabSnapshot{snapshot}
+	workspace := cachelab.Workspace{ID: cachelab.ID(), ClusterID: "cluster-a"}
+	snapshot := cachelab.Snapshot{ID: cachelab.ID(), Workspace: workspace.ID, Name: "Baseline", CreatedAt: time.Now(), Bytes: 64, Tables: 2}
+	cache = cacheTestRewrite(t, cache, func(lib *cachelab.Library) {
+		lib.Workspaces = []cachelab.Workspace{workspace}
+		lib.Snapshots = []cachelab.Snapshot{snapshot}
+	})
+	p.cacheLab = cache
 	proof, raw, err := p.testPackageEvidence(testPackageRequest{Kind: "cache-snapshot", SourceID: snapshot.ID, WorkspaceID: workspace.ID})
 	if err != nil || proof.Artifact != nil || len(raw) != 0 || proof.ClusterID != "cluster-a" {
 		t.Fatal("metadata-only snapshot failed or read database")
 	}
-	dbpath := filepath.Join(cache.root, workspace.ID, snapshot.ID+".db")
+	dbpath := filepath.Join(cache.Root(), workspace.ID, snapshot.ID+".db")
 	if err = os.MkdirAll(filepath.Dir(dbpath), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +307,7 @@ func TestTestPackageReadBoundsAndStrictMetadata(t *testing.T) {
 	}
 	s := packageTestService(t)
 	pkg := packageTestStart(t, s, packageTestPlan(t, s))
-	proof := testPackageEvidence{ID: cacheLabID(), Kind: "note", Name: "Hidden metadata", Description: "An observation", CapturedAt: time.Now(), AttachedAt: time.Now(), Metadata: json.RawMessage(`{"token":"secret"}`)}
+	proof := testPackageEvidence{ID: cachelab.ID(), Kind: "note", Name: "Hidden metadata", Description: "An observation", CapturedAt: time.Now(), AttachedAt: time.Now(), Metadata: json.RawMessage(`{"token":"secret"}`)}
 	if _, err := s.mutate(testPackageRequest{Action: "attach-evidence", ID: pkg.ID, Revision: pkg.Revision, SessionID: pkg.Sessions[0].ID}, nil, &proof, nil); err == nil {
 		t.Fatal("unknown credential-shaped metadata accepted")
 	}

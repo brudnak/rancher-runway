@@ -7,7 +7,7 @@ repo_root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # workspaces may contain downloaded Go source (including legacy modules with
 # @version directories and no go.mod), but none of it is part of Runway.
 # Repair older workspaces before Wails' binding generation, preserving caches.
-for output_dir in "${repo_root}/automation-output" "${repo_root}/terratest/automation-output"; do
+for output_dir in "${repo_root}/automation-output" "${repo_root}/terratest/automation-output" "${repo_root}/runway-data" "${repo_root}/terratest/runway-data"; do
   mkdir -p -m 0700 "${output_dir}"
   if [[ -f "${output_dir}/go.mod" ]]; then
     continue

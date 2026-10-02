@@ -1,6 +1,6 @@
 <template>
   <div class="cluster-home grid min-w-0 gap-4">
-    <header class="cluster-home-hero"><div><span class="cluster-home-eyebrow"><Icon name="layers"/>RANCHER RUNWAY / CLUSTER WORKSPACES</span><h2>Clusters<span>.</span></h2><p>Cluster access, health, and test history.</p></div><div class="cluster-home-totals"><span><strong>{{ items.length }}</strong> discovered</span><span><strong>{{ retainedWorkspaces.length }}</strong> retained & external</span></div></header>
+    <header class="cluster-home-hero"><div><span class="cluster-home-eyebrow"><Icon name="layers"/>RANCHER RUNWAY / CLUSTER WORKSPACES</span><h2>Clusters<span>.</span></h2><p>Cluster access, health, and test history.</p></div><div class="cluster-home-totals"><span><strong>{{ items.length }}</strong> discovered</span><button type="button" @click="setActivePanelTab('history')"><strong>{{ retainedWorkspaces.length }}</strong> retained · Open History →</button></div></header>
     <div class="cluster-home-search"><label><Icon name="search"/><input v-model="clusterSearch" type="search" aria-label="Search cluster workspaces" placeholder="Find a cluster, nickname, hostname, or run…"/></label><button type="button" @click="refreshClusterWorkspaces"><Icon name="refresh"/>Refresh history</button></div>
     <div v-if="clusterWorkspaceError" class="cluster-home-error" role="alert">{{ clusterWorkspaceError }} <button type="button" @click="refreshClusterWorkspaces">Try again</button></div>
     <template v-if="!clusterSearch.trim()">
@@ -126,8 +126,8 @@
       </div>
     </div>
     </template>
-    <div v-else-if="!cleanupRunning" class="cluster-home-results"><p class="cluster-home-caption">{{ matchingLive.length + matchingRetained.length }} matching workspaces</p><ClusterCard v-for="cluster in matchingLive" :key="cluster.id" :cluster="cluster"/><div v-if="!matchingLive.length&&!matchingRetained.length" class="cluster-home-empty"><Icon name="search"/><h3>No workspaces match.</h3><p>Try a nickname, cluster ID, Rancher URL, or run ID.</p><button type="button" @click="clusterSearch=''">Clear search</button></div></div>
-    <section v-if="matchingRetained.length" class="cluster-home-retained"><header><span class="cluster-home-eyebrow">SAVED WORK HAS A HOME</span><h3>Retained & external workspaces</h3><p>Explore the same test results and snapshots saved in your labs, including environments no longer in the live cluster list.</p></header><ClusterWorkspaceCard v-for="cluster in matchingRetained" :key="cluster.id" :cluster="cluster"/></section>
+    <div v-else-if="!cleanupRunning" class="cluster-home-results"><p class="cluster-home-caption">{{ matchingLive.length }} matching live workspaces</p><ClusterCard v-for="cluster in matchingLive" :key="cluster.id" :cluster="cluster"/><div v-if="!matchingLive.length" class="cluster-home-empty"><Icon name="search"/><h3>No workspaces match.</h3><p>Try a nickname, cluster ID, Rancher URL, or run ID.</p><button type="button" @click="clusterSearch=''">Clear search</button></div></div>
+
   </div>
 </template>
 
@@ -136,12 +136,12 @@ import RefreshStatus from './RefreshStatus.vue';
 import { initialDiscovery } from './panel-presentation.mjs';
 import { computed, nextTick, ref, watch } from "vue";
 import Icon from "./HelmLabIcon.vue";
-import ClusterWorkspaceCard from "./ClusterWorkspaceCard.vue";
 import { refreshTestPackageSummaries } from "./test-packages-store.mjs";
 import { useClusterWorkspaces,refreshClusterWorkspaces,selectedClusterWorkspaceId,clusterDisplayName } from "./cluster-workspace-store.mjs";
 import {
   state,
   activeTab,
+  setActivePanelTab,
   activeClusterRunKey,
   activeClusterHAKey,
   openCleanupLogs,
@@ -155,10 +155,9 @@ import ClusterCard from "./ClusterCard.vue";
 const {clusterWorkspaces,clusterWorkspaceError}=useClusterWorkspaces();
 watch(activeTab,tab=>{if(tab==='clusters')refreshTestPackageSummaries().catch(()=>{});},{immediate:true});
 const clusterSearch=ref('');
-const retainedWorkspaces=computed(()=>clusterWorkspaces.value.filter(cluster=>!items.value.some(live=>live.id===cluster.id)));
+const retainedWorkspaces=computed(()=>clusterWorkspaces.value.filter(cluster=>cluster.archived));
 const matches=cluster=>{const words=clusterSearch.value.toLowerCase().trim().split(/\s+/).filter(Boolean);const text=[clusterDisplayName(cluster.id,cluster.name),cluster.nickname,cluster.id,cluster.runId,cluster.url,cluster.rancherUrl,cluster.version].filter(Boolean).join(' ').toLowerCase();return words.every(word=>text.includes(word));};
 const matchingLive=computed(()=>items.value.filter(matches));
-const matchingRetained=computed(()=>retainedWorkspaces.value.filter(matches));
 
 
 // Styling classes
@@ -297,8 +296,8 @@ const selectHA = haKey => {
   activeClusterHAKey.value = haKey;
 };
 
-watch([selectedClusterWorkspaceId,()=>items.value.map(item=>item.id).join(','),()=>clusterWorkspaces.value.map(item=>item.id).join(',')],async([id])=>{
- if(!id)return;const live=items.value.find(item=>item.id===id);clusterSearch.value='';
+watch([selectedClusterWorkspaceId,activeTab,()=>items.value.map(item=>item.id).join(','),()=>clusterWorkspaces.value.map(item=>item.id).join(',')],async([id])=>{
+ if(!id||activeTab.value!=='clusters')return;const live=items.value.find(item=>item.id===id);clusterSearch.value='';
  if(live){selectRun(clusterRunKey(live));selectHA(clusterHAKey(live));}
  await nextTick();const target=Array.from(document.querySelectorAll('[data-cluster-workspace-id]')).find(element=>element.dataset.clusterWorkspaceId===id);
  if(target){target.scrollIntoView({block:'start',behavior:'auto'});target.focus({preventScroll:true});selectedClusterWorkspaceId.value='';}

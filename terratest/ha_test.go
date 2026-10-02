@@ -1,8 +1,10 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -163,6 +165,11 @@ func TestHACleanup(t *testing.T) {
 	var costEstimate *cleanupCostEstimate
 	if _, err := runCleanupDestroyPhases(
 		func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), downstreamDeleteTimeout)
+			defer cancel()
+			if err := cleanupDeployedDownstreamsForRun(ctx, os.Getenv(runIDEnv), operationCommand); err != nil {
+				return err
+			}
 			return cleanupRecordedLinodeDownstreams(downstreamDeleteTimeout)
 		},
 		func() error {

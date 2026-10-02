@@ -2,6 +2,7 @@ package settings
 
 import (
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/registrycatalog"
 	"regexp"
 	"strings"
 
@@ -10,12 +11,7 @@ import (
 
 var ownerNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z .'-]{0,63}$`)
 
-var PreferredImageRegistryOptions = []string{
-	"stgregistry.suse.com",
-	"registry.rancher.com",
-	"registry.suse.com",
-	"docker.io",
-}
+var PreferredImageRegistryOptions = registrycatalog.Preferred
 
 const (
 	RKE2IngressControllerTraefik = "traefik"

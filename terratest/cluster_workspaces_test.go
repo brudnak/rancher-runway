@@ -1,8 +1,10 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -16,7 +18,9 @@ func clusterWorkspaceTestPanel(t *testing.T) *localControlPanel {
 	root := t.TempDir()
 	t.Setenv("RANCHER_RUNWAY_WORKSPACE", root)
 	t.Setenv("GITHUB_WORKSPACE", root)
-	return &localControlPanel{token: "workspace-token", testDir: root, repoRoot: root, operations: newPanelOperations(), clusterSnapshot: map[string]clusterView{}}
+	p := &localControlPanel{token: "workspace-token", testDir: root, repoRoot: root, operations: newPanelOperations(), clusterSnapshot: map[string]clusterView{}}
+	t.Cleanup(func() { p.workers.Stop(); _ = p.workers.Wait(context.Background()) })
+	return p
 }
 
 func TestClusterWorkspacesStableNicknameRestartAndArchive(t *testing.T) {
@@ -100,7 +104,7 @@ func TestClusterWorkspaceAPIIsPrivateAndFlat(t *testing.T) {
 	p.rememberClusterSnapshot([]clusterView{{ID: "known", Name: "Known cluster", RancherURL: "https://known.test", KubeconfigPath: "/private/kubeconfig.yaml"}})
 	p.testLab = testLabFixture(t)
 	p.cacheLab, _ = cacheTestService(t)
-	p.testLab.library.Runs = []testLabRun{{ID: cacheLabID(), ClusterID: "known", Host: "known.test", Name: "Recent check", Status: "passed"}}
+	p.testLab.library.Runs = []testLabRun{{ID: cachelab.ID(), ClusterID: "known", Host: "known.test", Name: "Recent check", Status: "passed"}}
 	call := func(method, body, token string) *httptest.ResponseRecorder {
 		request := httptest.NewRequest(method, "/api/cluster-workspaces", strings.NewReader(body))
 		request.Header.Set("X-Control-Panel-Token", token)
@@ -177,8 +181,8 @@ func TestClusterWorkspaceCleanupOnlyAfterSuccessfulExactRun(t *testing.T) {
 			p.rememberClusterSnapshot([]clusterView{{ID: "cluster-a", RunID: "run-a", RancherURL: "https://a.test"}, {ID: "cluster-b", RunID: "run-b", RancherURL: "https://b.test"}})
 			p.testLab = testLabFixture(t)
 			p.cacheLab, _ = cacheTestService(t)
-			p.testLab.library.Runs = []testLabRun{{ID: cacheLabID(), Host: "a.test", Name: "A", Status: "passed"}, {ID: cacheLabID(), Host: "b.test", Name: "B", Status: "passed"}}
-			p.testLab.library.Plans = []testLabPlan{{ID: cacheLabID(), Host: "a.test", Name: "Keep plan"}}
+			p.testLab.library.Runs = []testLabRun{{ID: cachelab.ID(), Host: "a.test", Name: "A", Status: "passed"}, {ID: cachelab.ID(), Host: "b.test", Name: "B", Status: "passed"}}
+			p.testLab.library.Plans = []testLabPlan{{ID: cachelab.ID(), Host: "a.test", Name: "Keep plan"}}
 			options, err := p.freezeRunLabCleanup("run-a", scenario.request, false)
 			if err != nil {
 				t.Fatal(err)
@@ -292,7 +296,7 @@ func TestClusterWorkspaceActiveCleanupReportsWarning(t *testing.T) {
 	p.rememberClusterSnapshot([]clusterView{{ID: "cluster-a", RunID: "run-a", RancherURL: "https://a.test"}})
 	p.testLab = testLabFixture(t)
 	p.cacheLab, _ = cacheTestService(t)
-	p.testLab.library.Runs = []testLabRun{{ID: cacheLabID(), Host: "a.test", Name: "Still running", ClusterID: "cluster-a", Status: "running"}}
+	p.testLab.library.Runs = []testLabRun{{ID: cachelab.ID(), Host: "a.test", Name: "Still running", ClusterID: "cluster-a", Status: "running"}}
 	options, err := p.freezeRunLabCleanup("run-a", true, false)
 	if err != nil {
 		t.Fatal(err)
@@ -303,5 +307,71 @@ func TestClusterWorkspaceActiveCleanupReportsWarning(t *testing.T) {
 	}
 	if len(p.operationLocked(panelOperationCleanupBatch).CompletedRunIDs) != 1 || len(p.operationLocked(panelOperationCleanupBatch).Failures) != 0 {
 		t.Fatal("local cleanup warning changed successful infrastructure result")
+	}
+}
+
+func TestClusterHistoryCRUDSurvivesRestart(t *testing.T) {
+	p := clusterWorkspaceTestPanel(t)
+	if err := p.mutateClusterHistory(clusterHistoryRequest{Action: "create", Name: "Regression", Version: "v2.15.3-head", Milestone: "v2.16.0", Notes: "Upgrade evidence"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := p.labClusterCandidates()
+	if err != nil || len(rows) != 1 || !rows[0].Archived {
+		t.Fatalf("create: %+v %v", rows, err)
+	}
+	id := rows[0].ID
+	if err := p.mutateClusterHistory(clusterHistoryRequest{Action: "update", ID: id, Name: "Renamed", Version: "head", Milestone: "v2.17.0", Notes: "Keep this"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.mutateClusterHistory(clusterHistoryRequest{Action: "delete", ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	reopened := &localControlPanel{}
+	rows, err = reopened.labClusterCandidates()
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("trash reappeared after restart: %+v %v", rows, err)
+	}
+	if err := reopened.mutateClusterHistory(clusterHistoryRequest{Action: "restore", ID: id}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = reopened.labClusterCandidates()
+	if err != nil || len(rows) != 1 || rows[0].Name != "Renamed" || rows[0].Milestone != "v2.17.0" || rows[0].Notes != "Keep this" || rows[0].Version != "head" {
+		t.Fatalf("restore lost metadata: %+v %v", rows, err)
+	}
+}
+
+func TestClusterHistoryProtectsActiveClustersAndEvidence(t *testing.T) {
+	p := clusterWorkspaceTestPanel(t)
+	p.rememberClusterSnapshot([]clusterView{{ID: "live", Name: "Live", RunID: "run"}})
+	for _, action := range []string{"update", "delete"} {
+		if err := p.mutateClusterHistory(clusterHistoryRequest{Action: action, ID: "live", Name: "Changed"}); err == nil {
+			t.Fatalf("%s accepted for live cluster", action)
+		}
+	}
+	p.mu.Lock()
+	p.clusterSnapshot = map[string]clusterView{}
+	p.mu.Unlock()
+	p.testLab = testLabFixture(t)
+	p.cacheLab, _ = cacheTestService(t)
+	p.testLab.library.Runs = []testLabRun{{ID: cachelab.ID(), ClusterID: "live", Name: "Evidence", Status: "passed"}}
+	if err := p.mutateClusterHistory(clusterHistoryRequest{Action: "delete", ID: "live"}); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("GET", "/api/cluster-workspaces", nil)
+	request.Header.Set("X-Control-Panel-Token", "workspace-token")
+	result := httptest.NewRecorder()
+	p.handleClusterWorkspaces(result, request)
+	var response struct {
+		Clusters []clusterWorkspaceResponse `json:"clusters"`
+		Trash    []clusterWorkspaceResponse `json:"trash"`
+	}
+	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Clusters) != 0 || len(response.Trash) != 1 || len(response.Trash[0].TestRuns) != 1 {
+		t.Fatalf("trash lost evidence: %s", result.Body.String())
+	}
+	if len(p.testLab.library.Runs) != 1 {
+		t.Fatal("underlying evidence deleted")
 	}
 }

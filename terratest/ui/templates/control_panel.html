@@ -268,6 +268,7 @@
     .panel-nav-chevron { margin-left: auto; opacity: 0.65; width: 0.9rem !important; }
     .panel-nav-group[aria-expanded=true] .panel-nav-chevron { transform: rotate(180deg); }
     .panel-nav-search { margin-left: auto; white-space: nowrap; font-size: 0.8125rem !important; }
+    .panel-nav-destination { flex-shrink: 0; }
     .panel-nav-anchor-label { font-size: 0.8125rem; font-weight: 600; }
     .panel-nav kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 1.2rem; padding: 0.1rem 0.25rem; border: 1px solid var(--runway-border); border-radius: 0.25rem; font: inherit; font-size: 0.6875rem; color: var(--runway-muted); }
     .panel-nav-mobile, .panel-mobile-activity { display: none; }
@@ -845,15 +846,26 @@
     body[data-panel-fullscreen="true"] #logModal {
       padding: 0.75rem;
     }
+    .panel-nav-destination .panel-nav-anchor-label { display: inline; }
+    @media (max-width: 760px) {
+      .panel-nav-primary { flex-wrap: wrap; }
+      .panel-nav-mobile { order: 10; flex-basis: 100%; }
+      .panel-nav-search { margin-left: auto; }
+    }
+    .panel-main { --panel-gutter: 1rem; padding-top: 0; }
+    .panel-main > .panel-nav { top: 0; margin-inline: calc(-1 * var(--panel-gutter)); border-radius: 0; padding-inline: var(--panel-gutter); }
+    @media(min-width:640px) { .panel-main { --panel-gutter: 1.5rem; } }
+    @media(min-width:1024px) { .panel-main { --panel-gutter: 2rem; } }
   </style>
 </head>
 <body data-workspace="home" data-booting="true" class="min-h-screen overflow-x-hidden bg-zinc-100 text-zinc-950 antialiased dark:bg-zinc-950 dark:text-zinc-100">
-  <main class="min-h-screen px-4 py-5 sm:px-6 lg:px-8">
+  <main class="panel-main min-h-screen px-4 py-5 sm:px-6 lg:px-8">
+      <nav id="panelTabs" data-vue-owned="true" class="panel-nav mb-5" aria-label="Rancher Runway workspaces"></nav>
     <div class="panel-shell mx-auto max-w-[1680px]">
       <div id="controlPanelChromeVue"></div>
 
 
-      <nav id="panelTabs" data-vue-owned="true" class="panel-nav mb-5" aria-label="Rancher Runway workspaces"></nav>
+
 
       <div class="grid min-w-0 gap-6">
         <section id="setupTabPanel" data-tab-panel="setup" class="control-panel-setup min-w-0" aria-label="Setup workspace">

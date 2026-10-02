@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/prbuild"
 	"os"
 	"path/filepath"
 	"sync"
@@ -24,15 +25,15 @@ func readinessDailyFixture(t *testing.T, root string, clock func() time.Time, ca
 	s.plans = func() ([]testPackage, error) {
 		return []testPackage{{ID: "planned", IssueURL: snapshot.Issues[0].URL, Cases: []testPackageCase{{Title: "test"}}}}, nil
 	}
-	s.scanFactory = func() func(context.Context, issueReadinessRequest) (issueReadinessReport, error) {
-		return func(_ context.Context, req issueReadinessRequest) (issueReadinessReport, error) {
-			qa := readinessQA{State: "found", Complete: true}
+	s.scanFactory = func() func(context.Context, prbuild.Request) (prbuild.Report, error) {
+		return func(_ context.Context, req prbuild.Request) (prbuild.Report, error) {
+			qa := prbuild.QA{State: "found", Complete: true}
 			verdict := "ready"
 			if req.IssueURL == snapshot.Issues[1].URL {
 				qa.State = "not_found"
 				verdict = "in_progress"
 			}
-			return issueReadinessReport{Issue: issueRadarIssue{Title: "Observed", State: "open"}, Verdict: verdict, Complete: true, QA: qa}, nil
+			return prbuild.Report{Issue: issueRadarIssue{Title: "Observed", State: "open"}, Verdict: verdict, Complete: true, QA: qa}, nil
 		}
 	}
 	t.Cleanup(func() {
@@ -115,11 +116,11 @@ func TestDailyReadinessCancellationAndInterruptedRestart(t *testing.T) {
 	var calls atomic.Int32
 	s := readinessDailyFixture(t, t.TempDir(), time.Now, &calls)
 	started := make(chan struct{})
-	s.scanFactory = func() func(context.Context, issueReadinessRequest) (issueReadinessReport, error) {
-		return func(ctx context.Context, _ issueReadinessRequest) (issueReadinessReport, error) {
+	s.scanFactory = func() func(context.Context, prbuild.Request) (prbuild.Report, error) {
+		return func(ctx context.Context, _ prbuild.Request) (prbuild.Report, error) {
 			close(started)
 			<-ctx.Done()
-			return issueReadinessReport{}, ctx.Err()
+			return prbuild.Report{}, ctx.Err()
 		}
 	}
 	if err := s.change(dailyReadinessRequest{Action: "scan", Timezone: "UTC"}); err != nil {
@@ -153,12 +154,12 @@ func TestDailyReadinessPartialAndScopeChange(t *testing.T) {
 	s := readinessDailyFixture(t, t.TempDir(), time.Now, &calls)
 	enabled := true
 	_ = s.change(dailyReadinessRequest{Action: "settings", Enabled: &enabled})
-	s.scanFactory = func() func(context.Context, issueReadinessRequest) (issueReadinessReport, error) {
-		return func(_ context.Context, req issueReadinessRequest) (issueReadinessReport, error) {
+	s.scanFactory = func() func(context.Context, prbuild.Request) (prbuild.Report, error) {
+		return func(_ context.Context, req prbuild.Request) (prbuild.Report, error) {
 			if req.IssueURL == "https://github.com/rancher/rancher/issues/2" {
-				return issueReadinessReport{}, fmt.Errorf("rate limited")
+				return prbuild.Report{}, fmt.Errorf("rate limited")
 			}
-			return issueReadinessReport{Issue: issueRadarIssue{State: "closed"}, Complete: true, QA: readinessQA{State: "found", Complete: true}}, nil
+			return prbuild.Report{Issue: issueRadarIssue{State: "closed"}, Complete: true, QA: prbuild.QA{State: "found", Complete: true}}, nil
 		}
 	}
 	req := dailyReadinessRequest{Action: "auto", Timezone: "UTC"}
@@ -189,15 +190,15 @@ func TestDailyReadinessSkipsQANoneAndRemovesNewlyExemptPlanCount(t *testing.T) {
 		Name string `json:"name"`
 	}{{Name: "QA/None"}}
 	s.fetch = func(context.Context, myWorkConfig) (myWorkSnapshot, error) { return snapshot, nil }
-	s.scanFactory = func() func(context.Context, issueReadinessRequest) (issueReadinessReport, error) {
-		return func(ctx context.Context, req issueReadinessRequest) (issueReadinessReport, error) {
+	s.scanFactory = func() func(context.Context, prbuild.Request) (prbuild.Report, error) {
+		return func(ctx context.Context, req prbuild.Request) (prbuild.Report, error) {
 			if req.IssueURL == snapshot.Issues[0].URL {
 				t.Error("QA/None was unnecessarily scanned")
 			}
-			readinessNotify(ctx, "Reading updated QA labels")
+			prbuild.Notify(ctx, "Reading updated QA labels")
 			issue := snapshot.Issues[1]
 			issue.Labels = snapshot.Issues[0].Labels
-			return issueReadinessReport{Issue: issue, Verdict: "qa_not_required", Complete: true, QA: readinessQA{State: "not_required", Complete: true}}, nil
+			return prbuild.Report{Issue: issue, Verdict: "qa_not_required", Complete: true, QA: prbuild.QA{State: "not_required", Complete: true}}, nil
 		}
 	}
 	if err := s.change(dailyReadinessRequest{Action: "scan", Timezone: "UTC"}); err != nil {

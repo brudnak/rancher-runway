@@ -2,6 +2,7 @@ package test
 
 import (
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"log"
 	"os"
 	"strings"
@@ -71,7 +72,7 @@ func validateLinodeDockerConfig(totalInstances int) error {
 
 func validateLinodeDockerVersionInputs(versions []string) error {
 	for i, version := range versions {
-		if imageLookupLooksLikeReference(version) {
+		if imagelookup.LooksLikeReference(version) {
 			return fmt.Errorf("rancher.versions[%d] must be a version or tag for Linode Docker, not a full image reference; select the exact repository with linode.dockerhub or the setup UI's Linode custom image source", i)
 		}
 	}
@@ -90,7 +91,7 @@ func prepareLinodeDockerPlans(totalInstances int) ([]*RancherResolvedPlan, error
 	viper.Set("linode.dockerhub", imageRepo)
 	plans := make([]*RancherResolvedPlan, 0, len(versions))
 	for _, version := range versions {
-		tag := normalizeDockerRancherTag(version)
+		tag := imagelookup.NormalizeDockerRancherTag(version)
 		plans = append(plans, &RancherResolvedPlan{
 			Mode:                  "linode-docker-cattle",
 			RequestedVersion:      version,
@@ -250,7 +251,7 @@ func resolveLinodeDockerImageSource(versions []string) (string, string, []string
 	}
 	tags := make([]string, 0, len(versions))
 	for _, version := range versions {
-		tags = append(tags, normalizeDockerRancherTag(version))
+		tags = append(tags, imagelookup.NormalizeDockerRancherTag(version))
 	}
 
 	candidates := linodeDockerImageSources
@@ -294,7 +295,7 @@ func searchLinodeDockerImageSources(version, customImage string) (string, []lino
 	if err != nil {
 		return "", nil, err
 	}
-	tag := normalizeDockerRancherTag(normalizeVersionInput(version))
+	tag := imagelookup.NormalizeDockerRancherTag(imagelookup.NormalizeVersionInput(version))
 	if tag == "" && customTag != "" {
 		tag = customTag
 	}
@@ -457,7 +458,7 @@ func settingsOwnerTag() string {
 func linodeRancherVersions(totalInstances int) []string {
 	versions := nonEmptyStringSlice(viper.GetStringSlice("rancher.versions"))
 	if len(versions) == 0 {
-		if version := normalizeVersionInput(viper.GetString("rancher.version")); version != "" {
+		if version := imagelookup.NormalizeVersionInput(viper.GetString("rancher.version")); version != "" {
 			versions = []string{version}
 		}
 	}
@@ -471,21 +472,7 @@ func linodeRancherInstances(totalInstances int) []map[string]string {
 	versions := linodeRancherVersions(totalInstances)
 	instances := make([]map[string]string, 0, len(versions))
 	for _, version := range versions {
-		instances = append(instances, map[string]string{"rancher_version": normalizeDockerRancherTag(version)})
+		instances = append(instances, map[string]string{"rancher_version": imagelookup.NormalizeDockerRancherTag(version)})
 	}
 	return instances
-}
-
-func normalizeDockerRancherTag(version string) string {
-	version = strings.TrimSpace(version)
-	if version == "" {
-		return version
-	}
-	if normalizeVersionInput(version) == "head" {
-		return "head"
-	}
-	if strings.HasPrefix(version, "v") {
-		return version
-	}
-	return "v" + version
 }

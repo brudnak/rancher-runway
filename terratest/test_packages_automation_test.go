@@ -2,6 +2,7 @@ package test
 
 import (
 	"encoding/json"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"strings"
 	"sync"
 	"testing"
@@ -46,10 +47,10 @@ func TestTestPackageAutomationFrozenSourceAndPrepare(t *testing.T) {
 }
 func TestTestPackageAutomationPreservesIdempotentEvidenceWithoutInferringOutcome(t *testing.T) {
 	s, pkg, link := packageAutomationFixture(t)
-	run := testLabRun{ID: cacheLabID(), PackageLink: &link, ClusterID: "cluster-a", SHA: strings.Repeat("a", 40), Status: "failed", FinishedAt: time.Now()}
+	run := testLabRun{ID: cachelab.ID(), PackageLink: &link, ClusterID: "cluster-a", SHA: strings.Repeat("a", 40), Status: "failed", FinishedAt: time.Now()}
 	meta, _ := json.Marshal(testPackageTestRunMetadata{ID: run.ID, SHA: run.SHA, Status: run.Status})
 	raw := []byte("failure evidence")
-	proof := testPackageEvidence{ID: cacheLabID(), Kind: "test-run", Name: "Project regression", SourceID: run.ID, ClusterID: run.ClusterID, CaseID: link.CaseID, CapturedAt: run.FinishedAt, AttachedAt: time.Now(), Metadata: meta, Artifact: packageArtifact(cacheLabID()+".log", "text/plain", raw)}
+	proof := testPackageEvidence{ID: cachelab.ID(), Kind: "test-run", Name: "Project regression", SourceID: run.ID, ClusterID: run.ClusterID, CaseID: link.CaseID, CapturedAt: run.FinishedAt, AttachedAt: time.Now(), Metadata: meta, Artifact: packageArtifact(cachelab.ID()+".log", "text/plain", raw)}
 	for i := 0; i < 2; i++ {
 		if err := s.preserveAutomationEvidence(run, proof, raw); err != nil {
 			t.Fatal(err)
@@ -65,7 +66,7 @@ func TestTestPackageAutomationPreservesIdempotentEvidenceWithoutInferringOutcome
 		t.Fatal("finished while linked run pending")
 	}
 	delete(s.pendingAutomation, run.ID)
-	run.ID = cacheLabID()
+	run.ID = cachelab.ID()
 	run.ClusterID = "another-cluster"
 	if err := s.preserveAutomationEvidence(run, proof, raw); err == nil {
 		t.Fatal("different cluster accepted")
@@ -97,8 +98,8 @@ func TestTestPackageAutomationManualTargetAllowsResolvedCluster(t *testing.T) {
 	if err := s.saveLocked(pkg); err != nil {
 		t.Fatal(err)
 	}
-	run := testLabRun{ID: cacheLabID(), PackageLink: &link, ClusterID: "external-resolved", Host: "rancher.example.test", Status: "passed", FinishedAt: time.Now()}
-	e := testPackageEvidence{ID: cacheLabID(), Kind: "test-run", Name: "Passed fixture", SourceID: run.ID, ClusterID: run.ClusterID, CaseID: link.CaseID, CapturedAt: run.FinishedAt, AttachedAt: time.Now(), Metadata: json.RawMessage(`{}`)}
+	run := testLabRun{ID: cachelab.ID(), PackageLink: &link, ClusterID: "external-resolved", Host: "rancher.example.test", Status: "passed", FinishedAt: time.Now()}
+	e := testPackageEvidence{ID: cachelab.ID(), Kind: "test-run", Name: "Passed fixture", SourceID: run.ID, ClusterID: run.ClusterID, CaseID: link.CaseID, CapturedAt: run.FinishedAt, AttachedAt: time.Now(), Metadata: json.RawMessage(`{}`)}
 	if err := s.preserveAutomationEvidence(run, e, nil); err != nil {
 		t.Fatal("manual target lost evidence after cluster resolution", err)
 	}
@@ -106,7 +107,7 @@ func TestTestPackageAutomationManualTargetAllowsResolvedCluster(t *testing.T) {
 func TestTestPackageAutomationCallbackCopiesLogAndRecoversAfterRestart(t *testing.T) {
 	s, pkg, link := packageAutomationFixture(t)
 	lab := testLabFixture(t)
-	run := testLabRun{ID: cacheLabID(), Name: "Regression", PackageLink: &link, ClusterID: "cluster-a", SHA: strings.Repeat("a", 40), Ref: "main", Status: "passed", StartedAt: time.Now().Add(-time.Minute), FinishedAt: time.Now(), Selection: pkg.Cases[0].Selection, Results: []testLabResult{{Name: "TestMember", Status: "pass"}}}
+	run := testLabRun{ID: cachelab.ID(), Name: "Regression", PackageLink: &link, ClusterID: "cluster-a", SHA: strings.Repeat("a", 40), Ref: "main", Status: "passed", StartedAt: time.Now().Add(-time.Minute), FinishedAt: time.Now(), Selection: pkg.Cases[0].Selection, Results: []testLabResult{{Name: "TestMember", Status: "pass"}}}
 	lab.library.Runs = []testLabRun{run}
 	lab.logs[run.ID] = "fixture log"
 	if err := lab.persistLocked(); err != nil {
@@ -132,8 +133,8 @@ func TestTestPackageAutomationCallbackCopiesLogAndRecoversAfterRestart(t *testin
 
 func TestTestPackageAutomationConcurrentRetriesDoNotDuplicateEvidence(t *testing.T) {
 	s, pkg, link := packageAutomationFixture(t)
-	run := testLabRun{ID: cacheLabID(), PackageLink: &link, ClusterID: "cluster-a", Status: "passed", FinishedAt: time.Now()}
-	proof := testPackageEvidence{ID: cacheLabID(), Kind: "test-run", Name: "Concurrent result", SourceID: run.ID, CaseID: link.CaseID, ClusterID: run.ClusterID, CapturedAt: run.FinishedAt, AttachedAt: time.Now(), Metadata: json.RawMessage(`{}`)}
+	run := testLabRun{ID: cachelab.ID(), PackageLink: &link, ClusterID: "cluster-a", Status: "passed", FinishedAt: time.Now()}
+	proof := testPackageEvidence{ID: cachelab.ID(), Kind: "test-run", Name: "Concurrent result", SourceID: run.ID, CaseID: link.CaseID, ClusterID: run.ClusterID, CapturedAt: run.FinishedAt, AttachedAt: time.Now(), Metadata: json.RawMessage(`{}`)}
 	var group sync.WaitGroup
 	failures := make(chan error, 8)
 	for i := 0; i < 8; i++ {

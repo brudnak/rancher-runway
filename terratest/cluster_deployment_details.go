@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"log"
 	"net/http"
 	"regexp"
@@ -75,6 +76,7 @@ func (p *localControlPanel) handleClusterDeploymentDetails(w http.ResponseWriter
 
 	details := p.collectClusterDeploymentDetails(ctx, cluster)
 	p.rememberTestPackageDeploymentDetails(details)
+	p.retainDeploymentDetails(details)
 	writeJSON(w, details)
 }
 
@@ -396,11 +398,11 @@ func clusterDeploymentImageRepository(reference string) string {
 	if cleaned == "" || strings.EqualFold(cleaned, clusterDeploymentImageDigest(cleaned)) {
 		return ""
 	}
-	parsed, err := newImageLookupService().parseReference(cleaned, false)
+	parsed, err := imagelookup.New().ParseReference(cleaned, false)
 	if err != nil {
 		return ""
 	}
-	return parsed.registry + "/" + parsed.repository
+	return parsed.Registry + "/" + parsed.Repository
 }
 
 func stripClusterRuntimeImageScheme(reference string) string {

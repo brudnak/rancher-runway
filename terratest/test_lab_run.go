@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"net/url"
 	"os"
@@ -135,8 +136,21 @@ func (s *testLabService) startRun(req testLabRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	id := cacheLabID()
-	run := testLabRun{PackageLink: req.PackageLink, ClusterID: clusterID, ID: id, Name: cacheLabText(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: append([]string{}, req.Selection...), Tags: req.Tags, Timeout: req.Timeout, Status: "running", Stage: "Preparing isolated source", StartedAt: time.Now(), Results: []testLabResult{}}
+	if s.workers == nil {
+		s.workers = &panelWorkers{}
+	}
+	parent, done, err := s.workers.Begin()
+	if err != nil {
+		return nil, err
+	}
+	launched := false
+	defer func() {
+		if !launched {
+			done()
+		}
+	}()
+	id := cachelab.ID()
+	run := testLabRun{PackageLink: req.PackageLink, ClusterID: clusterID, ID: id, Name: cachelab.Text(req.Name, 100), Host: host, SHA: req.SHA, Ref: s.library.Catalog.Ref, Selection: append([]string{}, req.Selection...), Tags: req.Tags, Timeout: req.Timeout, Status: "running", Stage: "Preparing isolated source", StartedAt: time.Now(), Results: []testLabResult{}}
 	if run.Name == "" {
 		run.Name = fmt.Sprintf("%s · %d suite(s)", host, len(commands))
 	}
@@ -145,9 +159,10 @@ func (s *testLabService) startRun(req testLabRequest) (any, error) {
 		s.library.Runs = s.library.Runs[1:]
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	go s.execute(ctx, run, commands, req.Config, secrets, goPath)
+	launched = true
+	go func() { defer done(); s.execute(ctx, run, commands, req.Config, secrets, goPath) }()
 	return run, nil
 }
 func (s *testLabService) runLocked(id string) *testLabRun {

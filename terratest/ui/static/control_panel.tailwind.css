@@ -2094,3 +2094,11 @@ body[data-workspace] #panelTabs{background:var(--runway-card);isolation:isolate}
 @media(max-width:760px){.panel-nav-version{font-size:9px;padding-right:4px}.panel-nav-primary{gap:2px}}
 
 .panel-nav::before{content:"";position:absolute;left:50%;transform:translateX(-50%);top:calc(-.75rem - 1px);height:calc(.75rem + 1px);width:100vw;background:var(--runway-soft);pointer-events:none;z-index:-1}
+
+/* Shared config-first sign-in choice for downstream, Test Lab and Cache Lab. */
+.rancher-password-sources{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0 0 18px}
+.rancher-token-generator .rancher-password-sources button{display:flex;align-items:center;gap:10px;text-align:left;border:1px solid var(--runway-border);border-radius:10px;padding:14px;background:var(--runway-card);color:var(--runway-ink)}
+.rancher-password-sources span{display:grid;gap:4px}.rancher-password-sources strong{font-size:13px}.rancher-password-sources small{font-size:11px;color:var(--runway-muted);font-weight:400}
+.rancher-token-generator .rancher-password-sources button[aria-pressed=true]{border-color:var(--runway-accent);box-shadow:inset 0 0 0 1px var(--runway-accent);background:color-mix(in srgb,var(--runway-accent) 9%,var(--runway-card));color:var(--runway-ink)}
+.rancher-password-sources .hl-icon{color:var(--runway-accent)}
+@media(max-width:640px){.rancher-password-sources{grid-template-columns:1fr}}

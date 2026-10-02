@@ -1,6 +1,7 @@
 <script setup>
 import {computed,nextTick,onBeforeUnmount,onMounted,ref,watch} from 'vue';
 import Icon from './HelmLabIcon.vue';
+import ReleaseTrackers from './ReleaseTrackers.vue';
 import HomeLayoutPicker from './HomeLayoutPicker.vue';
 import {homeLayout} from './home-preferences.mjs';
 import {homeBriefing} from './home-layout.mjs';
@@ -33,9 +34,10 @@ watch(activeTab,tab=>{if(tab==='home')void refreshMyWork();});
 </script>
 <template>
  <div class="quiet-home">
-  <header class="qh-heading"><div><span class="qh-eyebrow">{{dateLabel}}</span><h1 id="home-title" tabindex="-1">Your workspace.</h1><p>{{homeLayout==='ready'?'A clear view of what’s ready and what needs you.':'Pick up where you left off.'}}</p></div><details class="qh-customize"><summary><Icon name="sliders"/>Personalize Home</summary><div><HomeLayoutPicker name="home-layout-choice"/></div></details></header>
+  <header class="qh-heading"><div><span class="qh-eyebrow">{{dateLabel}}</span><h1 id="home-title" tabindex="-1">Your work, in view.</h1><p>{{homeLayout==='ready'?'A clear view of what’s ready and what needs you.':'Pick up where you left off.'}}</p></div><details class="qh-customize"><summary><Icon name="sliders"/>Personalize Home</summary><div><HomeLayoutPicker name="home-layout-choice"/></div></details></header>
   <p v-if="myWorkError||dailyReadinessError" class="qh-notice" role="status">{{myWorkError||dailyReadinessError}}</p>
   <div v-if="snapshot.cloud.length||snapshot.localBusy||snapshot.stale||snapshot.checking" class="qh-activity" role="status"><Icon :name="snapshot.stale?'signal':'pulse'"/><span>{{snapshot.stale?'Workspace status may be out of date.':snapshot.checking?'Checking workspace…':snapshot.cloud.map(item=>item.label).join(' · ')||'Local operation running'}}<small v-if="snapshot.cloud.length&&!snapshot.stale">Keep Runway open while it finishes.</small></span><button v-if="snapshot.stale" :disabled="manualRefreshInFlight" @click="refreshChecks">Refresh</button><button v-else @click="setActivePanelTab(snapshot.cloud[0]?.tab||(state.steve?.operation?.running?'steve':snapshot.localBusy?'k3d':'runs'))">View activity <Icon name="arrow"/></button></div>
+  <ReleaseTrackers/>
   <div class="qh-layout">
    <div class="qh-main">
     <section v-for="section in sections" :key="section" class="qh-section" :class="{'qh-feature':section===sections[0]}" :aria-label="section==='continue'?'Continue working':'Readiness briefing'">

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"gopkg.in/yaml.v3"
 	"io"
 	"net/http"
@@ -30,7 +31,12 @@ type clusterWorkspaceRecord struct {
 	Role       string `json:"role,omitempty"`
 	Kubeconfig string `json:"kubeconfig,omitempty"`
 	Context    string `json:"context,omitempty"`
+	Reachable  bool   `json:"reachable"`
 	Archived   bool   `json:"archived"`
+	Milestone  string `json:"milestone,omitempty"`
+	Notes      string `json:"notes,omitempty"`
+	Purged     bool   `json:"purged,omitempty"`
+	Deleted    bool   `json:"deleted,omitempty"`
 }
 
 type clusterWorkspaceManifest struct {
@@ -44,7 +50,7 @@ type clusterWorkspaceResponse struct {
 }
 
 func (p *localControlPanel) clusterWorkspacesPath() string {
-	return filepath.Join(automationOutputDir(), "control-panel", "cluster-workspaces.json")
+	return durableDataPath("cluster-workspaces.json")
 }
 
 func (p *localControlPanel) loadClusterWorkspacesLocked() error {
@@ -106,7 +112,7 @@ func clusterWorkspaceURL(raw string) (string, error) {
 	if !strings.Contains(raw, "://") {
 		raw = "https://" + raw
 	}
-	base, err := cacheLabURL(raw)
+	base, err := cachelab.URL(raw)
 	if err != nil {
 		return "", err
 	}
@@ -188,6 +194,9 @@ func (p *localControlPanel) rememberClusterWorkspaces(clusters []clusterView) er
 			continue
 		}
 		old := p.clusterWorkspaces[cluster.ID]
+		if old.Purged {
+			continue
+		}
 		record := old
 		record.ID = cluster.ID
 		if cluster.Name != "" {
@@ -235,14 +244,17 @@ func (p *localControlPanel) labClusterCandidates() ([]clusterWorkspaceRecord, er
 	p.mu.Lock()
 	clusters := make([]clusterView, 0, len(p.clusterSnapshot))
 	discovered := map[string]bool{}
+	reachable := map[string]bool{}
 	for _, cluster := range p.clusterSnapshot {
 		clusters = append(clusters, cluster)
 		discovered[cluster.ID] = true
+		reachable[cluster.ID] = cluster.Reachable
 	}
 	p.mu.Unlock()
 	for _, cluster := range p.localLabClusterWorkspaceViews() {
 		clusters = append(clusters, cluster)
 		discovered[cluster.ID] = true
+		reachable[cluster.ID] = cluster.Reachable
 	}
 	if err := p.rememberClusterWorkspaces(clusters); err != nil {
 		return nil, err
@@ -255,6 +267,10 @@ func (p *localControlPanel) labClusterCandidates() ([]clusterWorkspaceRecord, er
 	defer p.clusterWorkspacesMu.Unlock()
 	result := make([]clusterWorkspaceRecord, 0, len(p.clusterWorkspaces))
 	for _, record := range p.clusterWorkspaces {
+		if record.Deleted {
+			continue
+		}
+		record.Reachable = reachable[record.ID]
 		record.Archived = !discovered[record.ID] && !recorded[record.RunID]
 		result = append(result, record)
 	}
@@ -322,6 +338,9 @@ func (p *localControlPanel) resolveLabCluster(clusterID, host, kubeconfig, conte
 	p.clusterWorkspacesMu.Lock()
 	defer p.clusterWorkspacesMu.Unlock()
 	if old, exists := p.clusterWorkspaces[id]; exists {
+		if old.Deleted {
+			return "", errors.New("this cluster history is in Trash; restore it from Retained History first")
+		}
 		return old.ID, nil
 	}
 	p.clusterWorkspaces[id] = record
@@ -363,22 +382,20 @@ func (p *localControlPanel) handleClusterWorkspaces(w http.ResponseWriter, r *ht
 		return
 	}
 	if r.Method == http.MethodPost {
-		var req struct {
-			Action   string `json:"action"`
-			ID       string `json:"id"`
-			Nickname string `json:"nickname"`
-		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+		var req clusterHistoryRequest
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&req); err != nil {
 			http.Error(w, "invalid cluster workspace request", 400)
 			return
 		}
-		if req.Action != "rename" {
-			http.Error(w, "unknown cluster workspace action", 400)
-			return
+		var err error
+		if req.Action == "rename" {
+			err = p.renameClusterWorkspace(req.ID, req.Nickname)
+		} else {
+			err = p.mutateClusterHistory(req)
 		}
-		if err := p.renameClusterWorkspace(req.ID, req.Nickname); err != nil {
+		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
@@ -416,7 +433,19 @@ func (p *localControlPanel) handleClusterWorkspaces(w http.ResponseWriter, r *ht
 		}
 		result = append(result, row)
 	}
-	writeJSON(w, map[string]any{"clusters": result})
+	trash := []clusterWorkspaceResponse{}
+	p.clusterWorkspacesMu.Lock()
+	for _, record := range p.clusterWorkspaces {
+		if record.Deleted && !record.Purged {
+			record.Kubeconfig = ""
+			record.Context = ""
+			record.Archived = true
+			trash = append(trash, clusterWorkspaceResponse{clusterWorkspaceRecord: record, clusterLabData: data[record.ID]})
+		}
+	}
+	p.clusterWorkspacesMu.Unlock()
+	sort.Slice(trash, func(i, j int) bool { return trash[i].ID < trash[j].ID })
+	writeJSON(w, map[string]any{"clusters": result, "trash": trash})
 }
 
 // Optional cleanup is frozen against exact cluster IDs before infrastructure
@@ -457,6 +486,9 @@ func (p *localControlPanel) finishRunLabCleanup(runID string, options panelLabCl
 		}
 	}
 	p.mu.Unlock()
+	for _, id := range options.ClusterIDs {
+		p.recordClusterHistory(id, "infrastructure-removed", map[string]any{"runId": runID, "cleanupCanceled": canceled})
+	}
 	if !options.TestLab && !options.CacheLab {
 		return
 	}
@@ -524,3 +556,94 @@ func (p *localControlPanel) localLabClusterWorkspaceViews() []clusterView {
 }
 
 func localLabClusterWorkspaceID(role, runID string) string { return "local-" + role + "-" + runID }
+
+// Removing a history entry is reversible and never operates on cloud resources
+// or destroys the independently stored test/cache/package evidence.
+type clusterHistoryRequest struct {
+	Action        string `json:"action"`
+	ID            string `json:"id"`
+	Nickname      string `json:"nickname"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Milestone     string `json:"milestone"`
+	Notes         string `json:"notes"`
+	ConfirmID     string `json:"confirmId"`
+	ConfirmPhrase string `json:"confirmPhrase"`
+}
+
+func (p *localControlPanel) mutateClusterHistory(in clusterHistoryRequest) error {
+	if in.Action == "purge" {
+		return p.purgeClusterHistory(in)
+	}
+	candidates, err := p.labClusterCandidates()
+	if err != nil {
+		return err
+	}
+	if in.Action != "create" && in.Action != "update" && in.Action != "delete" && in.Action != "restore" {
+		return errors.New("unknown cluster history action")
+	}
+	in.Name = strings.TrimSpace(in.Name)
+	in.Version = strings.TrimSpace(in.Version)
+	in.Milestone = strings.TrimSpace(in.Milestone)
+	if in.Action == "create" || in.Action == "update" {
+		if !validClusterWorkspaceText(in.Name, 160, false) || !validClusterWorkspaceText(in.Version, 160, true) || !validClusterWorkspaceText(in.Milestone, 160, true) || !utf8.ValidString(in.Notes) || len(in.Notes) > 16384 {
+			return errors.New("enter a name (up to 160 characters), a valid version/milestone, and notes of at most 16 KiB")
+		}
+	}
+	if in.Action != "create" && in.Action != "restore" {
+		for _, candidate := range candidates {
+			if candidate.ID == in.ID && !candidate.Archived {
+				return errors.New("this cluster is still associated with a live or recorded environment; manage its history after the environment is removed")
+			}
+		}
+	}
+	// Do not detach history while a lifecycle operation is using it.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.anyOperationRunningLocked() {
+		return errors.New("wait for active operations to finish before changing retained history")
+	}
+	p.clusterWorkspacesMu.Lock()
+	defer p.clusterWorkspacesMu.Unlock()
+	if in.Action == "create" {
+		in.ID = "history-" + operationID()
+	}
+	old, exists := p.clusterWorkspaces[in.ID]
+	if in.Action != "create" && !exists {
+		return errors.New("cluster history not found")
+	}
+	if old.Purged {
+		return errors.New("this history was permanently deleted")
+	}
+	record := old
+	switch in.Action {
+	case "create", "update":
+		if record.Deleted {
+			return errors.New("restore this history entry before editing it")
+		}
+		record.ID = in.ID
+		record.Name = in.Name
+		record.Nickname = ""
+		record.Version = in.Version
+		record.Milestone = in.Milestone
+		record.Notes = in.Notes
+		record.Archived = true
+		if in.Action == "create" {
+			record.Role = "history"
+		}
+	case "delete":
+		record.Deleted = true
+	case "restore":
+		record.Deleted = false
+	}
+	p.clusterWorkspaces[in.ID] = record
+	if err = p.persistClusterWorkspacesLocked(); err != nil {
+		if exists {
+			p.clusterWorkspaces[in.ID] = old
+		} else {
+			delete(p.clusterWorkspaces, in.ID)
+		}
+		return err
+	}
+	return nil
+}

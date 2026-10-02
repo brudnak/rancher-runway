@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
+	"github.com/brudnak/ha-rancher-rke2/internal/prbuild"
+	"github.com/brudnak/ha-rancher-rke2/internal/server"
+
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -16,7 +19,7 @@ import (
 )
 
 // Issue Radar only reads GitHub. Credentials stay in the existing gh CLI login.
-type issueRadarService struct{ runCommand imageLookupCommandRunner }
+type issueRadarService struct{ runCommand imagelookup.CommandRunner }
 
 type issueRadarConfig struct {
 	Repo        string   `json:"repo"`
@@ -26,49 +29,13 @@ type issueRadarConfig struct {
 	Users       []string `json:"users"`
 }
 
-type issueRadarMilestone struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	State  string `json:"state"`
-	DueOn  string `json:"due_on"`
-}
-
-type issueRadarIssue struct {
-	Number      int       `json:"number"`
-	Title       string    `json:"title"`
-	URL         string    `json:"html_url"`
-	State       string    `json:"state"`
-	StateReason string    `json:"state_reason,omitempty"`
-	Body        string    `json:"body,omitempty"`
-	CreatedAt   string    `json:"created_at"`
-	UpdatedAt   string    `json:"updated_at"`
-	ClosedAt    string    `json:"closed_at,omitempty"`
-	PullRequest *struct{} `json:"pull_request,omitempty"`
-	Labels      []struct {
-		Name string `json:"name"`
-	} `json:"labels"`
-	Assignees []struct {
-		Login string `json:"login"`
-	} `json:"assignees"`
-	Milestone *issueRadarMilestone `json:"milestone"`
-}
-
 type issueRadarSnapshot struct {
 	Config      issueRadarConfig  `json:"config"`
 	GeneratedAt time.Time         `json:"generatedAt"`
 	Issues      []issueRadarIssue `json:"issues"`
 }
 
-var issueRadarRepoPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9_.-]{1,100}$`)
 var issueRadarLoginPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`)
-
-func issueRadarRepo(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if !issueRadarRepoPattern.MatchString(value) || strings.HasSuffix(value, "/.") || strings.HasSuffix(value, "/..") {
-		return "", &imageLookupInputError{message: "Enter a GitHub repository as owner/repo."}
-	}
-	return value, nil
-}
 
 func normalizeIssueRadarConfig(config issueRadarConfig) (issueRadarConfig, error) {
 	var err error
@@ -78,10 +45,10 @@ func normalizeIssueRadarConfig(config issueRadarConfig) (issueRadarConfig, error
 	}
 	config.Milestone = strings.TrimSpace(config.Milestone)
 	if len(config.Milestone) > 200 || strings.ContainsAny(config.Milestone, "\r\n\x00") {
-		return config, &imageLookupInputError{message: "Enter a milestone title of at most 200 characters."}
+		return config, &imagelookup.InputError{Message: "Enter a milestone title of at most 200 characters."}
 	}
 	if config.NoMilestone && config.Milestone != "" {
-		return config, &imageLookupInputError{message: "Choose a milestone or issues without a milestone, not both."}
+		return config, &imagelookup.InputError{Message: "Choose a milestone or issues without a milestone, not both."}
 	}
 	labels := []string{}
 	seen := map[string]bool{}
@@ -91,7 +58,7 @@ func normalizeIssueRadarConfig(config issueRadarConfig) (issueRadarConfig, error
 			continue
 		}
 		if len(label) > 100 || strings.ContainsAny(label, "\r\n\x00") {
-			return config, &imageLookupInputError{message: "Each team label must be at most 100 characters on one line."}
+			return config, &imagelookup.InputError{Message: "Each team label must be at most 100 characters on one line."}
 		}
 		if !seen[strings.ToLower(label)] {
 			labels = append(labels, label)
@@ -99,7 +66,7 @@ func normalizeIssueRadarConfig(config issueRadarConfig) (issueRadarConfig, error
 		}
 	}
 	if len(labels) == 0 || len(labels) > 8 {
-		return config, &imageLookupInputError{message: "Enter one to eight comma-separated team labels. Issues must match every label."}
+		return config, &imagelookup.InputError{Message: "Enter one to eight comma-separated team labels. Issues must match every label."}
 	}
 	config.Label = strings.Join(labels, ",")
 	users := []string{}
@@ -110,7 +77,7 @@ func normalizeIssueRadarConfig(config issueRadarConfig) (issueRadarConfig, error
 			continue
 		}
 		if !issueRadarLoginPattern.MatchString(user) || strings.Contains(user, "--") {
-			return config, &imageLookupInputError{message: "Enter GitHub usernames using letters, numbers, and single hyphens."}
+			return config, &imagelookup.InputError{Message: "Enter GitHub usernames using letters, numbers, and single hyphens."}
 		}
 		if !seen[user] {
 			users = append(users, user)
@@ -118,7 +85,7 @@ func normalizeIssueRadarConfig(config issueRadarConfig) (issueRadarConfig, error
 		}
 	}
 	if len(users) == 0 || len(users) > 8 {
-		return config, &imageLookupInputError{message: "Add one to eight GitHub usernames to compare assignments."}
+		return config, &imagelookup.InputError{Message: "Add one to eight GitHub usernames to compare assignments."}
 	}
 	config.Users = users
 	return config, nil
@@ -129,15 +96,15 @@ func (s *issueRadarService) githubGet(ctx context.Context, endpoint, projection 
 	defer cancel()
 	args := []string{"api", "--include", "--hostname", "github.com", "--method", "GET",
 		"-H", "Accept:application/vnd.github+json", "-H", "X-GitHub-Api-Version:2022-11-28", endpoint, "--jq", projection}
-	raw, err := s.runCommand(ctx, "gh", args, imageLookupSanitizedGHEnvironment(), 2<<20)
-	status, payload := parsePRBuildGitHubIncludedResponse(raw)
+	raw, err := s.runCommand(ctx, "gh", args, imagelookup.SanitizedGHEnvironment(), 2<<20)
+	status, payload := prbuild.ParsePRBuildGitHubIncludedResponse(raw)
 	if ctx.Err() != nil {
 		return fmt.Errorf("GitHub issue lookup timed out or was cancelled: %w", ctx.Err())
 	}
 	if status >= 400 {
-		return &prBuildGitHubHTTPError{status: status, operation: "issue board"}
+		return &prbuild.GitHubHTTPError{Status: status, Operation: "issue board"}
 	}
-	if errors.Is(err, errImageLookupCommandOutputLimit) {
+	if errors.Is(err, imagelookup.ErrImageLookupCommandOutputLimit) {
 		return errors.New("GitHub issue response was too large; narrow the team labels or milestone.")
 	}
 	if err != nil {
@@ -186,7 +153,7 @@ func (s *issueRadarService) issues(ctx context.Context, config issueRadarConfig,
 			}
 		}
 		if query.Get("milestone") == "" {
-			return nil, &imageLookupInputError{message: fmt.Sprintf("Milestone %q was not found in %s. Load milestones to choose an exact title.", config.Milestone, config.Repo)}
+			return nil, &imagelookup.InputError{Message: fmt.Sprintf("Milestone %q was not found in %s. Load milestones to choose an exact title.", config.Milestone, config.Repo)}
 		}
 	}
 	projection := "map({number,title,html_url,state,state_reason,body:((.body // \"\")[0:1200]),created_at,updated_at,closed_at,pull_request,labels:[.labels[]|{name}],assignees:[.assignees[]|{login}],milestone:(.milestone|if . == null then null else {number,title,state,due_on} end)})"
@@ -221,46 +188,17 @@ func (p *localControlPanel) issueRadarBackend() *issueRadarService {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.issueRadar == nil {
-		p.issueRadar = &issueRadarService{runCommand: imageLookupExecCommand}
+		p.issueRadar = &issueRadarService{runCommand: imagelookup.ExecCommand}
 	}
 	return p.issueRadar
 }
 
 func (p *localControlPanel) issueRadarRequest(w http.ResponseWriter, r *http.Request, payload any, limits ...int64) bool {
-	w.Header().Set("Cache-Control", "no-store")
-	if !p.authorizedLocalAction(r) {
-		http.Error(w, "invalid control panel token", http.StatusForbidden)
-		return false
-	}
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return false
-	}
-	limit := int64(64 << 10)
-	if len(limits) > 0 {
-		limit = limits[0]
-	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(payload); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			http.Error(w, "Issue Radar request is too large.", http.StatusRequestEntityTooLarge)
-		} else {
-			http.Error(w, "invalid JSON request", http.StatusBadRequest)
-		}
-		return false
-	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		http.Error(w, "request body must contain exactly one JSON object", http.StatusBadRequest)
-		return false
-	}
-	return true
+	return server.ReadIssueRequest(w, r, payload, p.authorizedLocalAction, limits...)
 }
 
 func issueRadarError(w http.ResponseWriter, err error) {
-	http.Error(w, err.Error(), prBuildHTTPStatus(err))
+	http.Error(w, err.Error(), prbuild.HTTPStatus(err))
 }
 
 func (p *localControlPanel) handleIssueRadar(w http.ResponseWriter, r *http.Request) {
@@ -367,3 +305,9 @@ func (p *localControlPanel) handleIssueRadarSave(w http.ResponseWriter, r *http.
 	}
 	writeJSON(w, map[string]string{"filename": filepath.Base(path), "path": path})
 }
+
+type issueRadarIssue = prbuild.Issue
+type issueRadarMilestone = prbuild.Milestone
+
+func issueRadarRepo(value string) (string, error) { return prbuild.NormalizeRepository(value) }
+func issueQANone(issue issueRadarIssue) bool      { return prbuild.IssueQANone(issue) }

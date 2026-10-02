@@ -34,3 +34,6 @@ var ControlPanelCSS string
 
 //go:embed static/control_panel_components.css
 var ControlPanelComponentsCSS string
+
+//go:embed static/release_plan_import.js
+var ReleasePlanImportJS string

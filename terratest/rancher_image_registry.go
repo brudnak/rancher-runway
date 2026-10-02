@@ -3,13 +3,13 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"log"
 	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -17,33 +17,17 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
-const (
-	imageLookupVersionLabel            = "org.opencontainers.image.version"
-	imageLookupCanonicalReferenceLabel = "org.opensuse.reference"
-)
-
-type rancherImageProvenance struct {
-	Reference          string
-	Digest             string
-	CreatedAt          time.Time
-	BuildVersion       string
-	SourceURL          string
-	Revision           string
-	OSSRevision        string
-	CanonicalReference string
-}
-
 type preferredRancherImageResolution struct {
 	Registry          string
 	RegistryLabel     string
 	RancherImage      string
 	RancherImageTag   string
 	AgentImage        string
-	RancherProvenance rancherImageProvenance
-	AgentProvenance   rancherImageProvenance
+	RancherProvenance imagelookup.Provenance
+	AgentProvenance   imagelookup.Provenance
 }
 
-type rancherImageInspectFunc func(context.Context, string) (rancherImageProvenance, bool, error)
+type rancherImageInspectFunc func(context.Context, string) (imagelookup.Provenance, bool, error)
 type rancherImageTagListFunc func(context.Context, string, string) ([]string, error)
 
 type preferredRancherImageLookupServiceContextKey struct{}
@@ -60,7 +44,7 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 		return nil, nil
 	}
 
-	tag := normalizeDockerRancherTag(normalizeVersionInput(requestedVersion))
+	tag := imagelookup.NormalizeDockerRancherTag(imagelookup.NormalizeVersionInput(requestedVersion))
 	if tag == "" {
 		return nil, fmt.Errorf("cannot verify preferred image registries without a Rancher image tag")
 	}
@@ -76,10 +60,10 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 		serverProvenance, serverFound, serverErr := inspectPreferredRancherImage(serverCtx, serverReference)
 		serverCancel()
 		if serverErr != nil {
-			return nil, fmt.Errorf("could not verify %s in %s: %w", serverReference, preferredRancherRegistryLabel(registry), serverErr)
+			return nil, fmt.Errorf("could not verify %s in %s: %w", serverReference, imagelookup.PreferredRegistryLabel(registry), serverErr)
 		}
 		if !serverFound {
-			misses = append(misses, fmt.Sprintf("%s missing %s", preferredRancherRegistryLabel(registry), serverReference))
+			misses = append(misses, fmt.Sprintf("%s missing %s", imagelookup.PreferredRegistryLabel(registry), serverReference))
 			continue
 		}
 
@@ -87,21 +71,21 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 		agentProvenance, agentFound, agentErr := inspectPreferredRancherImage(agentCtx, agentReference)
 		agentCancel()
 		if agentErr != nil {
-			return nil, fmt.Errorf("could not verify %s in %s: %w", agentReference, preferredRancherRegistryLabel(registry), agentErr)
+			return nil, fmt.Errorf("could not verify %s in %s: %w", agentReference, imagelookup.PreferredRegistryLabel(registry), agentErr)
 		}
 
 		if serverFound && agentFound {
 			if err := validateExactHeadImagePair(tag, serverProvenance, agentProvenance); err != nil {
 				return nil, err
 			}
-			if isPrimeCommitHeadRancherVersion(requestedVersion) {
-				if err := validatePatchHeadServerProvenance(requestedVersion, serverProvenance); err != nil {
+			if imagelookup.IsPrimeCommitHeadRancherVersion(requestedVersion) {
+				if err := imagelookup.ValidatePatchHeadServerProvenance(requestedVersion, serverProvenance); err != nil {
 					return nil, err
 				}
 			}
 			return &preferredRancherImageResolution{
 				Registry:          registry,
-				RegistryLabel:     preferredRancherRegistryLabel(registry),
+				RegistryLabel:     imagelookup.PreferredRegistryLabel(registry),
 				RancherImage:      serverRepository,
 				RancherImageTag:   tag,
 				AgentImage:        agentReference,
@@ -114,7 +98,7 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 		if !agentFound {
 			missing = append(missing, agentReference)
 		}
-		misses = append(misses, fmt.Sprintf("%s missing %s", preferredRancherRegistryLabel(registry), strings.Join(missing, " and ")))
+		misses = append(misses, fmt.Sprintf("%s missing %s", imagelookup.PreferredRegistryLabel(registry), strings.Join(missing, " and ")))
 	}
 
 	return nil, fmt.Errorf("preferred registries do not contain a complete Rancher server/agent image pair for %s: %s. No unselected registry fallback was attempted", tag, strings.Join(misses, "; "))
@@ -122,7 +106,7 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 
 func inspectExplicitRancherImagePair(serverRepository, tag, agentReference string) (*preferredRancherImageResolution, error) {
 	serverReference := strings.TrimSpace(serverRepository) + ":" + strings.TrimSpace(tag)
-	registry, _, _, err := parseRegistryImage(serverReference)
+	registry, _, _, err := imagelookup.ParseRegistryImage(serverReference)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +136,7 @@ func inspectExplicitRancherImagePair(serverRepository, tag, agentReference strin
 
 	return &preferredRancherImageResolution{
 		Registry:          registry,
-		RegistryLabel:     preferredRancherRegistryLabel(registry),
+		RegistryLabel:     imagelookup.PreferredRegistryLabel(registry),
 		RancherImage:      strings.TrimSpace(serverRepository),
 		RancherImageTag:   strings.TrimSpace(tag),
 		AgentImage:        strings.TrimSpace(agentReference),
@@ -161,53 +145,17 @@ func inspectExplicitRancherImagePair(serverRepository, tag, agentReference strin
 	}, nil
 }
 
-func inspectRancherImageReference(ctx context.Context, reference string) (rancherImageProvenance, bool, error) {
-	service, _ := ctx.Value(preferredRancherImageLookupServiceContextKey{}).(*imageLookupService)
+func inspectRancherImageReference(ctx context.Context, reference string) (imagelookup.Provenance, bool, error) {
+	service, _ := ctx.Value(preferredRancherImageLookupServiceContextKey{}).(*imagelookup.Service)
 	if service == nil {
 		service = newPreferredRancherImageLookupService()
-		defer service.closeIdleConnections()
+		defer service.CloseIdleConnections()
 	}
-	return inspectRancherImageReferenceWithService(ctx, service, reference)
+	return imagelookup.InspectProvenance(ctx, service, reference)
 }
 
-func newPreferredRancherImageLookupService() *imageLookupService {
-	service := newImageLookupService()
-	service.keychain = preferredRancherImageKeychain{}
-	return service
-}
-
-func inspectRancherImageReferenceWithService(ctx context.Context, service *imageLookupService, reference string) (rancherImageProvenance, bool, error) {
-	platform := "linux/amd64"
-	if parsed, parseErr := service.parseReference(reference, true); parseErr == nil && parsed.tag != "" {
-		if architecture, _ := imageLookupTagArchitecture(parsed.tag); architecture != "" && architecture != "multi" && architecture != "unknown" {
-			platform = "linux/" + architecture
-		}
-	}
-	response, err := service.Inspect(ctx, imageLookupInspectRequest{
-		Reference:        reference,
-		Platform:         platform,
-		IncludeBuildYAML: false,
-		SkipTagMetadata:  true,
-	})
-	if err != nil {
-		if imageLookupRegistryNotFound(err) {
-			return rancherImageProvenance{Reference: reference}, false, nil
-		}
-		return rancherImageProvenance{Reference: reference}, false, fmt.Errorf("%s", imageLookupSafeError(err))
-	}
-
-	labels := response.Config.Labels
-	createdAt, _ := time.Parse(time.RFC3339Nano, response.CreatedAt)
-	return rancherImageProvenance{
-		Reference:          response.Reference,
-		Digest:             response.Digest,
-		CreatedAt:          createdAt,
-		BuildVersion:       safeOCIProvenanceLabel(labels[imageLookupVersionLabel]),
-		SourceURL:          safeOCIProvenanceLabel(labels[imageLookupSourceLabel]),
-		Revision:           safeOCIProvenanceLabel(labels[imageLookupRevisionLabel]),
-		OSSRevision:        safeOCIProvenanceLabel(labels[imageLookupOSSRevisionLabel]),
-		CanonicalReference: safeOCIProvenanceLabel(labels[imageLookupCanonicalReferenceLabel]),
-	}, true, nil
+func newPreferredRancherImageLookupService() *imagelookup.Service {
+	return imagelookup.NewWithOptions(imagelookup.Options{Keychain: preferredRancherImageKeychain{}})
 }
 
 type patchHeadStagingCandidate struct {
@@ -226,7 +174,7 @@ type patchHeadStagingResolution struct {
 type patchHeadStagingResolver func(string) (string, *preferredRancherImageResolution, error)
 
 func resolveCachedPatchHeadStagingBundle(cache map[string]patchHeadStagingResolution, requestedVersion string, resolver patchHeadStagingResolver) (string, *preferredRancherImageResolution, error) {
-	key := normalizeVersionInput(requestedVersion)
+	key := imagelookup.NormalizeVersionInput(requestedVersion)
 	if cached, ok := cache[key]; ok {
 		return cached.version, cached.images, nil
 	}
@@ -246,8 +194,8 @@ func resolveCachedPatchHeadStagingBundle(cache map[string]patchHeadStagingResolu
 // publication lags the images.
 func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredRancherImageResolution, error) {
 	startedAt := time.Now()
-	requestedVersion = normalizeVersionInput(requestedVersion)
-	if !isPatchHeadAliasRancherVersion(requestedVersion) {
+	requestedVersion = imagelookup.NormalizeVersionInput(requestedVersion)
+	if !imagelookup.IsPatchHeadAliasRancherVersion(requestedVersion) {
 		return "", nil, fmt.Errorf("%s is not a patch-qualified Rancher head selector", requestedVersion)
 	}
 
@@ -263,8 +211,8 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 	seen := map[string]bool{}
 	versions := make([]string, 0)
 	for _, tag := range tags {
-		version := normalizeVersionInput(tag)
-		if !isPrimeCommitHeadRancherVersion(version) || !strings.HasPrefix(version, patchVersion+"-") || seen[version] {
+		version := imagelookup.NormalizeVersionInput(tag)
+		if !imagelookup.IsPrimeCommitHeadRancherVersion(version) || !strings.HasPrefix(version, patchVersion+"-") || seen[version] {
 			continue
 		}
 		seen[version] = true
@@ -276,7 +224,7 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 	log.Printf("[resolver] SUSE staging tag scan matched %d immutable %s-SHA-head candidate(s) out of %d tags", len(versions), patchVersion, len(tags))
 
 	imageLookup := newPreferredRancherImageLookupService()
-	defer imageLookup.closeIdleConnections()
+	defer imageLookup.CloseIdleConnections()
 	ctx = context.WithValue(ctx, preferredRancherImageLookupServiceContextKey{}, imageLookup)
 
 	jobs := make(chan string)
@@ -362,7 +310,7 @@ func listRancherImageTags(ctx context.Context, registry, repository string) ([]s
 }
 
 func inspectPatchHeadStagingCandidate(ctx context.Context, version string) patchHeadStagingCandidate {
-	tag := normalizeDockerRancherTag(version)
+	tag := imagelookup.NormalizeDockerRancherTag(version)
 	serverRepository := "stgregistry.suse.com/rancher/rancher"
 	agentRepository := "stgregistry.suse.com/rancher/rancher-agent"
 	serverReference := serverRepository + ":" + tag
@@ -385,7 +333,7 @@ func inspectPatchHeadStagingCandidate(ctx context.Context, version string) patch
 	if err := validateExactHeadImagePair(tag, server, agent); err != nil {
 		return patchHeadStagingCandidate{version: version, err: err}
 	}
-	if err := validatePatchHeadServerProvenance(version, server); err != nil {
+	if err := imagelookup.ValidatePatchHeadServerProvenance(version, server); err != nil {
 		return patchHeadStagingCandidate{version: version, err: err}
 	}
 
@@ -403,7 +351,7 @@ func inspectPatchHeadStagingCandidate(ctx context.Context, version string) patch
 		version: version,
 		resolution: &preferredRancherImageResolution{
 			Registry:          "stgregistry.suse.com",
-			RegistryLabel:     preferredRancherRegistryLabel("stgregistry.suse.com"),
+			RegistryLabel:     imagelookup.PreferredRegistryLabel("stgregistry.suse.com"),
 			RancherImage:      serverRepository,
 			RancherImageTag:   tag,
 			AgentImage:        agentReference,
@@ -414,14 +362,14 @@ func inspectPatchHeadStagingCandidate(ctx context.Context, version string) patch
 	}
 }
 
-func validateExactHeadImagePair(tag string, server, agent rancherImageProvenance) error {
-	normalizedTag := normalizeVersionInput(tag)
+func validateExactHeadImagePair(tag string, server, agent imagelookup.Provenance) error {
+	normalizedTag := imagelookup.NormalizeVersionInput(tag)
 	if !isCommitHeadRancherVersion(normalizedTag) {
 		return nil
 	}
-	expectedTag := normalizeDockerRancherTag(normalizedTag)
-	_, serverCanonicalRepository, serverCanonicalTag, serverErr := parseRegistryImage(server.CanonicalReference)
-	_, agentCanonicalRepository, agentCanonicalTag, agentErr := parseRegistryImage(agent.CanonicalReference)
+	expectedTag := imagelookup.NormalizeDockerRancherTag(normalizedTag)
+	_, serverCanonicalRepository, serverCanonicalTag, serverErr := imagelookup.ParseRegistryImage(server.CanonicalReference)
+	_, agentCanonicalRepository, agentCanonicalTag, agentErr := imagelookup.ParseRegistryImage(agent.CanonicalReference)
 	if serverErr != nil || agentErr != nil || serverCanonicalTag == "" || agentCanonicalTag == "" {
 		return fmt.Errorf("exact Rancher head image pair %s did not declare canonical server and agent org.opensuse.reference labels", expectedTag)
 	}
@@ -434,31 +382,13 @@ func validateExactHeadImagePair(tag string, server, agent rancherImageProvenance
 	return nil
 }
 
-func validatePatchHeadServerProvenance(version string, server rancherImageProvenance) error {
-	normalizedVersion := normalizeVersionInput(version)
-	if !isPrimeCommitHeadRancherVersion(normalizedVersion) {
-		return fmt.Errorf("%s is not an immutable patch-qualified Rancher head", version)
-	}
-	components := strings.Split(normalizedVersion, "-")
-	expectedRevision := strings.ToLower(components[len(components)-2])
-	source := strings.TrimSpace(server.SourceURL)
-	if source != "https://github.com/rancher/rancher-prime" && source != "https://github.com/rancher/rancher-prime.git" {
-		return fmt.Errorf("Rancher head image %s did not declare the canonical Rancher Prime source", normalizeDockerRancherTag(normalizedVersion))
-	}
-	ossRevision := strings.ToLower(strings.TrimSpace(server.OSSRevision))
-	if !imageLookupGitRevisionPattern.MatchString(ossRevision) || !strings.HasPrefix(ossRevision, expectedRevision) {
-		return fmt.Errorf("Rancher head image %s identifies commit %s, but its public OSS revision is %s", normalizeDockerRancherTag(normalizedVersion), expectedRevision, ossRevision)
-	}
-	return nil
-}
-
 // Preferred-image verification must match what provisioned nodes can pull.
 // Docker Hub credentials are propagated to RKE2/K3s; credentials from the
 // operator's local Docker keychain for other registries are not.
 type preferredRancherImageKeychain struct{}
 
 func (preferredRancherImageKeychain) Resolve(resource authn.Resource) (authn.Authenticator, error) {
-	registry := imageLookupRegistryForDisplay(resource.RegistryStr())
+	registry := imagelookup.RegistryForDisplay(resource.RegistryStr())
 	username := strings.TrimSpace(os.Getenv("DOCKERHUB_USERNAME"))
 	password := os.Getenv("DOCKERHUB_PASSWORD")
 	if registry == "docker.io" && username != "" && password != "" {
@@ -467,30 +397,8 @@ func (preferredRancherImageKeychain) Resolve(resource authn.Resource) (authn.Aut
 	return authn.Anonymous, nil
 }
 
-func preferredRancherRegistryLabel(registry string) string {
-	if registry == "registry.rancher.com" {
-		return "Rancher Prime"
-	}
-	return imageLookupRegistryLabel(registry)
-}
-
-func safeOCIProvenanceLabel(value string) string {
-	value = strings.Map(func(character rune) rune {
-		if unicode.IsControl(character) {
-			return ' '
-		}
-		return character
-	}, value)
-	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
-	runes := []rune(value)
-	if len(runes) > 512 {
-		value = string(runes[:512])
-	}
-	return value
-}
-
 func rancherImageSourceCommitURL(source, revision string) string {
-	owner, repository, err := imageLookupParseGitHubSource(strings.TrimSpace(source), strings.TrimSpace(revision))
+	owner, repository, err := imagelookup.ParseGitHubSource(strings.TrimSpace(source), strings.TrimSpace(revision))
 	if err != nil {
 		return ""
 	}

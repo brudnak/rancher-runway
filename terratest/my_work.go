@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"net/http"
 	"net/url"
 	"os"
@@ -138,6 +139,10 @@ func (s *testPackageService) myWork() (myWorkSnapshot, error) {
 
 // Refresh is additive: existing plans and manually organized packages are never rewritten.
 func (s *testPackageService) prepareMyWork(out myWorkSnapshot) (myWorkSnapshot, error) {
+	return s.prepareTrackedWork(out, true)
+}
+
+func (s *testPackageService) prepareTrackedWork(out myWorkSnapshot, active bool) (myWorkSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous, err := s.myWorkLocked()
@@ -163,7 +168,7 @@ func (s *testPackageService) prepareMyWork(out myWorkSnapshot) (myWorkSnapshot, 
 			nameRunes = nameRunes[:len(nameRunes)-1]
 		}
 		name = string(nameRunes)
-		lib.Buckets = append(lib.Buckets, testPackageBucket{ID: cacheLabID(), Name: name, PackageIDs: []string{}, SourceRepo: out.Config.Repo, SourceMilestone: out.Config.Milestone})
+		lib.Buckets = append(lib.Buckets, testPackageBucket{ID: cachelab.ID(), Name: name, PackageIDs: []string{}, SourceRepo: out.Config.Repo, SourceMilestone: out.Config.Milestone})
 		bucketIndex = len(lib.Buckets) - 1
 	}
 	out.BucketID = lib.Buckets[bucketIndex].ID
@@ -209,7 +214,7 @@ func (s *testPackageService) prepareMyWork(out myWorkSnapshot) (myWorkSnapshot, 
 			continue
 		}
 		now := time.Now().UTC()
-		pkg := testPackage{ID: cacheLabID(), Revision: cacheLabID(), Title: issue.Title, IssueURL: issue.URL, IssueTitle: issue.Title, Summary: issue.Body, Status: "planning", Cases: []testPackageCase{}, Sessions: []testPackageSession{}, CreatedAt: now, UpdatedAt: now}
+		pkg := testPackage{ID: cachelab.ID(), Revision: cachelab.ID(), Title: issue.Title, IssueURL: issue.URL, IssueTitle: issue.Title, Summary: issue.Body, Status: "planning", Cases: []testPackageCase{}, Sessions: []testPackageSession{}, CreatedAt: now, UpdatedAt: now}
 		if err := s.saveLocked(pkg); err != nil {
 			_ = os.RemoveAll(filepath.Join(s.root, pkg.ID))
 			rollback()
@@ -221,7 +226,7 @@ func (s *testPackageService) prepareMyWork(out myWorkSnapshot) (myWorkSnapshot, 
 	}
 	out.Created = len(created)
 	out = mergeMyWorkSnapshot(previous, out)
-	lib.Revision = cacheLabID()
+	lib.Revision = cachelab.ID()
 	if err := validatePackageLibrary(lib, s.packages); err != nil {
 		rollback()
 		return out, err
@@ -236,6 +241,9 @@ func (s *testPackageService) prepareMyWork(out myWorkSnapshot) (myWorkSnapshot, 
 		return out, err
 	}
 	s.library = lib
+	if !active {
+		return out, nil
+	}
 	raw, err = json.MarshalIndent(out, "", "  ")
 	if err == nil {
 		err = writePrivateConfigAtomically(filepath.Join(s.root, ".my-work.json"), raw)
@@ -292,14 +300,6 @@ func (p *localControlPanel) handleMyWork(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, map[string]any{"snapshot": out})
 }
 
-func issueQANone(issue issueRadarIssue) bool {
-	for _, label := range issue.Labels {
-		if strings.EqualFold(strings.TrimSpace(label.Name), "QA/None") {
-			return true
-		}
-	}
-	return false
-}
 func mergeMyWorkSnapshot(previous, out myWorkSnapshot) myWorkSnapshot {
 	if previous.Config == out.Config {
 		out.History = previous.History

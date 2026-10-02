@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"os"
 	"path/filepath"
@@ -43,7 +44,7 @@ func packageLogFixture(t *testing.T) (*localControlPanel, *testPackageService, t
 	return p, s, pkg, req, path
 }
 
-func packageLogRunner(t *testing.T, kubePath string, calls *[][]string) cacheLabCommandRunner {
+func packageLogRunner(t *testing.T, kubePath string, calls *[][]string) cachelab.CommandRunner {
 	t.Helper()
 	return func(ctx context.Context, args []string, stdin io.Reader, out io.Writer) error {
 		*calls = append(*calls, append([]string{}, args...))

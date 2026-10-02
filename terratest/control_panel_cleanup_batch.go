@@ -151,7 +151,14 @@ func (p *localControlPanel) startCleanupBatchWithLabCleanup(runIDs []string, tes
 	p.persistOperationsLocked()
 	p.mu.Unlock()
 
-	go p.runCleanupBatchWithLabCleanup(append([]string(nil), runIDs...), options)
+	if err := p.startPanelWorker(func() { p.runCleanupBatchWithLabCleanup(append([]string(nil), runIDs...), options) }); err != nil {
+		p.mu.Lock()
+		batch.Running = false
+		batch.Error = err.Error()
+		p.persistOperationsLocked()
+		p.mu.Unlock()
+		return err
+	}
 	return nil
 }
 

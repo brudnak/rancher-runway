@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"log"
 	"os"
 	"os/exec"
@@ -32,7 +33,7 @@ func TestHAUpgradeRancher(t *testing.T) {
 	requireExplicitLifecycleTest(t, "TestHAUpgradeRancher")
 	setupConfig(t)
 
-	upgradeVersion := normalizeVersionInput(os.Getenv("RANCHER_UPGRADE_VERSION"))
+	upgradeVersion := imagelookup.NormalizeVersionInput(os.Getenv("RANCHER_UPGRADE_VERSION"))
 	if upgradeVersion == "" {
 		t.Skip("RANCHER_UPGRADE_VERSION is not set; skipping Rancher upgrade")
 	}

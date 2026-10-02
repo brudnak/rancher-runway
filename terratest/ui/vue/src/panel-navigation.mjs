@@ -2,10 +2,12 @@ import { workspaceTools, toolGroups, filterWorkspaceTools } from './home-workspa
 
 const groupLabels = { operate: 'Deploy & operate', investigate: 'Investigate', local: 'Local tools' };
 const groupIcons = { operate: 'server', investigate: 'search', local: 'flask' };
+export const primaryNavigationTools = workspaceTools.filter(tool => tool.id === 'my-work');
+
 // The Home guide is the catalog: new tools appear here without another tab list.
 export const navigationGroups = toolGroups.map(group => ({ ...group,
   label: groupLabels[group.id] || group.title, icon: groupIcons[group.id] || 'layers',
-  tabs: workspaceTools.filter(tool => tool.group === group.id),
+  tabs: workspaceTools.filter(tool => tool.group === group.id && !primaryNavigationTools.includes(tool)),
 }));
 
 export const navigationGroup = tab => navigationGroups.find(group => group.tabs.some(item => item.id === tab));
@@ -15,7 +17,8 @@ export function matchingNavigationGroups(query, group = 'all') {
   const words = String(query || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
   const relevance = tool => words.reduce((score, word) => score + (tool.label.toLowerCase().split(/\W+/).includes(word) ? 4 : tool.label.toLowerCase().includes(word) ? 2 : 0), 0);
   const matches = new Set(filterWorkspaceTools(query).map(tool => tool.id));
-  return navigationGroups.filter(item => searching || group === 'all' || item.id === group)
+  const groups = [{id:'primary',title:'Your work',tabs:primaryNavigationTools},...navigationGroups];
+  return groups.filter(item => searching || group === 'all' || item.id === group)
     .map(item => ({ ...item, tabs: item.tabs.filter(tool => matches.has(tool.id)).sort((a,b) => relevance(b) - relevance(a)) }))
     .filter(item => item.tabs.length)
     .sort((a,b) => relevance(b.tabs[0]) - relevance(a.tabs[0]));

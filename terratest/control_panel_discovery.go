@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -16,26 +17,35 @@ type panelDiscoverySnapshot[T any] struct {
 }
 
 func (s *panelDiscoverySnapshot[T]) snapshot(collect func() T) (T, bool) {
+	return s.snapshotWith(nil, collect)
+}
+func (s *panelDiscoverySnapshot[T]) snapshotWith(workers *panelWorkers, collect func() T) (T, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.refreshing && (s.finishedAt.IsZero() || time.Since(s.finishedAt) >= 5*time.Second) {
 		s.refreshing = true
-		go func() {
+		task := func(context.Context) {
 			value := collect()
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			s.value = value
 			s.finishedAt = time.Now()
 			s.refreshing = false
-		}()
+		}
+		if workers == nil {
+			go task(context.Background())
+		} else if !workers.Start(task) {
+			s.refreshing = false
+		}
 	}
 	return s.value, s.refreshing
 }
 
 func (p *localControlPanel) clusterDiscoveryState() panelClusterState {
-	state, refreshing := p.clusterDiscovery.snapshot(func() panelClusterState {
+	state, refreshing := p.clusterDiscovery.snapshotWith(&p.workers, func() panelClusterState {
 		clusters := p.discoverClusters()
 		p.rememberClusterSnapshot(clusters)
+		p.historyDiscovery.snapshotWith(&p.workers, func() struct{} { p.retainDiscoveredClusters(clusters); return struct{}{} })
 		updatedAt := time.Now()
 		return panelClusterState{Items: clusters, UpdatedAt: &updatedAt}
 	})
@@ -47,7 +57,7 @@ func (p *localControlPanel) clusterDiscoveryState() panelClusterState {
 }
 
 func (p *localControlPanel) awsDiscoveryState(records []panelRunRecord) panelAWSInventoryState {
-	state, refreshing := p.awsDiscovery.snapshot(func() panelAWSInventoryState {
+	state, refreshing := p.awsDiscovery.snapshotWith(&p.workers, func() panelAWSInventoryState {
 		return p.discoverAWSInventory(records)
 	})
 	state.Refreshing = refreshing

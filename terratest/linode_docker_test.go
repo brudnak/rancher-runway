@@ -1,6 +1,7 @@
 package test
 
 import (
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,8 +45,8 @@ func TestNormalizeDockerRancherTagAddsLeadingVExceptPlainHead(t *testing.T) {
 		"v2.16-MyFix": "v2.16-MyFix",
 	}
 	for input, want := range tests {
-		if got := normalizeDockerRancherTag(input); got != want {
-			t.Fatalf("normalizeDockerRancherTag(%q) = %q, want %q", input, got, want)
+		if got := imagelookup.NormalizeDockerRancherTag(input); got != want {
+			t.Fatalf("imagelookup.NormalizeDockerRancherTag(%q) = %q, want %q", input, got, want)
 		}
 	}
 }

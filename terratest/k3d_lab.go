@@ -297,7 +297,12 @@ func (p *localControlPanel) startK3DLab(req k3dLabStartRequest) error {
 		p.persistOperationsLocked()
 		return err
 	}
-	go p.runK3DLabCreate(record)
+	if err := p.startPanelWorker(func() { p.runK3DLabCreate(record) }); err != nil {
+		op.Running = false
+		op.Error = err.Error()
+		p.persistOperationsLocked()
+		return err
+	}
 	return nil
 }
 
@@ -363,7 +368,12 @@ func (p *localControlPanel) startK3DLabInstallK3D() error {
 		"[k3d-lab] $ brew install k3d",
 	}
 	p.persistOperationsLocked()
-	go p.runK3DLabInstallK3D(brewPath)
+	if err := p.startPanelWorker(func() { p.runK3DLabInstallK3D(brewPath) }); err != nil {
+		op.Running = false
+		op.Error = err.Error()
+		p.persistOperationsLocked()
+		return err
+	}
 	return nil
 }
 

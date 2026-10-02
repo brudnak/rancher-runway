@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,7 +112,7 @@ func testLabPlanConfigImport(lib testLabConfigLibrary, req testLabRequest) (test
 			return plan, fmt.Errorf("bundle contains duplicate folder identifiers")
 		}
 		name := testLabImportedName(f.Name, usedFolders)
-		id := cacheLabID()
+		id := cachelab.ID()
 		folderMap[f.ID] = id
 		folderLabels[id] = name
 		plan.Library.Folders = append(plan.Library.Folders, testLabConfigFolder{ID: id, Name: name})
@@ -144,7 +145,7 @@ func testLabPlanConfigImport(lib testLabConfigLibrary, req testLabRequest) (test
 			usedFiles[folder] = map[string]bool{}
 		}
 		name := testLabImportedName(f.Name, usedFiles[folder])
-		saved := testLabConfigFile{ID: cacheLabID(), Revision: cacheLabID(), Name: name, Folder: folder, UpdatedAt: time.Now()}
+		saved := testLabConfigFile{ID: cachelab.ID(), Revision: cachelab.ID(), Name: name, Folder: folder, UpdatedAt: time.Now()}
 		plan.Library.Files = append(plan.Library.Files, saved)
 		plan.Content[saved.ID+"-"+saved.Revision+".yml"] = f.YAML
 		plan.Preview.Entries = append(plan.Preview.Entries, testLabImportEntry{Kind: "config", Original: f.Name, Name: name, Folder: folderLabels[folder], Renamed: name != f.Name})
@@ -209,7 +210,7 @@ func testLabBuildConfigExport(root string, lib testLabConfigLibrary, scope, id s
 						break
 					}
 				}
-				name := cacheLabFileLabel(label)
+				name := cachelab.FileLabel(label)
 				if name == "snapshot" {
 					name = "cattle-config"
 				}
@@ -239,7 +240,7 @@ func testLabBuildConfigExport(root string, lib testLabConfigLibrary, scope, id s
 	if len(raw) > testLabBundleLimit {
 		return nil, "", fmt.Errorf("export exceeds 80 MiB; export smaller folders")
 	}
-	filename := cacheLabFileLabel(name) + ".runway-cattle-configs.json"
+	filename := cachelab.FileLabel(name) + ".runway-cattle-configs.json"
 	if scope == "library" {
 		filename = "runway-cattle-configs.json"
 	}
@@ -258,7 +259,7 @@ func (s *testLabService) saveConfigExport(raw []byte, name string) (any, error) 
 		return nil, err
 	}
 	// O_EXCL avoids overwriting a download or following an existing symlink.
-	f, err := os.OpenFile(filepath.Join(directory, cacheLabID()[:8]+"-"+name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	f, err := os.OpenFile(filepath.Join(directory, cachelab.ID()[:8]+"-"+name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, err
 	}

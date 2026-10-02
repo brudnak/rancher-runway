@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,11 +20,11 @@ func testPackageTransferFixture(t *testing.T) (*localControlPanel, *testPackageS
 	}
 	s.exportRoot = t.TempDir()
 	now := time.Now().UTC().Truncate(time.Second)
-	c := testPackageCase{ID: cacheLabID(), Title: "Expected state survives", Expected: "Saved value remains", Automation: "manual", Steps: []testPackageStep{{ID: cacheLabID(), Instruction: "Change the setting", Expected: "The setting is saved"}}, Selection: []string{}}
+	c := testPackageCase{ID: cachelab.ID(), Title: "Expected state survives", Expected: "Saved value remains", Automation: "manual", Steps: []testPackageStep{{ID: cachelab.ID(), Instruction: "Change the setting", Expected: "The setting is saved"}}, Selection: []string{}}
 	artifact := []byte("Saved local test result\n")
-	meta, _ := json.Marshal(testPackageTestRunMetadata{ID: cacheLabID(), Name: "Previous execution", Status: "passed", Results: []testLabResult{{Package: "validation/vai", Name: "TestCase", Status: "pass", Elapsed: 1}}})
-	e := testPackageEvidence{ID: cacheLabID(), Kind: "test-run", Name: "Related automated result", Description: "Pre-existing execution", SourceID: cacheLabID(), CapturedAt: now, AttachedAt: now, Metadata: meta, Artifact: &testPackageArtifact{Name: cacheLabID() + ".log", MediaType: "text/plain", Bytes: int64(len(artifact)), SHA256: testPackageDigest(artifact)}}
-	pkg := testPackage{ID: cacheLabID(), Revision: cacheLabID(), Title: "Issue investigation", Summary: "Reproduce and validate the behavior", Status: "validating", Notes: "private-note-marker", Cases: []testPackageCase{c}, CreatedAt: now, UpdatedAt: now, Sessions: []testPackageSession{{ID: cacheLabID(), Name: "Reproduction attempt", Purpose: "reproduction", Status: "active", Finding: "inconclusive", StartedAt: now, Environment: testPackageEnvironment{ClusterID: "stable-cluster", ClusterName: "Staging", URL: "https://private-target.example.test", RancherVersion: "v2.15.2", Images: []string{}, Source: "recorded", RecordedAt: now}, Cases: []testPackageCase{c}, Results: []testPackageResult{{CaseID: c.ID, Outcome: "not-run", Steps: []testPackageStepResult{{StepID: c.Steps[0].ID, Done: true, At: now}}}}, Evidence: []testPackageEvidence{e}}}}
+	meta, _ := json.Marshal(testPackageTestRunMetadata{ID: cachelab.ID(), Name: "Previous execution", Status: "passed", Results: []testLabResult{{Package: "validation/vai", Name: "TestCase", Status: "pass", Elapsed: 1}}})
+	e := testPackageEvidence{ID: cachelab.ID(), Kind: "test-run", Name: "Related automated result", Description: "Pre-existing execution", SourceID: cachelab.ID(), CapturedAt: now, AttachedAt: now, Metadata: meta, Artifact: &testPackageArtifact{Name: cachelab.ID() + ".log", MediaType: "text/plain", Bytes: int64(len(artifact)), SHA256: testPackageDigest(artifact)}}
+	pkg := testPackage{ID: cachelab.ID(), Revision: cachelab.ID(), Title: "Issue investigation", Summary: "Reproduce and validate the behavior", Status: "validating", Notes: "private-note-marker", Cases: []testPackageCase{c}, CreatedAt: now, UpdatedAt: now, Sessions: []testPackageSession{{ID: cachelab.ID(), Name: "Reproduction attempt", Purpose: "reproduction", Status: "active", Finding: "inconclusive", StartedAt: now, Environment: testPackageEnvironment{ClusterID: "stable-cluster", ClusterName: "Staging", URL: "https://private-target.example.test", RancherVersion: "v2.15.2", Images: []string{}, Source: "recorded", RecordedAt: now}, Cases: []testPackageCase{c}, Results: []testPackageResult{{CaseID: c.ID, Outcome: "not-run", Steps: []testPackageStepResult{{StepID: c.Steps[0].ID, Done: true, At: now}}}}, Evidence: []testPackageEvidence{e}}}}
 	path, err := s.artifactPath(pkg.ID, e.Artifact.Name)
 	if err != nil {
 		t.Fatal(err)
@@ -317,15 +318,15 @@ func TestTestPackageReportComparesAttemptsAndExplainsEvidence(t *testing.T) {
 	first.Evidence[0].CaseID = first.Cases[0].ID
 	first.Evidence[0].StepID = first.Cases[0].Steps[0].ID
 	second := cloneTestPackage(pkg).Sessions[0]
-	second.ID = cacheLabID()
+	second.ID = cachelab.ID()
 	second.Name = "Fix verification"
 	second.Purpose = "validation"
 	second.Finding = "validated"
 	second.Environment.RancherVersion = "v2.16.0"
 	second.Results[0].Outcome = "passed"
-	snapshot := testPackageCacheMetadata{ID: cacheLabID(), Name: "After change", SHA256: strings.Repeat("c", 64), Bytes: 4096, Tables: 7, Image: "rancher/rancher:v2.16.0"}
+	snapshot := testPackageCacheMetadata{ID: cachelab.ID(), Name: "After change", SHA256: strings.Repeat("c", 64), Bytes: 4096, Tables: 7, Image: "rancher/rancher:v2.16.0"}
 	raw, _ := json.Marshal(snapshot)
-	second.Evidence = []testPackageEvidence{{ID: cacheLabID(), Kind: "cache-snapshot", Name: "After change", CapturedAt: second.StartedAt, AttachedAt: second.StartedAt, Metadata: raw}}
+	second.Evidence = []testPackageEvidence{{ID: cachelab.ID(), Kind: "cache-snapshot", Name: "After change", CapturedAt: second.StartedAt, AttachedAt: second.StartedAt, Metadata: raw}}
 	pkg.Sessions = append(pkg.Sessions, second)
 	report, err := testPackageMarkdown(pkg, "", false)
 	if err != nil {

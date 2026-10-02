@@ -11,7 +11,7 @@ RELEASE_VERSION ?=
 RELEASE_REF ?= main
 export RELEASE_BUMP RELEASE_VERSION RELEASE_REF
 
-.PHONY: help setup install app build release release-plan node-deps frontend-deps panel-css panel-vue panel-ui prepare-runtime-data check-install-safe check-app-closed check-lifecycle-idle test ci ci-go ci-web ci-terraform ci-workflows
+.PHONY: help setup install app build release release-plan node-deps frontend-deps panel-css panel-vue panel-ui prepare-runtime-data check-install-safe check-app-closed check-lifecycle-idle test test-web test-regression ci ci-go ci-web ci-terraform ci-workflows
 
 help:
 	@printf '%s\n' "Targets:"
@@ -21,7 +21,7 @@ help:
 	@printf '  %-20s %s\n' "make release-plan" "Preview the next version and check published source (read-only)"
 	@printf '  %-20s %s\n' "make release" "Publish the next stable release and update the Homebrew tap"
 	@printf '  %-20s %s\n' "make panel-ui" "Rebuild embedded control-panel CSS and Vue assets"
-	@printf '  %-20s %s\n' "make test" "Run Go tests"
+	@printf '  %-20s %s\n' "make test" "Run Go and frontend unit tests"
 	@printf '  %-20s %s\n' "make ci" "Run local CI checks"
 
 install: setup
@@ -59,15 +59,25 @@ panel-ui: node-deps
 prepare-runtime-data:
 	@bash scripts/prepare-runtime-data.sh
 
-test: prepare-runtime-data
-	@go test ./...
+test: prepare-runtime-data test-web
+	@go test -buildvcs=false ./...
 
-ci: ci-go ci-web ci-terraform ci-workflows
+test-web:
+	@npm test
+
+# Explicitly local regressions: no live infrastructure lifecycle entry points.
+test-regression: prepare-runtime-data test-web
+	@go test -buildvcs=false -race ./internal/... -count=1 -timeout=3m
+	@go test -buildvcs=false -race ./terratest -run '^(TestRunCleanupDestroyPhases|TestDeployedCleanup|TestLinodeInventoryHTTP|TestRancherUpgradeSystemRegistry|TestDeployedProvisionerPreflight|TestDeployedProvisioningPodDiagnostics|TestDeployedDownstreamProvisionableVersions|TestDeployedDownstreamDefaults|TestDeployedLinodeCatalogProxy|TestDeployedMachineSchemaFormats|TestDeployedDriver|TestDeployedDownstreamLiveOptionsAndExecution|TestRancherConnection|TestImageLookupHandlers|TestPRBuildVerifyHandler|TestCacheLabHTTP|TestReadinessQANone|TestRegression|TestDurable|TestPanelWorkers|TestPanelShutdownTimeout|TestPanelHistoryProbe|TestCacheJobShutdown|TestClusterHistory|TestClusterWorkspace|TestPanelWorkerCompletion|TestRancherUpgradeExecutionBoundaries|TestRancherUpgradeReviewPreflightNeverApplies|TestRancherUpgradeVersionEvidence|TestRancherUpgradeMinorHeadPaths|TestRancherUpgradeChartImageSettings|TestRancherUpgradePlannerChartSchemas|TestDeployedHeadTargetsSources|TestDeployedUpgradeImageDetails|TestTestPackageHelmCommandRedaction|TestCleanupAutomationOutput)' -count=1 -timeout=3m
+	@go test -buildvcs=false ./scripts -run '^TestPrepareRuntimeData' -count=1
+	@go test -buildvcs=false ./desktop/wails -run '^TestInstallManagedRuntime' -count=1
+
+ci: ci-go ci-web test-regression ci-terraform ci-workflows
 
 ci-go: prepare-runtime-data
-	@go test ./...
+	@go test -buildvcs=false ./...
 
-ci-web: panel-ui frontend-deps
+ci-web: test-web panel-ui frontend-deps
 	@npm --prefix "$(WAILS_FRONTEND_DIR)" run build
 
 ci-terraform:

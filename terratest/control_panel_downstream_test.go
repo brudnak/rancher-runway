@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -20,13 +21,19 @@ func newDownstreamPanelTest(t *testing.T) *localControlPanel {
 	t.Helper()
 	workspace := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", workspace)
-	return &localControlPanel{
+	t.Setenv("RANCHER_RUNWAY_WORKSPACE", workspace)
+	panel := &localControlPanel{
 		token:      "token",
 		totalHAs:   2,
 		repoRoot:   workspace,
 		testDir:    workspace,
 		operations: newPanelOperations(),
 	}
+	// Cleanup runs before Setenv restores either workspace variable. Running=false
+	// only describes the command; its final record writes may still be in flight.
+	t.Cleanup(panel.lifecycleWorkers.Wait)
+	t.Cleanup(func() { panel.workers.Stop(); _ = panel.workers.Wait(context.Background()) })
+	return panel
 }
 
 func enabledDownstreamPlan() settings.LinodeDownstreamPlan {
@@ -390,6 +397,7 @@ func waitForPanelOperation(t *testing.T, panel *localControlPanel, operation pan
 	for time.Now().Before(deadline) {
 		snapshot := panel.snapshotOperation(operation)
 		if !snapshot.Running && snapshot.FinishedAt != nil {
+			panel.lifecycleWorkers.Wait()
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -408,4 +416,42 @@ func waitForRunDownstreamStatus(t *testing.T, panel *localControlPanel, runID, s
 	}
 	record, ok := panel.readRunRecord(runID)
 	t.Fatalf("run %s downstream status did not become %s: %#v, %v", runID, status, record, ok)
+}
+
+func TestPanelWorkerCompletionIncludesFinalRecordWrites(t *testing.T) {
+	panel := newDownstreamPanelTest(t)
+	if got := automationOutputDir(); got != filepath.Join(panel.repoRoot, "automation-output") {
+		t.Fatalf("test workspace was not isolated: %s", got)
+	}
+	worker := filepath.Join(t.TempDir(), "lifecycle-worker")
+	if err := os.WriteFile(worker, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(packagedLifecycleBinaryEnv, worker)
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	// Always release the callback before test cleanup waits for lifecycle workers.
+	defer close(release)
+	spec := panelCommandSpec{Operation: panelOperationReadiness, RunID: "completion-fixture", DisplayName: "readiness", TestName: "TestHAWaitForRancherReady", Timeout: "1m", AfterSuccess: func() {
+		close(entered)
+		<-release
+		panel.writeCurrentRunRecord(panelRunRecord{RunID: "completion-fixture", Status: "ready"})
+	}}
+	if err := panel.startPanelCommand(spec); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("completion callback did not start")
+	}
+	if panel.snapshotOperation(panelOperationReadiness).Running {
+		t.Fatal("expected subprocess completion before callback finishes")
+	}
+	go func() { panel.lifecycleWorkers.Wait(); close(finished) }()
+	select {
+	case <-finished:
+		t.Fatal("worker completed before final record write")
+	case <-time.After(20 * time.Millisecond):
+	}
+	// Cleanup must wait through the callback, even though Running is already false.
 }

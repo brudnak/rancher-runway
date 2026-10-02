@@ -534,6 +534,7 @@ func migrateRuntimeState(sourceRoot, targetRoot string) error {
 	paths := []string{
 		"tool-config.yml",
 		filepath.Join("terratest", "automation-output"),
+		filepath.Join("terratest", "runway-data"),
 	}
 	configBackups, err := filepath.Glob(filepath.Join(sourceRoot, ".tool-config-before-import-*.yml"))
 	if err != nil {

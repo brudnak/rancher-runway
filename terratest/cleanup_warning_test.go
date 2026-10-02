@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestRunCleanupDestroyPhasesContinuesAfterDownstreamFailure(t *testing.T) {
+func TestRunCleanupDestroyPhasesStopsAfterDownstreamFailure(t *testing.T) {
 	downstreamErr := errors.New("HA 1 cluster cluster-one: management API unavailable\nHA 2 cluster cluster-two: delete timed out")
 	calls := []string{}
 
@@ -25,10 +25,10 @@ func TestRunCleanupDestroyPhasesContinuesAfterDownstreamFailure(t *testing.T) {
 		},
 	)
 
-	if err != nil {
-		t.Fatalf("cleanup phases returned an error after management destroy succeeded: %v", err)
+	if !errors.Is(err, downstreamErr) {
+		t.Fatalf("downstream failure must stop destroy: %v", err)
 	}
-	if want := []string{"downstream", "management", "local"}; !reflect.DeepEqual(calls, want) {
+	if want := []string{"downstream"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("cleanup phase calls = %#v, want %#v", calls, want)
 	}
 	if !strings.Contains(result.Warning, "cluster-one") || !strings.Contains(result.Warning, "cluster-two") {
@@ -46,7 +46,7 @@ func TestRunCleanupDestroyPhasesContinuesAfterDownstreamFailure(t *testing.T) {
 	}
 }
 
-func TestRunCleanupDestroyPhasesReturnsManagementFailureWithWarning(t *testing.T) {
+func TestRunCleanupDestroyPhasesNeverCallsManagementAfterDownstreamFailure(t *testing.T) {
 	downstreamErr := errors.New("HA 1 cluster cluster-one: management API unavailable")
 	managementErr := errors.New("terraform destroy failed")
 	calls := []string{}
@@ -65,10 +65,10 @@ func TestRunCleanupDestroyPhasesReturnsManagementFailureWithWarning(t *testing.T
 		},
 	)
 
-	if !errors.Is(err, managementErr) {
-		t.Fatalf("cleanup error = %v, want management failure", err)
+	if !errors.Is(err, downstreamErr) {
+		t.Fatalf("cleanup error = %v, want downstream failure", err)
 	}
-	if want := []string{"downstream", "management"}; !reflect.DeepEqual(calls, want) {
+	if want := []string{"downstream"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("cleanup phase calls = %#v, want %#v", calls, want)
 	}
 	if !strings.Contains(result.Warning, "cluster-one") {
@@ -83,5 +83,14 @@ func TestRunCleanupDestroyPhasesCleanSuccessHasNoWarning(t *testing.T) {
 	}
 	if result.Warning != "" {
 		t.Fatalf("clean cleanup warning = %q, want empty", result.Warning)
+	}
+}
+
+func TestRunCleanupDestroyPhasesRetainsArtifactsAfterManagementFailure(t *testing.T) {
+	want := errors.New("terraform destroy failed")
+	cleaned := false
+	_, err := runCleanupDestroyPhases(func() error { return nil }, func() error { return want }, func() { cleaned = true })
+	if !errors.Is(err, want) || cleaned {
+		t.Fatalf("management failure must retain local records: err=%v cleaned=%v", err, cleaned)
 	}
 }

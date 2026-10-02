@@ -15,7 +15,7 @@ func TestPrepareRuntimeDataExcludesCachedModules(t *testing.T) {
 		filepath.Join(repo, "go.mod"):  "module example.invalid/runway\n\ngo 1.20\n",
 		filepath.Join(repo, "main.go"): "package runway\n",
 	}
-	for _, output := range []string{"automation-output", "terratest/automation-output"} {
+	for _, output := range []string{"automation-output", "terratest/automation-output", "runway-data", "terratest/runway-data"} {
 		root := filepath.Join(repo, output)
 		files[filepath.Join(root, "control-panel", "test-lab", "go-modules", "example.invalid", "legacy@v1.0.0", "source.go")] = "package legacy\n"
 		files[filepath.Join(root, "saved-result.json")] = "{\"result\":\"keep\"}\n"

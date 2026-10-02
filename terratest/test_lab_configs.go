@@ -3,6 +3,7 @@ package test
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"io"
 	"os"
 	"path/filepath"
@@ -121,12 +122,12 @@ func (s *testLabService) configAction(req testLabRequest) (any, error) {
 		return nil, err
 	}
 	for _, f := range lib.Files {
-		if !cacheLabIDPattern.MatchString(f.ID) || !cacheLabIDPattern.MatchString(f.Revision) {
+		if !cachelab.IDPattern.MatchString(f.ID) || !cachelab.IDPattern.MatchString(f.Revision) {
 			return nil, fmt.Errorf("invalid config library entry")
 		}
 	}
 	for _, f := range lib.Folders {
-		if !cacheLabIDPattern.MatchString(f.ID) {
+		if !cachelab.IDPattern.MatchString(f.ID) {
 			return nil, fmt.Errorf("invalid config folder")
 		}
 	}
@@ -199,7 +200,7 @@ func (s *testLabService) configAction(req testLabRequest) (any, error) {
 			if len(lib.Folders) >= 100 {
 				return nil, fmt.Errorf("folder limit reached")
 			}
-			lib.Folders = append(lib.Folders, testLabConfigFolder{ID: cacheLabID(), Name: name})
+			lib.Folders = append(lib.Folders, testLabConfigFolder{ID: cachelab.ID(), Name: name})
 		} else {
 			found := false
 			for i, f := range lib.Folders {
@@ -280,9 +281,9 @@ func (s *testLabService) configAction(req testLabRequest) (any, error) {
 		} else if len(lib.Files) >= 500 {
 			return nil, fmt.Errorf("saved config limit reached")
 		}
-		f := testLabConfigFile{ID: req.ID, Name: name, Folder: req.Folder, Revision: cacheLabID(), UpdatedAt: time.Now()}
+		f := testLabConfigFile{ID: req.ID, Name: name, Folder: req.Folder, Revision: cachelab.ID(), UpdatedAt: time.Now()}
 		if f.ID == "" {
-			f.ID = cacheLabID()
+			f.ID = cachelab.ID()
 		}
 		if err = testLabAtomicFile(root, filename(f), []byte(req.Config)); err != nil {
 			return nil, err

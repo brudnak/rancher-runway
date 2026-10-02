@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"go/ast"
 	"go/build"
 	"go/build/constraint"
@@ -40,10 +41,18 @@ func (s *testLabService) startCatalog(ref string) (any, error) {
 	if s.busy {
 		return nil, fmt.Errorf("catalog refresh is already running")
 	}
+	if s.workers == nil {
+		s.workers = &panelWorkers{}
+	}
+	parent, done, err := s.workers.Begin()
+	if err != nil {
+		return nil, err
+	}
 	s.busy = true
 	s.catalogError = ""
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer done()
+		ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 		defer cancel()
 		catalog, err := s.fetchCatalog(ctx, ref)
 		s.mu.Lock()
@@ -264,7 +273,7 @@ func testLabDiscover(root string) ([]testLabEntry, error) {
 			}
 			row := parsed{entry: testLabEntry{Package: filepath.ToSlash(filepath.Dir(rel)), Test: fn.Name.Name, File: filepath.ToSlash(rel), Line: fs.Position(fn.Pos()).Line, Constraint: build}}
 			if fn.Doc != nil {
-				row.entry.Description = cacheLabText(fn.Doc.Text(), 600)
+				row.entry.Description = cachelab.Text(fn.Doc.Text(), 600)
 			}
 			if fn.Recv != nil {
 				row.receiver = testLabReceiver(fn.Recv.List[0].Type)

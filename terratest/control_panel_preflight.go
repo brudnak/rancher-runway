@@ -2,6 +2,7 @@ package test
 
 import (
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"os"
 	"path/filepath"
 	"sort"
@@ -180,7 +181,7 @@ func panelAutoModeConfigBlockers(totalHAs int) []string {
 		blockers = append(blockers, "rancher.bootstrap_password")
 	}
 
-	requestedVersion := normalizeVersionInput(viper.GetString("rancher.version"))
+	requestedVersion := imagelookup.NormalizeVersionInput(viper.GetString("rancher.version"))
 	requestedVersions := nonEmptyStringSlice(viper.GetStringSlice("rancher.versions"))
 	if totalHAs <= 1 {
 		if requestedVersion == "" && len(requestedVersions) == 0 {

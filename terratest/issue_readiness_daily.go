@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
+	"github.com/brudnak/ha-rancher-rke2/internal/prbuild"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,27 +24,27 @@ type dailyReadinessBuild struct {
 	AgentDigest    string `json:"agentDigest"`
 }
 type dailyReadinessEntry struct {
-	IssueURL   string                 `json:"issueUrl"`
-	Title      string                 `json:"title"`
-	Number     int                    `json:"number"`
-	PackageID  string                 `json:"packageId,omitempty"`
-	NeedsPlan  bool                   `json:"needsPlan"`
-	QANone     bool                   `json:"qaNone"`
-	Closed     bool                   `json:"closed"`
-	Verdict    string                 `json:"verdict"`
-	Detail     string                 `json:"detail"`
-	Complete   bool                   `json:"complete"`
-	QAState    string                 `json:"qaState"`
-	QAComplete bool                   `json:"qaComplete"`
-	QAURL      string                 `json:"qaUrl,omitempty"`
-	Statuses   []issueReadinessStatus `json:"statuses"`
-	Workflow   readinessWorkflow      `json:"workflow"`
-	Builds     []dailyReadinessBuild  `json:"builds"`
-	Error      string                 `json:"error,omitempty"`
+	IssueURL   string                `json:"issueUrl"`
+	Title      string                `json:"title"`
+	Number     int                   `json:"number"`
+	PackageID  string                `json:"packageId,omitempty"`
+	NeedsPlan  bool                  `json:"needsPlan"`
+	QANone     bool                  `json:"qaNone"`
+	Closed     bool                  `json:"closed"`
+	Verdict    string                `json:"verdict"`
+	Detail     string                `json:"detail"`
+	Complete   bool                  `json:"complete"`
+	QAState    string                `json:"qaState"`
+	QAComplete bool                  `json:"qaComplete"`
+	QAURL      string                `json:"qaUrl,omitempty"`
+	Statuses   []prbuild.Status      `json:"statuses"`
+	Workflow   prbuild.Workflow      `json:"workflow"`
+	Builds     []dailyReadinessBuild `json:"builds"`
+	Error      string                `json:"error,omitempty"`
 }
 type dailyReadinessReport struct {
 	ID           string                `json:"id"`
-	Progress     []readinessProgress   `json:"progress,omitempty"`
+	Progress     []prbuild.Progress    `json:"progress,omitempty"`
 	CurrentIssue string                `json:"currentIssue,omitempty"`
 	Trigger      string                `json:"trigger"`
 	Day          string                `json:"day"`
@@ -78,6 +80,7 @@ type dailyReadinessRequest struct {
 	Timezone string `json:"timezone,omitempty"`
 }
 type dailyReadinessService struct {
+	workers     *panelWorkers
 	mu          sync.Mutex
 	root        string
 	state       dailyReadinessState
@@ -86,7 +89,7 @@ type dailyReadinessService struct {
 	scope       func() (myWorkSnapshot, error)
 	fetch       func(context.Context, myWorkConfig) (myWorkSnapshot, error)
 	plans       func() ([]testPackage, error)
-	scanFactory func() func(context.Context, issueReadinessRequest) (issueReadinessReport, error)
+	scanFactory func() func(context.Context, prbuild.Request) (prbuild.Report, error)
 }
 
 func newDailyReadinessService(root string) (*dailyReadinessService, error) {
@@ -188,17 +191,31 @@ func (s *dailyReadinessService) change(req dailyReadinessRequest) error {
 	if req.Action == "auto" && (!s.state.Enabled || s.state.LastAutoDay == day && s.state.LastAutoScope == scope.Config) {
 		return nil
 	}
+	if s.workers == nil {
+		s.workers = &panelWorkers{}
+	}
+	parent, done, err := s.workers.Begin()
+	if err != nil {
+		return err
+	}
+	launched := false
+	defer func() {
+		if !launched {
+			done()
+		}
+	}()
 	next := s.state
 	next.StorageError = ""
 	next.LastAutoDay = day
 	next.LastAutoScope = scope.Config
-	next.Report = &dailyReadinessReport{ID: cacheLabID(), Trigger: req.Action, Day: day, Timezone: req.Timezone, StartedAt: s.now().UTC(), Config: scope.Config, Milestone: scope.Milestone.Title, Status: "running", Entries: []dailyReadinessEntry{}}
+	next.Report = &dailyReadinessReport{ID: cachelab.ID(), Trigger: req.Action, Day: day, Timezone: req.Timezone, StartedAt: s.now().UTC(), Config: scope.Config, Milestone: scope.Milestone.Title, Status: "running", Entries: []dailyReadinessEntry{}}
 	if err = s.persistLocked(next); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 20*time.Minute)
 	s.cancel = cancel
-	go s.run(ctx, next.Report.ID, scope.Config)
+	launched = true
+	go func() { defer done(); s.run(ctx, next.Report.ID, scope.Config) }()
 	return nil
 }
 func (s *dailyReadinessService) update(id string, fn func(*dailyReadinessReport)) bool {
@@ -270,7 +287,7 @@ func (s *dailyReadinessService) run(ctx context.Context, id string, config myWor
 			continue
 		}
 		pkg := latest[dailyIssueKey(issue.URL)]
-		entries = append(entries, dailyReadinessEntry{IssueURL: issue.URL, Title: issue.Title, Number: issue.Number, PackageID: pkg.ID, NeedsPlan: len(pkg.Cases) == 0, Verdict: "pending", QAState: "unknown", Statuses: []issueReadinessStatus{}, Builds: []dailyReadinessBuild{}})
+		entries = append(entries, dailyReadinessEntry{IssueURL: issue.URL, Title: issue.Title, Number: issue.Number, PackageID: pkg.ID, NeedsPlan: len(pkg.Cases) == 0, Verdict: "pending", QAState: "unknown", Statuses: []prbuild.Status{}, Builds: []dailyReadinessBuild{}})
 	}
 	if !s.update(id, func(r *dailyReadinessReport) {
 		r.Total = len(entries)
@@ -292,7 +309,7 @@ func (s *dailyReadinessService) run(ctx context.Context, id string, config myWor
 			break
 		}
 		issueCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
-		issueCtx = readinessWithProgress(issueCtx, func(progress readinessProgress) {
+		issueCtx = prbuild.WithProgress(issueCtx, func(progress prbuild.Progress) {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			if r := s.state.Report; r != nil && r.ID == id {
@@ -303,7 +320,7 @@ func (s *dailyReadinessService) run(ctx context.Context, id string, config myWor
 				}
 			}
 		})
-		report, err := scan(issueCtx, issueReadinessRequest{IssueURL: entry.IssueURL})
+		report, err := scan(issueCtx, prbuild.Request{IssueURL: entry.IssueURL})
 		cancel()
 		if ctx.Err() != nil {
 			break
@@ -389,6 +406,7 @@ func (p *localControlPanel) dailyReadinessBackend() (*dailyReadinessService, err
 	if err != nil {
 		return nil, err
 	}
+	s.workers = &p.workers
 	s.scope = packages.myWork
 	s.plans = packages.list
 	s.fetch = func(ctx context.Context, c myWorkConfig) (myWorkSnapshot, error) {
@@ -399,29 +417,7 @@ func (p *localControlPanel) dailyReadinessBackend() (*dailyReadinessService, err
 		_, err = packages.refreshMyWorkSnapshot(fresh)
 		return fresh, err
 	}
-	s.scanFactory = func() func(context.Context, issueReadinessRequest) (issueReadinessReport, error) {
-		cache := &readinessEvidenceCache{entries: map[string]readinessCachedEvidence{}}
-		type observed struct {
-			builds   []issueReadinessBuild
-			warnings []string
-		}
-		observations := map[readinessSearchScope]observed{}
-		return func(ctx context.Context, req issueReadinessRequest) (issueReadinessReport, error) {
-			ctx = context.WithValue(ctx, readinessCacheKey{}, cache)
-			return verifier.checkIssue(ctx, req, func(ctx context.Context) ([]issueReadinessBuild, []string) {
-				scope, _ := ctx.Value(readinessScopeKey{}).(readinessSearchScope)
-				if saved, ok := observations[scope]; ok {
-					readinessNotify(ctx, "Reusing this scan’s observed head images for the same release.")
-					return saved.builds, saved.warnings
-				}
-				builds, warnings := verifier.readinessBuilds(ctx)
-				if ctx.Err() == nil {
-					observations[scope] = observed{builds, warnings}
-				}
-				return builds, warnings
-			})
-		}
-	}
+	s.scanFactory = verifier.NewIssueScan
 	p.dailyReadiness = s
 	return s, nil
 }

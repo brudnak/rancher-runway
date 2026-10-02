@@ -1,12 +1,27 @@
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { apiFetch, setActivePanelTab, activeTab } from './store.js';
 import { clusterName } from './cluster-workspace.mjs';
 
 export const clusterWorkspaces = ref([]);
+export const clusterHistoryTrash = ref([]);
 export const clusterWorkspaceError = ref('');
 export const selectedClusterWorkspaceId = ref('');
 export const testWorkspaceIntent = ref(null);
 export const cacheLabIntent = ref(null);
+// Retain the originating cluster while moving between its tests, packages, and cache.
+export const clusterReturnContext = ref(null);
+export function rememberClusterOrigin(cluster) {
+  if (!cluster?.id) return;
+  clusterReturnContext.value = { id: cluster.id, name: clusterName(cluster, cluster.id), runId: cluster.runId || '', tab: activeTab.value === 'history' ? 'history' : 'clusters' };
+}
+export function returnToCluster() {
+  const origin = clusterReturnContext.value;
+  selectedClusterWorkspaceId.value=origin?.id || '';
+  setActivePanelTab(origin?.tab || 'clusters');
+}
+watch(activeTab, tab => {
+  if (!['tests', 'packages', 'cache'].includes(tab)) clusterReturnContext.value = null;
+});
 let inFlight, pollTimer, consumers = 0;
 const eventName = 'rancher-runway:lab-data-changed';
 export async function refreshClusterWorkspaces({fresh=false}={}) {
@@ -19,6 +34,7 @@ export async function refreshClusterWorkspaces({fresh=false}={}) {
       if (!response.ok) throw new Error(await response.text());
       const data = await response.json();
       clusterWorkspaces.value = data.clusters || [];
+      clusterHistoryTrash.value = data.trash || [];
       clusterWorkspaceError.value = '';
     } catch (error) { clusterWorkspaceError.value = error.name==='AbortError' ? 'Cluster history took too long to load. Try refreshing.' : error.message; }
     finally { clearTimeout(timer); }
@@ -33,7 +49,7 @@ export function listenClusterDataChanged(listener) {
 const refreshAfterMutation = () => refreshClusterWorkspaces({fresh:true});
 function poll() {
   clearTimeout(pollTimer);
-  if (!document.hidden && ['clusters','tests','cache','destroy','packages'].includes(activeTab.value)) refreshClusterWorkspaces();
+  if (!document.hidden && ['clusters','history','tests','cache','destroy','packages'].includes(activeTab.value)) refreshClusterWorkspaces();
   if (consumers) pollTimer=setTimeout(poll,10000);
 }
 export function useClusterWorkspaces() {
@@ -47,7 +63,7 @@ export async function renameCluster(id,nickname) {
   if(!response.ok)throw new Error(await response.text());
   await refreshClusterWorkspaces({fresh:true});notifyClusterDataChanged();
 }
-export function openClusterWorkspace(id) { selectedClusterWorkspaceId.value=id;setActivePanelTab('clusters'); }
+export function openClusterWorkspace(id) { selectedClusterWorkspaceId.value=id;setActivePanelTab(clusterWorkspaces.value.find(item=>item.id===id)?.archived ? 'history' : 'clusters'); }
 export function openClusterTestRun(id) { testWorkspaceIntent.value={runId:id};setActivePanelTab('tests'); }
 export function openClusterTestPlan(id) { testWorkspaceIntent.value={planId:id};setActivePanelTab('tests'); }
 export function prepareClusterTest(id) { testWorkspaceIntent.value={clusterId:id};setActivePanelTab('tests'); }
