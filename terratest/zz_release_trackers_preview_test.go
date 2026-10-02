@@ -16,7 +16,7 @@ func TestRunwayReleaseTrackersPreview(t *testing.T) {
 	}
 	p := clusterWorkspaceTestPanel(t)
 	s := packageTestService(t)
-	p.testPackages = s
+	p.issuePackages = s
 	p.trustedLocalOrigin = true
 	snap := workSnapshot(workIssue(52858, "open"), workIssue(54281, "open"))
 	snap.Milestone.Title = "v2.15.3"
@@ -34,7 +34,7 @@ func TestRunwayReleaseTrackersPreview(t *testing.T) {
 	mux.HandleFunc("/", p.handleIndex)
 	mux.HandleFunc("/static/", p.handleControlPanelStaticAsset)
 	mux.HandleFunc("/api/release-trackers", p.handleReleaseTrackers)
-	mux.HandleFunc("/api/test-packages", p.handleTestPackages)
+	mux.HandleFunc("/api/issue-packages", p.handleIssuePackages)
 	mux.HandleFunc("/api/my-work", p.handleMyWork)
 	mux.HandleFunc("/api/my-work/refresh", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, map[string]any{"snapshot": snap}) })
 	mux.HandleFunc("/api/issue-readiness/daily", func(w http.ResponseWriter, r *http.Request) {

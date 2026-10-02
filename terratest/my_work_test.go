@@ -20,7 +20,7 @@ func workSnapshot(issues ...issueRadarIssue) myWorkSnapshot {
 func TestMyWorkIntakePreservesPlansMovesAndRestart(t *testing.T) {
 	s := packageTestService(t)
 	existing := packageTestPlan(t, s)
-	existing = packageTestMutation(t, s, testPackageRequest{Action: "update", ID: existing.ID, Revision: existing.Revision, Title: existing.Title, IssueURL: workIssue(123, "open").URL, Status: existing.Status, Cases: existing.Cases}, nil, nil, nil)
+	existing = packageTestMutation(t, s, issuePackageRequest{Action: "update", ID: existing.ID, Revision: existing.Revision, Title: existing.Title, IssueURL: workIssue(123, "open").URL, Status: existing.Status, Cases: existing.Cases}, nil, nil, nil)
 	existing = packageTestStart(t, s, existing)
 	out, err := s.prepareMyWork(workSnapshot(workIssue(123, "open"), workIssue(456, "open"), workIssue(789, "closed")))
 	if err != nil {
@@ -41,7 +41,7 @@ func TestMyWorkIntakePreservesPlansMovesAndRestart(t *testing.T) {
 	lib.Buckets[0].Name = "Renamed release"
 	lib.Buckets[0].PackageIDs = []string{existing.ID}
 	lib.Unfiled = []string{starter.ID}
-	if _, err = s.savePackageLibrary(testPackageRequest{Library: &lib}); err != nil {
+	if _, err = s.savePackageLibrary(issuePackageRequest{Library: &lib}); err != nil {
 		t.Fatal(err)
 	}
 	out, err = s.prepareMyWork(workSnapshot(workIssue(123, "closed"), workIssue(456, "open")))
@@ -52,7 +52,7 @@ func TestMyWorkIntakePreservesPlansMovesAndRestart(t *testing.T) {
 	if out.Created != 0 || len(out.Departed) != 1 || len(out.History) != 2 || lib.Buckets[0].Name != "Renamed release" || len(lib.Unfiled) != 1 || lib.Unfiled[0] != starter.ID {
 		t.Fatalf("refresh overwrote organization or lost scope changes: %+v %+v", out, lib)
 	}
-	reopened, err := newTestPackageService(s.root)
+	reopened, err := newIssuePackageService(s.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,11 +70,11 @@ func TestMyWorkIntakePreservesPlansMovesAndRestart(t *testing.T) {
 func TestMyWorkDoesNotMovePackagesFromManualBuckets(t *testing.T) {
 	s := packageTestService(t)
 	pkg := packageTestPlan(t, s)
-	pkg = packageTestMutation(t, s, testPackageRequest{Action: "update", ID: pkg.ID, Revision: pkg.Revision, Title: pkg.Title, IssueURL: workIssue(123, "open").URL, Status: pkg.Status, Cases: pkg.Cases}, nil, nil, nil)
+	pkg = packageTestMutation(t, s, issuePackageRequest{Action: "update", ID: pkg.ID, Revision: pkg.Revision, Title: pkg.Title, IssueURL: workIssue(123, "open").URL, Status: pkg.Status, Cases: pkg.Cases}, nil, nil, nil)
 	lib := s.packageLibrarySnapshot()
-	lib.Buckets = []testPackageBucket{{ID: cachelab.ID(), Name: "Manual regression", PackageIDs: []string{pkg.ID}}}
+	lib.Buckets = []issuePackageBucket{{ID: cachelab.ID(), Name: "Manual regression", PackageIDs: []string{pkg.ID}}}
 	lib.Unfiled = []string{}
-	if _, err := s.savePackageLibrary(testPackageRequest{Library: &lib}); err != nil {
+	if _, err := s.savePackageLibrary(issuePackageRequest{Library: &lib}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.prepareMyWork(workSnapshot(workIssue(123, "open"))); err != nil {

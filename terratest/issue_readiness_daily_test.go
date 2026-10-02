@@ -22,8 +22,8 @@ func readinessDailyFixture(t *testing.T, root string, clock func() time.Time, ca
 	snapshot := myWorkSnapshot{Config: myWorkConfig{Repo: "rancher/rancher", Milestone: 14, Scope: "mine", User: "tester"}, Milestone: issueRadarMilestone{Number: 14, Title: "v2.14"}, Issues: []issueRadarIssue{{Number: 1, Title: "First", URL: "https://github.com/rancher/rancher/issues/1", State: "open"}, {Number: 2, Title: "Second", URL: "https://github.com/rancher/rancher/issues/2", State: "open"}}}
 	s.scope = func() (myWorkSnapshot, error) { return snapshot, nil }
 	s.fetch = func(_ context.Context, _ myWorkConfig) (myWorkSnapshot, error) { calls.Add(1); return snapshot, nil }
-	s.plans = func() ([]testPackage, error) {
-		return []testPackage{{ID: "planned", IssueURL: snapshot.Issues[0].URL, Cases: []testPackageCase{{Title: "test"}}}}, nil
+	s.plans = func() ([]issuePackage, error) {
+		return []issuePackage{{ID: "planned", IssueURL: snapshot.Issues[0].URL, Cases: []issuePackageCase{{Title: "test"}}}}, nil
 	}
 	s.scanFactory = func() func(context.Context, prbuild.Request) (prbuild.Report, error) {
 		return func(_ context.Context, req prbuild.Request) (prbuild.Report, error) {

@@ -635,13 +635,13 @@ wrapping, pause/resume, and copying of matching output. Status checks pause
 when a tab is inactive. If a refresh fails, the last successful workspace stays
 visible and lifecycle actions wait for a fresh check.
 
-## Test Packages
+## Issue Packages
 
-**My Work** pulls a GitHub milestone into a personal issue queue before or after assignment, prepares a local milestone bucket, and creates starter packages where an open issue has no plan yet. Its coverage and progress views distinguish saved plans, reproduction, validation, and GitHub closure. See [My Work](docs/my-work.md). Create an individual issue package from **Issue Radar**, **Clusters**, or **Test Packages** as well. Write manual cases, preserve reproduction and fix-validation sessions with recorded environment details, and attach existing Test Lab results or Cache Lab evidence. Link the fix pull request, look it up on GitHub for its title and linked issue, and let validation sessions record the fix and head commit they tested. Each session keeps the plan it started with; later edits do not rewrite that history. The Overview derives plan → reproduction → fix → validation progress with a suggested next step; it never sets the package status or a case outcome.
+**My Work** pulls a GitHub milestone into a personal issue queue before or after assignment, prepares a local milestone bucket, and creates starter packages where an open issue has no plan yet. Its coverage and progress views distinguish saved plans, reproduction, validation, and GitHub closure. See [My Work](docs/my-work.md). Create an individual issue package from **Issue Radar**, **Clusters**, or **Issue Packages** as well. Write manual cases, preserve reproduction and fix-validation sessions with recorded environment details, and attach existing Test Lab results or Cache Lab evidence. Link the fix pull request, look it up on GitHub for its title and linked issue, and let validation sessions record the fix and head commit they tested. Each session keeps the plan it started with; later edits do not rewrite that history. The Overview derives plan → reproduction → fix → validation progress with a suggested next step; it never sets the package status or a case outcome.
 
 **Is this issue ready to test?** checks linked PRs against observed head-build pairs and detects **QA template found on GitHub** in issue descriptions and comments. Enable **Settings → Daily issue readiness** for a saved My Work briefing on the first app open or return each day, or use **Scan now**. Build evidence, GitHub QA guidance, and locally saved test cases are tracked separately. See [Issue readiness](docs/issue-readiness.md) for limits and evidence rules.
 
-Preview a Markdown report for GitHub, export a portable package, or explicitly back up that same format to a private GitHub repository. Imports create independent local copies and never execute tests. Attached evidence survives cleanup of the original lab record. Organize packages into movable, ordered milestone buckets and export a bucket or the whole library. Link saved Test Lab plans to cases; reviewed local runs preserve their results and logs in the originating session. See [Test Packages](docs/test-packages.md) for the workflow, archive format, storage, and limits.
+Preview a Markdown report for GitHub, export a portable package, or explicitly back up that same format to a private GitHub repository. Imports create independent local copies and never execute tests. Attached evidence survives cleanup of the original lab record. Organize packages into movable, ordered milestone buckets and export a bucket or the whole library. Link saved Test Lab plans to cases; reviewed local runs preserve their results and logs in the originating session. See [Issue Packages](docs/issue-packages.md) for the workflow, archive format, storage, and limits.
 
 ## Cache Lab
 
@@ -860,7 +860,7 @@ state and identity resolution through constructors and callbacks:
 | `internal/cachelab` | Snapshot storage, SQLite queries and comparisons, capture jobs, and library synchronization |
 | `internal/server` | HTTP handlers for those services, strict request decoding, and request-origin checks |
 | `internal/workspace` | Retained-data paths, migration, and runtime-data module boundaries |
-| `internal/history` | Atomic observation files and chronological reads |
+| `internal/history` | Observation storage interface, compatible JSON file backend, and chronological reads |
 | `internal/panelsession` | Local app-session records, reuse checks, and ownership-aware cleanup |
 | `internal/operations` | Worker admission, cancellation, and shutdown draining |
 | `internal/awspricing` | AWS price-catalog queries using the existing environment credentials |
@@ -887,6 +887,59 @@ Keep new files focused on one responsibility. Before extending a large file,
 consider whether the new behavior belongs in an existing domain module or an
 independent package. Keep pure package tests beside their implementation and
 application integration tests in `terratest`.
+
+### Storage boundary and SQLite evaluation
+
+Cluster observations now use `history.Store` (`Write`, `List`, `Delete`) with opaque
+cluster IDs. `history.FileStore` remains the default and preserves the existing
+hashed directories, event filenames, JSON payloads, permissions, and read order.
+No user data is migrated. The application retains ownership of locking,
+deduplication, redaction, purge authorization, and suppression of late writes.
+The store override is set before workers start and must remain fixed during use.
+
+Storage failures can now be injected independently of the filesystem. Regression
+coverage verifies write retries do not lose observations through deduplication,
+read errors propagate, failed deletions remain retryable, and late observations
+cannot recreate purged history. File-backend tests cover legacy reads, isolation,
+corruption, missing streams, replacement semantics, and detached payloads.
+
+An initial SQLite read experiment lives only in
+`internal/history/sqlite_benchmark_test.go`, using the project's existing
+`modernc.org/sqlite` dependency. It is not a production backend. Reproduce with:
+
+```sh
+go test -buildvcs=false ./internal/history -run '^$' -bench 'Benchmark(FileStoreList|SQLiteHistoryList)' -benchtime=10x -count=1
+```
+
+On October 2, 2026, a local Apple M5 run produced:
+
+| Observations in one cluster | JSON files, full read | SQLite prototype, full read |
+| --- | --- | --- |
+| 100 | 6.11 ms | 0.126 ms |
+| 1,000 | 32.35 ms | 1.12 ms |
+
+These are ten-iteration, repeated reads of small synthetic observations, with
+setup excluded. Both paths decode the same event payloads and return complete
+histories. This does not measure cold storage, realistic large payloads, writes,
+concurrent workloads, crash recovery, or migration performance. It supports a
+larger-history prototype, not a general performance guarantee.
+
+**Recommendation:** retain JSON as the production default for this first step.
+SQLite is a plausible next backend for retained cluster metadata, observations,
+and operation records together. SQLite's documentation describes its suitability
+for [local application storage](https://www.sqlite.org/whentouse.html) and
+[atomic transactions](https://www.sqlite.org/atomiccommit.html). Our current purge
+updates workspace metadata, deletes observation files, then removes operation
+records; an observation-only database cannot make that whole operation atomic.
+The current interface deliberately does not promise a transaction across stores.
+
+Before switching, define a repository transaction covering the purge marker and
+all three record types, test rollback and restart after interruption, and add a
+versioned, resumable JSON import with record-count/payload verification and a
+preserved source backup. Evaluate indexed/paginated reads, writer contention,
+backup/restore, and representative workloads. Keep UI responses and identity
+semantics stable. Test Lab, issue packages, and Cache Lab retain their existing
+storage until each has its own domain boundary and migration coverage.
 
 Run `make test-regression` for the local regression suite: frontend tests, internal
 package tests with the race detector, selected backend lifecycle/history tests,

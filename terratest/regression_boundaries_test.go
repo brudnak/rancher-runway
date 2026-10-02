@@ -43,7 +43,7 @@ func TestRegressionMigrationResumesAndPreservesLinkedEvidence(t *testing.T) {
 		"rancher-operations/upgrade.json":           []byte(`{"clusterId":"original","from":"v2.15.2","to":"v2.15.3-head"}`),
 		"test-lab/library.json":                     []byte(`{"runs":[{"id":"run-original","clusterId":"original"}]}`),
 		"cache-lab/snapshot/data.db":                {0, 1, 2, 255, 42},
-		"test-packages/package/evidence.json":       []byte(`{"runId":"run-original","clusterId":"original"}`),
+		"issue-packages/package/evidence.json":       []byte(`{"runId":"run-original","clusterId":"original"}`),
 	}
 	for name, data := range files {
 		regressionWrite(t, filepath.Join(automationOutputDir(), "control-panel", name), data)

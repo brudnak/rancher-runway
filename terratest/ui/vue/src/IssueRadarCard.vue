@@ -1,4 +1,5 @@
 <script setup>
+import AddIssueToTracker from './AddIssueToTracker.vue';
 import RadarIcon from './HelmLabIcon.vue';
 import IssueReadiness from './IssueReadiness.vue';
 import { issueEffort } from './issue-radar-prompt.mjs';
@@ -8,7 +9,7 @@ defineEmits(['open', 'copy', 'package']);
 
 <template>
   <article class="ir-issue">
-    <div class="ir-card-actions"><button type="button" class="ir-package-action" @click="$emit('package', issue)"><RadarIcon name="folder"/> Create test package</button><IssueReadiness :issue-url="issue.url" compact/></div>
+    <div class="ir-card-actions"><AddIssueToTracker :issue="issue"/><button type="button" class="ir-package-action" @click="$emit('package', issue)"><RadarIcon name="folder"/> Create issue package</button><IssueReadiness :issue-url="issue.url" compact/></div>
     <div class="ir-row ir-issue-meta"><span class="font-mono">#{{ issue.number }}</span><span class="ir-kind" :data-kind="issue.kind">{{ issue.kind }}</span><button type="button" class="ir-copy-link" :aria-label="`Copy link to issue ${issue.number}`" title="Copy issue link" @click="$emit('copy', issue.url)"><RadarIcon name="copy"/></button></div>
     <a :href="issue.url" class="ir-issue-title" @click.prevent="$emit('open', issue.url)">{{ issue.title }} <span aria-hidden="true">↗</span></a>
     <div class="ir-tags"><span class="ir-tag ir-size-tag" :data-size="issue.qaSize" :class="{ 'ir-tag-warning': issue.qaSize === 'Lacks QA Size' || issue.sizeConflict }">{{ issue.sizeConflict ? (issue.qaNone ? 'QA/None · conflicting size' : 'Conflicting QA sizes') : issue.qaSize }}</span><span class="ir-tag" :class="{ 'ir-tag-warning': !issue.milestone }">{{ issue.milestone || 'No milestone' }}</span></div>

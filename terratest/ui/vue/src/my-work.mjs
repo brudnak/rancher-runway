@@ -1,4 +1,4 @@
-import {packageJourney} from './test-packages.mjs';
+import {packageJourney} from './issue-packages.mjs';
 const issueKey=value=>String(value||'').trim().replace(/\/$/,'').toLowerCase();
 export function myWorkRows(snapshot,packages=[]){
  const linked=new Map();for(const pkg of packages){const key=issueKey(pkg.issueUrl);if(!linked.has(key))linked.set(key,[]);linked.get(key).push(pkg)}

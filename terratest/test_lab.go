@@ -56,7 +56,7 @@ type testLabResult struct {
 	Elapsed float64 `json:"elapsed"`
 }
 type testLabRun struct {
-	PackageLink          *testPackageRunLink `json:"packageLink,omitempty"`
+	PackageLink          *issuePackageRunLink `json:"packageLink,omitempty"`
 	PackageEvidenceError string              `json:"packageEvidenceError,omitempty"`
 	PackageEvidenceSaved bool                `json:"packageEvidenceSaved,omitempty"`
 	ClusterID            string              `json:"clusterId,omitempty"`
@@ -83,7 +83,7 @@ type testLabLibrary struct {
 	GitHub  testLabGitHub  `json:"github"`
 }
 type testLabRequest struct {
-	PackageLink *testPackageRunLink  `json:"packageLink,omitempty"`
+	PackageLink *issuePackageRunLink  `json:"packageLink,omitempty"`
 	ClusterID   string               `json:"clusterId,omitempty"`
 	Action      string               `json:"action"`
 	ID          string               `json:"id"`

@@ -377,7 +377,7 @@ func (s *Service) checkIssue(ctx context.Context, req Request, discoverBuilds fu
 		report.Verdict = "qa_not_required"
 		report.Title = "QA is not required for this issue."
 		report.Detail = "GitHub currently labels this issue QA/None. It is excluded from remaining QA work and missing-test-case counts."
-		report.Recommendation = "Existing test packages remain available as history."
+		report.Recommendation = "Existing issue packages remain available as history."
 		report.QA = QA{State: "not_required", Complete: true, Templates: []readinessQATemplate{}}
 		summarizeReadinessWorkflow(&report)
 		return report, nil

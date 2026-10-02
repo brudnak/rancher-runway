@@ -84,7 +84,7 @@
 
   <section v-if="testsOpened" v-show="activeTab === 'tests'" class="min-w-0" aria-label="Test Lab workspace"><TestLabPanel :active="activeTab === 'tests'" /></section>
 
-  <section v-if="packagesOpened" v-show="activeTab === 'packages'" class="min-w-0" aria-label="Test Packages workspace"><TestPackagesPanel :active="activeTab === 'packages'" /></section>
+  <section v-if="packagesOpened" v-show="activeTab === 'packages'" class="min-w-0" aria-label="Issue Packages workspace"><IssuePackagesPanel :active="activeTab === 'packages'" /></section>
 
   <section v-if="cacheOpened" v-show="activeTab === 'cache'" class="min-w-0" aria-label="Cache Lab workspace"><CacheLabPanel :active="activeTab === 'cache'" /></section>
 
@@ -115,7 +115,7 @@ import PRBuildVerifierPanel from "./PRBuildVerifierPanel.vue";
 import PreflightPanel from "./PreflightPanel.vue";
 import SettingsPanel from "./SettingsPanel.vue";
 import TestLabPanel from "./TestLabPanel.vue";
-import TestPackagesPanel from "./TestPackagesPanel.vue";
+import IssuePackagesPanel from "./IssuePackagesPanel.vue";
 import CacheLabPanel from "./CacheLabPanel.vue";
 import SteveLabPanel from "./SteveLabPanel.vue";
 import WorkspaceRunsPanel from "./WorkspaceRunsPanel.vue";

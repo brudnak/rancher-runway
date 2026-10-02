@@ -580,7 +580,7 @@ func decodeSanitizedEvents(data []byte) ([]resultEvent, error) {
 
 func validateResultIdentity(event resultEvent) error {
 	if _, ok := allowedPackages[event.Package]; !ok {
-		return fmt.Errorf("package %q is not an allowed Runway test package", event.Package)
+		return fmt.Errorf("package %q is not an allowed Runway issue package", event.Package)
 	}
 	if !strings.Contains(event.Test, "/") {
 		return fmt.Errorf("test %q is not a subtest", event.Test)

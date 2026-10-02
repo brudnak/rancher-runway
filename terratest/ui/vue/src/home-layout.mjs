@@ -1,5 +1,5 @@
 export const homeLayouts = [
-  {id:'continue',title:'Continue working',description:'Pick up recent test packages and return to your last workspace. Your readiness briefing stays close by.',icon:'undo'},
+  {id:'continue',title:'Continue working',description:'Pick up recent issue packages and return to your last workspace. Your readiness briefing stays close by.',icon:'undo'},
   {id:'ready',title:'Ready to test',description:'Lead with verified fixes, workflow status, and issues that need test plans. Recent work is one step away.',icon:'check'},
 ];
 export const normalizeHomeLayout = value => homeLayouts.some(item=>item.id===value)?value:'continue';

@@ -2,7 +2,7 @@
 import {computed,nextTick,ref,watch} from 'vue';
 import {activeTab,apiFetch,setActivePanelTab} from './store.js';
 import {useClusterWorkspaces,clusterHistoryTrash,selectedClusterWorkspaceId,refreshClusterWorkspaces,notifyClusterDataChanged} from './cluster-workspace-store.mjs';
-import {testPackageSummaries,testPackageMilestoneBuckets,refreshTestPackageSummaries} from './test-packages-store.mjs';
+import {issuePackageSummaries,issuePackageMilestoneBuckets,refreshIssuePackageSummaries} from './issue-packages-store.mjs';
 import {historyGroups} from './cluster-history.mjs';
 import ClusterEvidenceHistory from './ClusterEvidenceHistory.vue';
 import ClusterWorkspaceCard from './ClusterWorkspaceCard.vue';
@@ -10,8 +10,8 @@ const {clusterWorkspaces,clusterWorkspaceError}=useClusterWorkspaces();
 const purge=ref(null);
 const query=ref(''),trash=ref(false),expanded=ref(''),editing=ref(null),busy=ref(false),error=ref(''),notice=ref('');
 const retained=computed(()=>clusterWorkspaces.value.filter(item=>item.archived));
-const groups=computed(()=>historyGroups(trash.value?clusterHistoryTrash.value:retained.value,testPackageSummaries.value,testPackageMilestoneBuckets.value,query.value));
-watch(activeTab,tab=>{if(tab==='history')refreshTestPackageSummaries().catch(err=>{error.value=err.message;});},{immediate:true});
+const groups=computed(()=>historyGroups(trash.value?clusterHistoryTrash.value:retained.value,issuePackageSummaries.value,issuePackageMilestoneBuckets.value,query.value));
+watch(activeTab,tab=>{if(tab==='history')refreshIssuePackageSummaries().catch(err=>{error.value=err.message;});},{immediate:true});
 watch([selectedClusterWorkspaceId,activeTab,()=>retained.value.map(item=>item.id).join(',')],async([id,tab])=>{
  if(tab!=='history'||!id)return;trash.value=false;query.value='';expanded.value=id;await nextTick();
  const element=[...document.querySelectorAll('[data-history-id]')].find(el=>el.dataset.historyId===id);
@@ -25,9 +25,9 @@ async function mutate(action,fields){if(busy.value)return;busy.value=true;error.
   <header><div><p class="history-eyebrow">RANCHER RUNWAY / SAVED WORK</p><h2>Retained History</h2><p>Removed clusters and their saved tests, snapshots, and packages. Grouped by milestone, then by Rancher version when no milestone is known.</p></div><button type="button" @click="setActivePanelTab('clusters')">← Live clusters</button></header>
   <div class="history-toolbar"><label>Search history<input v-model="query" type="search" placeholder="Milestone, version, cluster, run, notes…"></label><button type="button" :aria-pressed="!trash" @click="trash=false">History · {{retained.length}}</button><button type="button" :aria-pressed="trash" @click="trash=true">Trash · {{clusterHistoryTrash.length}}</button><button type="button" @click="edit(null)">Add history entry</button></div>
   <p v-if="error||clusterWorkspaceError" role="alert" class="history-error">{{error||clusterWorkspaceError}}</p><p v-if="notice" role="status">{{notice}}</p>
-  <p v-if="trash">Trash removes the workspace card from History. Restore it to browse its linked work again. Test Lab, Cache Lab, and Test Packages keep their own records.</p>
+  <p v-if="trash">Trash removes the workspace card from History. Restore it to browse its linked work again. Test Lab, Cache Lab, and Issue Packages keep their own records.</p>
   <form v-if="editing" class="history-editor" @submit.prevent="mutate(editing.id?'update':'create',editing)"><h3>{{editing.id?'Edit history':'Add a history entry'}}</h3><div class="history-fields"><label>Name<input v-model.trim="editing.name" required maxlength="160"></label><label>Milestone<input v-model.trim="editing.milestone" maxlength="160" placeholder="e.g. v2.16.0 — optional"></label><label>Rancher version<input v-model.trim="editing.version" maxlength="160" placeholder="e.g. v2.15.3-head"></label></div><label>Notes<textarea v-model="editing.notes" rows="3" maxlength="16384"></textarea></label><button type="submit" :disabled="busy||!editing.name">Save history</button> <button type="button" :disabled="busy" @click="editing=null">Cancel</button></form>
-  <form v-if="purge" class="history-editor" @submit.prevent="mutate('purge',purge)"><h3>Permanently delete this environment archive?</h3><p>This cannot be undone. Deletes the history card, observed deployment details, saved commands, and upgrade/downstream operation records for this cluster. Independently saved Test Lab, Cache Lab, and Test Package evidence remains in those libraries.</p><p>Cluster ID: <code>{{purge.id}}</code></p><label>Type the exact cluster ID<input v-model="purge.confirmId" autocomplete="off" :disabled="busy"></label><label>Type DELETE PERMANENTLY<input v-model="purge.confirmPhrase" autocomplete="off" :disabled="busy"></label><button type="submit" :disabled="busy||purge.confirmId!==purge.id||purge.confirmPhrase!=='DELETE PERMANENTLY'">Permanently delete archive</button> <button type="button" :disabled="busy" @click="purge=null">Cancel</button></form>
+  <form v-if="purge" class="history-editor" @submit.prevent="mutate('purge',purge)"><h3>Permanently delete this environment archive?</h3><p>This cannot be undone. Deletes the history card, observed deployment details, saved commands, and upgrade/downstream operation records for this cluster. Independently saved Test Lab, Cache Lab, and Issue Package evidence remains in those libraries.</p><p>Cluster ID: <code>{{purge.id}}</code></p><label>Type the exact cluster ID<input v-model="purge.confirmId" autocomplete="off" :disabled="busy"></label><label>Type DELETE PERMANENTLY<input v-model="purge.confirmPhrase" autocomplete="off" :disabled="busy"></label><button type="submit" :disabled="busy||purge.confirmId!==purge.id||purge.confirmPhrase!=='DELETE PERMANENTLY'">Permanently delete archive</button> <button type="button" :disabled="busy" @click="purge=null">Cancel</button></form>
   <p v-if="!groups.length" class="history-empty">{{query?'No matching history.':trash?'Trash is empty.':'No retained history yet. Removed cluster workspaces appear here automatically.'}}</p>
   <section v-for="group in groups" :key="group.label" class="history-group"><h3>{{group.label}} <small>{{group.clusters.length}}</small></h3>
    <article v-for="cluster in group.clusters" :key="cluster.id" :data-history-id="cluster.id" tabindex="-1" class="history-entry">

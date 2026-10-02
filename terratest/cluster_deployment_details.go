@@ -75,7 +75,7 @@ func (p *localControlPanel) handleClusterDeploymentDetails(w http.ResponseWriter
 	}
 
 	details := p.collectClusterDeploymentDetails(ctx, cluster)
-	p.rememberTestPackageDeploymentDetails(details)
+	p.rememberIssuePackageDeploymentDetails(details)
 	p.retainDeploymentDetails(details)
 	writeJSON(w, details)
 }

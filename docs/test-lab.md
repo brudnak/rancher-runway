@@ -28,7 +28,7 @@ On macOS, install Go and Xcode Command Line Tools (or Xcode). Before compiling t
 
 ### Connected cluster history
 
-Use [Test Packages](test-packages.md) to keep a larger issue investigation: write manual cases, preserve reproduction and validation sessions, and attach finished Test Lab runs alongside Cache Lab evidence. Package-owned evidence copies survive ordinary lab cleanup.
+Use [Issue Packages](issue-packages.md) to keep a larger issue investigation: write manual cases, preserve reproduction and validation sessions, and attach finished Test Lab runs alongside Cache Lab evidence. Package-owned evidence copies survive ordinary lab cleanup.
 
 Test runs and saved plans link to stable cluster IDs. **Clusters** shows the same results alongside that cluster's Cache Lab snapshots. Set a cluster nickname there or in either lab; every view uses the updated name while IDs, recorded targets, and versions remain visible. Activity and saved plans are grouped by cluster. Opening a result or snapshot from Clusters goes directly to that item in its lab.
 

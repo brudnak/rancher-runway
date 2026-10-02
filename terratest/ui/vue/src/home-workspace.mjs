@@ -13,7 +13,7 @@ export const workspaceTools = [
   { id: 'cache', label: 'Cache Lab', group: 'investigate', icon: 'database', kind: 'Inspect', description: 'Capture, query, and compare SQL cache snapshots.', keywords: 'SQLite database vacuum diff query kubeconfig token before after' },
   { id: 'my-work', label: 'My Work', group: 'investigate', icon: 'folder', kind: 'Plan', description: 'Your milestone, test plans, and readiness briefing.', keywords: 'GitHub assigned unassigned owner milestone coverage progress remaining plans validation' },
   { id: 'issues', label: 'Issue Radar', group: 'investigate', icon: 'pulse', kind: 'Plan', description: 'Issue ownership and workload by milestone.', keywords: 'GitHub milestone triage team report history delegate' },
-  { id: 'packages', label: 'Test Packages', group: 'investigate', icon: 'folder', kind: 'Validate', description: 'Organize test plans, sessions, and evidence.', keywords: 'cases steps reproduction validation notes archive private backup bundles' },
+  { id: 'packages', label: 'Issue Packages', group: 'investigate', icon: 'folder', kind: 'Validate', description: 'Organize test plans, sessions, and evidence.', keywords: 'cases steps reproduction validation notes archive private backup bundles' },
   { id: 'k3d', label: 'K3D Lab', group: 'local', icon: 'boxes', kind: 'Local', description: 'Create and manage local K3s clusters in Docker.', keywords: 'Kubernetes k3s experiment sandbox containers' },
   { id: 'steve', label: 'Steve Lab', group: 'local', icon: 'flask', kind: 'Local', description: 'Run Steve locally and inspect its API and SQL cache.', keywords: 'API source ref development metrics SQLite experiment' },
   { id: 'tests', label: 'Test Lab', group: 'local', icon: 'flask', kind: 'Validate', description: 'Run validation tests and review results.', keywords: 'test suite cattle config templates folders README documentation preflight validation GitHub Actions runner regression' },
@@ -28,7 +28,7 @@ export const toolGroups = [
 
 export const guidedPaths = [
   { id: 'issue', label: 'Validate an issue', icon: 'folder', description: 'Follow an issue from discovery and assignment through test preparation, reproduction, validation, and closure.', steps: [
-    { tab: 'my-work', title: 'Bring in your work', detail: 'Pull a milestone for yourself or prepare unassigned issues. Missing test packages get a starter in a milestone bucket.' },
+    { tab: 'my-work', title: 'Bring in your work', detail: 'Pull a milestone for yourself or prepare unassigned issues. Missing issue packages get a starter in a milestone bucket.' },
     { tab: 'packages', title: 'Plan & preserve', detail: 'Write manual cases, record sessions against known versions, and attach existing lab evidence.' },
     { tab: 'packages', title: 'Report & share', detail: 'Preview a Markdown report, export a portable bundle, or back up to your private GitHub repository.' },
   ] },

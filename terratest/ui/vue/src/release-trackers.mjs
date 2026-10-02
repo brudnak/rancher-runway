@@ -35,9 +35,16 @@ export function effectiveCheckpoints(tracker,key=''){
 }
 export function trackerIssues(trackers,selected='',milestone=''){
  const seen=new Map();
- for(const tracker of trackers.filter(t=>!t.archived&&(!selected||t.id===selected)))for(const link of tracker.milestones||[]){
+ for(const tracker of trackers.filter(t=>(selected||!t.archived)&&(!selected||t.id===selected))){
+ for(const entry of tracker.issues||[]){
+ const issue=entry.snapshot;if(!issue)continue;
+ if(milestone&&milestone!==`${entry.repo.toLowerCase()}#${issue.milestone?.number}`)continue;
+ seen.set(issue.html_url.toLowerCase(),{...issue,trackerName:tracker.name,milestoneTitle:issue.milestone?.title||'',explicitlyTracked:true});
+ }
+ for(const link of tracker.milestones||[]){
  const key=milestoneKey(link.config);if(milestone&&milestone!==key)continue;
  for(const issue of link.snapshot?.issues||[]){const id=issue.html_url.toLowerCase();if(!seen.has(id))seen.set(id,{...issue,trackerName:tracker.name,milestoneTitle:link.snapshot.milestone.title});}
+ }
  }return [...seen.values()];
 }
 const months=['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
@@ -103,3 +110,11 @@ export function extractReleaseMonth(text,month){
 export const sameWorkScope=(a,b)=>!!a&&!!b&&['repo','milestone','scope','user','label'].every(key=>String(a[key]||'').toLowerCase()===String(b[key]||'').toLowerCase());
 export const ownsSavedWork=(tracker,snapshot)=>!!snapshot&&(tracker.milestones||[]).some(m=>sameWorkScope(m.config,snapshot.config));
 export const matchingWorkMilestone=(tracker,snapshot)=>!!snapshot&&(tracker.milestones||[]).some(m=>milestoneKey(m.config)===milestoneKey(snapshot.config));
+
+// Saved work is a suggestion only when this release supplies matching evidence.
+export function canIncludeSavedWork(tracker,snapshot){
+ if(!snapshot?.config?.milestone||ownsSavedWork(tracker,snapshot))return false;
+ if(matchingWorkMilestone(tracker,snapshot))return true;
+ const version=String(snapshot.milestone?.title||'').trim().replace(/^v/i,'').toLowerCase();
+ return !!version&&(tracker.planVersions||[]).some(v=>v.trim().replace(/^v/i,'').toLowerCase()===version);
+}

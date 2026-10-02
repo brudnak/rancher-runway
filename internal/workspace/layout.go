@@ -10,7 +10,7 @@ import (
 
 // Durable libraries are siblings of disposable automation output. Run cleanup
 // must never own this directory. Names are fixed by callers, never HTTP input.
-var durableDataNames = []string{"cluster-workspaces.json", "cluster-history", "rancher-operations", "test-packages", "test-lab", "cache-lab"}
+var durableDataNames = []string{"cluster-workspaces.json", "cluster-history", "rancher-operations", "issue-packages", "test-lab", "cache-lab"}
 var durableMigrationMu sync.Mutex
 
 // Layout locates retained libraries relative to an explicit automation output path.

@@ -88,20 +88,20 @@ type dailyReadinessService struct {
 	now         func() time.Time
 	scope       func() (myWorkSnapshot, error)
 	fetch       func(context.Context, myWorkConfig) (myWorkSnapshot, error)
-	plans       func() ([]testPackage, error)
+	plans       func() ([]issuePackage, error)
 	scanFactory func() func(context.Context, prbuild.Request) (prbuild.Report, error)
 }
 
 func newDailyReadinessService(root string) (*dailyReadinessService, error) {
 	s := &dailyReadinessService{root: root, state: dailyReadinessState{Version: 1}, now: time.Now}
-	raw, err := testPackageReadBounded(filepath.Join(root, ".daily-readiness.json"), 8<<20)
+	raw, err := issuePackageReadBounded(filepath.Join(root, ".daily-readiness.json"), 8<<20)
 	if os.IsNotExist(err) {
 		return s, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err = decodeTestPackage(raw, &s.state); err != nil {
+	if err = decodeIssuePackage(raw, &s.state); err != nil {
 		return nil, fmt.Errorf("daily readiness data is invalid; existing file preserved: %w", err)
 	}
 	if s.state.Version != 1 {
@@ -273,7 +273,7 @@ func (s *dailyReadinessService) run(ctx context.Context, id string, config myWor
 		s.finish(id, "failed", "Could not read saved plans: "+err.Error())
 		return
 	}
-	latest := map[string]testPackage{}
+	latest := map[string]issuePackage{}
 	for _, p := range packages {
 		key := dailyIssueKey(p.IssueURL)
 		previous, ok := latest[key]
@@ -391,7 +391,7 @@ func (s *dailyReadinessService) run(ctx context.Context, id string, config myWor
 	}
 }
 func (p *localControlPanel) dailyReadinessBackend() (*dailyReadinessService, error) {
-	packages, err := p.testPackageService()
+	packages, err := p.issuePackageService()
 	if err != nil {
 		return nil, err
 	}

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/brudnak/ha-rancher-rke2/internal/history"
 	"log"
 	"net/http"
 	"os"
@@ -14,13 +13,23 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/brudnak/ha-rancher-rke2/internal/history"
 )
 
 type clusterHistoryEvent = history.Event
 
+// The default is resolved from the workspace on each call, just as before.
+// Tests can supply a store before workers start; it must not change during use.
+func (p *localControlPanel) clusterHistoryStore() history.Store {
+	if p.historyStore != nil {
+		return p.historyStore
+	}
+	return history.FileStore{Root: durableDataPath("cluster-history")}
+}
+
 func (p *localControlPanel) clusterHistoryDir(id string) string {
-	sum := sha256.Sum256([]byte(id))
-	return filepath.Join(durableDataPath("cluster-history"), hex.EncodeToString(sum[:]))
+	return (history.FileStore{Root: durableDataPath("cluster-history")}).Dir(id)
 }
 func (p *localControlPanel) saveClusterHistory(id, kind string, value any) error {
 	if id == "" {
@@ -52,7 +61,7 @@ func (p *localControlPanel) saveClusterHistory(id, kind string, value any) error
 		return nil
 	}
 	event := clusterHistoryEvent{ID: operationID(), At: time.Now().UTC(), Kind: kind, Data: raw}
-	err = history.WriteEvent(p.clusterHistoryDir(id), event)
+	err = p.clusterHistoryStore().Write(id, event)
 	if err == nil {
 		p.historyHashes[key] = hash
 	}
@@ -82,7 +91,7 @@ func (p *localControlPanel) retainDiscoveredClusters(clusters []clusterView) {
 		})
 		p.recordClusterHistory(cluster.ID, "discovery", saved)
 		if command, err := p.helmCommandForCluster(cluster); err == nil {
-			p.recordClusterHistory(cluster.ID, "helm-install", map[string]string{"command": sanitizeTestPackageHelmCommand(command), "source": "Saved install.sh; credentials, hostnames and local paths redacted"})
+			p.recordClusterHistory(cluster.ID, "helm-install", map[string]string{"command": sanitizeIssuePackageHelmCommand(command), "source": "Saved install.sh; credentials, hostnames and local paths redacted"})
 		}
 		if !cluster.Reachable || cluster.KubeconfigPath == "" {
 			continue
@@ -122,7 +131,7 @@ func (p *localControlPanel) retainDeploymentDetails(details clusterDeploymentDet
 }
 
 func (p *localControlPanel) readClusterHistory(id string) ([]clusterHistoryEvent, error) {
-	return history.ReadEvents(p.clusterHistoryDir(id))
+	return p.clusterHistoryStore().List(id)
 }
 func (p *localControlPanel) handleClusterHistory(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -227,7 +236,7 @@ func (p *localControlPanel) purgeClusterHistory(in clusterHistoryRequest) error 
 		_ = p.persistClusterWorkspacesLocked()
 		return err
 	}
-	if err := os.RemoveAll(p.clusterHistoryDir(in.ID)); err != nil {
+	if err := p.clusterHistoryStore().Delete(in.ID); err != nil {
 		return fail(err)
 	}
 	entries, err := os.ReadDir(p.rancherOperationsDir())

@@ -249,7 +249,7 @@ func TestPrepareRejectsUnsafeResultStreams(t *testing.T) {
 			name: "unapproved package",
 			stream: eventLine("run", "github.com/example/evil", "TestSuite/TestCase", "") +
 				eventLine("pass", "github.com/example/evil", "TestSuite/TestCase", "0.1"),
-			want: "not an allowed Runway test package",
+			want: "not an allowed Runway issue package",
 		},
 		{
 			name:   "terminal without run",

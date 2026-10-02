@@ -1,6 +1,6 @@
 # Issue readiness
 
-**Is this issue ready to test?** runs a read-only evidence check from the issue itself. The action is available on Issue Radar cards, My Work issues, linked Test Package bucket entries, and the open package overview.
+**Is this issue ready to test?** runs a read-only evidence check from the issue itself. The action is available on Issue Radar cards, My Work issues, linked Issue Package bucket entries, and the open package overview.
 
 Runway reads the issue state and milestone, the single-select **Status** value on accessible GitHub Projects, pull requests that close the issue, pull requests referenced in the issue timeline or body, and pull request links written in comments. A ProjectV2 or issue-discussion access problem is reported as an incomplete scan. Discovered PR references are labeled as closing links, cross-references, or mentions so a reviewer can distinguish GitHub's explicit closing relation from text that may need confirmation.
 
@@ -30,7 +30,7 @@ Enable **Settings → Daily issue readiness → Scan My Work automatically each 
 
 My Work keeps the latest report with its exact scope, observation time, per-issue workflow states, proven server/agent build pairs, GitHub QA template links, and issues without locally saved test cases. Counts exclude closed issues and issues labeled **QA/None**, including labels discovered during a scan. Test-case coverage uses the most recently updated package for each issue, matching My Work’s existing behavior. Reports describe the saved scan, not live counts after later edits.
 
-A daily job observes mutable images once and shares that observation across the issues in that job. It checks at most 100 open issues, with a 20-minute overall bound and a four-minute per-issue bound. Completed observations are saved incrementally in the private `.daily-readiness.json` file alongside the test-package library. Unchecked, incomplete, cancelled, failed, and interrupted work remains visible. Restarting does not repeat that day’s attempted scan; use **Scan now** to retry. Turning off the setting cancels an active automatic scan. Scans require the local Runway server to remain open; this is not an external scheduler.
+A daily job observes mutable images once and shares that observation across the issues in that job. It checks at most 100 open issues, with a 20-minute overall bound and a four-minute per-issue bound. Completed observations are saved incrementally in the private `.daily-readiness.json` file alongside the issue-package library. Unchecked, incomplete, cancelled, failed, and interrupted work remains visible. Restarting does not repeat that day’s attempted scan; use **Scan now** to retry. Turning off the setting cancels an active automatic scan. Scans require the local Runway server to remain open; this is not an external scheduler.
 
 Manual and daily scans show an elapsed timer, spinner, current activity, and expandable recent steps. Missing QA templates and blank templates are highlighted as actions needed; an incomplete comment scan remains unresolved. **QA/None** issues return immediately with a clear “QA not required” result.
 

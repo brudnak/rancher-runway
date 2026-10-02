@@ -119,30 +119,30 @@ func (s *issueRadarService) pullMyWork(ctx context.Context, c myWorkConfig) (myW
 	}
 	return out, fmt.Errorf("milestone exceeds the 100-page limit; narrow its scope")
 }
-func (s *testPackageService) myWorkLocked() (myWorkSnapshot, error) {
+func (s *issuePackageService) myWorkLocked() (myWorkSnapshot, error) {
 	var out myWorkSnapshot
-	raw, err := testPackageReadBounded(filepath.Join(s.root, ".my-work.json"), 16<<20)
+	raw, err := issuePackageReadBounded(filepath.Join(s.root, ".my-work.json"), 16<<20)
 	if os.IsNotExist(err) {
 		return out, nil
 	}
 	if err != nil {
 		return out, err
 	}
-	err = decodeTestPackage(raw, &out)
+	err = decodeIssuePackage(raw, &out)
 	return out, err
 }
-func (s *testPackageService) myWork() (myWorkSnapshot, error) {
+func (s *issuePackageService) myWork() (myWorkSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.myWorkLocked()
 }
 
 // Refresh is additive: existing plans and manually organized packages are never rewritten.
-func (s *testPackageService) prepareMyWork(out myWorkSnapshot) (myWorkSnapshot, error) {
+func (s *issuePackageService) prepareMyWork(out myWorkSnapshot) (myWorkSnapshot, error) {
 	return s.prepareTrackedWork(out, true)
 }
 
-func (s *testPackageService) prepareTrackedWork(out myWorkSnapshot, active bool) (myWorkSnapshot, error) {
+func (s *issuePackageService) prepareTrackedWork(out myWorkSnapshot, active bool) (myWorkSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous, err := s.myWorkLocked()
@@ -168,7 +168,7 @@ func (s *testPackageService) prepareTrackedWork(out myWorkSnapshot, active bool)
 			nameRunes = nameRunes[:len(nameRunes)-1]
 		}
 		name = string(nameRunes)
-		lib.Buckets = append(lib.Buckets, testPackageBucket{ID: cachelab.ID(), Name: name, PackageIDs: []string{}, SourceRepo: out.Config.Repo, SourceMilestone: out.Config.Milestone})
+		lib.Buckets = append(lib.Buckets, issuePackageBucket{ID: cachelab.ID(), Name: name, PackageIDs: []string{}, SourceRepo: out.Config.Repo, SourceMilestone: out.Config.Milestone})
 		bucketIndex = len(lib.Buckets) - 1
 	}
 	out.BucketID = lib.Buckets[bucketIndex].ID
@@ -214,7 +214,7 @@ func (s *testPackageService) prepareTrackedWork(out myWorkSnapshot, active bool)
 			continue
 		}
 		now := time.Now().UTC()
-		pkg := testPackage{ID: cachelab.ID(), Revision: cachelab.ID(), Title: issue.Title, IssueURL: issue.URL, IssueTitle: issue.Title, Summary: issue.Body, Status: "planning", Cases: []testPackageCase{}, Sessions: []testPackageSession{}, CreatedAt: now, UpdatedAt: now}
+		pkg := issuePackage{ID: cachelab.ID(), Revision: cachelab.ID(), Title: issue.Title, IssueURL: issue.URL, IssueTitle: issue.Title, Summary: issue.Body, Status: "planning", Cases: []issuePackageCase{}, Sessions: []issuePackageSession{}, CreatedAt: now, UpdatedAt: now}
 		if err := s.saveLocked(pkg); err != nil {
 			_ = os.RemoveAll(filepath.Join(s.root, pkg.ID))
 			rollback()
@@ -260,7 +260,7 @@ func (p *localControlPanel) handleMyWork(w http.ResponseWriter, r *http.Request)
 			http.Error(w, "unauthorized", 401)
 			return
 		}
-		s, err := p.testPackageService()
+		s, err := p.issuePackageService()
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -289,7 +289,7 @@ func (p *localControlPanel) handleMyWork(w http.ResponseWriter, r *http.Request)
 		issueRadarError(w, err)
 		return
 	}
-	s, err := p.testPackageService()
+	s, err := p.issuePackageService()
 	if err == nil {
 		out, err = s.prepareMyWork(out)
 	}
@@ -331,7 +331,7 @@ func mergeMyWorkSnapshot(previous, out myWorkSnapshot) myWorkSnapshot {
 }
 
 // Refresh scope metadata only: saved plans and bucket placement are independent history.
-func (s *testPackageService) refreshMyWorkSnapshot(out myWorkSnapshot) (myWorkSnapshot, error) {
+func (s *issuePackageService) refreshMyWorkSnapshot(out myWorkSnapshot) (myWorkSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous, err := s.myWorkLocked()
@@ -358,7 +358,7 @@ func (p *localControlPanel) handleRefreshMyWork(w http.ResponseWriter, r *http.R
 	if !p.issueRadarRequest(w, r, &req) {
 		return
 	}
-	s, err := p.testPackageService()
+	s, err := p.issuePackageService()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

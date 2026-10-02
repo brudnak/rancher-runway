@@ -136,7 +136,7 @@ import RefreshStatus from './RefreshStatus.vue';
 import { initialDiscovery } from './panel-presentation.mjs';
 import { computed, nextTick, ref, watch } from "vue";
 import Icon from "./HelmLabIcon.vue";
-import { refreshTestPackageSummaries } from "./test-packages-store.mjs";
+import { refreshIssuePackageSummaries } from "./issue-packages-store.mjs";
 import { useClusterWorkspaces,refreshClusterWorkspaces,selectedClusterWorkspaceId,clusterDisplayName } from "./cluster-workspace-store.mjs";
 import {
   state,
@@ -153,7 +153,7 @@ import {
 import ClusterCard from "./ClusterCard.vue";
 
 const {clusterWorkspaces,clusterWorkspaceError}=useClusterWorkspaces();
-watch(activeTab,tab=>{if(tab==='clusters')refreshTestPackageSummaries().catch(()=>{});},{immediate:true});
+watch(activeTab,tab=>{if(tab==='clusters')refreshIssuePackageSummaries().catch(()=>{});},{immediate:true});
 const clusterSearch=ref('');
 const retainedWorkspaces=computed(()=>clusterWorkspaces.value.filter(cluster=>cluster.archived));
 const matches=cluster=>{const words=clusterSearch.value.toLowerCase().trim().split(/\s+/).filter(Boolean);const text=[clusterDisplayName(cluster.id,cluster.name),cluster.nickname,cluster.id,cluster.runId,cluster.url,cluster.rancherUrl,cluster.version].filter(Boolean).join(' ').toLowerCase();return words.every(word=>text.includes(word));};

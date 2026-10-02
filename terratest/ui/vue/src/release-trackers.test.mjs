@@ -59,3 +59,23 @@ test('saved work matches by milestone but belongs only to its full owner scope',
  assert.equal(ownsSavedWork(tracker,snapshot),true);
  assert.equal(matchingWorkMilestone({milestones:[]},snapshot),false);
 });
+
+test('individual issues bypass owner scope, deduplicate milestones, and filter by their own milestone',()=>{
+ const issue={number:57584,html_url:'https://github.com/rancher/rancher/issues/57584',state:'open',milestone:{number:15,title:'v2.15.3'}};
+ const tracker={id:'oct',name:'October',issues:[{repo:'rancher/rancher',number:57584,snapshot:issue}],milestones:[{config:{repo:'rancher/rancher',milestone:15},snapshot:{milestone:{title:'v2.15.3'},issues:[issue]}}]};
+ assert.equal(trackerIssues([tracker],'oct').length,1);
+ assert.equal(trackerIssues([tracker],'oct')[0].explicitlyTracked,true);
+ assert.equal(trackerIssues([tracker],'oct','rancher/rancher#15').length,1);
+ assert.equal(trackerIssues([tracker],'oct','rancher/rancher#16').length,0);
+ assert.equal(trackerIssues([{...tracker,milestones:[]}],'oct')[0].number,57584);
+});
+
+test('saved work suggestions require a matching release version or linked milestone',async()=>{
+ const {canIncludeSavedWork}=await import('./release-trackers.mjs');
+ const saved={config:{repo:'rancher/rancher',milestone:16,scope:'mine',user:'brudnak'},milestone:{title:'v2.16.0'}};
+ assert.equal(canIncludeSavedWork({month:'2026-10',milestones:[]},saved),false);
+ assert.equal(canIncludeSavedWork({planVersions:['v2.15.3','v2.14.7'],milestones:[]},saved),false);
+ assert.equal(canIncludeSavedWork({planVersions:['2.16.0'],milestones:[]},saved),true);
+ assert.equal(canIncludeSavedWork({milestones:[{config:{...saved.config,scope:'all'}}]},saved),true);
+ assert.equal(canIncludeSavedWork({milestones:[{config:saved.config}]},saved),false);
+});

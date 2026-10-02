@@ -4,10 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
-	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
-	"github.com/brudnak/ha-rancher-rke2/internal/linodeinventory"
-	"github.com/brudnak/ha-rancher-rke2/internal/prbuild"
 	"log"
 	"net"
 	"net/http"
@@ -16,6 +12,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
+	"github.com/brudnak/ha-rancher-rke2/internal/history"
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
+	"github.com/brudnak/ha-rancher-rke2/internal/linodeinventory"
+	"github.com/brudnak/ha-rancher-rke2/internal/prbuild"
 )
 
 type localControlPanel struct {
@@ -58,9 +60,10 @@ type localControlPanel struct {
 	cacheLab                *cachelab.Service
 	testLabMu               sync.Mutex
 	testLab                 *testLabService
-	testPackagesMu          sync.Mutex
-	testPackages            *testPackageService
-	testPackageEnvironments map[string]testPackageEnvironment // guarded by mu; never rewrites preserved sessions
+	issuePackagesMu          sync.Mutex
+	issuePackages            *issuePackageService
+	issuePackageEnvironments map[string]issuePackageEnvironment // guarded by mu; never rewrites preserved sessions
+	historyStore            history.Store                     // Optional override, set before serving or starting workers.
 	historyMu               sync.Mutex
 	historyHashes           map[string]string
 	historyProbes           map[string]time.Time

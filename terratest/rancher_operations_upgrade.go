@@ -214,7 +214,7 @@ func (p *localControlPanel) runRancherUpgrade(record *rancherOperationRecord, pl
 	for i, arg := range commandArgs {
 		quoted[i] = shellQuote(arg)
 	}
-	p.recordClusterHistory(record.ClusterID, "helm-upgrade-command", map[string]string{"operationId": record.ID, "command": sanitizeTestPackageHelmCommand(strings.Join(quoted, " ")), "source": "Upgrade invocation; local files and credentials redacted; chart and agent digests are in the operation plan"})
+	p.recordClusterHistory(record.ClusterID, "helm-upgrade-command", map[string]string{"operationId": record.ID, "command": sanitizeIssuePackageHelmCommand(strings.Join(quoted, " ")), "source": "Upgrade invocation; local files and credentials redacted; chart and agent digests are in the operation plan"})
 	// Repeat Kubernetes-aware Helm rendering immediately before applying the upgrade.
 	if _, err = runtime.command(ctx, nil, "helm", append(append([]string{}, args...), "--dry-run=server")...); err != nil {
 		return fmt.Errorf("Helm preflight failed; no upgrade applied: %w", err)

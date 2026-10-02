@@ -7,14 +7,14 @@ import {homeLayout} from './home-preferences.mjs';
 import {homeBriefing} from './home-layout.mjs';
 import {dailyReadiness,dailyReadinessBusy,dailyReadinessError,changeDailyReadiness} from './daily-readiness-store.mjs';
 import {myWorkSnapshot,refreshMyWork,myWorkRefreshing,myWorkError} from './my-work-store.mjs';
-import {testPackageSummaries,openTestPackage} from './test-packages-store.mjs';
+import {issuePackageSummaries,openIssuePackage} from './issue-packages-store.mjs';
 import {myWorkRows,myWorkMetrics} from './my-work.mjs';
 import {openIssueReadiness} from './issue-readiness-store.mjs';
 import {activeTab,previousWorkspaceTab,state,bootPending,refreshError,refreshChecks,manualRefreshInFlight,setActivePanelTab} from './store.js';
 import {filterWorkspaceTools,homeSnapshot,toolGroups,workspaceTool} from './home-workspace.mjs';
 const work=computed(()=>myWorkSnapshot.value);
-const metrics=computed(()=>myWorkMetrics(myWorkRows(work.value,testPackageSummaries.value)));
-const recent=computed(()=>[...testPackageSummaries.value].sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0,4));
+const metrics=computed(()=>myWorkMetrics(myWorkRows(work.value,issuePackageSummaries.value)));
+const recent=computed(()=>[...issuePackageSummaries.value].sort((a,b)=>String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0,4));
 const report=computed(()=>dailyReadiness.value.report);
 const briefing=computed(()=>homeBriefing(report.value,work.value));
 const readyIssues=computed(()=>[...briefing.value.entries].filter(entry=>!entry.changed&&entry.verdict==='ready').sort((a,b)=>Number(!!b.workflow?.greenLight)-Number(!!a.workflow?.greenLight)).slice(0,3));
@@ -44,7 +44,7 @@ watch(activeTab,tab=>{if(tab==='home')void refreshMyWork();});
      <template v-if="section==='continue'">
       <div class="qh-section-top"><div><span class="qh-eyebrow">Your recent work</span><h2>Continue working</h2></div><button class="qh-link" @click="setActivePanelTab('packages')">All packages <Icon name="arrow"/></button></div>
       <button v-if="resume" class="qh-resume" @click="setActivePanelTab(resume.id)"><span class="qh-icon"><Icon :name="resume.icon"/></span><span><small>Last workspace</small><strong>Return to {{resume.label}}</strong></span><Icon name="arrow"/></button>
-      <div v-if="recent.length" class="qh-package-list"><button v-for="pkg in recent" :key="pkg.id" @click="openTestPackage(pkg.id)"><span class="qh-package-mark"><Icon name="folder"/></span><span><strong>{{pkg.title}}</strong><small>{{pkg.cases?.length||0}} {{pkg.cases?.length===1?'test case':'test cases'}} · {{pkg.status?.replaceAll('_',' ')||'planning'}}</small></span><span class="qh-updated">{{observed(pkg.updatedAt)}}</span><Icon name="arrow"/></button></div>
+      <div v-if="recent.length" class="qh-package-list"><button v-for="pkg in recent" :key="pkg.id" @click="openIssuePackage(pkg.id)"><span class="qh-package-mark"><Icon name="folder"/></span><span><strong>{{pkg.title}}</strong><small>{{pkg.cases?.length||0}} {{pkg.cases?.length===1?'test case':'test cases'}} · {{pkg.status?.replaceAll('_',' ')||'planning'}}</small></span><span class="qh-updated">{{observed(pkg.updatedAt)}}</span><Icon name="arrow"/></button></div>
       <div v-else class="qh-empty"><Icon name="folder"/><h3>Start with your milestone.</h3><p>Bring in your issues and give your test plans a home.</p><button class="qh-primary" @click="setActivePanelTab('my-work')">Choose a milestone <Icon name="arrow"/></button></div>
      </template>
      <template v-else>

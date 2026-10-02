@@ -39,7 +39,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/run-slots/start", p.handleRunSlotStart)
 	mux.HandleFunc("/api/operations/abort", p.handleAbortOperation)
 	mux.HandleFunc("/api/test-lab", p.handleTestLab)
-	mux.HandleFunc("/api/test-packages", p.handleTestPackages)
+	mux.HandleFunc("/api/issue-packages", p.handleIssuePackages)
 	mux.HandleFunc("/api/rancher/targets", p.handleRancherTargets)
 	mux.HandleFunc("/api/rancher/operations", p.handleRancherOperations)
 	mux.HandleFunc("/api/cluster-workspaces", p.handleClusterWorkspaces)
