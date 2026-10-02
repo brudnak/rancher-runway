@@ -9,32 +9,6 @@ import (
 	"time"
 )
 
-func TestPanelStateURLStripsTokenAndUsesStateEndpoint(t *testing.T) {
-	got, err := panelStateURL("http://127.0.0.1:1234/?token=secret#frag")
-	if err != nil {
-		t.Fatalf("panelStateURL failed: %v", err)
-	}
-	if want := "http://127.0.0.1:1234/api/state"; got != want {
-		t.Fatalf("panelStateURL() = %q, want %q", got, want)
-	}
-}
-
-func TestPanelSessionHealthyUsesStateEndpoint(t *testing.T) {
-	var gotPath string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(server.Close)
-
-	if !panelSessionHealthy(server.URL + "/?token=secret") {
-		t.Fatal("expected panel session to be healthy")
-	}
-	if gotPath != "/api/state" {
-		t.Fatalf("expected health check to use /api/state, got %q", gotPath)
-	}
-}
-
 func TestPersistAndRemovePanelSession(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", workspace)
@@ -86,5 +60,29 @@ func TestInspectLocalPanelSessionReportsRunningSession(t *testing.T) {
 	}
 	if session.URL != panel.baseURL {
 		t.Fatalf("expected panel URL %q, got %q", panel.baseURL, session.URL)
+	}
+}
+
+func TestPanelSessionReuseAndOwnership(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", workspace)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer server.Close()
+	panel := &localControlPanel{baseURL: server.URL + "/?token=test", repoRoot: workspace, sessionID: "current", startedAt: time.Now()}
+	if err := panel.persistPanelSession(); err != nil {
+		t.Fatal(err)
+	}
+	previous := &localControlPanel{sessionID: "previous"}
+	previous.removePanelSession()
+	got, ok, err := existingControlPanelURL(workspace)
+	if err != nil || !ok || got != panel.baseURL {
+		t.Fatalf("existing session lost: %q %v %v", got, ok, err)
+	}
+	if _, ok, err := existingControlPanelURL(t.TempDir()); err != nil || ok {
+		t.Fatalf("reused another workspace: %v %v", ok, err)
+	}
+	panel.removePanelSession()
+	if _, ok, err := existingControlPanelURL(workspace); err != nil || ok {
+		t.Fatalf("removed session reused: %v %v", ok, err)
 	}
 }

@@ -18,7 +18,7 @@ func TestServiceImportBoundaries(t *testing.T) {
 	}
 	root := filepath.Dir(filepath.Dir(source))
 	prefix := "github.com/brudnak/ha-rancher-rke2/"
-	domains := []string{"imagelookup", "prbuild", "cachelab", "server", "workspace", "history", "operations", "awspricing", "localtools", "registrycatalog", "linodeinventory"}
+	domains := []string{"imagelookup", "prbuild", "cachelab", "server", "workspace", "history", "operations", "awspricing", "localtools", "registrycatalog", "linodeinventory", "panelsession"}
 	for _, domain := range domains {
 		files, err := filepath.Glob(filepath.Join(root, domain, "*.go"))
 		if err != nil {

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/panelsession"
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/spf13/viper"
 )
@@ -287,11 +288,11 @@ func localWorkspaceRunRecord(record panelRunRecord) LocalWorkspaceRunRecord {
 
 func inspectLocalPanelSession(repoRoot string) LocalPanelSession {
 	logPath := panelLaunchLogPath()
-	session, ok, err := readPanelSession()
-	if err != nil || !ok || !samePath(session.RepoRoot, repoRoot) {
+	session, ok, err := panelSessions().Read()
+	if err != nil || !ok || !panelsession.SamePath(session.RepoRoot, repoRoot) {
 		return LocalPanelSession{LogPath: logPath}
 	}
-	running := processAlive(session.PID) && panelSessionHealthy(session.URL)
+	running := processAlive(session.PID) && panelsession.Healthy(session.URL)
 	startedAt := session.StartedAt
 	return LocalPanelSession{
 		Running:   running,

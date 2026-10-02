@@ -861,6 +861,7 @@ state and identity resolution through constructors and callbacks:
 | `internal/server` | HTTP handlers for those services, strict request decoding, and request-origin checks |
 | `internal/workspace` | Retained-data paths, migration, and runtime-data module boundaries |
 | `internal/history` | Atomic observation files and chronological reads |
+| `internal/panelsession` | Local app-session records, reuse checks, and ownership-aware cleanup |
 | `internal/operations` | Worker admission, cancellation, and shutdown draining |
 | `internal/awspricing` | AWS price-catalog queries using the existing environment credentials |
 | `internal/localtools` | Local executable discovery and subprocess environment construction |
