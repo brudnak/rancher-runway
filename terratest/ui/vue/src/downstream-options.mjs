@@ -36,7 +36,16 @@ export function linodeMachineDefaults(catalog) {
  return {
   region:choose('region','us-west') || choices.region?.[0]?.id || '',
   instanceType:choose('instanceType','g6-standard-2') || choices.instanceType?.find(item => item.memoryMB >= 4096)?.id || choices.instanceType?.[0]?.id || '',
-  image:choose('image','linode/ubuntu20.04') || choices.image?.find(item => !item.deprecated)?.id || '',
+  image:choose('image','linode/ubuntu22.04') || choose('image','linode/ubuntu24.04') || choose('image','linode/ubuntu20.04') || choices.image?.find(item => !item.deprecated)?.id || '',
  };
 }
 export const machineFieldLabel = key => ({region:'Region',instanceType:'Instance size',image:'OS image',createPrivateIp:'Private networking',sshUser:'SSH user',vpcId:'VPC',subnetId:'Subnet',ami:'AMI',zone:'Availability zone',securityGroup:'Security groups'}[key] || key);
+
+// Management inventory identifies the infrastructure and Kubernetes runtime.
+// Docker management has no Kubernetes distribution; use RKE2 in that case.
+export function downstreamLocalDefaults(cluster = {}) {
+ return {
+  provider: cluster.deploymentType === 'linode-docker-cattle' ? 'linode' : 'amazonec2',
+  distribution: cluster.deploymentType === 'hosted-tenant-k3s' ? 'k3s' : 'rke2',
+ };
+}

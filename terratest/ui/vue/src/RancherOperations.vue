@@ -1,8 +1,8 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { apiFetch } from './store.js';
 import { readJSON } from './read-json.mjs';
-import { downstreamVersionChoices, compareDownstreamVersions, generateDownstreamName, linodeMachineChoices, linodeMachineDefaults, machineFieldLabel } from './downstream-options.mjs';
+import { downstreamVersionChoices, compareDownstreamVersions, generateDownstreamName, linodeMachineChoices, linodeMachineDefaults, machineFieldLabel, downstreamLocalDefaults } from './downstream-options.mjs';
 import { machineValues, operationEvidence } from './rancher-operations.mjs';
 import { rancherConnectionURL } from './rancher-connection.mjs';
 import RancherTokenGenerator from './RancherTokenGenerator.vue';
@@ -16,16 +16,36 @@ const token = ref(''), insecure = ref(false), provider = ref('linode'), distro =
 const driverState = ref(null), enablingDriver = ref(false);
 const options = ref(null), kubernetes = ref(''), name = ref(''), quantity = ref(1), credentialID = ref('');
 const useEnvironment = ref(false), environmentStatus = ref(null);
-const credentials = ref({}), machine = ref({}), creationReviewed = ref(false), showAdvanced = ref(false);
+const credentials = ref({}), machine = ref({}), showAdvanced = ref(false);
+const additionalDetails = ref(false), initialized = ref(false), quickCreating = ref(false), quickStatus = ref('');
+const credentialReady = computed(() => !!credentialID.value || useEnvironment.value || (provider.value === 'linode' ? !!credentials.value.token : !!credentials.value.accessKey && !!credentials.value.secretKey));
+const canCreate = computed(() => !!options.value && !!token.value && !!name.value && !!kubernetes.value && credentialReady.value && !missingMachineFields.value && !providerSelectionInvalid.value && !connectionBusy.value);
 const issueContext = ref('');
 const namePrefix = ref(''), showOlderVersions = ref(false), providerCatalog = ref(null), providerError = ref('');
 const versionChoices = computed(() => downstreamVersionChoices(options.value?.versions, showOlderVersions.value, kubernetes.value));
 const missingMachineFields = computed(() => fields.value.some(([key, field]) => field.required && (machine.value[key] === undefined || machine.value[key] === null || machine.value[key] === '') && field.default == null));
 const providerSelectionInvalid = computed(() => Object.entries(providerChoices.value).some(([key, choices]) => machine.value[key] && !choices.some(item => item.id === machine.value[key])));
 const providerChoices = computed(() => linodeMachineChoices(providerCatalog.value));
+const creationIssues = computed(() => {
+  const issues = [];
+  if (!token.value) issues.push('Rancher sign-in is required.');
+  if (!options.value) issues.push('Cluster options have not loaded.');
+  if (!name.value) issues.push('A cluster name is required.');
+  if (!kubernetes.value) issues.push('Rancher did not provide a usable default Kubernetes version.');
+  if (!credentialReady.value) issues.push(environmentStatus.value?.message || 'Choose a cloud credential.');
+  for (const [key, field] of fields.value) {
+    if (field.required && (machine.value[key] == null || machine.value[key] === '') && field.default == null) issues.push(`${machineFieldLabel(key)} is required.`);
+  }
+  for (const [key, choices] of Object.entries(providerChoices.value)) {
+    if (machine.value[key] && !choices.some(item => item.id === machine.value[key])) issues.push(`${machineFieldLabel(key)} is unavailable in the current provider catalog.`);
+  }
+  if (providerError.value) issues.push(`Provider choices could not load: ${providerError.value}`);
+  if (connectionBusy.value) issues.push('Sign-in is still in progress.');
+  return issues;
+});
 function generateName() { try { name.value = generateDownstreamName(namePrefix.value); error.value = ''; } catch (err) { error.value = err.message; } }
 const providerInput = () => ({...connection(), credentialId:credentialID.value, useEnvironment:!credentialID.value && useEnvironment.value, credentials:credentialID.value || useEnvironment.value ? {} : credentials.value});
-async function fetchProviderChoices() {
+async function fetchProviderChoices(replaceUnavailableDefaults = false) {
   if (provider.value !== 'linode') return;
   providerError.value = '';
   const input = providerInput(), signature = JSON.stringify(input);
@@ -37,13 +57,16 @@ async function fetchProviderChoices() {
     const credentialRegion = options.value?.credentials.find(credential => credential.id === credentialID.value)?.defaultRegion;
     if (catalog.regions?.some(region => region.id === credentialRegion)) defaults.region = credentialRegion;
     for (const [key,value] of Object.entries(defaults)) {
-      if (options.value?.fields[key] && !machine.value[key]) machine.value[key] = value;
+      // Quick creation starts from schema defaults, which can outlive provider images.
+      // Keep explicit choices during manual refresh; only the automatic flow replaces them.
+      const unavailable = !providerChoices.value[key]?.some(item => item.id === machine.value[key]);
+      if (options.value?.fields[key] && value && (!machine.value[key] || (replaceUnavailableDefaults && unavailable))) machine.value[key] = value;
     }
   } catch (err) { if (signature === JSON.stringify(providerInput())) providerError.value = err.message; }
 }
 const loadProviderChoices = () => work(fetchProviderChoices);
-watch([credentialID, useEnvironment, credentials, provider, token], () => { providerCatalog.value = null; providerError.value = ''; creationReviewed.value = false; }, {deep:true});
-watch(credentialID, value => { if (value && provider.value === 'linode') void loadProviderChoices(); });
+watch([credentialID, useEnvironment, credentials, provider, token], () => { providerCatalog.value = null; providerError.value = '';  }, {deep:true});
+watch(credentialID, value => { if (value && provider.value === 'linode' && !busy.value) void loadProviderChoices(); });
 
 let timer, disposed = false;
 const nodeDriversURL = computed(() => { const base = rancherConnectionURL(props.cluster.rancherUrl); return base ? `${base}/dashboard/c/_/manager/nodeDriver` : ''; });
@@ -57,7 +80,7 @@ const request = async (action, values = {}) => {
   const result = await readJSON(signal => apiFetch('/api/rancher/operations', {
     method: 'POST', signal, body: JSON.stringify({ action, clusterId, ...values }),
   }), { label: 'Rancher workflow', timeoutMs: 100000 });
-  if (clusterId !== props.cluster.id || rancherUrl !== props.cluster.rancherUrl) throw new Error('Rancher changed during the request. Load options for the selected Rancher again.');
+  if (disposed || clusterId !== props.cluster.id || rancherUrl !== props.cluster.rancherUrl) throw new Error('Rancher changed during the request. Load options for the selected Rancher again.');
   return result;
 };
 async function work(fn) {
@@ -82,22 +105,82 @@ async function poll() {
 }
 watch(open, value => { clearTimeout(timer); if (value) void poll(); });
 onBeforeUnmount(() => { disposed = true; clearTimeout(timer); token.value = ''; credentials.value = {}; });
-watch([() => props.cluster.id, () => props.cluster.rancherUrl], () => { token.value = ''; options.value = null; history.value = []; credentials.value = {}; creationReviewed.value = false; });
-watch([token, insecure, provider, distro], () => { driverState.value = null; options.value = null; credentialID.value = ''; credentials.value = {}; machine.value = {}; creationReviewed.value = false; useEnvironment.value = false; environmentStatus.value = null; });
-watch([name, quantity, kubernetes, credentialID, credentials, machine, useEnvironment], () => { creationReviewed.value = false; }, { deep: true });
+watch([() => props.cluster.id, () => props.cluster.rancherUrl], () => { token.value = ''; options.value = null; history.value = []; credentials.value = {}; initialized.value = false; name.value = ''; namePrefix.value = ''; additionalDetails.value = false; open.value = false; });
+watch([token, insecure, provider, distro], () => { driverState.value = null; options.value = null; credentialID.value = ''; credentials.value = {}; machine.value = {};  useEnvironment.value = false; environmentStatus.value = null; });
+
 const connection = () => ({ token: token.value, insecure: insecure.value, provider: provider.value, distribution: distro.value });
 const loadCatalog = (distribution, channel) => readJSON(signal => apiFetch(`/api/helm-lab/catalog?distribution=${distribution}&channel=${channel}`, { signal }), { timeoutMs: 60000 });
-function openWorkflow(value) { tab.value = value; open.value = true; error.value = ''; notice.value = ''; }
+async function prepareDownstream(automatic = false) {
+  initialized.value = true;
+  const defaults = downstreamLocalDefaults(props.cluster);
+  provider.value = automatic ? 'linode' : defaults.provider; distro.value = defaults.distribution;
+  await nextTick();
+  if (!token.value) {
+    quickStatus.value = 'Signing in…';
+    const clusterId = props.cluster.id, rancherUrl = props.cluster.rancherUrl;
+    const created = await readJSON(signal => apiFetch('/api/rancher/token', {
+      method: 'POST', signal, body: JSON.stringify({url: rancherConnectionURL(rancherUrl), username: 'admin', useBootstrapPassword: true, ttlMinutes: 1440, purpose: 'downstream', insecure: insecure.value}),
+    }), {label: 'Rancher sign-in', timeoutMs: 60000});
+    if (disposed || clusterId !== props.cluster.id || rancherUrl !== props.cluster.rancherUrl) throw new Error('The selected Rancher changed. Try again on the selected cluster.');
+    if (!created.token) throw new Error('Sign-in did not return a token. Open Additional details to sign in.');
+    token.value = created.token;
+    await nextTick();
+  }
+  quickStatus.value = 'Loading defaults…';
+  await fetchOptions(automatic);
+}
+async function openWorkflow(value) {
+  if (busy.value || connectionBusy.value || quickCreating.value) return;
+  tab.value = value; open.value = true; error.value = ''; notice.value = '';
+  if (value !== 'downstream' || initialized.value || running.value) return;
+  await work(() => prepareDownstream());
+  if (error.value || !options.value) additionalDetails.value = true;
+}
+async function toggleDownstreamOptions() {
+  if (busy.value || connectionBusy.value || quickCreating.value) return;
+  if (open.value && tab.value === 'downstream') { open.value = false; return; }
+  await openWorkflow('downstream');
+}
+async function quickCreate() {
+  if (busy.value || connectionBusy.value || quickCreating.value || running.value) return;
+  quickCreating.value = true;
+  const clusterId = props.cluster.id, rancherUrl = props.cluster.rancherUrl;
+  tab.value = 'downstream'; open.value = false;
+  await work(async () => {
+    quickStatus.value = 'Checking Rancher…';
+    await refreshHistory();
+    if (disposed || clusterId !== props.cluster.id || rancherUrl !== props.cluster.rancherUrl) throw new Error('The selected Rancher changed. Try again on the selected cluster.');
+    if (running.value) { tab.value = 'history'; open.value = true; return; }
+    // Quick creation always uses a fresh name and defaults, even after editing a draft.
+    name.value = ''; quantity.value = 1; kubernetes.value = '';
+    credentialID.value = ''; useEnvironment.value = false; credentials.value = {}; machine.value = {};
+    await prepareDownstream(true);
+    if (!canCreate.value) throw new Error(`Quick create needs attention: ${creationIssues.value.join(' ')} Open Additional details to update these settings.`);
+    quickStatus.value = 'Creating downstream…';
+    await submitCluster();
+  });
+  quickCreating.value = false;
+  quickStatus.value = '';
+  if (error.value && !disposed && clusterId === props.cluster.id && rancherUrl === props.cluster.rancherUrl) {
+    open.value = true; additionalDetails.value = true;
+  }
+}
 async function upgradeStarted() { tab.value = 'history'; await work(refreshHistory); }
-async function connected(created) { token.value = created.token; await loadOptions(); }
-async function fetchOptions() {
+async function connected(created) { token.value = created.token; await nextTick(); await loadOptions(); }
+async function fetchOptions(automatic = false) {
   options.value = null; driverState.value = null;
   // Schema access can be allowed even when node-driver management is not.
   try { driverState.value = await request('driver-status', connection()); } catch { /* Let schema discovery report its own result. */ }
-  if (driverState.value?.active === false) return;
+  if (driverState.value?.active === false) {
+    if (!automatic) return;
+    quickStatus.value = 'Preparing the cloud provider…';
+    await request('enable-driver', connection());
+    driverState.value = null;
+  }
   options.value = await request('options', connection());
   if (!options.value.versions.includes(kubernetes.value)) kubernetes.value = options.value.defaultVersion || '';
-  if (!namePrefix.value) namePrefix.value = options.value.namePrefix || '';
+  if (!namePrefix.value) namePrefix.value = options.value.namePrefix || 'downstream';
+  if (!name.value) generateName();
   showOlderVersions.value = false;
   if (credentialID.value && !options.value.credentials.some(item => item.id === credentialID.value)) credentialID.value = '';
   const previousMachine = machine.value;
@@ -106,8 +189,18 @@ async function fetchOptions() {
     if (previousMachine[key] !== undefined) { machine.value[key] = previousMachine[key]; continue; }
     if (field.default !== undefined && field.default !== null) machine.value[key] = typeof field.default === 'object' ? JSON.stringify(field.default) : field.default;
   }
+  if (!credentialID.value && !useEnvironment.value && !Object.values(credentials.value).some(Boolean)) {
+    if (options.value.credentials.length === 1) credentialID.value = options.value.credentials[0].id;
+    else {
+      environmentStatus.value = await request('environment', {provider: provider.value});
+      useEnvironment.value = environmentStatus.value.available;
+    }
+  }
+  await nextTick();
+  if (credentialReady.value) await fetchProviderChoices(automatic);
+  if (!credentialReady.value || missingMachineFields.value || providerSelectionInvalid.value || !kubernetes.value) additionalDetails.value = true;
 }
-async function loadOptions() { await work(fetchOptions); }
+async function loadOptions() { await nextTick(); if (token.value) await work(() => fetchOptions()); }
 async function enableDriver() {
   await work(async () => {
     enablingDriver.value = true;
@@ -121,16 +214,20 @@ async function enableDriver() {
 async function pullEnvironment() {
   await work(async () => {
     environmentStatus.value = await request('environment', { provider: provider.value });
-    if (environmentStatus.value.available) { useEnvironment.value = true; credentials.value = {}; await fetchProviderChoices(); }
+    if (environmentStatus.value.available) { useEnvironment.value = true; credentials.value = {}; await nextTick(); await fetchProviderChoices(); }
   });
 }
+async function submitCluster() {
+  await request('downstream', { ...connection(), name: name.value, quantity: Number(quantity.value), kubernetesVersion: kubernetes.value,
+    credentialId: credentialID.value, useEnvironment: !credentialID.value && useEnvironment.value, credentials: credentialID.value || useEnvironment.value ? {} : credentials.value,
+    machine: machineValues(options.value.fields, machine.value), confirmed: true });
+  credentials.value = {}; token.value = ''; initialized.value = false;
+  tab.value = 'history'; open.value = true;
+  await refreshHistory();
+}
 async function createCluster() {
-  await work(async () => {
-    await request('downstream', { ...connection(), name: name.value, quantity: Number(quantity.value), kubernetesVersion: kubernetes.value,
-      credentialId: credentialID.value, useEnvironment: !credentialID.value && useEnvironment.value, credentials: credentialID.value || useEnvironment.value ? {} : credentials.value,
-      machine: machineValues(options.value.fields, machine.value), confirmed: creationReviewed.value });
-    credentials.value = {}; token.value = ''; tab.value = 'history'; await refreshHistory();
-  });
+  if (!canCreate.value || running.value || quickCreating.value) return;
+  await work(submitCluster);
 }
 function exportEvidence(record, format) {
   const content = format === 'json' ? JSON.stringify(record, null, 2) : `${issueContext.value ? `Issue: ${issueContext.value}\n\n` : ''}${operationEvidence(record)}`;
@@ -149,24 +246,33 @@ function podsFor(record) {
   <section class="rw-operations" aria-label="Manage deployed Rancher">
     <div class="rw-launchers" aria-label="Rancher actions">
       <button type="button" class="rw-launch" :aria-expanded="open && tab === 'upgrade'" @click="openWorkflow('upgrade')"><span aria-hidden="true">↗</span> Upgrade Rancher</button>
-      <button type="button" class="rw-launch" :aria-expanded="open && tab === 'downstream'" @click="openWorkflow('downstream')"><span aria-hidden="true">＋</span> Create downstream</button>
+      <div class="rw-quick-create" role="group" aria-label="Create a downstream cluster">
+        <button type="button" class="rw-launch rw-quick-primary" :disabled="busy || connectionBusy || quickCreating || running" title="One click: create a Linode downstream cluster with defaults" @click="quickCreate"><span aria-hidden="true">＋</span>{{ quickCreating ? 'Creating…' : 'Quick create · Linode' }}</button>
+        <button type="button" class="rw-launch rw-quick-options" aria-label="Choose downstream options" title="Choose downstream options" :aria-expanded="open && tab === 'downstream'" :disabled="busy || connectionBusy || quickCreating || running" @click="toggleDownstreamOptions">Choose options <span aria-hidden="true">⌄</span></button>
+      </div>
       <button type="button" class="rw-history-link" :aria-expanded="open && tab === 'history'" @click="props.unifiedHistory ? (open = false, emit('history')) : openWorkflow('history')">Cluster history <span aria-hidden="true">→</span></button>
     </div>
-    <div v-if="open" class="rw-body" :class="{ 'rw-upgrade-body': tab === 'upgrade' }">
+    <p v-if="quickCreating" class="rw-quick-status" role="status" aria-live="polite">{{ quickStatus }}</p>
+    <div v-if="open && !quickCreating" class="rw-body" :class="{ 'rw-upgrade-body': tab === 'upgrade' }">
       <header class="rw-heading"><div><span class="rw-eyebrow">{{ tab === 'upgrade' ? 'RANCHER UPGRADE' : tab === 'downstream' ? 'DOWNSTREAM CLUSTER' : 'OPERATION HISTORY' }}</span><h3>{{ tab === 'upgrade' ? 'Choose your next Rancher' : tab === 'downstream' ? 'Create a downstream cluster' : 'History & evidence' }}</h3><p>{{ cluster.rancherUrl }}</p></div><button type="button" aria-label="Close Rancher workflow" class="rw-close" @click="open = false">✕</button></header>
-      <div v-if="error" role="alert" class="rw-error"><p>{{ error }}</p><p v-if="tab === 'downstream' && nodeDriversURL"><a :href="nodeDriversURL" target="_blank" rel="noopener noreferrer">Open Node Drivers in Rancher ↗</a> · <a :href="nodeDriversURL.replace('/nodeDriver', '/provisioning.cattle.io.cluster/create')" target="_blank" rel="noopener noreferrer">Continue in Rancher ↗</a><span v-if="token"> · Your token is still available. After fixing the issue, click Load options from Rancher.</span></p></div>
+      <div v-if="error" role="alert" class="rw-error"><p>{{ error }}</p><p v-if="tab === 'downstream' && driverState?.active === false && nodeDriversURL"><a :href="nodeDriversURL" target="_blank" rel="noopener noreferrer">Open Node Drivers in Rancher ↗</a> · <a :href="nodeDriversURL.replace('/nodeDriver', '/provisioning.cattle.io.cluster/create')" target="_blank" rel="noopener noreferrer">Continue in Rancher ↗</a><span v-if="token"> · Your token is still available. After fixing the issue, click Load options from Rancher.</span></p></div>
       <p v-if="notice" role="status">{{ notice }}</p>
       <p v-if="running" role="status" class="rw-note">An operation is running. Keep Runway open; follow its progress in History & evidence.</p>
       <RancherUpgrade v-if="tab === 'upgrade'" :key="cluster.id" :cluster="cluster" :request="request" :load-catalog="loadCatalog" :running="running" @started="upgradeStarted" />
       <fieldset :disabled="busy || running" v-if="tab === 'downstream'">
-        <p>Create an RKE2 or K3s cluster through this deployed Rancher. Available releases and machine fields come from its live API. Runway checks the selected node driver and can enable it before loading machine options.</p>
+        <p>Customize your downstream cluster. Defaults are already selected.</p>
+        <label>Cluster name<input v-model.trim="name" placeholder="my-downstream" maxlength="40"></label>
+        <p role="status">{{ busy ? 'Loading cluster settings…' : `${provider === 'linode' ? 'Linode' : 'AWS EC2'} · ${distro.toUpperCase()} · ${kubernetes || 'Version pending'} · ${quantity} all-role node(s)` }}</p>
+        <details :open="additionalDetails" @toggle="additionalDetails = $event.target.open">
+        <summary>Additional details · sign-in, cloud provider &amp; cluster settings</summary>
+        <p>Default sign-in uses Runway’s configured admin password and creates a 24-hour token. The password stays on the backend; revoke the token in Rancher’s API &amp; Keys.</p>
         <div class="rancher-methods" role="group" aria-label="Connection method"><button type="button" :aria-pressed="authMode === 'password'" :disabled="connectionBusy" @click="authMode = 'password'">Password sign-in</button><button type="button" :aria-pressed="authMode === 'token'" :disabled="connectionBusy" @click="authMode = 'token'">API token</button></div>
         <label v-if="authMode === 'token'">Rancher API token<input v-model.trim="token" type="password" autocomplete="off" placeholder="token-…:…"></label>
         <RancherTokenGenerator v-if="authMode === 'password'" purpose="downstream" :url="cluster.rancherUrl" :credential-available="!!token" :insecure="insecure" :disabled="busy || running" @busy="connectionBusy = $event" @generated="connected" />
         <label class="rw-check"><input type="checkbox" v-model="insecure" :disabled="connectionBusy">Allow this Rancher's self-signed certificate for this connection.</label>
         <div class="rw-grid">
-          <label>Cloud provider<select v-model="provider" :disabled="connectionBusy"><option value="linode">Linode</option><option value="amazonec2">AWS EC2</option></select></label>
-          <label>Distribution<select v-model="distro" :disabled="connectionBusy"><option value="rke2">RKE2</option><option value="k3s">K3s</option></select></label>
+          <label>Cloud provider<select v-model="provider" :disabled="connectionBusy" @change="loadOptions"><option value="linode">Linode</option><option value="amazonec2">AWS EC2</option></select></label>
+          <label>Distribution<select v-model="distro" :disabled="connectionBusy" @change="loadOptions"><option value="rke2">RKE2</option><option value="k3s">K3s</option></select></label>
         </div>
         <button type="button" :disabled="!token || connectionBusy" @click="loadOptions">Load options from Rancher</button>
         <div v-if="driverState?.active === false" class="rw-driver-needed" role="status">
@@ -177,7 +283,7 @@ function podsFor(record) {
         </div>
         <template v-if="options">
           <div class="rw-grid">
-            <div class="rw-name"><label>Cluster name<input v-model.trim="name" placeholder="my-downstream" maxlength="40"></label><div class="rw-name-generator"><input v-model.trim="namePrefix" aria-label="Cluster name prefix" placeholder="Your initials" maxlength="33"><button type="button" @click="generateName">Generate name</button></div></div>
+            <div class="rw-name-generator"><input v-model.trim="namePrefix" aria-label="Cluster name prefix" placeholder="Your initials" maxlength="33"><button type="button" @click="generateName">Generate name</button></div>
             <div><label>Kubernetes version<select v-model="kubernetes"><option value="" disabled>Choose a version</option><option v-for="v in versionChoices" :key="v" :value="v">{{ v }}{{ v === options.defaultVersion ? ' · Rancher default' : options.defaultVersion && compareDownstreamVersions(v, options.defaultVersion) > 0 ? ' · Experimental' : '' }}</option></select></label><label class="rw-check"><input type="checkbox" v-model="showOlderVersions">Show older patches</label></div>
             <label>All-role nodes<select v-model.number="quantity"><option :value="1">1 · development</option><option :value="3">3</option><option :value="5">5</option></select></label>
             <label>Cloud credential<select v-model="credentialID"><option value="">Add a new credential to Rancher</option><option v-for="cred in options.credentials" :key="cred.id" :value="cred.id">{{ cred.name || cred.id }}</option></select></label>
@@ -207,13 +313,14 @@ function podsFor(record) {
             </label>
           </div>
           <label class="rw-check"><input type="checkbox" v-model="showAdvanced">Advanced · all {{ fields.length }} machine fields</label>
-          <div class="rw-review">
-            <h4>Review cluster creation</h4><p v-if="missingMachineFields || providerSelectionInvalid" class="rw-note">Choose valid values for the required machine fields before creating.</p><p>{{ name || 'Choose a name' }} · {{ provider }} · {{ kubernetes }} · {{ quantity }} all-role node(s) · fleet-default</p>
-            <p v-if="machine.region || machine.instanceType || machine.image">{{ machine.region }} · {{ machine.instanceType }} · {{ machine.image || machine.ami }}</p><p>Rancher will provision billable cloud resources. A failed operation retains partial resources and records their IDs for inspection and cleanup.</p>
-            <label class="rw-check"><input type="checkbox" v-model="creationReviewed">I reviewed these settings and want to create these resources.</label>
-            <button type="button" class="rw-primary" :disabled="!creationReviewed || !name || !kubernetes || missingMachineFields || providerSelectionInvalid" @click="createCluster">Create downstream cluster</button>
-          </div>
         </template>
+        </details>
+        <div class="rw-review">
+          <p v-if="machine.region || machine.instanceType || machine.image">{{ machine.region }} · {{ machine.instanceType }} · {{ machine.image || machine.ami }}</p>
+          <p v-if="!busy && !canCreate" class="rw-note">{{ creationIssues.join(' ') }}</p>
+          <p>Creating this cluster provisions billable cloud resources. Partial resources from a failed operation remain available for inspection and cleanup.</p>
+          <button type="button" class="rw-primary" :disabled="!canCreate || busy || running" @click="createCluster">{{ busy ? 'Working…' : 'Create downstream' }}</button>
+        </div>
       </fieldset>
       <div v-if="tab === 'history'">
         <p>History is saved locally and survives app restarts. An interrupted operation has an unknown outcome; inspect Rancher before retrying.</p>
@@ -240,5 +347,5 @@ function podsFor(record) {
 </style>
 
 <style scoped>
-.rw-name-generator{display:flex;gap:8px;align-items:center}.rw-body .rw-name-generator input{width:100px!important}.rw-name-generator button{white-space:nowrap}.rw-name-generator{margin-bottom:12px}
+.rw-quick-create{display:inline-flex;gap:8px;flex-wrap:wrap}.rw-quick-create .rw-quick-primary{border-radius:10px;background:#047857;border-color:#047857;color:white}.rw-quick-create .rw-quick-primary span{color:white}.rw-quick-create .rw-quick-options{border-radius:10px;padding-left:12px;padding-right:12px}.rw-launch:disabled{opacity:.5;cursor:not-allowed}.rw-quick-status{margin-top:12px;color:var(--runway-muted);font-size:13px}.rw-name-generator{display:flex;gap:8px;align-items:center}.rw-body .rw-name-generator input{width:100px!important}.rw-name-generator button{white-space:nowrap}.rw-name-generator{margin-bottom:12px}
 </style>
