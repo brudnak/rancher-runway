@@ -7,10 +7,19 @@ import {machineValues, operationEvidence} from './rancher-operations.mjs';
 import {rancherConnectionURL} from './rancher-connection.mjs';
 
 const source = readFileSync(new URL('./RancherOperations.vue', import.meta.url), 'utf8');
-function workflow(t, {machineFields = {region:{type:'string',default:'us-east-2',required:true}}, catalog = {regions:[{id:'us-east-2'}],types:[],images:[]}, credentials = [{id:'cloud-1'}], environment = false, signInFails = false, driverActive = true, existingRecords = [], submitFails = false, beforeSignIn = async () => {}} = {}) {
- const calls = [], cleanup = [];
+function workflow(t, {machineFields = {region:{type:'string',default:'us-east-2',required:true}}, catalog = {regions:[{id:'us-east-2'}],types:[],images:[]}, credentials = [{id:'cloud-1'}], environment = false, signInFails = false, driverActive = true, existingRecords = [], submitFails = false, beforeSignIn = async () => {}, onSubmit = () => {}, beforeHistory = async () => {}} = {}) {
+ const calls = [], cleanup = [], timers = new Map();
+ let timerID = 0;
+ const advancePoll = async () => {
+  await nextTick();
+  await new Promise(resolve=>setImmediate(resolve));
+  const pending = [...timers.values()]; timers.clear();
+  for (const callback of pending) await callback();
+  await nextTick();
+  await new Promise(resolve=>setImmediate(resolve));
+ }; 
  const props = reactive({cluster:{id:'local',rancherUrl:'https://rancher.example',deploymentType:'ha-rke2'}});
- const bindings = {computed,nextTick,ref,watch,onBeforeUnmount:fn=>cleanup.push(fn),defineProps:()=>props,defineEmits:()=>()=>{}, ...choices,machineValues,operationEvidence,rancherConnectionURL,
+ const bindings = {setTimeout:fn=>{timers.set(++timerID,fn);return timerID;},clearTimeout:id=>timers.delete(id),computed,nextTick,ref,watch,onBeforeUnmount:fn=>cleanup.push(fn),defineProps:()=>props,defineEmits:()=>()=>{}, ...choices,machineValues,operationEvidence,rancherConnectionURL,
   apiFetch:async (url, init) => {
    const input = init?.body ? JSON.parse(init.body) : {};
    calls.push({endpoint:url,...input});
@@ -20,19 +29,21 @@ function workflow(t, {machineFields = {region:{type:'string',default:'us-east-2'
     return {json:async()=>({token:'test-token'})};
    }
    if(input.action === 'downstream' && submitFails) throw new Error('Submission failed');
+   if(input.action === 'downstream') onSubmit(input);
+   if(!init?.body) await beforeHistory();
    const results = {
     'driver-status':{active:driverActive},
     'provider-options':catalog,
     options:{versions:['v1.35.1+rke2r1'],defaultVersion:'v1.35.1+rke2r1',namePrefix:'qa',credentials,fields:machineFields},
     environment:{available:environment},downstream:{},
    };
-   return {json:async()=>results[input.action] || {records:existingRecords}};
+   return {json:async()=>results[input.action] || {records:structuredClone(existingRecords)}};
   },readJSON:async fn=>(await fn()).json()};
  const script = source.match(/<script setup>([\s\S]*?)<\/script>/)[1].replace(/^import .*;\n/gm,'');
  const scope = effectScope();
- const model = scope.run(()=>new Function(...Object.keys(bindings),`${script}\nreturn {openWorkflow,quickCreate,toggleDownstreamOptions,createCluster,quickCreating,open,tab,quantity,machine,fetchProviderChoices,additionalDetails,canCreate,name,provider,distro,token,options,error,initialized};`)(...Object.values(bindings)));
+ const model = scope.run(()=>new Function(...Object.keys(bindings),`${script}\nreturn {running,refreshHistory,openWorkflow,quickCreate,toggleDownstreamOptions,createCluster,quickCreating,open,tab,quantity,machine,fetchProviderChoices,additionalDetails,canCreate,name,provider,distro,token,options,error,initialized};`)(...Object.values(bindings)));
  t.after(()=>{cleanup.forEach(fn=>fn());scope.stop();});
- return {model,calls,props};
+ return {model,calls,props,timers,advancePoll};
 }
 test('management deployment defaults follow AWS RKE2, AWS K3s and Linode Docker',()=>{
  assert.deepEqual(choices.downstreamLocalDefaults({deploymentType:'ha-rke2'}),{provider:'amazonec2',distribution:'rke2'});
@@ -189,4 +200,58 @@ test('an empty image catalog blocks creation and identifies OS image as unavaila
  await model.quickCreate();
  assert.equal(calls.some(call=>call.action==='downstream'),false);
  assert.match(model.error.value,/OS image is unavailable/);
+});
+
+test('closing the panel during creation keeps polling, unlocks on completion and allows another unique cluster',async t=>{
+ const records=[];
+ const {model,calls,timers,advancePoll}=workflow(t,{existingRecords:records,onSubmit:()=>records.unshift({id:`op-${records.length}`,kind:'downstream',status:'running'})});
+ await model.quickCreate();
+ assert.equal(model.running.value,true);
+ model.open.value=false;
+ await advancePoll();
+ assert.ok(timers.size > 0,'closed workflows must keep checking active operations');
+ records[0]={...records[0],status:'succeeded',finished:'2026-10-05T18:00:00Z'};
+ await advancePoll();
+ assert.equal(model.running.value,false);
+ assert.equal(timers.size,0,'stop background polling after closed operation finishes');
+ await model.quickCreate();
+ const submissions=calls.filter(call=>call.action==='downstream');
+ assert.equal(submissions.length,2);
+ assert.notEqual(submissions[0].name,submissions[1].name);
+});
+test('failed operations also unlock the closed workflow, with no automatic retry',async t=>{
+ const records=[];
+ const {model,calls,advancePoll}=workflow(t,{existingRecords:records,onSubmit:()=>records.push({id:'failure',status:'running'})});
+ await model.quickCreate();
+ model.open.value=false;
+ await advancePoll();
+ records[0]={id:'failure',status:'failed',finished:'2026-10-05T18:00:00Z'};
+ await advancePoll();
+ assert.equal(model.running.value,false);
+ assert.equal(calls.filter(call=>call.action==='downstream').length,1);
+});
+test('a temporary history failure retains the lock and continues polling while closed',async t=>{
+ let failHistory=false;
+ const records=[];
+ const {model,timers,advancePoll}=workflow(t,{existingRecords:records,onSubmit:()=>records.push({id:'op',status:'running'}),beforeHistory:async()=>{if(failHistory) throw new Error('Offline');}});
+ await model.quickCreate();
+ model.open.value=false;
+ failHistory=true;
+ await advancePoll();
+ assert.equal(model.running.value,true);
+ assert.ok(timers.size > 0);
+ failHistory=false;
+ records[0]={id:'op',status:'succeeded',finished:'2026-10-05T18:00:00Z'};
+ await advancePoll();
+ assert.equal(model.running.value,false);
+});
+test('custom creation clears the submitted name before preparing the next cluster',async t=>{
+ const {model}=workflow(t);
+ await model.openWorkflow('downstream');
+ const first=model.name.value;
+ await model.createCluster();
+ assert.equal(model.name.value,'');
+ await model.openWorkflow('downstream');
+ assert.notEqual(model.name.value,first);
+ assert.match(model.name.value,/^qa-[a-f0-9]{6}$/);
 });

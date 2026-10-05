@@ -68,7 +68,7 @@ const loadProviderChoices = () => work(fetchProviderChoices);
 watch([credentialID, useEnvironment, credentials, provider, token], () => { providerCatalog.value = null; providerError.value = '';  }, {deep:true});
 watch(credentialID, value => { if (value && provider.value === 'linode' && !busy.value) void loadProviderChoices(); });
 
-let timer, disposed = false;
+let timer, disposed = false, historyPolling = false, historyRevision = 0;
 const nodeDriversURL = computed(() => { const base = rancherConnectionURL(props.cluster.rancherUrl); return base ? `${base}/dashboard/c/_/manager/nodeDriver` : ''; });
 const running = computed(() => history.value.some(record => record.status === 'running'));
 const fieldOrder = {region:0, instanceType:1, image:2, createPrivateIp:3};
@@ -90,9 +90,10 @@ async function work(fn) {
   finally { busy.value = false; }
 }
 async function refreshHistory() {
-  const clusterId = props.cluster.id;
+  const clusterId = props.cluster.id, rancherUrl = props.cluster.rancherUrl;
+  const revision = ++historyRevision;
   const data = await readJSON(signal => apiFetch(`/api/rancher/operations?clusterId=${encodeURIComponent(clusterId)}`, { signal }));
-  if (!disposed && clusterId === props.cluster.id) {
+  if (!disposed && revision === historyRevision && clusterId === props.cluster.id && rancherUrl === props.cluster.rancherUrl) {
     const records = data.records || [];
     const completed = records.some(record => record.finished && !history.value.some(previous => previous.id === record.id && previous.finished === record.finished));
     history.value = records;
@@ -100,10 +101,20 @@ async function refreshHistory() {
   }
 }
 async function poll() {
+  if (disposed || historyPolling) return;
+  clearTimeout(timer);
+  historyPolling = true;
   try { await refreshHistory(); } catch (err) { if (!disposed) error.value = `History refresh: ${err.message}`; }
-  if (!disposed && open.value) timer = setTimeout(poll, 5000);
+  finally {
+    historyPolling = false;
+    // Closing the workflow must not freeze its running state and lock the launchers.
+    if (!disposed && (open.value || running.value)) timer = setTimeout(poll, 5000);
+  }
 }
-watch(open, value => { clearTimeout(timer); if (value) void poll(); });
+watch([open, running], () => {
+  clearTimeout(timer);
+  if (open.value || running.value) void poll();
+});
 onBeforeUnmount(() => { disposed = true; clearTimeout(timer); token.value = ''; credentials.value = {}; });
 watch([() => props.cluster.id, () => props.cluster.rancherUrl], () => { token.value = ''; options.value = null; history.value = []; credentials.value = {}; initialized.value = false; name.value = ''; namePrefix.value = ''; additionalDetails.value = false; open.value = false; });
 watch([token, insecure, provider, distro], () => { driverState.value = null; options.value = null; credentialID.value = ''; credentials.value = {}; machine.value = {};  useEnvironment.value = false; environmentStatus.value = null; });
@@ -221,7 +232,7 @@ async function submitCluster() {
   await request('downstream', { ...connection(), name: name.value, quantity: Number(quantity.value), kubernetesVersion: kubernetes.value,
     credentialId: credentialID.value, useEnvironment: !credentialID.value && useEnvironment.value, credentials: credentialID.value || useEnvironment.value ? {} : credentials.value,
     machine: machineValues(options.value.fields, machine.value), confirmed: true });
-  credentials.value = {}; token.value = ''; initialized.value = false;
+  credentials.value = {}; token.value = ''; initialized.value = false; name.value = ''; additionalDetails.value = false;
   tab.value = 'history'; open.value = true;
   await refreshHistory();
 }
@@ -252,6 +263,7 @@ function podsFor(record) {
       </div>
       <button type="button" class="rw-history-link" :aria-expanded="open && tab === 'history'" @click="props.unifiedHistory ? (open = false, emit('history')) : openWorkflow('history')">Cluster history <span aria-hidden="true">→</span></button>
     </div>
+    <p v-if="running && !quickCreating" class="rw-quick-status" role="status">An operation is running. You can create another downstream as soon as it finishes.</p>
     <p v-if="quickCreating" class="rw-quick-status" role="status" aria-live="polite">{{ quickStatus }}</p>
     <div v-if="open && !quickCreating" class="rw-body" :class="{ 'rw-upgrade-body': tab === 'upgrade' }">
       <header class="rw-heading"><div><span class="rw-eyebrow">{{ tab === 'upgrade' ? 'RANCHER UPGRADE' : tab === 'downstream' ? 'DOWNSTREAM CLUSTER' : 'OPERATION HISTORY' }}</span><h3>{{ tab === 'upgrade' ? 'Choose your next Rancher' : tab === 'downstream' ? 'Create a downstream cluster' : 'History & evidence' }}</h3><p>{{ cluster.rancherUrl }}</p></div><button type="button" aria-label="Close Rancher workflow" class="rw-close" @click="open = false">✕</button></header>
