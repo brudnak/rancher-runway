@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -153,12 +154,15 @@ func (p *localControlPanel) runDeployedDownstream(cluster clusterView, in ranche
 		}
 	}
 	var created struct {
-		ID string `json:"id"`
+		ID       string `json:"id"`
+		Metadata struct {
+			UID string `json:"uid"`
+		} `json:"metadata"`
 	}
 	if err = p.operationEvent(record, "Creating machine configuration fleet-default/"+machineName); err != nil {
 		return err
 	}
-	if err = call(http.MethodPost, "/v1/rke-machine-config.cattle.io."+in.Provider+"configs", downstreamMachinePayload(in, machineName), &created); err != nil {
+	if err = call(http.MethodPost, "/v1/rke-machine-config.cattle.io."+in.Provider+"configs", downstreamMachinePayload(in, machineName), nil); err != nil {
 		return fmt.Errorf("machine configuration creation failed; retained resources are listed in history: %w", err)
 	}
 	if err = checkpoint("machine configuration fleet-default/" + machineName); err != nil {
@@ -185,8 +189,15 @@ func (p *localControlPanel) runDeployedDownstream(cluster clusterView, in ranche
 	lastPods := ""
 	lastBlocker := ""
 	blockerCount := 0
+	missingCount := 0
+	clusterUID := created.Metadata.UID
 	for {
 		var state struct {
+			Metadata struct {
+				UID               string            `json:"uid"`
+				DeletionTimestamp string            `json:"deletionTimestamp"`
+				Annotations       map[string]string `json:"annotations"`
+			} `json:"metadata"`
 			Status struct {
 				ClusterName string `json:"clusterName"`
 				Conditions  []struct {
@@ -198,10 +209,32 @@ func (p *localControlPanel) runDeployedDownstream(cluster clusterView, in ranche
 		}
 		err = call(http.MethodGet, "/v1/provisioning.cattle.io.cluster/fleet-default/"+url.PathEscape(in.Name), nil, &state)
 		if err != nil {
+			var statusErr *deployedRancherHTTPError
+			if errors.As(err, &statusErr) && statusErr.status == http.StatusNotFound {
+				missingCount++
+				// Allow brief read-after-create lag, but never wait the full readiness
+				// timeout for a cluster that has been manually removed.
+				if missingCount >= 3 {
+					return fmt.Errorf("downstream cluster fleet-default/%s is no longer present in Rancher; stopped waiting for provisioning. Resource records are preserved for cleanup", in.Name)
+				}
+			} else {
+				missingCount = 0
+			}
 			if e := p.operationEvent(record, "Waiting for Rancher status: "+err.Error()); e != nil {
 				return e
 			}
 		} else {
+			missingCount = 0
+			if state.Metadata.DeletionTimestamp != "" {
+				return fmt.Errorf("downstream cluster fleet-default/%s is being deleted in Rancher; stopped waiting for provisioning. Resource records are preserved for cleanup", in.Name)
+			}
+			owner := state.Metadata.Annotations[deployedOwnerAnnotation]
+			if (clusterUID != "" && state.Metadata.UID != "" && clusterUID != state.Metadata.UID) || (owner != "" && owner != record.ID) {
+				return fmt.Errorf("downstream cluster fleet-default/%s was replaced in Rancher; stopped waiting for the original cluster. Inspect the replacement before cleanup", in.Name)
+			}
+			if clusterUID == "" {
+				clusterUID = state.Metadata.UID
+			}
 			// Log condition types/status only: provider error messages may echo secrets.
 			statuses := []string{}
 			ready := false

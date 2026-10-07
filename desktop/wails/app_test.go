@@ -73,6 +73,7 @@ func TestLifecycleCloseBlockedDialog(t *testing.T) {
 		wantTitle   string
 		wantMessage string
 	}{
+		{operation: "Rancher upgrade or downstream creation", wantTitle: "A Rancher operation is still running", wantMessage: "confirming it is gone"},
 		{operation: "test lab", wantTitle: "A local test is still running", wantMessage: "Test Lab → Activity & results"},
 		{operation: "setup", wantTitle: "Setup is still running", wantMessage: "creating a run slot"},
 		{operation: "cleanup", wantTitle: "Cleanup is still running", wantMessage: "cleaning up infrastructure"},

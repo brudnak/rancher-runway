@@ -200,6 +200,12 @@ func (p *localControlPanel) anyOperationRunning() bool {
 }
 
 func (p *localControlPanel) runningOperationNameLocked() string {
+	p.rancherOps.mu.Lock()
+	rancherBusy := len(p.rancherOps.active) > 0
+	p.rancherOps.mu.Unlock()
+	if rancherBusy {
+		return "Rancher upgrade or downstream creation"
+	}
 	for _, name := range allPanelOperationNames() {
 		if p.operationLocked(name).Running {
 			return string(name)

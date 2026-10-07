@@ -113,6 +113,13 @@ func (p *localControlPanel) startCleanupBatchWithLabCleanup(runIDs []string, tes
 	}
 
 	p.mu.Lock()
+	p.rancherOps.mu.Lock()
+	rancherBusy := len(p.rancherOps.active) > 0
+	p.rancherOps.mu.Unlock()
+	if rancherBusy {
+		p.mu.Unlock()
+		return fmt.Errorf("cannot start cleanup batch while Rancher upgrade or downstream creation is running")
+	}
 	for _, operation := range []panelOperationName{
 		panelOperationSetup,
 		panelOperationReadiness,

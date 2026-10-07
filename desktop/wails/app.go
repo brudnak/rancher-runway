@@ -147,6 +147,8 @@ func gpuCloseWarningDialog(summary harancher.GPUInfrastructureSummary) (string, 
 func lifecycleCloseBlockedDialog(operation string) (string, string) {
 	operation = strings.TrimSpace(strings.ToLower(operation))
 	switch operation {
+	case "rancher upgrade or downstream creation":
+		return "A Rancher operation is still running", "Runway is upgrading Rancher or waiting for a downstream cluster to become ready. Check the management cluster's operation history for progress. If a downstream was deleted in Rancher, Runway will stop waiting after confirming it is gone."
 	case "test lab":
 		return "A local test is still running", "Keep Runway open while Test Lab is running. You can stop the run in Test Lab → Activity & results. Stopping may interrupt suite cleanup; inspect the target afterward."
 	case "setup":
