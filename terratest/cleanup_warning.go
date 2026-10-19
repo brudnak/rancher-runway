@@ -12,7 +12,7 @@ type cleanupDestroyResult struct {
 	Warning string
 }
 
-// Downstream deletion must finish while management and its credentials still exist.
+// Attempt downstream deletion while management is available, but always proceed to management cleanup.
 func runCleanupDestroyPhases(cleanupDownstreams func() error, destroyManagement func() error, cleanupLocalArtifacts func()) (cleanupDestroyResult, error) {
 	if cleanupDownstreams == nil {
 		return cleanupDestroyResult{}, fmt.Errorf("downstream cleanup function must not be nil")
@@ -28,7 +28,6 @@ func runCleanupDestroyPhases(cleanupDownstreams func() error, destroyManagement 
 	if err := cleanupDownstreams(); err != nil {
 		result.Warning = manualLinodeCleanupWarning(err)
 		log.Print(cleanupWarningLogLine(result.Warning))
-		return result, fmt.Errorf("downstream cleanup failed; management infrastructure and local records retained: %w", err)
 	}
 	if err := destroyManagement(); err != nil {
 		return result, err
@@ -42,8 +41,8 @@ func manualLinodeCleanupWarning(err error) string {
 	if err != nil {
 		detail = compactCleanupWarningText(err.Error())
 	}
-	return compactCleanupWarningText("Automatic downstream cleanup failed. Management destroy has stopped. " +
-		"Keep management access and fix downstream deletion before retrying. Details: " + detail)
+	return compactCleanupWarningText("Automatic downstream cleanup failed. Management Terraform destroy will still be attempted. " +
+		"Verify and clean up remaining Linode resources manually. Details: " + detail)
 }
 
 func cleanupWarningLogLine(warning string) string {

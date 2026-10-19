@@ -54,9 +54,9 @@ func TestControlPanelBundlesIndependentDownstreamLifecycle(t *testing.T) {
 
 	for _, marker := range []string{
 		`Cleanup removes tracked downstream clusters and waits for their machines first.`,
-		`A failure retains management access and run records for inspection and retry.`,
-		`Management Terraform destroy starts only after downstream deletion succeeds.`,
-		`If downstream cleanup fails, that run stops and keeps management access and run records.`,
+		`Downstream failures are saved as warnings for manual Linode cleanup.`,
+		`Management Terraform destroy is attempted even if downstream cleanup fails.`,
+		`If downstream cleanup fails, management destroy continues and a manual Linode cleanup warning is saved.`,
 		`Slots whose management Terraform destroy succeeds are removed; Terraform failures stay recorded`,
 		`recorded Linode downstream deletion or Terraform destroy`,
 	} {
@@ -66,8 +66,8 @@ func TestControlPanelBundlesIndependentDownstreamLifecycle(t *testing.T) {
 	}
 
 	for _, marker := range []string{
-		`Management Terraform destroy starts only after downstream deletion succeeds.`,
-		`On failure, management access and run records are retained so you can fix the issue and retry.`,
+		`Management Terraform destroy is attempted even if downstream cleanup fails.`,
+		`Downstream failures produce a manual Linode cleanup warning; management destroy still runs.`,
 		`Cleanup removes tracked downstream clusters through Rancher first and waits for their machines to disappear.`,
 	} {
 		if !strings.Contains(destroySource, marker) {
@@ -79,7 +79,7 @@ func TestControlPanelBundlesIndependentDownstreamLifecycle(t *testing.T) {
 		`id="manualLinodeCleanupWarningModal"`,
 		`role="alertdialog"`,
 		`Manual Linode cleanup required`,
-		`New Destroy operations stop on downstream cleanup failure`,
+		`Management destroy proceeds even if downstream cleanup fails`,
 		`{{ manualLinodeCleanupWarning.warning }}`,
 		`Review cleanup logs`,
 		`I understand`,
@@ -138,9 +138,9 @@ func TestControlPanelBundlesIndependentDownstreamLifecycle(t *testing.T) {
 		`Downstream provisioning failed; management remains ready`,
 		`Manual Linode cleanup required`,
 		`manualLinodeCleanupWarningModal`,
-		`New Destroy operations stop on downstream cleanup failure`,
-		`Management Terraform destroy starts only after downstream deletion succeeds`,
-		`If downstream cleanup fails, that run stops and keeps management access and run records.`,
+		`Management destroy proceeds even if downstream cleanup fails`,
+		`Management Terraform destroy is attempted even if downstream cleanup fails`,
+		`If downstream cleanup fails, management destroy continues and a manual Linode cleanup warning is saved.`,
 		`AWS destroy finished; manual Linode cleanup required`,
 	} {
 		if !strings.Contains(ControlPanelHeaderVueJS, marker) {
@@ -149,9 +149,9 @@ func TestControlPanelBundlesIndependentDownstreamLifecycle(t *testing.T) {
 	}
 
 	staleContinuingPhrases := []string{
-		`AWS management destroy continued`,
-		`proceeds to AWS management Terraform destroy even if downstream deletion fails`,
-		`AWS destroy continues`,
+		`Management Terraform destroy starts only after downstream deletion succeeds`,
+		`New Destroy operations stop on downstream cleanup failure`,
+		`If downstream cleanup fails, that run stops and keeps management access and run records.`,
 	}
 	for _, surface := range []struct {
 		name   string
@@ -165,7 +165,7 @@ func TestControlPanelBundlesIndependentDownstreamLifecycle(t *testing.T) {
 	} {
 		for _, phrase := range staleContinuingPhrases {
 			if strings.Contains(surface.source, phrase) {
-				t.Fatalf("%s still claims downstream failure permits AWS destroy: %q", surface.name, phrase)
+				t.Fatalf("%s still claims downstream failure blocks AWS destroy: %q", surface.name, phrase)
 			}
 		}
 	}

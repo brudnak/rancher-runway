@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestRunCleanupDestroyPhasesStopsAfterDownstreamFailure(t *testing.T) {
+func TestRunCleanupDestroyPhasesContinuesAfterDownstreamFailure(t *testing.T) {
 	downstreamErr := errors.New("HA 1 cluster cluster-one: management API unavailable\nHA 2 cluster cluster-two: delete timed out")
 	calls := []string{}
 
@@ -25,10 +25,10 @@ func TestRunCleanupDestroyPhasesStopsAfterDownstreamFailure(t *testing.T) {
 		},
 	)
 
-	if !errors.Is(err, downstreamErr) {
-		t.Fatalf("downstream failure must stop destroy: %v", err)
+	if err != nil {
+		t.Fatalf("downstream failure must not stop destroy: %v", err)
 	}
-	if want := []string{"downstream"}; !reflect.DeepEqual(calls, want) {
+	if want := []string{"downstream", "management", "local"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("cleanup phase calls = %#v, want %#v", calls, want)
 	}
 	if !strings.Contains(result.Warning, "cluster-one") || !strings.Contains(result.Warning, "cluster-two") {
@@ -46,7 +46,7 @@ func TestRunCleanupDestroyPhasesStopsAfterDownstreamFailure(t *testing.T) {
 	}
 }
 
-func TestRunCleanupDestroyPhasesNeverCallsManagementAfterDownstreamFailure(t *testing.T) {
+func TestRunCleanupDestroyPhasesPreservesWarningWhenManagementFails(t *testing.T) {
 	downstreamErr := errors.New("HA 1 cluster cluster-one: management API unavailable")
 	managementErr := errors.New("terraform destroy failed")
 	calls := []string{}
@@ -65,10 +65,10 @@ func TestRunCleanupDestroyPhasesNeverCallsManagementAfterDownstreamFailure(t *te
 		},
 	)
 
-	if !errors.Is(err, downstreamErr) {
-		t.Fatalf("cleanup error = %v, want downstream failure", err)
+	if !errors.Is(err, managementErr) {
+		t.Fatalf("cleanup error = %v, want management failure", err)
 	}
-	if want := []string{"downstream"}; !reflect.DeepEqual(calls, want) {
+	if want := []string{"downstream", "management"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("cleanup phase calls = %#v, want %#v", calls, want)
 	}
 	if !strings.Contains(result.Warning, "cluster-one") {

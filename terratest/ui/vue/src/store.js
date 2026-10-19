@@ -1259,7 +1259,7 @@ export const stopOperationThenOpenDestroy = async (operation, runId = "") => {
   const label = operation === "setup" ? "setup" : "readiness";
   const confirmed = await requestTypedConfirmation({
     title: `Stop ${label}, then open destroy?`,
-    body: `This requests a stop for the running ${label} process and moves run ${targetRunId || "this slot"} into the Destroy tab. Cleanup requires a separate review and confirmation. Cleanup removes tracked downstream clusters first. Management Terraform destroy starts only after downstream deletion succeeds. If cleanup fails, management access and run records are retained.`,
+    body: `This requests a stop for the running ${label} process and moves run ${targetRunId || "this slot"} into the Destroy tab. Cleanup requires a separate review and confirmation. Cleanup removes tracked downstream clusters first. Management Terraform destroy is attempted even if downstream cleanup fails. Downstream failures produce a warning; management Terraform failures retain run records for retry.`,
     confirmText: "Stop and open destroy",
     accentText: "Stop before destroy",
   });
@@ -1367,7 +1367,7 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
     title: `Destroy run ${targetRunId}?`,
     body: (linodeRun
       ? "This runs Terraform destroy from the selected Linode run state. It deletes the Linode instance and its AWS Route53 record, then removes the run slot only after destroy succeeds."
-      : "Cleanup removes tracked downstream clusters and waits for their machines first. Management Terraform destroy starts only after downstream deletion succeeds. A failure retains management access and run records for inspection and retry. The run slot is removed after management Terraform destroy succeeds.") + labCleanupDescription(labCleanup),
+      : "Cleanup removes tracked downstream clusters and waits for their machines first. Management Terraform destroy is attempted even if downstream cleanup fails. Downstream failures are saved as warnings for manual Linode cleanup. The run slot is removed after management Terraform destroy succeeds.") + labCleanupDescription(labCleanup),
     confirmText: "Start destroy",
     accentText: linodeRun ? "Linode destroy confirmation" : "Downstream-first destroy confirmation",
   });
@@ -1427,7 +1427,7 @@ export const runCleanupBatch = async ({ all = false, runIds = selectedCleanupRun
     title: all
       ? `Destroy all ${requestedRunIds.length} run slots?`
       : `Destroy ${requestedRunIds.length} selected run slot${requestedRunIds.length === 1 ? "" : "s"}?`,
-    body: `For each run, cleanup removes tracked downstream clusters first. Management Terraform destroy starts only after downstream deletion succeeds. If downstream cleanup fails, that run stops and keeps management access and run records. Linode Docker slots use their recorded Linode and Route53 Terraform destroy. Cleanup runs sequentially for this fixed set: ${targetSummary}. Slots whose management Terraform destroy succeeds are removed; Terraform failures stay recorded and the batch continues with the remaining targets.` + labCleanupDescription(labCleanup),
+    body: `For each run, cleanup removes tracked downstream clusters first. Management Terraform destroy is attempted even if downstream cleanup fails. If downstream cleanup fails, management destroy continues and a manual Linode cleanup warning is saved. Linode Docker slots use their recorded Linode and Route53 Terraform destroy. Cleanup runs sequentially for this fixed set: ${targetSummary}. Slots whose management Terraform destroy succeeds are removed; Terraform failures stay recorded and the batch continues with the remaining targets.` + labCleanupDescription(labCleanup),
     confirmText: all ? "Destroy all slots" : "Destroy selected slots",
     accentText: all ? "Destroy every recorded slot" : "Bulk destroy confirmation",
   });

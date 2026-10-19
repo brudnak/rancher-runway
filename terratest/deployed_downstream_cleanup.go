@@ -22,7 +22,7 @@ func cleanupDeployedDownstreamsForRun(ctx context.Context, runID string, command
 	for _, record := range records {
 		log.Printf("[cleanup] Deleting Rancher-created downstream %s/%s before management destroy", record.Namespace, record.Name)
 		if err = deleteDeployedDownstream(ctx, record, command); err != nil {
-			return fmt.Errorf("downstream %s: %w; management infrastructure retained", record.Name, err)
+			return fmt.Errorf("downstream %s: %w", record.Name, err)
 		}
 		now := time.Now().UTC()
 		record.DeletedAt = &now
