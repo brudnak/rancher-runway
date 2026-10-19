@@ -177,7 +177,10 @@ func (s *Service) searchTargetWithOptions(ctx context.Context, target searchTarg
 			group.Error = SafeError(getErr)
 			return group
 		}
-		if imageLookupFullVersionTag(options.query) {
+		// Explicit references and immutable Prime-head tags are exact-only.
+		// Other queries can be version fragments (for example v2.14.6-rcs),
+		// so search the tag list when their literal manifest does not exist.
+		if options.exactLookup {
 			group.Scanned = 1
 			return group
 		}

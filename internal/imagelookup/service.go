@@ -41,8 +41,6 @@ var imageLookupKnownRepositories = []string{
 	"rancher/rancher-webhook",
 }
 
-var imageLookupFullVersionTagPattern = regexp.MustCompile(`(?i)^v?[0-9]+\.[0-9]+\.[0-9]+(?:[-._][a-z0-9][a-z0-9._-]*)?$`)
-
 var imageLookupVersionLinePattern = regexp.MustCompile(`(?i)^v?([0-9]+)\.([0-9]+)(?:\.([0-9]+))?$`)
 
 var imageLookupMinorHeadPattern = regexp.MustCompile(`(?i)^v?([0-9]+)\.([0-9]+)-head$`)

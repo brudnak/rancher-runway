@@ -423,6 +423,10 @@ can be cancelled and have bounded request times.
   `registry.suse.com` together or one at a time.
 - Browse `rancher/rancher`, `rancher/rancher-agent`, and
   `rancher/rancher-webhook`, or paste a custom public HTTPS repository.
+- Search a tag fragment such as `v2.14.6-rcs` to find matching builds. If a
+  bare query has no exact tag, lookup falls back to matching tag substrings;
+  pasted full image references and immutable Prime-head tags remain exact
+  lookups.
 - Prime-head lookup distinguishes a mutable patch selector such as
   `2.15.1-head` from an immutable tag such as
   `v2.15.1-<7-to-40-character-hex-SHA>-head`; the leading `v` is optional for

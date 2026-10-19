@@ -93,16 +93,6 @@ func TestImageLookupTagClassificationFilteringAndNaturalOrder(t *testing.T) {
 		t.Fatalf("natural alpha order = %v, want %v", alphaTags, wantAlphaOrder)
 	}
 
-	for _, query := range []string{"v2.16.0", "2.16.0", "v2.16.0-rc1", "v2.16.0-rcs-0844.1", "v2.16.0-amd64"} {
-		if !imageLookupFullVersionTag(query) {
-			t.Errorf("full Rancher version tag %q was not recognized", query)
-		}
-	}
-	for _, query := range []string{"", "0844", "deadbeef", "rcs", "v2.16", "release candidate"} {
-		if imageLookupFullVersionTag(query) {
-			t.Errorf("search fragment %q was misclassified as a full version tag", query)
-		}
-	}
 }
 
 func TestImageLookupPrimeHeadClassificationAndFiltering(t *testing.T) {

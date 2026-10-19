@@ -134,6 +134,10 @@ func (s *Service) searchParameters(request SearchRequest) ([]searchTarget, searc
 		options.primeHead = "only"
 		options.primeVersion = primeQueryVersion
 		options.verifyPrimePairs = true
+		if primeQueryKind == "immutable" {
+			// An immutable Prime-head tag identifies one specific image pair.
+			options.exactLookup = true
+		}
 		if primeQueryKind == "moving" && strings.TrimSpace(request.SortBy) == "" {
 			options.sortBy = "pair-completed"
 		}

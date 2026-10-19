@@ -58,10 +58,6 @@ func imageLookupExactDigestReference(repository name.Repository, query string, a
 	return digest, err == nil
 }
 
-func imageLookupFullVersionTag(query string) bool {
-	return imageLookupFullVersionTagPattern.MatchString(strings.TrimSpace(query))
-}
-
 type imageLookupCredentialKeychain struct{}
 
 func (imageLookupCredentialKeychain) Resolve(resource authn.Resource) (authn.Authenticator, error) {

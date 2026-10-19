@@ -142,7 +142,76 @@ func TestImageLookupSearchExactTagNotFoundFallsBackToListing(t *testing.T) {
 	}
 }
 
-func TestImageLookupSearchMissingFullVersionDoesNotList(t *testing.T) {
+func TestImageLookupSearchVersionFragmentsFallBackToListing(t *testing.T) {
+	var tagListRequests atomic.Int32
+	registryHandler := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	registryServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if strings.HasSuffix(request.URL.Path, "/tags/list") {
+			tagListRequests.Add(1)
+		}
+		registryHandler.ServeHTTP(response, request)
+	}))
+	defer registryServer.Close()
+
+	service := newImageLookupTestService(t, registryServer)
+	for _, tag := range []string{
+		"v2.14.6-rcs-cc3e.1",
+		"v2.14.6-rcs-cc3e.2",
+		"v2.14.6-rcs-cc3e.2-amd64",
+		"v2.14.6-rcs-cc3e.2.sig",
+		"v2.14.5-rcs-cc3e.2",
+		"v2.14.6-rc1",
+	} {
+		pushImageLookupSourceFixture(t, registryServer, tag, nil)
+	}
+
+	for _, testCase := range []struct {
+		query string
+		want  []string
+	}{
+		{query: "v2.14.6-rcs", want: []string{"v2.14.6-rcs-cc3e.2", "v2.14.6-rcs-cc3e.1"}},
+		{query: "2.14.6-rcs", want: []string{"v2.14.6-rcs-cc3e.2", "v2.14.6-rcs-cc3e.1"}},
+		{query: "v2.14.6-rcs-cc3e", want: []string{"v2.14.6-rcs-cc3e.2", "v2.14.6-rcs-cc3e.1"}},
+		{query: "2.14.6-rcs-cc3e.2", want: []string{"v2.14.6-rcs-cc3e.2"}},
+		{query: "v2.14.6-rcs-missing.1", want: []string{}},
+	} {
+		for _, scanMode := range []string{"bounded", "complete"} {
+			t.Run(testCase.query+"/"+scanMode, func(t *testing.T) {
+				tagListRequests.Store(0)
+				result, err := service.Search(context.Background(), SearchRequest{
+					Registry:     imageLookupTestServerHost(t, registryServer),
+					Repository:   "rancher/rancher",
+					Query:        testCase.query,
+					Architecture: "multi",
+					ScanMode:     scanMode,
+					Limit:        200,
+				})
+				if err != nil {
+					t.Fatalf("Search version fragment: %v", err)
+				}
+				if tagListRequests.Load() == 0 {
+					t.Fatal("version fragment did not fall back to tag listing")
+				}
+				if len(result.Groups) != 1 {
+					t.Fatalf("search groups = %d, want 1", len(result.Groups))
+				}
+				group := result.Groups[0]
+				if group.Error != "" || group.Scanned != 6 || group.Matched != len(testCase.want) || group.Truncated {
+					t.Fatalf("unexpected version-fragment group: %#v", group)
+				}
+				got := make([]string, len(group.Tags))
+				for index, tag := range group.Tags {
+					got[index] = tag.Name
+				}
+				if !slices.Equal(got, testCase.want) {
+					t.Fatalf("matched tags = %v, want %v", got, testCase.want)
+				}
+			})
+		}
+	}
+}
+
+func TestImageLookupSearchMissingExplicitTagDoesNotList(t *testing.T) {
 	var manifestRequests atomic.Int32
 	var tagListRequests atomic.Int32
 	registryHandler := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
@@ -158,27 +227,39 @@ func TestImageLookupSearchMissingFullVersionDoesNotList(t *testing.T) {
 	defer registryServer.Close()
 
 	service := newImageLookupTestService(t, registryServer)
-	result, err := service.Search(context.Background(), SearchRequest{
-		Registry:   imageLookupTestServerHost(t, registryServer),
-		Repository: "rancher/rancher",
-		Query:      "v2.16.0-rcs-0844.1",
-		Limit:      200,
-	})
-	if err != nil {
-		t.Fatalf("Search missing full version tag: %v", err)
-	}
-	if manifestRequests.Load() == 0 {
-		t.Fatal("missing full version did not attempt the exact manifest")
-	}
-	if tagListRequests.Load() != 0 {
-		t.Fatalf("missing full version made %d tag-list requests, want 0", tagListRequests.Load())
-	}
-	if len(result.Groups) != 1 {
-		t.Fatalf("search groups = %d, want 1", len(result.Groups))
-	}
-	group := result.Groups[0]
-	if group.Error != "" || group.Scanned != 1 || group.Matched != 0 || group.Truncated || len(group.Tags) != 0 {
-		t.Fatalf("unexpected missing full-version group: %#v", group)
+	pushImageLookupSourceFixture(t, registryServer, "v2.14.6-rcs-cc3e.2", nil)
+	pushImageLookupSourceFixture(t, registryServer, "custom-build", nil)
+	for _, tag := range []string{"v2.14.6-rcs", "v2.14.6-rcs-cc3e.1", "custom"} {
+		for _, selectorField := range []string{"query", "repository"} {
+			t.Run(tag+"/"+selectorField, func(t *testing.T) {
+				manifestRequests.Store(0)
+				tagListRequests.Store(0)
+				reference := imageLookupTestServerHost(t, registryServer) + "/rancher/rancher:" + tag
+				request := SearchRequest{Limit: 200}
+				if selectorField == "query" {
+					request.Query = reference
+				} else {
+					request.Repository = reference
+				}
+				result, err := service.Search(context.Background(), request)
+				if err != nil {
+					t.Fatalf("Search missing explicit tag: %v", err)
+				}
+				if manifestRequests.Load() == 0 {
+					t.Fatal("missing explicit tag did not attempt the exact manifest")
+				}
+				if tagListRequests.Load() != 0 {
+					t.Fatalf("missing explicit tag made %d tag-list requests, want 0", tagListRequests.Load())
+				}
+				if len(result.Groups) != 1 {
+					t.Fatalf("search groups = %d, want 1", len(result.Groups))
+				}
+				group := result.Groups[0]
+				if group.Error != "" || group.Scanned != 1 || group.Matched != 0 || group.Truncated || len(group.Tags) != 0 {
+					t.Fatalf("unexpected missing explicit-tag group: %#v", group)
+				}
+			})
+		}
 	}
 }
 
