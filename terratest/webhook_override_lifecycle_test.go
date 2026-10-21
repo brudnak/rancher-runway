@@ -1,6 +1,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -425,9 +426,17 @@ func ensureDownstreamKubeconfig(record downstreamOutputRecord) (string, error) {
 }
 
 func overrideWebhookDeployment(instanceNum int, scope, clusterName, kubeconfigPath, namespace, webhookImage string) (webhookDeploymentTarget, error) {
-	target, err := discoverWebhookDeployment(kubeconfigPath, namespace)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	return overrideWebhookDeploymentWithDiscovery(ctx, instanceNum, scope, clusterName, kubeconfigPath, namespace, webhookImage, 10*time.Second)
+}
+
+func overrideWebhookDeploymentWithDiscovery(ctx context.Context, instanceNum int, scope, clusterName, kubeconfigPath, namespace, webhookImage string, interval time.Duration) (webhookDeploymentTarget, error) {
+	logPrefix := fmt.Sprintf("[webhook][ha-%d][%s:%s]", instanceNum, scope, clusterName)
+	target, err := waitForWebhookDeployment(ctx, kubeconfigPath, namespace, interval, logPrefix)
 	if err != nil {
-		return webhookDeploymentTarget{}, err
+		logWebhookDiscoveryDiagnostics(kubeconfigPath, logPrefix)
+		return webhookDeploymentTarget{}, fmt.Errorf("HA %d %s cluster %s webhook discovery failed: %w", instanceNum, scope, clusterName, err)
 	}
 	if target.Namespace == "" {
 		target.Namespace = namespace
@@ -454,13 +463,17 @@ func discoverLocalWebhookDeployment(kubeconfigPath string) (webhookDeploymentTar
 }
 
 func discoverWebhookDeployment(kubeconfigPath, namespace string) (webhookDeploymentTarget, error) {
+	return discoverWebhookDeploymentContext(context.Background(), kubeconfigPath, namespace)
+}
+
+func discoverWebhookDeploymentContext(ctx context.Context, kubeconfigPath, namespace string) (webhookDeploymentTarget, error) {
 	args := []string{"get", "deployments", "-o", "json"}
 	if namespace == "" {
 		args = []string{"get", "deployments", "-A", "-o", "json"}
 	} else {
 		args = []string{"get", "deployments", "-n", namespace, "-o", "json"}
 	}
-	output, err := runKubectlOutput(kubeconfigPath, args...)
+	output, err := runWebhookDiscoveryKubectlOutput(ctx, kubeconfigPath, args...)
 	if err != nil {
 		return webhookDeploymentTarget{}, err
 	}
