@@ -365,15 +365,28 @@ exit 0
 	}
 }
 
-func TestInstallScriptRejectsZeroPodIngressDaemonSet(t *testing.T) {
-	tempDir := t.TempDir()
-	haDir := filepath.Join(tempDir, "high-availability-1")
-	fakeBin := filepath.Join(tempDir, "bin")
-	if err := os.MkdirAll(fakeBin, 0o700); err != nil {
-		t.Fatal(err)
-	}
+func TestInstallScriptWaitsForIngressDaemonSetAvailability(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		initial      string
+		recovered    string
+		wantAttempts string
+		wantError    string
+	}{
+		{name: "new node becomes ready after rollout", initial: "3 2", recovered: "3 3", wantAttempts: "2"},
+		{name: "unavailable pod times out", initial: "3 2", wantAttempts: "20", wantError: "has 2/3 available pods"},
+		{name: "zero pods never counts as ready", initial: "0 0", wantAttempts: "20", wantError: "has 0/0 available pods"},
+		{name: "invalid status fails with diagnostics", initial: "invalid", wantAttempts: "1", wantError: "returned an invalid status"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			haDir := filepath.Join(tempDir, "high-availability-1")
+			fakeBin := filepath.Join(tempDir, "bin")
+			if err := os.MkdirAll(fakeBin, 0o700); err != nil {
+				t.Fatal(err)
+			}
 
-	kubectlScript := `#!/bin/bash
+			kubectlScript := `#!/bin/bash
 set -euo pipefail
 case "$*" in
   "cluster-info")
@@ -389,9 +402,24 @@ case "$*" in
     exit 0
     ;;
   "-n kube-system get daemonset/rke2-traefik --request-timeout=20s -o jsonpath="*)
-    printf '%s\n' '0 0'
+    attempt=0
+    if [ -f "${FAKE_DAEMONSET_COUNT:?}" ]; then
+      attempt="$(cat "${FAKE_DAEMONSET_COUNT}")"
+    fi
+    attempt=$((attempt + 1))
+    printf '%s\n' "${attempt}" >"${FAKE_DAEMONSET_COUNT}"
+    if [ "${attempt}" -gt 1 ] && [ -n "${FAKE_RECOVERED_STATUS:-}" ]; then
+      printf '%s\n' "${FAKE_RECOVERED_STATUS}"
+    else
+      printf '%s\n' "${FAKE_INITIAL_STATUS:?}"
+    fi
     ;;
   "create --request-timeout=20s --dry-run=server -f -")
+    cat >/dev/null
+    if [ "$(cat "${FAKE_DAEMONSET_COUNT:?}")" -lt 2 ]; then
+      echo "Ingress admission checked before the new node became ready" >&2
+      exit 1
+    fi
     : >"${FAKE_INGRESS_DRY_RUN:?}"
     exit 0
     ;;
@@ -404,49 +432,77 @@ case "$*" in
     ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(fakeBin, "kubectl"), []byte(kubectlScript), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(fakeBin, "helm"), []byte("#!/bin/bash\n: >\"${FAKE_HELM_LOG:?}\"\n"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+			for name, script := range map[string]string{
+				"kubectl": kubectlScript,
+				"helm":    "#!/bin/bash\nprintf '%s\\n' \"$*\" >>\"${FAKE_HELM_LOG:?}\"\n",
+				"sleep":   "#!/bin/bash\nexit 0\n",
+			} {
+				if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(script), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
 
-	CreateInstallScript("helm install rancher rancher-latest/rancher", haDir, "rke2-traefik")
-	if err := os.WriteFile(filepath.Join(haDir, "kube_config.yaml"), []byte("apiVersion: v1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+			CreateInstallScript("helm install rancher rancher-latest/rancher", haDir, "rke2-traefik")
+			if err := os.WriteFile(filepath.Join(haDir, "kube_config.yaml"), []byte("apiVersion: v1\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 
-	diagnosticsPath := filepath.Join(tempDir, "diagnostics.log")
-	ingressDryRunPath := filepath.Join(tempDir, "ingress-dry-run")
-	helmLogPath := filepath.Join(tempDir, "helm.log")
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("FAKE_DIAGNOSTICS_LOG", diagnosticsPath)
-	t.Setenv("FAKE_INGRESS_DRY_RUN", ingressDryRunPath)
-	t.Setenv("FAKE_HELM_LOG", helmLogPath)
+			diagnosticsPath := filepath.Join(tempDir, "diagnostics.log")
+			ingressDryRunPath := filepath.Join(tempDir, "ingress-dry-run")
+			helmLogPath := filepath.Join(tempDir, "helm.log")
+			countPath := filepath.Join(tempDir, "daemonset-count")
+			t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("FAKE_DIAGNOSTICS_LOG", diagnosticsPath)
+			t.Setenv("FAKE_INGRESS_DRY_RUN", ingressDryRunPath)
+			t.Setenv("FAKE_HELM_LOG", helmLogPath)
+			t.Setenv("FAKE_DAEMONSET_COUNT", countPath)
+			t.Setenv("FAKE_INITIAL_STATUS", tc.initial)
+			t.Setenv("FAKE_RECOVERED_STATUS", tc.recovered)
 
-	command := exec.Command(filepath.Join(haDir, "install.sh"))
-	command.Dir = haDir
-	output, err := command.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected zero-pod ingress DaemonSet to fail readiness:\n%s", output)
-	}
-	if !strings.Contains(string(output), "has 0/0 available pods") {
-		t.Fatalf("expected zero-pod DaemonSet diagnostic, got:\n%s", output)
-	}
-	if _, err := os.Stat(ingressDryRunPath); !os.IsNotExist(err) {
-		t.Fatalf("expected Ingress dry-run not to execute, stat err=%v", err)
-	}
-	if _, err := os.Stat(helmLogPath); !os.IsNotExist(err) {
-		t.Fatalf("expected Helm not to run, stat err=%v", err)
-	}
-	diagnostics, err := os.ReadFile(diagnosticsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"describe daemonset/rke2-traefik", "get events -A"} {
-		if !strings.Contains(string(diagnostics), want) {
-			t.Fatalf("zero-pod diagnostics omitted %q:\n%s", want, diagnostics)
-		}
+			command := exec.Command(filepath.Join(haDir, "install.sh"))
+			command.Dir = haDir
+			output, runErr := command.CombinedOutput()
+			count, err := os.ReadFile(countPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.TrimSpace(string(count)) != tc.wantAttempts {
+				t.Fatalf("expected %s DaemonSet availability checks, got %q:\n%s", tc.wantAttempts, count, output)
+			}
+			if tc.wantError == "" {
+				if runErr != nil {
+					t.Fatalf("generated install script failed after availability recovered: %v\n%s", runErr, output)
+				}
+				if _, err := os.Stat(ingressDryRunPath); err != nil {
+					t.Fatalf("expected Ingress admission check after availability recovered: %v", err)
+				}
+				helmLog, err := os.ReadFile(helmLogPath)
+				if err != nil || !strings.Contains(string(helmLog), "install rancher rancher-latest/rancher") {
+					t.Fatalf("expected Rancher installation after availability recovered, err=%v, log=%s", err, helmLog)
+				}
+				return
+			}
+			if runErr == nil || !strings.Contains(string(output), tc.wantError) {
+				t.Fatalf("expected failure containing %q, err=%v:\n%s", tc.wantError, runErr, output)
+			}
+			if tc.wantAttempts == "20" && !strings.Contains(string(output), "ERROR: Timed out waiting for RKE2 ingress DaemonSet") {
+				t.Fatalf("expected availability timeout diagnostic:\n%s", output)
+			}
+			for _, path := range []string{ingressDryRunPath, helmLogPath} {
+				if _, err := os.Stat(path); !os.IsNotExist(err) {
+					t.Fatalf("expected no admission check or Helm installation before availability, found %s: %v", path, err)
+				}
+			}
+			if diagnostics, err := os.ReadFile(diagnosticsPath); err != nil {
+				t.Fatal(err)
+			} else {
+				for _, want := range []string{"describe daemonset/rke2-traefik", "get events -A"} {
+					if !strings.Contains(string(diagnostics), want) {
+						t.Fatalf("availability failure diagnostics omitted %q:\n%s", want, diagnostics)
+					}
+				}
+			}
+		})
 	}
 }
 

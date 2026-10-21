@@ -791,7 +791,7 @@ jobs:
             "GOCACHE=$external_home/.cache/go-build"
             "PATH=$PATH"
             "CI=true"
-            "GOTOOLCHAIN=local"
+            "GOTOOLCHAIN=auto"
             "CATTLE_TEST_CONFIG=$config_path"
           )
           if env -i "${external_env[@]}" /usr/bin/env | grep -Eq \
@@ -799,6 +799,14 @@ jobs:
             echo "Protected environment reached the external Rancher test boundary" >&2
             exit 1
           fi
+
+          # The external test module can require a newer Go version than Runway.
+          # Resolve it once in the same isolated environment used by every suite.
+          echo "Resolving Go toolchain for rancher/tests..."
+          (
+            cd "$tests_dir"
+            env -i "${external_env[@]}" go version
+          )
 
           results_json="automation-output/rancher-test-results.json"
           results_tmp="$(mktemp)"

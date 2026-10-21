@@ -194,23 +194,32 @@ if ! kubectl -n kube-system rollout status "daemonset/${ingress_daemonset}" --ti
   exit 1
 fi
 
-daemonset_status=""
-if ! daemonset_status="$(kubectl -n kube-system get "daemonset/${ingress_daemonset}" --request-timeout=20s -o jsonpath='{.status.desiredNumberScheduled}{" "}{.status.numberAvailable}')"; then
-  echo "ERROR: Unable to verify RKE2 ingress DaemonSet ${ingress_daemonset}." >&2
-  collect_ingress_diagnostics
-  exit 1
-fi
-read -r desired_ingress_pods available_ingress_pods <<<"${daemonset_status}"
-if [[ ! "${desired_ingress_pods}" =~ ^[0-9]+$ || ! "${available_ingress_pods}" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: RKE2 ingress DaemonSet ${ingress_daemonset} returned an invalid status: ${daemonset_status}." >&2
-  collect_ingress_diagnostics
-  exit 1
-fi
-if (( desired_ingress_pods < 1 || available_ingress_pods < desired_ingress_pods )); then
-  echo "ERROR: RKE2 ingress DaemonSet ${ingress_daemonset} has ${available_ingress_pods}/${desired_ingress_pods} available pods." >&2
-  collect_ingress_diagnostics
-  exit 1
-fi
+# Joining nodes can increase the desired pod count after rollout status succeeds.
+# Twenty attempts at a 20-second request timeout plus retry delays stays bounded to about ten minutes.
+for ((attempt=1; attempt<=20; attempt++)); do
+  daemonset_status=""
+  if ! daemonset_status="$(kubectl -n kube-system get "daemonset/${ingress_daemonset}" --request-timeout=20s -o jsonpath='{.status.desiredNumberScheduled}{" "}{.status.numberAvailable}')"; then
+    echo "ERROR: Unable to verify RKE2 ingress DaemonSet ${ingress_daemonset}." >&2
+    collect_ingress_diagnostics
+    exit 1
+  fi
+  read -r desired_ingress_pods available_ingress_pods <<<"${daemonset_status}"
+  if [[ ! "${desired_ingress_pods}" =~ ^[0-9]+$ || ! "${available_ingress_pods}" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: RKE2 ingress DaemonSet ${ingress_daemonset} returned an invalid status: ${daemonset_status}." >&2
+    collect_ingress_diagnostics
+    exit 1
+  fi
+  if (( desired_ingress_pods >= 1 && available_ingress_pods >= desired_ingress_pods )); then
+    break
+  fi
+  if [ "${attempt}" -eq 20 ]; then
+    echo "ERROR: Timed out waiting for RKE2 ingress DaemonSet ${ingress_daemonset}; it has ${available_ingress_pods}/${desired_ingress_pods} available pods." >&2
+    collect_ingress_diagnostics
+    exit 1
+  fi
+  echo "RKE2 ingress DaemonSet ${ingress_daemonset} has ${available_ingress_pods}/${desired_ingress_pods} available pods (attempt ${attempt}/20); retrying in 10 seconds..."
+  sleep 10
+done
 
 echo "Waiting for Kubernetes to accept Ingress resources..."
 ingress_check_output=""
