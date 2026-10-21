@@ -1,10 +1,13 @@
 # Documentation
 
-This directory is for the automation and operational docs that would make the
-root README too noisy. The root README stays focused on local Rancher Runway usage:
-copy a `tool-config.yml`, run setup, open the local control panel, and clean up.
+Start with the [quick start](../README.md) to install the desktop app.
+These guides cover detailed app usage, development, and repository automation.
 
 ## Start Here
+
+- [Desktop guide: setup, configuration, labs, and cleanup](desktop-guide.md)
+- [Development: source builds, checks, and architecture](development.md)
+- [Advanced usage: CLI and guarded infrastructure tests](advanced-usage.md)
 
 - [AWS cleanup and local cost history](aws-cost-history.md)
 - [Issue Packages: cases, preserved sessions, evidence, and sharing](issue-packages.md)
@@ -21,15 +24,12 @@ copy a `tool-config.yml`, run setup, open the local control panel, and clean up.
 
 ### Local Rancher Environments
 
-Local users and forks should continue to use the root README flow:
+Use the desktop app to configure an environment in **Setup**, review and start
+it, follow **Runs** and **Clusters**, and clean up through **Destroy**.
+See the [desktop guide](desktop-guide.md) for the full workflow, or
+[Advanced Usage](advanced-usage.md) for CLI and guarded Go entry points.
 
-1. Create a local `tool-config.yml`.
-2. Run `go test -v -run '^TestHaSetup$' -timeout 60m ./terratest`.
-3. Use `go test -v -run '^TestHAControlPanel$' -timeout 0 -count=1 ./terratest` when a browser-based local view is useful.
-4. Run `go test -v -run '^TestHACleanup$' -timeout 30m ./terratest`.
-
-This path should not require GitHub Actions, S3 state, Linode automation, or
-automation-only secrets.
+Desktop provisioning does not require GitHub Actions or the automation backend.
 
 ### Repository-Owned Automation
 

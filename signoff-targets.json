@@ -2,6 +2,9 @@
   "targets": [
     {
       "rancher_version": "v2.15.3-389ec4d-head"
+    },
+    {
+      "rancher_version": "v2.14.7-a3af136-head"
     }
   ]
 }

@@ -63,7 +63,7 @@ Terraform state, existing runs, or shell credentials.
 
 Readiness uses current baselines and accepts newer versions within the supported
 major rather than requiring an exact match. Helm remains on major 3. See the
-[requirements table](../README.md#requirements) for versions and the kubectl
+[requirements table](desktop-guide.md#requirements) for versions and the kubectl
 client/server compatibility constraint.
 
 Homebrew's [`--adopt` option](https://docs.brew.sh/Manpage#install-options-formulacask-)
