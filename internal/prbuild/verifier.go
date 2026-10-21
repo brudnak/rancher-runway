@@ -197,6 +197,10 @@ func (s *Service) defaults() {
 		if s.imageLookup == nil {
 			s.imageLookup = imagelookup.New()
 		}
+		// Readiness and PR provenance checks examine public Rancher images.
+		// Keep their background reads independent of Docker Desktop's files and
+		// credential helpers, without changing the shared Image Lookup service.
+		s.imageLookup = s.imageLookup.WithEnvironmentCredentialsOnly()
 		runner := s.imageLookup.CommandRunner()
 		if s.runCommand == nil {
 			s.runCommand = runner

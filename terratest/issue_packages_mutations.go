@@ -22,7 +22,7 @@ func (s *issuePackageService) mutate(req issuePackageRequest, environment *issue
 			_ = os.RemoveAll(filepath.Join(s.root, pkg.ID))
 			return nil, err
 		}
-		return map[string]any{"package": cloneIssuePackage(pkg), "currentPlanFingerprint": issuePackagePlanFingerprint(issuePackageEditablePlan(pkg))}, nil
+		return map[string]any{"package": cloneIssuePackage(pkg), "currentPlanFingerprint": issuePackagePlanFingerprint(issuePackageEditablePlan(pkg)), "planFolderWarning": s.planFolderErrors[pkg.ID]}, nil
 	}
 	current, ok := s.packages[req.ID]
 	if !ok {
@@ -40,13 +40,24 @@ func (s *issuePackageService) mutate(req issuePackageRequest, environment *issue
 		if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
 			return nil, fmt.Errorf("package directory is unavailable")
 		}
+		folderRecord, folderErr := s.planFolderRecord(pkg.ID)
 		tombstone := filepath.Join(s.root, ".deleted-"+pkg.ID+"-"+cachelab.ID())
 		if err := os.Rename(dir, tombstone); err != nil {
 			return nil, err
 		}
 		delete(s.packages, pkg.ID)
+		delete(s.planFolderErrors, pkg.ID)
+		folderWarning := ""
+		if folderErr != nil {
+			folderWarning = "Generated plan files were preserved because their saved folder metadata could not be verified."
+		} else {
+			folderWarning = s.removeGeneratedPlanFolder(folderRecord)
+		}
 		if err := os.RemoveAll(tombstone); err != nil {
 			return map[string]any{"ok": true, "warning": "Package removed; some hidden local files could not be removed."}, nil
+		}
+		if folderWarning != "" {
+			return map[string]any{"ok": true, "warning": folderWarning}, nil
 		}
 		return map[string]bool{"ok": true}, nil
 	}
@@ -139,6 +150,10 @@ func (s *issuePackageService) mutate(req issuePackageRequest, environment *issue
 				return nil, fmt.Errorf("completed sessions are preserved; start a new session to record another attempt")
 			}
 			switch req.Action {
+			case "update-session-case":
+				if err := updateIssuePackageSessionCase(&pkg, session, req); err != nil {
+					return nil, err
+				}
 			case "mark-step", "case-result":
 				resultIndex := -1
 				for i := range session.Results {
@@ -240,5 +255,91 @@ func (s *issuePackageService) mutate(req issuePackageRequest, environment *issue
 			_ = os.Remove(path)
 		}
 	}
-	return map[string]any{"package": cloneIssuePackage(pkg), "currentPlanFingerprint": issuePackagePlanFingerprint(issuePackageEditablePlan(pkg))}, nil
+	return map[string]any{"package": cloneIssuePackage(pkg), "currentPlanFingerprint": issuePackagePlanFingerprint(issuePackageEditablePlan(pkg)), "planFolderWarning": s.planFolderErrors[pkg.ID]}, nil
+}
+
+func updateIssuePackageSessionCase(pkg *issuePackage, session *issuePackageSession, req issuePackageRequest) error {
+	if len(req.Cases) != 1 || req.CaseID == "" || req.Cases[0].ID != req.CaseID {
+		return fmt.Errorf("provide exactly one existing session case with its original identity")
+	}
+	caseIndex, resultIndex, planIndex := -1, -1, -1
+	for i := range session.Cases {
+		if session.Cases[i].ID == req.CaseID {
+			caseIndex = i
+			break
+		}
+	}
+	for i := range session.Results {
+		if session.Results[i].CaseID == req.CaseID {
+			resultIndex = i
+			break
+		}
+	}
+	if caseIndex < 0 || resultIndex < 0 {
+		return fmt.Errorf("case does not belong to this session")
+	}
+	for i := range pkg.Cases {
+		if pkg.Cases[i].ID == req.CaseID {
+			planIndex = i
+			break
+		}
+	}
+	if planIndex < 0 {
+		return fmt.Errorf("this case was removed from the test plan; restore it in the plan or start a new session before editing its details")
+	}
+	previous := session.Cases[caseIndex]
+	if issuePackageCaseContent(pkg.Cases[planIndex]) != issuePackageCaseContent(previous) {
+		return fmt.Errorf("this case changed separately in the test plan; review the plan and start a new session to use its latest details")
+	}
+	updated := generatedPackageCases(req.Cases)[0]
+	// Writing manual details cannot retarget a saved automation run or replace
+	// its pinned source. These references keep their original session values.
+	updated.Automation = previous.Automation
+	updated.AutomationURL = previous.AutomationURL
+	updated.AutomationSource = previous.AutomationSource
+	updated.Selection = previous.Selection
+	if err := validateIssuePackageCases([]issuePackageCase{updated}); err != nil {
+		return err
+	}
+	newSteps := map[string]issuePackageStep{}
+	for _, step := range updated.Steps {
+		newSteps[step.ID] = step
+	}
+	for _, evidence := range session.Evidence {
+		if evidence.CaseID == req.CaseID && evidence.StepID != "" {
+			if _, exists := newSteps[evidence.StepID]; !exists {
+				return fmt.Errorf("a removed step has attached evidence; keep that step or remove its evidence before deleting it")
+			}
+		}
+	}
+	// Evidence keeps its stable step association when wording evolves. A
+	// changed step is marked unperformed below, so its old timestamp cannot
+	// claim the revised instruction or expectation was already checked.
+	oldSteps := map[string]issuePackageStep{}
+	for _, step := range previous.Steps {
+		oldSteps[step.ID] = step
+	}
+	oldMarkers := map[string]issuePackageStepResult{}
+	for _, marker := range session.Results[resultIndex].Steps {
+		oldMarkers[marker.StepID] = marker
+	}
+	markers := make([]issuePackageStepResult, 0, len(updated.Steps))
+	for _, step := range updated.Steps {
+		marker := issuePackageStepResult{StepID: step.ID}
+		if old, exists := oldSteps[step.ID]; exists && old == step {
+			if recorded, exists := oldMarkers[step.ID]; exists {
+				marker = recorded
+			}
+		}
+		markers = append(markers, marker)
+	}
+	// Only this selected active session and its unchanged working-plan case
+	// evolve. Other sessions and the candidate's baseline remain independent.
+	session.Cases[caseIndex] = updated
+	session.Results[resultIndex].Steps = markers
+	if issuePackageCaseContent(updated) != issuePackageCaseContent(previous) {
+		session.Results[resultIndex].Outcome = "not-run"
+	}
+	pkg.Cases[planIndex] = updated
+	return nil
 }

@@ -151,7 +151,7 @@ export function createPackageDraftController({request, onState = () => {}, onSav
 }
 
 export function packageDraftHasWriting(draft) {
-  return Boolean(draft?.plan || draft?.observations?.length);
+  return Boolean(draft?.titleLines?.trim() || draft?.plan || draft?.observations?.length);
 }
 
 export function packageDraftObservationKey(packageId, sessionId, caseId) {

@@ -8,7 +8,9 @@ For merged closing PRs and explicit issue declarations in PR descriptions, Runwa
 
 An open or unmerged PR remains in progress; a closed PR without a merge does not count as a fix. PRs found only in discussion are shown for review and do not establish readiness on their own. An explicit `Issue <URL>` or closing declaration in a linked PR description can identify a required fix; quoted examples and code samples do not count. A successful result requires complete issue-link discovery and evidence for every applicable closing PR in both images. Missing registry data, inaccessible issue links, or truncated scans remain unknown and are called out in the report.
 
-The scan uses the existing GitHub CLI sign-in and the image checker’s registry access. It does not change issues, project fields, pull requests, images, labels, assignments, or workflows. Image tags are mutable observations; review the reported digest, commit comparison, and target environment before testing.
+The scan uses the existing GitHub CLI sign-in. Its registry checks use anonymous access, plus configured `DOCKERHUB_USERNAME` and `DOCKERHUB_PASSWORD` for Docker Hub only. Readiness and PR provenance checks do not inspect Docker/Podman credential files or invoke their credential helpers. This avoids the unnecessary cross-app data access that can cause a macOS privacy prompt during public image inspection. Explicit Image Lookup retains its existing private-registry authentication. Registry access failures remain unknown in the report.
+
+The scan does not change issues, project fields, pull requests, images, labels, assignments, or workflows. Image tags are mutable observations; review the reported digest, commit comparison, and target environment before testing.
 
 ## QA template found on GitHub
 

@@ -123,6 +123,57 @@ func (p *localControlPanel) enrichIssuePackageEnvironment(e *issuePackageEnviron
 	} else {
 		e.Warnings = []string{"Showing saved Runway details. Refresh from cluster to record exact server, Kubernetes, and webhook versions."}
 	}
+	packageEnvironmentInstallation(e)
+}
+
+// Classify the selected installation from recorded deployment metadata. A
+// downstream's management deployment never describes the downstream itself.
+func packageEnvironmentInstallation(e *issuePackageEnvironment) {
+	details := map[string]issuePackageEnvironmentDetail{}
+	for _, detail := range e.Details {
+		details[detail.Label] = detail
+	}
+	deployment, role, kind := details["Deployment"].Value, details["Cluster role"].Value, details["Cluster type"].Value
+	installation, distribution, provider := "", "", ""
+	if role != "downstream" && kind != "downstream" {
+		switch deployment {
+		case deploymentTypeHARKE2:
+			installation, distribution, provider = "Rancher on RKE2 HA", "RKE2", "AWS"
+		case deploymentTypeHostedTenantK3S:
+			installation, distribution, provider = "Hosted Rancher on K3s", "K3s", "AWS"
+			if role == "tenant" {
+				installation = "Hosted tenant Rancher on K3s"
+			} else if role == "host" {
+				installation = "Host Rancher on K3s"
+			}
+		case deploymentTypeLinodeDocker:
+			installation, provider = "Rancher Docker installation", "Linode"
+		}
+		if kind == "linode" && installation == "" {
+			installation, provider = "Rancher Docker installation", "Linode"
+		}
+	}
+	packageEnvironmentDetail(e, "Installation type", installation, "recorded", nil)
+	packageEnvironmentDetail(e, "Infrastructure provider", provider, "recorded", nil)
+	packageEnvironmentDetail(e, "Kubernetes distribution", distribution, "recorded", nil)
+	// An exact observed server version is stronger evidence than configuration,
+	// and also identifies distributions for imported/downstream clusters.
+	version := details["Kubernetes server version"]
+	if version.Value == "" && e.KubernetesVersion != "" {
+		version = issuePackageEnvironmentDetail{Value: e.KubernetesVersion, Source: "recorded"}
+		if e.Source == "manual" {
+			version.Source = "manual"
+		}
+	}
+	if version.Value != "" {
+		distribution = ""
+		if strings.Contains(strings.ToLower(version.Value), "+rke2") {
+			distribution = "RKE2"
+		} else if strings.Contains(strings.ToLower(version.Value), "+k3s") {
+			distribution = "K3s"
+		}
+		packageEnvironmentDetail(e, "Kubernetes distribution", distribution, version.Source, version.ObservedAt)
+	}
 }
 
 func packageEnvironmentHasObservedImages(e issuePackageEnvironment) bool {
@@ -325,6 +376,7 @@ func probeIssuePackageEnvironment(ctx context.Context, e issuePackageEnvironment
 			e.KubernetesVersion = r.value
 		}
 	}
+	packageEnvironmentInstallation(&e)
 	sort.Slice(e.Details, func(i, j int) bool { return e.Details[i].Label < e.Details[j].Label })
 	sort.Strings(e.Warnings)
 	return e

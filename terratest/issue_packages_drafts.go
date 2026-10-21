@@ -17,14 +17,14 @@ import (
 const issuePackageDraftLimit = 8 << 20
 
 type issuePackageDraftPlan struct {
-	Title      string            `json:"title"`
-	IssueURL   string            `json:"issueUrl"`
-	IssueTitle string            `json:"issueTitle"`
-	FixURL     string            `json:"fixUrl,omitempty"`
-	FixTitle   string            `json:"fixTitle,omitempty"`
-	Summary    string            `json:"summary"`
-	Status     string            `json:"status"`
-	Notes      string            `json:"notes"`
+	Title      string             `json:"title"`
+	IssueURL   string             `json:"issueUrl"`
+	IssueTitle string             `json:"issueTitle"`
+	FixURL     string             `json:"fixUrl,omitempty"`
+	FixTitle   string             `json:"fixTitle,omitempty"`
+	Summary    string             `json:"summary"`
+	Status     string             `json:"status"`
+	Notes      string             `json:"notes"`
 	Cases      []issuePackageCase `json:"cases"`
 }
 
@@ -35,16 +35,26 @@ type issuePackageObservationDraft struct {
 	Notes     string `json:"notes"`
 }
 
+// The plan owns the editable text; this identity records which active session
+// must receive that case's details before the working plan is checkpointed.
+type issuePackageSessionCaseDraft struct {
+	SessionID string `json:"sessionId"`
+	CaseID    string `json:"caseId"`
+}
+
 type issuePackageWritingDraft struct {
-	Revision            string                        `json:"revision"`
-	UpdatedAt           *time.Time                    `json:"updatedAt,omitempty"`
-	BasePlanFingerprint string                        `json:"basePlanFingerprint"`
+	TitleLines          string                         `json:"titleLines"`
+	PlanClusterID       string                         `json:"planClusterId"`
+	Revision            string                         `json:"revision"`
+	UpdatedAt           *time.Time                     `json:"updatedAt,omitempty"`
+	BasePlanFingerprint string                         `json:"basePlanFingerprint"`
 	Plan                *issuePackageDraftPlan         `json:"plan"`
 	Observations        []issuePackageObservationDraft `json:"observations"`
+	SessionCaseEdits    []issuePackageSessionCaseDraft `json:"sessionCaseEdits"`
 }
 
 type issuePackageDraftEnvelope struct {
-	Version int                     `json:"version"`
+	Version int                      `json:"version"`
 	Draft   issuePackageWritingDraft `json:"draft"`
 }
 
@@ -56,10 +66,10 @@ type issuePackageObservationConflict struct {
 
 type issuePackageDraftResponse struct {
 	Draft                  issuePackageWritingDraft          `json:"draft"`
-	CurrentPlanFingerprint string                           `json:"currentPlanFingerprint"`
-	PlanChanged            bool                             `json:"planChanged"`
+	CurrentPlanFingerprint string                            `json:"currentPlanFingerprint"`
+	PlanChanged            bool                              `json:"planChanged"`
 	ObservationConflicts   []issuePackageObservationConflict `json:"observationConflicts"`
-	Warnings               []string                         `json:"warnings"`
+	Warnings               []string                          `json:"warnings"`
 }
 
 var errIssuePackageDraftConflict = fmt.Errorf("writing draft changed in another view; recover or reload that draft before saving: %w", errIssuePackageConflict)
@@ -85,11 +95,24 @@ func issuePackagePlanFingerprint(plan issuePackageDraftPlan) string {
 }
 
 func validateIssuePackageWritingDraft(draft issuePackageWritingDraft) error {
+	if !packageText(draft.TitleLines, 128000, false) || !packageText(draft.PlanClusterID, 512, false) {
+		return fmt.Errorf("unfinished case titles or selected environment exceed the writing limits")
+	}
 	if len(draft.BasePlanFingerprint) != 64 {
 		return fmt.Errorf("draft must identify its saved plan checkpoint")
 	}
 	if _, err := hex.DecodeString(draft.BasePlanFingerprint); err != nil {
 		return fmt.Errorf("invalid draft plan fingerprint")
+	}
+	if len(draft.SessionCaseEdits) > 250 {
+		return fmt.Errorf("a writing draft can track at most 250 session case edits")
+	}
+	caseEdits := map[string]bool{}
+	for _, edit := range draft.SessionCaseEdits {
+		if !cachelab.IDPattern.MatchString(edit.SessionID) || !cachelab.IDPattern.MatchString(edit.CaseID) || caseEdits[edit.CaseID] {
+			return fmt.Errorf("each draft case must identify one original session with valid identities")
+		}
+		caseEdits[edit.CaseID] = true
 	}
 	if plan := draft.Plan; plan != nil {
 		// Incomplete titles, instructions, and URLs are valid while writing. Only
@@ -137,7 +160,7 @@ func validateIssuePackageWritingDraft(draft issuePackageWritingDraft) error {
 func (s *issuePackageService) readWritingDraftLocked(id string, pkg issuePackage) (issuePackageWritingDraft, error) {
 	raw, err := issuePackageReadBounded(filepath.Join(s.root, id, "draft.json"), issuePackageDraftLimit)
 	if errors.Is(err, os.ErrNotExist) {
-		return issuePackageWritingDraft{BasePlanFingerprint: issuePackagePlanFingerprint(issuePackageEditablePlan(pkg)), Observations: []issuePackageObservationDraft{}}, nil
+		return issuePackageWritingDraft{BasePlanFingerprint: issuePackagePlanFingerprint(issuePackageEditablePlan(pkg)), Observations: []issuePackageObservationDraft{}, SessionCaseEdits: []issuePackageSessionCaseDraft{}}, nil
 	}
 	if err != nil {
 		return issuePackageWritingDraft{}, fmt.Errorf("writing draft could not be read; its existing file was preserved: %w", err)
@@ -151,6 +174,9 @@ func (s *issuePackageService) readWritingDraftLocked(id string, pkg issuePackage
 	}
 	if envelope.Draft.Observations == nil {
 		envelope.Draft.Observations = []issuePackageObservationDraft{}
+	}
+	if envelope.Draft.SessionCaseEdits == nil {
+		envelope.Draft.SessionCaseEdits = []issuePackageSessionCaseDraft{}
 	}
 	return envelope.Draft, nil
 }
@@ -217,7 +243,7 @@ func (s *issuePackageService) handleWritingDraft(req issuePackageRequest) (any, 
 		return nil, errIssuePackageDraftConflict
 	}
 	if req.Action == "draft-clear" {
-		draft = issuePackageWritingDraft{BasePlanFingerprint: issuePackagePlanFingerprint(issuePackageEditablePlan(pkg)), Observations: []issuePackageObservationDraft{}}
+		draft = issuePackageWritingDraft{BasePlanFingerprint: issuePackagePlanFingerprint(issuePackageEditablePlan(pkg)), Observations: []issuePackageObservationDraft{}, SessionCaseEdits: []issuePackageSessionCaseDraft{}}
 	} else {
 		if req.Draft == nil {
 			return nil, fmt.Errorf("writing draft is required")
@@ -228,6 +254,9 @@ func (s *issuePackageService) handleWritingDraft(req issuePackageRequest) (any, 
 		}
 		if draft.Observations == nil {
 			draft.Observations = []issuePackageObservationDraft{}
+		}
+		if draft.SessionCaseEdits == nil {
+			draft.SessionCaseEdits = []issuePackageSessionCaseDraft{}
 		}
 	}
 	// A durable empty revision is a tombstone: a late request with the old

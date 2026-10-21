@@ -1,6 +1,71 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {insertCaseStep, removeCaseStep, restoreCaseStep, caseWritingSummary, MAX_CASE_STEPS} from './issue-package-case-editor.mjs';
+import {insertCaseStep, removeCaseStep, restoreCaseStep, caseWritingSummary, MAX_CASE_STEPS, formatCaseSteps, parseCaseSteps, reconcileCaseSteps, caseFieldWritingProblem} from './issue-package-case-editor.mjs';
+
+test('writing limits match stored UTF-8 bytes for ASCII, accented text, CJK, and emoji', () => {
+  for (const [field,limit] of [['title',240],['expected',16000],['preconditions',16000],['automationUrl',2048]]) {
+    assert.equal(caseFieldWritingProblem(field, 'x'.repeat(limit)), '');
+    assert.ok(caseFieldWritingProblem(field, 'x'.repeat(limit + 1)));
+    for (const [character,bytes] of [['é',2],['界',3],['🧪',4]]) {
+      const fitting = character.repeat(Math.floor(limit / bytes));
+      assert.equal(caseFieldWritingProblem(field, fitting), '');
+      assert.ok(caseFieldWritingProblem(field, fitting + character));
+    }
+  }
+  assert.equal(caseFieldWritingProblem('title', ''), '');
+});
+
+test('the steps writer accepts numbered, bulleted, and plain action lines without creating blank steps', () => {
+  assert.deepEqual(parseCaseSteps('1. Open Rancher\r\n2) Open the project\r\n\r\n- Change the role\nVerify permissions\n5. '), [
+    {instruction:'Open Rancher', expected:''}, {instruction:'Open the project', expected:''},
+    {instruction:'Change the role', expected:''}, {instruction:'Verify permissions', expected:''},
+  ]);
+  assert.deepEqual(reconcileCaseSteps([], '').steps, []);
+});
+
+test('the writer round-trips multiline actions and expectations, including literal Expected lines', () => {
+  const source = [
+    {instruction:'Open the project\nRun the following check:\nExpected: literal command output\n\\Expected: another literal line', expected:'Only permitted namespaces appear.\n\nThe role remains unchanged.'},
+    {instruction:'Update the role', expected:''},
+  ];
+  assert.deepEqual(parseCaseSteps(formatCaseSteps(source)), source);
+});
+
+test('writing an inserted or renamed step preserves the identities and checks of existing steps', () => {
+  const source = [{id:'a', instruction:'Open Rancher', expected:'The dashboard loads'}, {id:'b', instruction:'Open the project', expected:'The project loads'}];
+  const result = reconcileCaseSteps(source, '1. Sign in\n2. Open Rancher\n   Expected: The dashboard loads\n3. Open the assigned project\n   Expected: The project loads', () => 'new');
+  assert.deepEqual(result.steps.map(step => step.id), ['new', 'a', 'b']);
+  assert.equal(result.steps[2].expected, 'The project loads');
+  assert.equal(source[1].instruction, 'Open the project');
+});
+
+test('reordering and removing lines keep the remaining steps attached to their original identities', () => {
+  const source = [{id:'a', instruction:'First', expected:'One'}, {id:'b', instruction:'Second', expected:'Two'}, {id:'c', instruction:'Third', expected:'Three'}];
+  const result = reconcileCaseSteps(source, formatCaseSteps([source[2], source[0]]));
+  assert.deepEqual(result.steps.map(step => step.id), ['c', 'a']);
+  assert.deepEqual(result.steps.map(step => step.expected), ['Three', 'One']);
+  assert.equal(source.length, 3);
+});
+
+test('duplicate actions retain distinct identities and a check can be cleared through writing', () => {
+  const source = [{id:'a', instruction:'Refresh', expected:'First result'}, {id:'b', instruction:'Refresh', expected:'Second result'}];
+  const result = reconcileCaseSteps(source, '1. Refresh\n2. Refresh\n   Expected: Second result');
+  assert.deepEqual(result.steps.map(step => step.id), ['a', 'b']);
+  assert.equal(result.steps[0].expected, '');
+  assert.equal(result.steps[1].expected, 'Second result');
+  const reordered = reconcileCaseSteps(source, formatCaseSteps([source[1], source[0]]));
+  assert.deepEqual(reordered.steps.map(step => step.id), ['b', 'a']);
+});
+
+test('oversized writing is rejected atomically instead of silently truncating a case', () => {
+  const source = [{id:'a', instruction:'Original', expected:'Preserved'}];
+  assert.match(reconcileCaseSteps(source, Array.from({length:101}, (_, index) => `${index + 1}. Action`).join('\n')).error, /100 steps/);
+  assert.match(reconcileCaseSteps(source, 'x'.repeat(16001)).error, /16,000/);
+  assert.equal(reconcileCaseSteps(source, '🧪'.repeat(4000)).error, undefined);
+  assert.match(reconcileCaseSteps(source, '🧪'.repeat(4001)).error, /16,000 bytes/);
+  assert.match(reconcileCaseSteps(source, `1. Check output\n   Expected: ${'界'.repeat(5334)}`).error, /16,000 bytes/);
+  assert.deepEqual(source, [{id:'a', instruction:'Original', expected:'Preserved'}]);
+});
 
 test('duplicating a step creates independent content and identity without changing the plan', () => {
   const original = {id:'original', instruction:'Open the project', expected:'Only permitted namespaces appear'};

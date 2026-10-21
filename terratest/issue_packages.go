@@ -48,31 +48,31 @@ const issuePackageArtifactLimit = 32 << 20
 const issuePackageTotalLimit = 64 << 20
 
 type issuePackage struct {
-	ID         string               `json:"id"`
-	OriginID   string               `json:"originId,omitempty"`
-	Revision   string               `json:"revision"`
-	Title      string               `json:"title"`
-	IssueURL   string               `json:"issueUrl"`
-	IssueTitle string               `json:"issueTitle"`
-	FixURL     string               `json:"fixUrl"`
-	FixTitle   string               `json:"fixTitle"`
-	Summary    string               `json:"summary"`
-	Status     string               `json:"status"`
-	Notes      string               `json:"notes"`
+	ID         string                `json:"id"`
+	OriginID   string                `json:"originId,omitempty"`
+	Revision   string                `json:"revision"`
+	Title      string                `json:"title"`
+	IssueURL   string                `json:"issueUrl"`
+	IssueTitle string                `json:"issueTitle"`
+	FixURL     string                `json:"fixUrl"`
+	FixTitle   string                `json:"fixTitle"`
+	Summary    string                `json:"summary"`
+	Status     string                `json:"status"`
+	Notes      string                `json:"notes"`
 	Cases      []issuePackageCase    `json:"cases"`
 	Sessions   []issuePackageSession `json:"sessions"`
-	CreatedAt  time.Time            `json:"createdAt"`
-	UpdatedAt  time.Time            `json:"updatedAt"`
+	CreatedAt  time.Time             `json:"createdAt"`
+	UpdatedAt  time.Time             `json:"updatedAt"`
 }
 
 type issuePackageCase struct {
-	ID               string                       `json:"id"`
-	Title            string                       `json:"title"`
-	Preconditions    string                       `json:"preconditions"`
-	Expected         string                       `json:"expected"`
-	Automation       string                       `json:"automation"`
-	AutomationURL    string                       `json:"automationUrl,omitempty"`
-	Selection        []string                     `json:"selection"`
+	ID               string                        `json:"id"`
+	Title            string                        `json:"title"`
+	Preconditions    string                        `json:"preconditions"`
+	Expected         string                        `json:"expected"`
+	Automation       string                        `json:"automation"`
+	AutomationURL    string                        `json:"automationUrl,omitempty"`
+	Selection        []string                      `json:"selection"`
 	AutomationSource *issuePackageAutomationSource `json:"automationSource,omitempty"`
 	Steps            []issuePackageStep            `json:"steps"`
 }
@@ -84,17 +84,17 @@ type issuePackageStep struct {
 }
 
 type issuePackageSession struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Purpose     string                 `json:"purpose"`
-	FixURL      string                 `json:"fixUrl,omitempty"`
-	FixTitle    string                 `json:"fixTitle,omitempty"`
-	FixCommit   string                 `json:"fixCommit,omitempty"`
-	Status      string                 `json:"status"`
-	StartedAt   time.Time              `json:"startedAt"`
-	FinishedAt  time.Time              `json:"finishedAt,omitempty"`
-	Conclusion  string                 `json:"conclusion"`
-	Finding     string                 `json:"finding"`
+	ID          string                  `json:"id"`
+	Name        string                  `json:"name"`
+	Purpose     string                  `json:"purpose"`
+	FixURL      string                  `json:"fixUrl,omitempty"`
+	FixTitle    string                  `json:"fixTitle,omitempty"`
+	FixCommit   string                  `json:"fixCommit,omitempty"`
+	Status      string                  `json:"status"`
+	StartedAt   time.Time               `json:"startedAt"`
+	FinishedAt  time.Time               `json:"finishedAt,omitempty"`
+	Conclusion  string                  `json:"conclusion"`
+	Finding     string                  `json:"finding"`
 	Environment issuePackageEnvironment `json:"environment"`
 	Cases       []issuePackageCase      `json:"cases"`
 	Results     []issuePackageResult    `json:"results"`
@@ -103,9 +103,9 @@ type issuePackageSession struct {
 }
 
 type issuePackageResult struct {
-	CaseID  string                  `json:"caseId"`
-	Outcome string                  `json:"outcome"`
-	Notes   string                  `json:"notes"`
+	CaseID  string                   `json:"caseId"`
+	Outcome string                   `json:"outcome"`
+	Notes   string                   `json:"notes"`
 	Steps   []issuePackageStepResult `json:"steps"`
 }
 
@@ -116,19 +116,19 @@ type issuePackageStepResult struct {
 }
 
 type issuePackageEnvironment struct {
-	ClusterID         string                         `json:"clusterId"`
-	ClusterName       string                         `json:"clusterName"`
-	URL               string                         `json:"url"`
-	RancherVersion    string                         `json:"rancherVersion"`
-	KubernetesVersion string                         `json:"kubernetesVersion"`
-	Images            []string                       `json:"images"`
-	Configuration     string                         `json:"configuration"`
-	Source            string                         `json:"source"`
-	RecordedAt        time.Time                      `json:"recordedAt"`
+	ClusterID         string                          `json:"clusterId"`
+	ClusterName       string                          `json:"clusterName"`
+	URL               string                          `json:"url"`
+	RancherVersion    string                          `json:"rancherVersion"`
+	KubernetesVersion string                          `json:"kubernetesVersion"`
+	Images            []string                        `json:"images"`
+	Configuration     string                          `json:"configuration"`
+	Source            string                          `json:"source"`
+	RecordedAt        time.Time                       `json:"recordedAt"`
 	Details           []issuePackageEnvironmentDetail `json:"details,omitempty"`
-	HelmCommand       string                         `json:"helmCommand,omitempty"`
-	ObservedAt        *time.Time                     `json:"observedAt,omitempty"`
-	Warnings          []string                       `json:"warnings,omitempty"`
+	HelmCommand       string                          `json:"helmCommand,omitempty"`
+	ObservedAt        *time.Time                      `json:"observedAt,omitempty"`
+	Warnings          []string                        `json:"warnings,omitempty"`
 }
 
 type issuePackageEnvironmentDetail struct {
@@ -147,70 +147,75 @@ type issuePackageArtifact struct {
 }
 
 type issuePackageEvidence struct {
-	ID          string               `json:"id"`
-	Kind        string               `json:"kind"`
-	Name        string               `json:"name"`
-	Description string               `json:"description"`
-	SourceID    string               `json:"sourceId"`
-	WorkspaceID string               `json:"workspaceId"`
-	ClusterID   string               `json:"clusterId"`
-	CapturedAt  time.Time            `json:"capturedAt"`
-	AttachedAt  time.Time            `json:"attachedAt"`
-	CaseID      string               `json:"caseId,omitempty"`
-	StepID      string               `json:"stepId,omitempty"`
-	Metadata    json.RawMessage      `json:"metadata"`
+	ID          string                `json:"id"`
+	Kind        string                `json:"kind"`
+	Name        string                `json:"name"`
+	Description string                `json:"description"`
+	SourceID    string                `json:"sourceId"`
+	WorkspaceID string                `json:"workspaceId"`
+	ClusterID   string                `json:"clusterId"`
+	CapturedAt  time.Time             `json:"capturedAt"`
+	AttachedAt  time.Time             `json:"attachedAt"`
+	CaseID      string                `json:"caseId,omitempty"`
+	StepID      string                `json:"stepId,omitempty"`
+	Metadata    json.RawMessage       `json:"metadata"`
 	Artifact    *issuePackageArtifact `json:"artifact,omitempty"`
 }
 
 type issuePackageRequest struct {
 	Library           *issuePackageLibrary      `json:"library,omitempty"`
-	BucketID          string                   `json:"bucketId"`
-	IncludeEvidence   bool                     `json:"includeEvidence"`
-	Action            string                   `json:"action"`
-	ID                string                   `json:"id"`
-	Revision          string                   `json:"revision"`
-	Confirm           string                   `json:"confirm"`
-	Title             string                   `json:"title"`
-	IssueURL          string                   `json:"issueUrl"`
-	IssueTitle        string                   `json:"issueTitle"`
-	FixURL            string                   `json:"fixUrl"`
-	FixTitle          string                   `json:"fixTitle"`
-	FixCommit         string                   `json:"fixCommit"`
-	Summary           string                   `json:"summary"`
-	Status            string                   `json:"status"`
-	Notes             string                   `json:"notes"`
+	BucketID          string                    `json:"bucketId"`
+	IncludeEvidence   bool                      `json:"includeEvidence"`
+	Action            string                    `json:"action"`
+	ID                string                    `json:"id"`
+	Revision          string                    `json:"revision"`
+	Confirm           string                    `json:"confirm"`
+	Title             string                    `json:"title"`
+	IssueURL          string                    `json:"issueUrl"`
+	IssueTitle        string                    `json:"issueTitle"`
+	FixURL            string                    `json:"fixUrl"`
+	FixTitle          string                    `json:"fixTitle"`
+	FixCommit         string                    `json:"fixCommit"`
+	Summary           string                    `json:"summary"`
+	Status            string                    `json:"status"`
+	Notes             string                    `json:"notes"`
 	Cases             []issuePackageCase        `json:"cases"`
-	SessionID         string                   `json:"sessionId"`
-	BaselineSessionID string                   `json:"baselineSessionId"`
-	DraftRevision     string                   `json:"draftRevision"`
+	SessionID         string                    `json:"sessionId"`
+	BaselineSessionID string                    `json:"baselineSessionId"`
+	DraftRevision     string                    `json:"draftRevision"`
 	Draft             *issuePackageWritingDraft `json:"draft,omitempty"`
-	Name              string                   `json:"name"`
-	Purpose           string                   `json:"purpose"`
+	Name              string                    `json:"name"`
+	Purpose           string                    `json:"purpose"`
 	Environment       issuePackageEnvironment   `json:"environment"`
-	CaseIDs           []string                 `json:"caseIds"`
-	CaseID            string                   `json:"caseId"`
-	StepID            string                   `json:"stepId"`
-	Done              bool                     `json:"done"`
-	Outcome           string                   `json:"outcome"`
-	Conclusion        string                   `json:"conclusion"`
-	Finding           string                   `json:"finding"`
-	Kind              string                   `json:"kind"`
-	SourceID          string                   `json:"sourceId"`
-	WorkspaceID       string                   `json:"workspaceId"`
-	Description       string                   `json:"description"`
-	IncludeDatabase   bool                     `json:"includeDatabase"`
-	Repository        string                   `json:"repository"`
-	RemoteSHA         string                   `json:"remoteSha"`
-	ReviewToken       string                   `json:"reviewToken"`
-	IncludeNotes      bool                     `json:"includeNotes"`
+	CaseIDs           []string                  `json:"caseIds"`
+	CaseID            string                    `json:"caseId"`
+	StepID            string                    `json:"stepId"`
+	Done              bool                      `json:"done"`
+	Outcome           string                    `json:"outcome"`
+	Conclusion        string                    `json:"conclusion"`
+	Finding           string                    `json:"finding"`
+	Kind              string                    `json:"kind"`
+	SourceID          string                    `json:"sourceId"`
+	WorkspaceID       string                    `json:"workspaceId"`
+	Description       string                    `json:"description"`
+	IncludeDatabase   bool                      `json:"includeDatabase"`
+	Repository        string                    `json:"repository"`
+	RemoteSHA         string                    `json:"remoteSha"`
+	ReviewToken       string                    `json:"reviewToken"`
+	IncludeNotes      bool                      `json:"includeNotes"`
 	Bundle            *issuePackageBundle       `json:"bundle,omitempty"`
-	ArtifactNames     []string                 `json:"artifactNames"`
-	Pod               string                   `json:"pod"`
-	PodUID            string                   `json:"podUid"`
-	Container         string                   `json:"container"`
-	TailLines         int64                    `json:"tailLines"`
-	SinceSeconds      int64                    `json:"sinceSeconds"`
-	Previous          bool                     `json:"previous"`
+	ArtifactNames     []string                  `json:"artifactNames"`
+	Pod               string                    `json:"pod"`
+	PodUID            string                    `json:"podUid"`
+	Container         string                    `json:"container"`
+	TailLines         int64                     `json:"tailLines"`
+	SinceSeconds      int64                     `json:"sinceSeconds"`
+	Previous          bool                      `json:"previous"`
+	GitBranch         string                    `json:"gitBranch"`
+	GitMessage        string                    `json:"gitMessage"`
+	GitPath           string                    `json:"gitPath"`
+	Query             string                    `json:"query"`
+	DontAskAgain      bool                      `json:"dontAskAgain"`
 }
 
 type issuePackageService struct {
@@ -220,6 +225,7 @@ type issuePackageService struct {
 	packages          map[string]issuePackage
 	library           issuePackageLibrary
 	pendingAutomation map[string]issuePackageRunLink
+	planFolderErrors  map[string]string
 }
 
 var errIssuePackageConflict = errors.New("this package changed in another view; reload it before saving")
@@ -251,6 +257,12 @@ func newIssuePackageService(root string) (*issuePackageService, error) {
 		return nil, err
 	}
 	for _, entry := range entries {
+		if entry.Name() == issuePackagePlanDirectory {
+			if !entry.IsDir() {
+				return nil, fmt.Errorf("test plan storage is not a directory; existing files were preserved")
+			}
+			continue
+		}
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
@@ -276,6 +288,7 @@ func newIssuePackageService(root string) (*issuePackageService, error) {
 	if err := s.loadPackageLibrary(); err != nil {
 		return nil, err
 	}
+	s.initializePlanFolders()
 	return s, nil
 }
 
@@ -391,5 +404,6 @@ func (s *issuePackageService) saveLocked(pkg issuePackage) error {
 		return err
 	}
 	s.packages[pkg.ID] = cloneIssuePackage(pkg)
+	s.rememberPlanFolderLocked(pkg)
 	return nil
 }

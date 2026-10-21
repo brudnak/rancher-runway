@@ -36,7 +36,7 @@ func (p *localControlPanel) handleIssuePackages(w http.ResponseWriter, r *http.R
 		for _, pkg := range packages {
 			fingerprints[pkg.ID] = issuePackagePlanFingerprint(issuePackageEditablePlan(pkg))
 		}
-		writeJSON(w, map[string]any{"packages": packages, "planFingerprints": fingerprints, "library": s.packageLibrarySnapshot()})
+		writeJSON(w, map[string]any{"packages": packages, "planFingerprints": fingerprints, "library": s.packageLibrarySnapshot(), "planFolderWarnings": s.packagePlanFolderWarnings()})
 		return
 	}
 	var req issuePackageRequest
@@ -75,6 +75,14 @@ func (p *localControlPanel) handleIssuePackages(w http.ResponseWriter, r *http.R
 			var value issuePackageEnvironment
 			value, err = p.issuePackageEnvironment(req.Environment)
 			result = map[string]any{"environment": value}
+		case "plan-markdown":
+			result, err = p.issuePackagePlanMarkdown(s, req)
+		case "plan-search":
+			result, err = s.searchPlans(r.Context(), req.Query)
+		case "plan-folder", "plan-folder-open", "plan-folder-history-open":
+			result, err = p.handleIssuePackagePlanFolder(s, req, openLocalPath)
+		case "plan-git-status", "plan-git-onboarding", "plan-git-onboarding-dismiss", "plan-git-link", "plan-git-unlink", "plan-git-preview", "plan-git-execute", "plan-git-import":
+			result, err = s.handleIssuePackagePlanGit(r.Context(), req)
 		case "refresh-environment":
 			var value issuePackageEnvironment
 			value, err = p.refreshIssuePackageEnvironment(r.Context(), req.Environment)
@@ -83,7 +91,7 @@ func (p *localControlPanel) handleIssuePackages(w http.ResponseWriter, r *http.R
 			result, err = p.handleIssuePackageLogs(r.Context(), s, req)
 		case "fix-lookup":
 			result, err = p.issuePackageFixLookup(r.Context(), req)
-		case "create", "update", "delete", "start-session", "mark-step", "case-result", "finish-session", "delete-session", "attach-evidence", "remove-evidence":
+		case "create", "update", "delete", "start-session", "update-session-case", "mark-step", "case-result", "finish-session", "delete-session", "attach-evidence", "remove-evidence":
 			result, err = s.mutate(req, environment, evidence, artifact)
 		default:
 			result, err = p.handleIssuePackageTransfer(r.Context(), s, req)

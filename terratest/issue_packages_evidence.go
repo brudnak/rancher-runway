@@ -70,7 +70,6 @@ func (p *localControlPanel) issuePackageEnvironment(input issuePackageEnvironmen
 			e.URL = record.URL
 			e.Source = "recorded"
 			packageEnvironmentDetail(&e, "Configured version", record.Version, "recorded", nil)
-			packageEnvironmentDetail(&e, "Cluster role", record.Role, "recorded", nil)
 			packageEnvironmentDetail(&e, "Run", record.RunID, "recorded", nil)
 			role := record.Role
 			if known && cluster.Type == "downstream" {
@@ -78,6 +77,12 @@ func (p *localControlPanel) issuePackageEnvironment(input issuePackageEnvironmen
 			}
 			if role == "" && strings.Contains(record.ID, "-downstream-") {
 				role = "downstream"
+			}
+			packageEnvironmentDetail(&e, "Cluster role", role, "recorded", nil)
+			if !known && role != "downstream" && record.RunID != "" {
+				if run, ok := p.readRunRecord(record.RunID); ok {
+					packageEnvironmentDetail(&e, "Deployment", run.DeploymentType, "recorded", nil)
+				}
 			}
 			if record.Version != "" {
 				switch {

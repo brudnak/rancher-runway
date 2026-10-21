@@ -2,8 +2,10 @@ package test
 
 import (
 	"errors"
+	"github.com/brudnak/ha-rancher-rke2/internal/cachelab"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -156,5 +158,100 @@ func TestIssuePackageDraftRejectsUnsafeFilesAndInvalidIdentity(t *testing.T) {
 	}
 	if _, err := s.handleWritingDraft(issuePackageRequest{Action: "draft-read", ID: pkg.ID}); err == nil {
 		t.Fatal("draft followed a symbolic link")
+	}
+}
+
+func TestIssuePackageDraftRecoversTitleListAndEnvironment(t *testing.T) {
+	s := packageTestService(t)
+	pkg := packageTestPlan(t, s)
+	initial := packageTestDraft(t, s, issuePackageRequest{Action: "draft-read", ID: pkg.ID})
+	draft := issuePackageWritingDraft{BasePlanFingerprint: initial.CurrentPlanFingerprint, TitleLines: "1. First title\n2. Still thinking…", PlanClusterID: "selected-rancher"}
+	saved := packageTestDraft(t, s, issuePackageRequest{Action: "draft-write", ID: pkg.ID, Draft: &draft})
+	restarted, err := newIssuePackageService(s.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := packageTestDraft(t, restarted, issuePackageRequest{Action: "draft-read", ID: pkg.ID})
+	if recovered.Draft.TitleLines != draft.TitleLines || recovered.Draft.PlanClusterID != draft.PlanClusterID || recovered.PlanChanged {
+		t.Fatal("title-only writing or environment selection did not survive restart")
+	}
+	checkpoint, _ := restarted.get(pkg.ID)
+	if checkpoint.Revision != pkg.Revision || len(checkpoint.Cases) != len(pkg.Cases) {
+		t.Fatal("unfinished titles changed the saved plan")
+	}
+	cleared := packageTestDraft(t, restarted, issuePackageRequest{Action: "draft-clear", ID: pkg.ID, DraftRevision: saved.Draft.Revision})
+	if cleared.Draft.TitleLines != "" || cleared.Draft.PlanClusterID != "" {
+		t.Fatal("clear retained title writing")
+	}
+	draft.TitleLines = strings.Repeat("x", 128001)
+	if _, err := restarted.handleWritingDraft(issuePackageRequest{Action: "draft-write", ID: pkg.ID, DraftRevision: cleared.Draft.Revision, Draft: &draft}); err == nil {
+		t.Fatal("accepted unbounded title list")
+	}
+}
+
+func TestIssuePackageDraftRecoversSessionCaseOriginsAfterSessionChanges(t *testing.T) {
+	s := packageTestService(t)
+	pkg := packageTestStart(t, s, packageTestPlan(t, s))
+	initial := packageTestDraft(t, s, issuePackageRequest{Action: "draft-read", ID: pkg.ID})
+	if initial.Draft.SessionCaseEdits == nil {
+		t.Fatal("a new draft did not provide an empty session-edit list")
+	}
+	plan := issuePackageEditablePlan(cloneIssuePackage(pkg))
+	plan.Cases[0].Expected = "Unfinished session expectation"
+	origin := issuePackageSessionCaseDraft{SessionID: pkg.Sessions[0].ID, CaseID: pkg.Cases[0].ID}
+	draft := issuePackageWritingDraft{BasePlanFingerprint: initial.CurrentPlanFingerprint, Plan: &plan, SessionCaseEdits: []issuePackageSessionCaseDraft{origin}}
+	saved := packageTestDraft(t, s, issuePackageRequest{Action: "draft-write", ID: pkg.ID, Draft: &draft})
+	pkg = packageTestMutation(t, s, issuePackageRequest{Action: "finish-session", ID: pkg.ID, Revision: pkg.Revision, SessionID: origin.SessionID, Finding: "inconclusive"}, nil, nil, nil)
+	pkg = packageTestMutation(t, s, issuePackageRequest{Action: "delete-session", ID: pkg.ID, Revision: pkg.Revision, SessionID: origin.SessionID, Confirm: "confirm"}, nil, nil, nil)
+	restarted, err := newIssuePackageService(s.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered := packageTestDraft(t, restarted, issuePackageRequest{Action: "draft-read", ID: pkg.ID})
+	if !reflect.DeepEqual(recovered.Draft.SessionCaseEdits, []issuePackageSessionCaseDraft{origin}) || recovered.Draft.Plan.Cases[0].Expected != plan.Cases[0].Expected || recovered.Draft.Revision != saved.Draft.Revision {
+		t.Fatal("session changes or restart lost the origin of unfinished writing")
+	}
+	checkpoint, _ := restarted.get(pkg.ID)
+	if checkpoint.Cases[0].Expected == plan.Cases[0].Expected {
+		t.Fatal("recovering session writing silently changed the saved plan")
+	}
+	cleared := packageTestDraft(t, restarted, issuePackageRequest{Action: "draft-clear", ID: pkg.ID, DraftRevision: saved.Draft.Revision})
+	if cleared.Draft.SessionCaseEdits == nil || len(cleared.Draft.SessionCaseEdits) != 0 {
+		t.Fatal("clearing writing retained a session-case origin")
+	}
+}
+
+func TestIssuePackageDraftValidatesSessionCaseOriginsWithoutRequiringLiveSessions(t *testing.T) {
+	s := packageTestService(t)
+	pkg := packageTestPlan(t, s)
+	initial := packageTestDraft(t, s, issuePackageRequest{Action: "draft-read", ID: pkg.ID})
+	origin := issuePackageSessionCaseDraft{SessionID: cachelab.ID(), CaseID: cachelab.ID()}
+	draft := issuePackageWritingDraft{BasePlanFingerprint: initial.CurrentPlanFingerprint, TitleLines: "1. Keep this writing", SessionCaseEdits: []issuePackageSessionCaseDraft{origin}}
+	saved := packageTestDraft(t, s, issuePackageRequest{Action: "draft-write", ID: pkg.ID, Draft: &draft})
+	for _, origins := range [][]issuePackageSessionCaseDraft{
+		{{SessionID: "../invalid", CaseID: origin.CaseID}},
+		{{SessionID: origin.SessionID, CaseID: "../invalid"}},
+		{origin, origin},
+		{origin, {SessionID: cachelab.ID(), CaseID: origin.CaseID}},
+	} {
+		draft.SessionCaseEdits = origins
+		if _, err := s.handleWritingDraft(issuePackageRequest{Action: "draft-write", ID: pkg.ID, DraftRevision: saved.Draft.Revision, Draft: &draft}); err == nil {
+			t.Fatal("invalid or ambiguous session-case origins were accepted")
+		}
+	}
+	draft.SessionCaseEdits = nil
+	for range 250 {
+		draft.SessionCaseEdits = append(draft.SessionCaseEdits, issuePackageSessionCaseDraft{SessionID: cachelab.ID(), CaseID: cachelab.ID()})
+	}
+	if err := validateIssuePackageWritingDraft(draft); err != nil {
+		t.Fatalf("the maximum valid origin list was rejected: %v", err)
+	}
+	draft.SessionCaseEdits = append(draft.SessionCaseEdits, issuePackageSessionCaseDraft{SessionID: cachelab.ID(), CaseID: cachelab.ID()})
+	if err := validateIssuePackageWritingDraft(draft); err == nil {
+		t.Fatal("unbounded session-case origins were accepted")
+	}
+	recovered := packageTestDraft(t, s, issuePackageRequest{Action: "draft-read", ID: pkg.ID})
+	if recovered.Draft.Revision != saved.Draft.Revision || recovered.Draft.TitleLines != saved.Draft.TitleLines || !reflect.DeepEqual(recovered.Draft.SessionCaseEdits, saved.Draft.SessionCaseEdits) {
+		t.Fatal("invalid origin metadata overwrote durable writing")
 	}
 }

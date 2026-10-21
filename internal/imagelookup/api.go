@@ -25,6 +25,24 @@ func NewWithOptions(o Options) *Service {
 	return s
 }
 
+// WithEnvironmentCredentialsOnly returns an independent service configuration
+// for automated public-registry checks. It uses Runway's Docker Hub environment
+// credentials when present and anonymous access elsewhere, without reading
+// Docker/Podman configuration or running local credential helpers. The original
+// service keeps its authentication policy for explicit private-image lookups.
+// Transport, limits and command dependencies are retained, never mutated.
+func (s *Service) WithEnvironmentCredentialsOnly() *Service {
+	if s == nil {
+		s = New()
+	}
+	return NewWithOptions(Options{
+		Transport: s.transport, Keychain: imageLookupEnvironmentKeychain{},
+		AllowHTTP: s.allowHTTP, Now: s.now, MaxTagScan: s.maxTagScan,
+		MaxBuildYAML: s.maxBuildYML, MaxBuildLayer: s.maxBuildLayer,
+		MaxLayerScan: s.maxLayerScan, RunCommand: s.runCommand,
+	})
+}
+
 type Reference struct{ Registry, Repository, Tag, Digest, Canonical string }
 
 func (s *Service) ParseReference(raw string, requireTag bool) (Reference, error) {

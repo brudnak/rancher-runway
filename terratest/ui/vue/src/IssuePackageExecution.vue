@@ -1,12 +1,13 @@
 <script setup>
 import {computed,nextTick,ref,watch} from 'vue';
 import Icon from './HelmLabIcon.vue';
-import {CASE_OUTCOMES,packageDate} from './issue-packages.mjs';
+import CaseEditor from './IssuePackageCaseEditor.vue';
+import {CASE_OUTCOMES,packageDate,packagePlanProblem} from './issue-packages.mjs';
 import {caseStepProgress,changedCaseFields,evidenceForCase,nextCaseToCheck,outcomeLabel,resultForCase} from './issue-package-comparison.mjs';
 
-const props=defineProps({session:{type:Object,required:true},caseId:String,observation:{type:String,default:''},busy:Boolean,observationBlocked:Boolean,baseline:Object});
-const emit=defineEmits(['select-case','update:observation','mark-step','outcome','save-observation','logs','attach-evidence','run-automation']);
-const heading=ref(null),expandedBaseline=ref(false);
+const props=defineProps({session:{type:Object,required:true},caseId:String,observation:{type:String,default:''},busy:Boolean,observationBlocked:Boolean,baseline:Object,caseDraft:Object,canEditCase:Boolean});
+const emit=defineEmits(['select-case','update:observation','mark-step','outcome','save-observation','logs','attach-evidence','run-automation','update-case-draft','save-case-details']);
+const heading=ref(null),expandedBaseline=ref(false),editingCase=ref(false),caseWriter=ref(null);
 const cases=computed(()=>props.session.cases||[]);
 const activeCase=computed(()=>cases.value.find(item=>item.id===props.caseId));
 const activeIndex=computed(()=>cases.value.findIndex(item=>item.id===props.caseId));
@@ -21,9 +22,15 @@ const evidence=computed(()=>evidenceForCase(props.session,props.caseId));
 const nextCase=computed(()=>nextCaseToCheck(props.session,props.caseId));
 const stepProgress=computed(()=>caseStepProgress(activeCase.value,result.value));
 const active=computed(()=>props.session.status==='active');
+const writingCase=computed(()=>editingCase.value&&active.value&&props.caseDraft?.id===activeCase.value?.id);
+const writtenDetails=item=>({title:item?.title||'',preconditions:item?.preconditions||'',expected:item?.expected||'',steps:item?.steps||[]});
+const caseDetailsChanged=computed(()=>props.caseDraft&&JSON.stringify(writtenDetails(props.caseDraft))!==JSON.stringify(writtenDetails(activeCase.value)));
+const caseDetailsProblem=computed(()=>props.caseDraft?packagePlanProblem({title:'Case details',cases:[props.caseDraft]}):null);
 const unrun=computed(()=>cases.value.filter(item=>(resultForCase(props.session,item.id)?.outcome||'not-run')==='not-run').length);
 const stepMarker=id=>result.value?.steps?.find(item=>item.stepId===id);
-watch(()=>[props.session.id,props.caseId],()=>{expandedBaseline.value=false;});
+watch(()=>[props.session.id,props.caseId],()=>{expandedBaseline.value=false;editingCase.value=false;});
+watch(()=>JSON.stringify(activeCase.value),()=>{editingCase.value=false;});
+async function writeCase(){if(props.busy||!props.canEditCase)return;editingCase.value=true;await nextTick();caseWriter.value?.querySelector('.pce-steps textarea')?.focus({preventScroll:true});}
 async function advance(){if(!nextCase.value||props.busy)return;emit('select-case',nextCase.value.id);await nextTick();heading.value?.focus({preventScroll:true});}
 </script>
 
@@ -41,7 +48,15 @@ async function advance(){if(!nextCase.value||props.busy)return;emit('select-case
       </nav>
       <div v-if="activeCase" class="px-workspace" :class="{'with-baseline':baselineRecord}">
         <article class="px-current-case">
+          <div v-if="writingCase" ref="caseWriter" class="px-case-writer">
+            <div class="px-writing-bar"><span>Write the details as you discover them.</span><button type="button" class="px-link" :disabled="busy" @click="editingCase=false">Back to testing</button></div>
+            <CaseEditor :model-value="caseDraft" :number="activeIndex+1" :disabled="busy||!canEditCase" :removable="false" :automation-editable="false" @update:model-value="$emit('update-case-draft',$event)"/>
+            <p v-if="caseDetailsProblem" class="px-hint">{{caseDetailsProblem.message}}</p>
+            <div class="px-writing-actions"><span>Your writing stays in the plan draft. Applying updates this session and the plan.</span><button type="button" :disabled="busy||!canEditCase||!caseDetailsChanged||!!caseDetailsProblem" @click="$emit('save-case-details')">Use these details</button></div>
+          </div>
+          <template v-else>
           <header class="px-case-heading"><div><span class="px-eyebrow">CASE {{String(activeIndex+1).padStart(2,'0')}} OF {{cases.length}}</span><h4 ref="heading" tabindex="-1">{{activeCase.title}}</h4></div><span class="px-outcome" :data-outcome="result?.outcome||'not-run'">{{outcomeLabel(result?.outcome)}}</span></header>
+          <div v-if="active&&canEditCase" class="px-write-invitation"><button type="button" class="px-link" :disabled="busy" @click="writeCase"><Icon name="file"/>{{activeCase.steps?.length?'Edit case details':'Add steps as you test'}}</button><span v-if="!activeCase.steps?.length">Start with what you know. Add the rest as you go.</span><span v-else-if="caseDetailsChanged">More writing is waiting in your plan draft.</span></div>
           <div v-if="activeCase.preconditions" class="px-condition"><span class="px-eyebrow">BEFORE YOU BEGIN</span><p>{{activeCase.preconditions}}</p></div>
           <div v-if="activeCase.steps?.length" class="px-step-progress"><span>{{stepProgress.done}} of {{stepProgress.total}} steps marked performed</span><div aria-hidden="true"><span :style="{width:`${stepProgress.total?stepProgress.done/stepProgress.total*100:0}%`}"/></div></div>
           <ol v-if="activeCase.steps?.length" class="px-steps">
@@ -52,12 +67,13 @@ async function advance(){if(!nextCase.value||props.busy)return;emit('select-case
             </li>
           </ol>
           <div v-if="activeCase.expected" class="px-condition px-expected"><Icon name="compass"/><div><span class="px-eyebrow">EXPECTED BEHAVIOR</span><p>{{activeCase.expected}}</p></div></div>
+          </template>
           <div class="px-observation">
             <label :for="`package-observation-${session.id}-${activeCase.id}`">What happened?</label><p v-if="active" class="px-hint">Record the behavior you saw, then choose an outcome. Step markers alone do not mark a case passed.</p>
             <textarea v-if="active" :id="`package-observation-${session.id}-${activeCase.id}`" :value="observation" :disabled="busy||observationBlocked" rows="5" placeholder="Actual behavior, anything unexpected, and what this result establishes…" @input="$emit('update:observation',$event.target.value)"/>
             <p v-else class="px-preserved-note">{{result?.notes||'No observation recorded.'}}</p>
             <p v-if="observationBlocked" class="px-baseline-warning">A recovered observation needs review above. Choose which text to keep before saving this case’s result.</p><div v-if="active" class="px-observation-state"><span>{{observation!==(result?.notes||'')?'Draft · choose an outcome or save this observation':'Observation saved with this case'}}</span><button type="button" class="px-link" :disabled="busy||observationBlocked||observation===(result?.notes||'')" @click="$emit('save-observation')">Save observation</button></div>
-            <div v-if="active" class="px-outcomes" role="group" aria-label="Record case outcome"><button v-for="item in CASE_OUTCOMES.filter(item=>item.id!=='not-run')" :key="item.id" type="button" :data-outcome="item.id" :aria-pressed="result?.outcome===item.id" :disabled="busy||observationBlocked" @click="$emit('outcome',item.id)"><Icon v-if="result?.outcome===item.id" name="check"/>{{item.label}}</button></div>
+            <div v-if="active" class="px-outcomes" role="group" aria-label="Record case outcome"><button v-for="item in CASE_OUTCOMES.filter(item=>item.id!=='not-run')" :key="item.id" type="button" :data-outcome="item.id" :aria-pressed="result?.outcome===item.id" :disabled="busy||observationBlocked||writingCase" @click="$emit('outcome',item.id)"><Icon v-if="result?.outcome===item.id" name="check"/>{{item.label}}</button></div>
           </div>
           <section class="px-case-evidence" aria-label="Evidence for this case"><header><div><Icon name="layers"/><strong>{{evidence.length?`${evidence.length} ${evidence.length===1?'record':'records'} attached to this case`:'Evidence for this case'}}</strong></div><div v-if="active" class="px-evidence-actions"><button v-if="session.environment?.clusterId" type="button" class="px-link" :disabled="busy" @click="$emit('logs',{caseId:activeCase.id,stepId:''})"><Icon name="terminal"/>Get logs</button><button type="button" class="px-link" :disabled="busy" @click="$emit('attach-evidence',{caseId:activeCase.id})"><Icon name="plus"/>Attach evidence</button></div></header><ul v-if="evidence.length"><li v-for="item in evidence" :key="item.id"><Icon :name="item.kind==='pod-logs'?'terminal':item.kind==='cache-snapshot'?'database':'file'"/><span>{{item.name||'Written observation'}}<small v-if="item.stepId">Step {{(activeCase.steps||[]).findIndex(step=>step.id===item.stepId)+1}}</small></span></li></ul><p v-else class="px-hint">Attach a lab result, cache snapshot, log capture, or written observation. Session-wide evidence stays below.</p></section>
           <footer v-if="active" class="px-case-footer"><span v-if="nextCase">{{nextCase.blocked?'A blocked case is ready to revisit.':'Continue when you are ready. Your observation stays with this case.'}}</span><span v-else>{{unrun?'This is the last unrun case.':'No other unrun or blocked cases.'}}</span><button v-if="nextCase" type="button" :disabled="busy" @click="advance">{{nextCase.blocked?'Review blocked case':'Next unrun case'}}<Icon name="arrow"/></button></footer>
@@ -76,6 +92,7 @@ async function advance(){if(!nextCase.value||props.busy)return;emit('select-case
 </template>
 
 <style scoped>
+.px-write-invitation{display:grid;justify-items:start;gap:3px;margin:-10px 0 22px}.px-write-invitation>span{color:var(--runway-muted);font-size:10px;line-height:1.7}.px-case-writer{margin-bottom:28px;padding-bottom:22px;border-bottom:1px solid var(--runway-border)}.px-writing-bar,.px-writing-actions{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;color:var(--runway-muted);font-size:10px;line-height:1.8}.px-writing-bar{margin-bottom:25px}.px-writing-actions{margin-top:18px}.px-writing-actions>span{flex:1;min-width:150px}.package-execution .px-writing-actions>button{color:var(--runway-accent);background:var(--runway-accent-soft)}
 .px-automation{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid var(--runway-border);border-radius:10px;padding:15px;margin-bottom:18px;background:var(--runway-accent-soft)}.px-automation>div{flex:1;min-width:160px}.px-automation strong{display:block;font-size:12px}.px-automation small{display:block;font:10px ui-monospace,monospace;margin-top:6px;color:var(--runway-muted);overflow-wrap:anywhere}.px-automation p{width:100%;margin:0;color:var(--runway-muted);font-size:11px;line-height:1.6}.px-automation button{display:flex;align-items:center;gap:7px;font:12px inherit;background:var(--runway-card);border:1px solid var(--runway-border);border-radius:8px;padding:10px;color:var(--runway-accent);cursor:pointer}.px-automation button:disabled{opacity:.4}.px-automation svg{width:14px;height:14px}
 
 .package-execution{container:execution / inline-size;color:var(--runway-ink);border:1px solid var(--runway-border);border-radius:16px;overflow:hidden;margin:24px 0;background:var(--runway-card)}

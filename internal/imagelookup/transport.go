@@ -61,13 +61,29 @@ func imageLookupExactDigestReference(repository name.Repository, query string, a
 type imageLookupCredentialKeychain struct{}
 
 func (imageLookupCredentialKeychain) Resolve(resource authn.Resource) (authn.Authenticator, error) {
+	if credential := imageLookupEnvironmentCredential(resource); credential != authn.Anonymous {
+		return credential, nil
+	}
+	return authn.DefaultKeychain.Resolve(resource)
+}
+
+// Automated public-image checks must not inspect another application's Docker
+// or Podman configuration or invoke its credential helpers. On macOS, those
+// accesses can trigger an unrelated cross-application data permission prompt.
+type imageLookupEnvironmentKeychain struct{}
+
+func (imageLookupEnvironmentKeychain) Resolve(resource authn.Resource) (authn.Authenticator, error) {
+	return imageLookupEnvironmentCredential(resource), nil
+}
+
+func imageLookupEnvironmentCredential(resource authn.Resource) authn.Authenticator {
 	registry := RegistryForDisplay(resource.RegistryStr())
 	username := strings.TrimSpace(os.Getenv("DOCKERHUB_USERNAME"))
 	password := os.Getenv("DOCKERHUB_PASSWORD")
 	if registry == "docker.io" && username != "" && password != "" {
-		return authn.FromConfig(authn.AuthConfig{Username: username, Password: password}), nil
+		return authn.FromConfig(authn.AuthConfig{Username: username, Password: password})
 	}
-	return authn.DefaultKeychain.Resolve(resource)
+	return authn.Anonymous
 }
 
 type imageLookupSafeRoundTripper struct {

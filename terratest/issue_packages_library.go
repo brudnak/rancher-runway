@@ -21,10 +21,10 @@ type issuePackageBucket struct {
 	PackageIDs      []string `json:"packageIds"`
 }
 type issuePackageLibrary struct {
-	Version  int                 `json:"version"`
-	Revision string              `json:"revision"`
+	Version  int                  `json:"version"`
+	Revision string               `json:"revision"`
 	Buckets  []issuePackageBucket `json:"buckets"`
-	Unfiled  []string            `json:"unfiled"`
+	Unfiled  []string             `json:"unfiled"`
 }
 
 func (s *issuePackageService) loadPackageLibrary() error {
@@ -161,7 +161,10 @@ func (s *issuePackageService) savePackageLibrary(req issuePackageRequest) (any, 
 		return nil, err
 	}
 	s.library = lib
-	return map[string]any{"library": s.libraryLocked()}, nil
+	for _, pkg := range s.packages {
+		s.rememberPlanFolderLocked(pkg)
+	}
+	return map[string]any{"library": s.libraryLocked(), "planFolderWarnings": s.planFolderWarningsLocked()}, nil
 }
 func (s *issuePackageService) exportPackageLibrary(req issuePackageRequest) (any, error) {
 	lib := s.packageLibrarySnapshot()
