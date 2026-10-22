@@ -43,9 +43,10 @@ resource "aws_iam_role" "ssm_role" {
   tags               = merge(var.common_tags, { Name = "${var.aws_prefix}-ssm-${random_pet.random_pet.id}" })
 }
 
+# Retain SSM agent functionality without granting Parameter Store reads.
 resource "aws_iam_role_policy_attachment" "ssm_core" {
   role       = aws_iam_role.ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedEC2InstanceDefaultPolicy"
 }
 
 resource "aws_iam_instance_profile" "ssm_profile" {

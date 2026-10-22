@@ -20,7 +20,8 @@ import (
 const (
 	iamTestRoleARN    = "arn:aws:iam::123456789012:role/run-ssm-role"
 	iamTestProfileARN = "arn:aws:iam::123456789012:instance-profile/run-ssm-profile"
-	iamTestPolicyARN  = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+	iamTestPolicyName = "AmazonSSMManagedEC2InstanceDefaultPolicy"
+	iamTestPolicyARN  = "arn:aws:iam::aws:policy/" + iamTestPolicyName
 	iamTestTrust      = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}`
 )
 
@@ -114,7 +115,7 @@ func newIAMCleanupSDKFixture(t *testing.T, fixture *iamCleanupFixture) *awsSDKCl
 				if fixture.paginated && values.Get("Marker") == "" {
 					result = `<AttachedPolicies/><IsTruncated>true</IsTruncated><Marker>policies-2</Marker>`
 				} else {
-					result = `<AttachedPolicies><member><PolicyName>AmazonSSMManagedInstanceCore</PolicyName><PolicyArn>` + iamTestPolicyARN + `</PolicyArn></member></AttachedPolicies><IsTruncated>false</IsTruncated>`
+					result = `<AttachedPolicies><member><PolicyName>` + iamTestPolicyName + `</PolicyName><PolicyArn>` + iamTestPolicyARN + `</PolicyArn></member></AttachedPolicies><IsTruncated>false</IsTruncated>`
 				}
 			case "ListRolePolicies":
 				result = `<PolicyNames/><IsTruncated>false</IsTruncated>`
@@ -180,6 +181,15 @@ func TestAWSCleanupIAMTrustRestriction(t *testing.T) {
 	for _, policy := range []string{`{}`, `broken`, strings.ReplaceAll(iamTestTrust, "ec2.amazonaws.com", "lambda.amazonaws.com"), strings.ReplaceAll(iamTestTrust, `"Service":"ec2.amazonaws.com"`, `"Service":"ec2.amazonaws.com","AWS":"*"`), strings.ReplaceAll(iamTestTrust, "sts:AssumeRole", "sts:*"), strings.ReplaceAll(iamTestTrust, "Principal", "NotPrincipal")} {
 		if iamEC2OnlyTrust(policy) {
 			t.Fatalf("unsafe trust accepted: %s", policy)
+		}
+	}
+}
+
+func TestAWSCleanupIAMAttachmentIdentitiesSupportCurrentAndLegacyPolicies(t *testing.T) {
+	for _, policyARN := range []string{iamTestPolicyARN, "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore", "arn:aws:iam::123456789012:policy/custom-ssm"} {
+		role, policy, err := iamAttachmentARNs(iamTestRoleARN + ":" + policyARN)
+		if err != nil || role != iamTestRoleARN || policy != policyARN {
+			t.Fatalf("policy attachment identity rejected: role=%q policy=%q error=%v", role, policy, err)
 		}
 	}
 }
