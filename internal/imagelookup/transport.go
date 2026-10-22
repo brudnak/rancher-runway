@@ -19,7 +19,7 @@ import (
 func (s *Service) remoteOptions(ctx context.Context, platform *v1.Platform, pageSize int) []remote.Option {
 	options := []remote.Option{
 		remote.WithContext(ctx),
-		remote.WithTransport(s.transport),
+		remote.WithTransport(imageLookupFullResponseTransport{inner: s.transport}),
 		remote.WithAuthFromKeychain(s.keychain),
 		remote.WithUserAgent("rancher-runway-image-lookup"),
 	}

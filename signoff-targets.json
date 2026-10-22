@@ -8,6 +8,9 @@
     },
     {
       "rancher_version": "v2.13.11-c59dfee-head"
+    },
+    {
+      "rancher_version": "v2.12.15-f38f7b1-head"
     }
   ]
 }
