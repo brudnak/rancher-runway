@@ -11,6 +11,9 @@
     },
     {
       "rancher_version": "v2.12.15-f38f7b1-head"
+    },
+    {
+      "rancher_version": "v2.11.19-5668f67-head"
     }
   ]
 }
