@@ -763,10 +763,20 @@ func TestSupportMatrixRequestCacheFetchesOnce(t *testing.T) {
 func TestRKE2PatchRequestCacheFetchesOnce(t *testing.T) {
 	t.Setenv(releaseLookupCachePathEnv, filepath.Join(t.TempDir(), "release-cache.json"))
 	hits := 0
+	assetHits := 0
 	previousClient := rancherLookupHTTPClient
 	rancherLookupHTTPClient = &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
-		hits++
-		body := `v1.35.7+rke2r1 v1.35.6+rke2r1`
+		var body string
+		switch req.URL.Path {
+		case "/release-notes/v1.35.X":
+			hits++
+			body = `v1.35.7+rke2r1 v1.35.6+rke2r1`
+		case "/repos/rancher/rke2/releases/tags/v1.35.7+rke2r1":
+			assetHits++
+			body = `{"assets":[{"name":"rke2-images.linux-amd64.tar.zst"},{"name":"sha256sum-amd64.txt"}]}`
+		default:
+			t.Fatalf("unexpected RKE2 lookup: %s", req.URL)
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
@@ -789,6 +799,9 @@ func TestRKE2PatchRequestCacheFetchesOnce(t *testing.T) {
 	}
 	if hits != 1 {
 		t.Fatalf("expected one RKE2 release-notes HTTP request, got %d", hits)
+	}
+	if assetHits != 1 {
+		t.Fatalf("expected one RKE2 release asset lookup, got %d", assetHits)
 	}
 }
 

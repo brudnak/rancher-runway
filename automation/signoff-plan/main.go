@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/registryhttp"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -1436,7 +1437,7 @@ func (c githubClient) registryImageTagExists(ctx context.Context, registry, repo
 		"application/vnd.docker.distribution.manifest.v2+json",
 	}, ", "))
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := registryhttp.Do(c.httpClient, req)
 	if err != nil {
 		return false, err
 	}
@@ -1472,7 +1473,7 @@ func (c githubClient) registryImageTagExistsWithToken(ctx context.Context, manif
 		"application/vnd.docker.distribution.manifest.v2+json",
 	}, ", "))
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := registryhttp.Do(c.httpClient, req)
 	if err != nil {
 		return false, err
 	}
@@ -1512,7 +1513,7 @@ func (c githubClient) registryBearerToken(ctx context.Context, authenticate stri
 	}
 	req.URL.RawQuery = query.Encode()
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := registryhttp.Do(c.httpClient, req)
 	if err != nil {
 		return "", err
 	}

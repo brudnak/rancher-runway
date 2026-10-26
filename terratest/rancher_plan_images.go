@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
+	"github.com/brudnak/ha-rancher-rke2/internal/registryhttp"
 	"io"
 	"net/http"
 	"strings"
@@ -133,7 +134,7 @@ func registryImageTagExists(registry, repository, tag string) (bool, error) {
 	}
 	setRegistryManifestAcceptHeader(req)
 
-	resp, err := rancherRegistryHTTPClient.Do(req)
+	resp, err := registryhttp.Do(rancherRegistryHTTPClient, req)
 	if err != nil {
 		return false, err
 	}
@@ -164,7 +165,7 @@ func registryImageTagExistsWithToken(manifestURL, token string) (bool, error) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	setRegistryManifestAcceptHeader(req)
 
-	resp, err := rancherRegistryHTTPClient.Do(req)
+	resp, err := registryhttp.Do(rancherRegistryHTTPClient, req)
 	if err != nil {
 		return false, err
 	}
@@ -204,7 +205,7 @@ func registryBearerToken(authenticate string) (string, error) {
 	}
 	req.URL.RawQuery = query.Encode()
 
-	resp, err := rancherRegistryHTTPClient.Do(req)
+	resp, err := registryhttp.Do(rancherRegistryHTTPClient, req)
 	if err != nil {
 		return "", err
 	}

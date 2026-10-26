@@ -83,18 +83,33 @@ func resolveHighestSupportedRKE2Minor(supportMatrixURL string) (int, string, str
 func resolveLatestRKE2Patch(highestMinor int) (string, error) {
 	releaseNotesURL := fmt.Sprintf("https://docs.rke2.io/release-notes/v1.%d.X", highestMinor)
 	config := releaseProductConfig{
-		ProductName:       "RKE2",
-		CacheKey:          "rke2",
-		Pattern:           regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+rke2r\d+`, highestMinor)),
-		GitHubTagRefsURL:  fmt.Sprintf("https://api.github.com/repos/rancher/rke2/git/matching-refs/tags/v1.%d.", highestMinor),
-		GitHubBuildPrefix: "+rke2",
-		GitHubReleaseURL:  "https://api.github.com/repos/rancher/rke2/releases/tags/%s",
+		ProductName:              "RKE2",
+		CacheKey:                 "rke2",
+		Pattern:                  regexp.MustCompile(fmt.Sprintf(`v1\.%d\.\d+\+rke2r\d+`, highestMinor)),
+		ReleaseNotesFallbackURLs: []string{fmt.Sprintf("https://docs.rke2.io/release-notes-old/v1.%d.X", highestMinor)},
+		GitHubTagRefsURL:         fmt.Sprintf("https://api.github.com/repos/rancher/rke2/git/matching-refs/tags/v1.%d.", highestMinor),
+		GitHubBuildPrefix:        "+rke2",
+		GitHubReleaseURL:         "https://api.github.com/repos/rancher/rke2/releases/tags/%s",
 		GitHubAssetNames: []string{
 			"rke2-images.linux-amd64.tar.zst",
 			"sha256sum-amd64.txt",
 		},
 	}
-	return resolveLatestCachedReleasePatch(config, highestMinor, releaseNotesURL, firstReleaseVersion)
+	return resolveLatestCachedReleasePatch(config, highestMinor, releaseNotesURL, func(versions []string) (string, error) {
+		// Release notes also list Prime-only builds without the public assets
+		// required by the installer. Keep the docs order, but validate each
+		// candidate just as the GitHub tag fallback does.
+		for _, version := range versions {
+			available, err := githubTagReleasesWithAssets(config, []string{version})
+			if err != nil {
+				return "", err
+			}
+			if len(available) > 0 {
+				return available[0], nil
+			}
+		}
+		return "", fmt.Errorf("no RKE2 releases have required public assets %s", strings.Join(config.GitHubAssetNames, ", "))
+	})
 }
 
 func resolveRKE2PatchWithCache(cache map[int]string, highestMinor int) (string, error) {
