@@ -34,7 +34,7 @@ on:
       max_parallel_lanes:
         description: Maximum active sign-off lane runners to allow.
         required: false
-        default: 4
+        default: 8
         type: number
       rerun_successful_lanes:
         description: Re-dispatch a successful immutable regression lane. Mutable head aliases are always reconsidered.

@@ -34,7 +34,7 @@ on:
       max_parallel_lanes:
         description: Maximum active sign-off lane runners to allow.
         required: false
-        default: 4
+        default: 8
         type: number
       rerun_successful_lanes:
         description: Re-dispatch successful immutable lanes. Mutable head aliases are always reconsidered.
@@ -124,7 +124,7 @@ jobs:
         id: dispatch-queue
         env:
           DISPATCH_REQUESTED: ${{ inputs.dispatch_runs }}
-          MAX_PARALLEL_LANES: ${{ inputs.max_parallel_lanes || 4 }}
+          MAX_PARALLEL_LANES: ${{ inputs.max_parallel_lanes || 8 }}
           RERUN_SUCCESSFUL_LANES: ${{ inputs.rerun_successful_lanes }}
           RKE2_SERVER_COUNT: ${{ inputs.rke2_server_count || '3' }}
           IGNORE_ACTIVE_RUNNER_ID: ${{ inputs.ignore_active_runner_id || '' }}
@@ -224,8 +224,8 @@ jobs:
             exit 1
           fi
           max_parallel_lanes="$MAX_PARALLEL_LANES"
-          if [ "$max_parallel_lanes" -gt 4 ]; then
-            max_parallel_lanes=4
+          if [ "$max_parallel_lanes" -gt 8 ]; then
+            max_parallel_lanes=8
           fi
           available_runner_count=$((max_parallel_lanes - active_runner_count))
           if [ "$available_runner_count" -lt 0 ]; then
