@@ -66,9 +66,17 @@ does not print or upload the backend names.
 | `OWNER_FIRST_NAME` | yes | First name used in AWS `Owner` tags. |
 | `OWNER_LAST_NAME` | yes | Last name used in AWS `Owner` tags. |
 | `RANCHER_BOOTSTRAP_PASSWORD` | yes | Initial Rancher admin password rendered into generated `tool-config.yml`. |
-| `LINODE_TOKEN` | yes for downstream lanes | Linode token used by Rancher to create the disposable downstream K3s node. |
+| `LINODE_TOKEN` | yes for downstream lanes | Valid Linode token with Linodes read/write access, used by Rancher to create and delete the disposable downstream K3s node. |
 | `DOCKERHUB_USERNAME` | optional | Docker Hub auth for RKE2 pulls when needed. Rejected credentials fall back to anonymous pulls rather than being installed on the nodes. |
 | `DOCKERHUB_PASSWORD` | optional | Docker Hub auth for RKE2 pulls when needed. Rejected credentials fall back to anonymous pulls rather than being installed on the nodes. |
+
+Downstream lanes validate `LINODE_TOKEN` with a read-only request to the
+authenticated Linode instances API before setting up Rancher infrastructure.
+This verifies authentication and instance-read access; provisioning also needs
+Linodes read/write access. If validation returns HTTP 401, replace the invalid
+or expired `LINODE_TOKEN` in the `rancher-signoff` environment. HTTP 403 means
+the token or account lacks access. A nonempty token or a successful public
+catalog lookup does not prove that provisioning credentials are valid.
 
 Infrastructure identifiers and owner fields are stored as individual secrets
 for log redaction even though they are not authentication credentials. Do not

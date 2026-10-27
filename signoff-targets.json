@@ -1,31 +1,19 @@
 {
   "targets": [
     {
-      "rancher_version": "v2.15.3-389ec4d-head"
+      "rancher_version": "v2.15.3-5eb027d-head"
     },
     {
-      "rancher_version": "v2.14.7-a3af136-head"
+      "rancher_version": "v2.14.7-dea4684-head"
     },
     {
-      "rancher_version": "v2.13.11-c59dfee-head"
+      "rancher_version": "v2.13.11-aaf81db-head"
     },
     {
-      "rancher_version": "v2.12.15-f38f7b1-head"
+      "rancher_version": "v2.12.15-a0461d0-head"
     },
     {
-      "rancher_version": "v2.11.19-5668f67-head"
-    },
-    {
-      "rancher_version": "v2.15.3-0070132-head"
-    },
-    {
-      "rancher_version": "v2.14.7-126bf62-head"
-    },
-    {
-      "rancher_version": "v2.13.11-93b6617-head"
-    },
-    {
-      "rancher_version": "v2.12.15-8ca6484-head"
+      "rancher_version": "v2.11.19-dbb6003-head"
     }
   ]
 }

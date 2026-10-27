@@ -146,6 +146,47 @@ jobs:
             exit 1
           fi
 
+      - name: Validate Linode token
+        if: ${{ inputs.lane != 'framework-regression' }}
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          token="${LINODE_TOKEN:-}"
+          token="${token#"${token%%[![:space:]]*}"}"
+          token="${token%"${token##*[![:space:]]}"}"
+          if [ -z "$token" ]; then
+            echo "LINODE_TOKEN is empty. Set the LINODE_TOKEN secret in the rancher-signoff environment before retrying." >&2
+            exit 1
+          fi
+
+          if ! status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request GET --header "Authorization: Bearer $token" \
+            --connect-timeout 10 --max-time 15 \
+            --retry 2 --retry-delay 1 --retry-max-time 45 \
+            'https://api.linode.com/v4/linode/instances?page_size=25')"; then
+            echo "Could not reach the Linode API after bounded retries. Check Linode API availability and runner connectivity before retrying." >&2
+            exit 1
+          fi
+          case "$status" in
+            200)
+              echo "Linode API authentication and instance-read access validated."
+              ;;
+            401)
+              echo "LINODE_TOKEN is invalid or expired. Update the LINODE_TOKEN secret in the rancher-signoff environment before retrying." >&2
+              exit 1
+              ;;
+            403)
+              echo "LINODE_TOKEN cannot list Linode instances. Grant Linodes read/write access for downstream provisioning and check account restrictions before retrying." >&2
+              exit 1
+              ;;
+            *)
+              echo "Linode token validation returned HTTP $status. Check Linode API availability and token access before retrying." >&2
+              exit 1
+              ;;
+          esac
+
       - name: Validate resolved Rancher target
         env:
           RESOLVED_RANCHER_VERSION: ${{ inputs.resolved_rancher_version || '' }}
@@ -411,12 +452,6 @@ jobs:
           TF_STATE_LOCK_TABLE: ${{ secrets.TF_STATE_LOCK_TABLE }}
           TF_STATE_REGION: ${{ secrets.TF_STATE_REGION }}
         run: go test -v -run '^TestHAWriteLocalSuiteEnv$' -timeout 5m ./terratest
-
-      - name: Validate Linode token
-        if: ${{ inputs.lane != 'framework-regression' }}
-        env:
-          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
-        run: test -n "${LINODE_TOKEN:-}"
 
       - name: Provision downstream Linode K3s
         id: downstream
