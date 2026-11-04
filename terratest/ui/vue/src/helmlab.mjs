@@ -175,13 +175,14 @@ export function buildOutput(config, channel, version, fields, overrides, env, ch
   const command = [
     `helm upgrade ${config.action === 'install' ? '--install ' : ''}${quote(config.release)} ${quote(config.repo + '/' + chartName)}`,
     `--namespace ${quote(config.namespace)}`,
+    '--server-side=false',
     config.action === 'install' ? '--create-namespace' : config.action === 'upgrade' ? '--reset-then-reuse-values' : '--reuse-values',
     `--version ${quote(version)}`,
   ];
   if (channel.devel) command.push('--devel');
   if (config.context?.trim()) command.push(`--kube-context ${quote(config.context.trim())}`);
-  if (config.wait) command.push('--wait', `--timeout ${quote(config.timeout)}`);
-  if (config.dryRun) command.push('--dry-run', '--hide-secret');
+  if (config.wait) command.push('--wait=legacy', `--timeout ${quote(config.timeout)}`);
+  if (config.dryRun) command.push('--dry-run=client', '--hide-secret');
   const needsFile = Object.keys(file).length > 0;
   if (needsFile) command.push('--values values.yaml');
   command.push(...flags);

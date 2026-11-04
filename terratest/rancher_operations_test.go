@@ -362,6 +362,9 @@ func TestRancherUpgradeExecutionBoundaries(t *testing.T) {
 				if len(commands) != expected || !strings.Contains(commands[1], "--dry-run=server") || !strings.Contains(commands[2], "--wait-for-jobs") {
 					t.Fatal(commands)
 				}
+				if !strings.Contains(commands[1], "--server-side=false") || !strings.Contains(commands[2], "--server-side=false") || !strings.Contains(commands[2], "--wait=legacy") {
+					t.Fatal("Helm 4 must preserve apply and readiness behavior in review and execution", commands)
+				}
 			}
 		})
 	}

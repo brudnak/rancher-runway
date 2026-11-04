@@ -22,7 +22,7 @@ func TestCoreSystemReadinessUsesPackagedWorkerInsteadOfGo(t *testing.T) {
 	}
 }
 
-func TestSystemReadinessRequiresHelm3(t *testing.T) {
+func TestSystemReadinessRequiresHelm4(t *testing.T) {
 	config := loadSystemReadinessConfig()
 	var helmConfig *systemReadinessToolConfig
 	for i := range config.Tools {
@@ -34,11 +34,11 @@ func TestSystemReadinessRequiresHelm3(t *testing.T) {
 	if helmConfig == nil {
 		t.Fatal("system readiness config does not include Helm")
 	}
-	if helmConfig.RequiredMajorVersion != 3 {
-		t.Fatalf("Helm required major = %d, want 3", helmConfig.RequiredMajorVersion)
+	if helmConfig.RequiredMajorVersion != 4 {
+		t.Fatalf("Helm required major = %d, want 4", helmConfig.RequiredMajorVersion)
 	}
-	if helmConfig.RecommendedVersion != "3.22.0" {
-		t.Fatalf("Helm recommended version = %q, want 3.22.0", helmConfig.RecommendedVersion)
+	if helmConfig.RecommendedVersion != "4.3.1" {
+		t.Fatalf("Helm recommended version = %q, want 4.3.1", helmConfig.RecommendedVersion)
 	}
 }
 
@@ -51,16 +51,16 @@ func TestToolMajorVersionSupported(t *testing.T) {
 	}{
 		{name: "requirement disabled accepts Helm 4", version: "4.1.3", want: true},
 		{name: "requirement disabled accepts empty version", version: "", want: true},
-		{name: "Helm 3 exact", requiredMajor: 3, version: "3.21.3", want: true},
-		{name: "Helm 3 v prefix", requiredMajor: 3, version: "v3.21.3", want: true},
-		{name: "Helm 3 build metadata", requiredMajor: 3, version: "3.21.3+g1234567", want: true},
-		{name: "Helm 3 prerelease", requiredMajor: 3, version: "3.22.0-rc.1", want: true},
-		{name: "Helm 3 older minor", requiredMajor: 3, version: "3.18.0", want: true},
-		{name: "Helm 2 rejected", requiredMajor: 3, version: "2.17.0", want: false},
-		{name: "Helm 4 rejected", requiredMajor: 3, version: "4.1.3", want: false},
-		{name: "future major rejected", requiredMajor: 3, version: "10.0.0", want: false},
-		{name: "empty rejected", requiredMajor: 3, version: "", want: false},
-		{name: "malformed rejected", requiredMajor: 3, version: "development", want: false},
+		{name: "Helm 4 exact", requiredMajor: 4, version: "4.3.1", want: true},
+		{name: "Helm 4 v prefix", requiredMajor: 4, version: "v4.3.1", want: true},
+		{name: "Helm 4 build metadata", requiredMajor: 4, version: "4.3.1+g1234567", want: true},
+		{name: "Helm 4 prerelease", requiredMajor: 4, version: "4.3.1-rc.1", want: true},
+		{name: "Helm 4 older minor", requiredMajor: 4, version: "4.0.0", want: true},
+		{name: "Helm 2 rejected", requiredMajor: 4, version: "2.17.0", want: false},
+		{name: "Helm 3 rejected", requiredMajor: 4, version: "3.22.0", want: false},
+		{name: "future major rejected", requiredMajor: 4, version: "10.0.0", want: false},
+		{name: "empty rejected", requiredMajor: 4, version: "", want: false},
+		{name: "malformed rejected", requiredMajor: 4, version: "development", want: false},
 	}
 
 	for _, test := range tests {
@@ -197,10 +197,10 @@ func TestDeploymentSecretReadinessItemsSkipNonLinodeDeployments(t *testing.T) {
 }
 
 func TestSystemReadinessBaselinePolicy(t *testing.T) {
-	tool := systemReadinessToolConfig{Name: "Helm", Command: "helm", MinimumVersion: "3.18.0", RecommendedVersion: "3.22.0", RequiredMajorVersion: 3}
+	tool := systemReadinessToolConfig{Name: "Helm", Command: "helm", MinimumVersion: "4.0.0", RecommendedVersion: "4.3.1", RequiredMajorVersion: 4}
 	for _, tc := range []struct{ version, status string }{
-		{"3.22.0", "ok"}, {"3.22.1", "ok"}, {"3.23.0", "ok"},
-		{"3.21.3", "warning"}, {"3.17.0", "warning"}, {"4.0.0", "error"}, {"", "warning"},
+		{"4.3.1", "ok"}, {"4.3.2", "ok"}, {"4.4.0", "ok"},
+		{"4.1.3", "warning"}, {"4.0.0", "warning"}, {"3.22.0", "error"}, {"5.0.0", "error"}, {"", "warning"},
 	} {
 		t.Run(tc.version, func(t *testing.T) {
 			if item := assessSystemReadinessVersion(tool, tc.version); item.Status != tc.status {

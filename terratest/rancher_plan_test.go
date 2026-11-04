@@ -1577,6 +1577,7 @@ func TestBuildAutoHelmCommandsUsesImageFieldsForNewOptimusAlpha(t *testing.T) {
 
 	command := commands[0]
 	expectedSnippets := []string{
+		"--server-side=false",
 		"--set tls=external",
 		"--set image.registry=stgregistry.suse.com",
 		"--set image.repository=rancher/rancher",
@@ -1865,7 +1866,8 @@ func TestBuildAutoHelmCommandUpgradeUsesSameResolvedSettings(t *testing.T) {
 		"--set image.tag=v2.14.1-alpha6",
 		"--set 'extraEnv[0].name=CATTLE_AGENT_IMAGE'",
 		"--set 'extraEnv[0].value=stgregistry.suse.com/rancher/rancher-agent:v2.14.1-alpha6'",
-		"--wait",
+		"--wait=legacy",
+		"--server-side=false",
 		"--wait-for-jobs",
 		"--timeout 30m",
 	}

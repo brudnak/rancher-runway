@@ -51,6 +51,9 @@ test('install and reuse actions select appropriate flags', () => {
  assert.match(build({}, [], { action: 'install' }).command, /upgrade --install/);
  assert.match(build({}, [], { action: 'install' }).command, /--create-namespace/);
  assert.match(build({}, [], { action: 'upgrade-reuse' }).command, /--reuse-values/);
+ for (const action of ['install', 'upgrade', 'upgrade-reuse']) {
+  assert.match(build({}, [], { action }).command, /--server-side=false/);
+ }
 });
 
 test('validation rejects invalid release metadata and noninteger counts', () => {
@@ -63,9 +66,10 @@ test('validation rejects invalid release metadata and noninteger counts', () => 
 test('optional context, wait and dry-run flags preserve shell literals', () => {
  const result = build({}, [], { context: "team's cluster", wait: true, timeout: '1m30s', dryRun: true });
  assert.ok(result.command.includes("--kube-context 'team'\\''s cluster'"));
- assert.match(result.command, /--wait/);
+ assert.match(result.command, /--wait=legacy/);
  assert.match(result.command, /--timeout '1m30s'/);
- assert.match(result.command, /--dry-run/);
+ assert.match(result.command, /--dry-run=client/);
+ assert.match(result.command, /--hide-secret/);
  assert.throws(() => build({}, [], { wait: true, timeout: 'forever' }), /timeout/);
 });
 test('complete YAML export includes flag values as well as file values', () => {

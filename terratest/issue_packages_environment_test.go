@@ -39,6 +39,44 @@ func TestIssuePackageHelmCommandRedaction(t *testing.T) {
 	}
 }
 
+func TestIssuePackageHelm4ModesRemainSafeAndStable(t *testing.T) {
+	for _, flags := range []string{
+		"--wait=legacy --dry-run=client --server-side=false --rollback-on-failure --force-replace --force-conflicts --hide-secret --reset-then-reuse-values",
+		"--wait=watcher --dry-run=server --server-side auto --rollback-on-failure=false --force-replace=true --force-conflicts=false",
+		"--wait=hookOnly --dry-run=none --server-side=true",
+	} {
+		got := sanitizeIssuePackageHelmCommand("helm upgrade rancher rancher/rancher " + flags)
+		if strings.Contains(got, "<redacted>") {
+			t.Fatalf("lost safe Helm 4 options: %s", got)
+		}
+		for _, option := range strings.Fields(flags) {
+			if !strings.HasPrefix(option, "--") {
+				continue
+			}
+			name, value, equals := strings.Cut(option, "=")
+			want := name
+			if equals {
+				want += "=" + shellQuote(value)
+			}
+			if !strings.Contains(got, want) {
+				t.Fatalf("lost safe option %s: %s", option, got)
+			}
+		}
+		if sanitized := sanitizeIssuePackageHelmCommand(got); got != sanitized {
+			t.Fatalf("Helm 4 redaction is not stable:\n%s\n%s", got, sanitized)
+		}
+	}
+	for _, flag := range []string{"--wait", "--dry-run", "--server-side", "--rollback-on-failure", "--force-replace", "--force-conflicts"} {
+		got := sanitizeIssuePackageHelmCommand("helm upgrade rancher rancher/rancher " + flag + "=private-value")
+		if strings.Contains(got, "private-value") || !strings.Contains(got, "<redacted>") {
+			t.Fatalf("unrecognized mode survived redaction: %s", got)
+		}
+		if got != sanitizeIssuePackageHelmCommand(got) {
+			t.Fatalf("redacted mode is not stable: %s", got)
+		}
+	}
+}
+
 func TestIssuePackageEnvironmentCopiesKnownMetadataAndRedactedCommand(t *testing.T) {
 	p := clusterWorkspaceTestPanel(t)
 	dir := t.TempDir()

@@ -185,7 +185,9 @@ func (p *localControlPanel) lifecycleInvocation(spec panelCommandSpec) (panelLif
 }
 
 func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []string {
-	env := os.Environ()
+	// Both packaged workers and source invocations inherit readiness's tool
+	// ordering, including versioned Homebrew installations ahead of shell PATH.
+	env := localToolEnv(nil)
 	var runID string
 	var haOutputRoot string
 	var terraformModuleDir string

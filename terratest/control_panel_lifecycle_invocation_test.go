@@ -2,6 +2,7 @@ package test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -23,6 +24,37 @@ func TestLifecycleInvocationUsesGoInCheckout(t *testing.T) {
 	}
 	if want := "go test -v -run '^TestHaSetup$' -timeout 90m -count=1 ./terratest"; got.display != want {
 		t.Fatalf("display = %q, want %q", got.display, want)
+	}
+}
+
+func TestPanelCommandEnvMatchesReadinessToolSelection(t *testing.T) {
+	root := t.TempDir()
+	customBin := filepath.Join(root, "bin")
+	if err := os.MkdirAll(customBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"helm", "kubectl", "terraform"} {
+		if err := os.WriteFile(filepath.Join(customBin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", customBin)
+	t.Setenv("RANCHER_RUNWAY_WORKSPACE", root)
+	panel := &localControlPanel{repoRoot: root, testDir: root, operations: newPanelOperations()}
+	env := panel.panelCommandEnv(panelOperationSetup)
+	for _, name := range []string{"helm", "kubectl", "terraform"} {
+		readinessPath, err := resolveLocalToolPath(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Workers and their install scripts perform ordinary PATH lookups.
+		// Ask a child shell to resolve the name without running the tool.
+		cmd := exec.Command("/bin/sh", "-c", `command -v "$1"`, "tool-check", name)
+		cmd.Env = env
+		output, err := cmd.Output()
+		if err != nil || strings.TrimSpace(string(output)) != readinessPath {
+			t.Fatalf("%s: worker selects %q (%v), readiness selects %q", name, output, err, readinessPath)
+		}
 	}
 }
 

@@ -417,7 +417,7 @@ func sanitizeIssuePackageHelmCommand(command string) string {
 		if !issuePackageSafeHelmValue.MatchString(strings.TrimLeft(flag, "-")) {
 			return ""
 		}
-		if !equals && packageEnum(flag, "--install", "--wait", "--wait-for-jobs", "--atomic", "--create-namespace", "--debug", "--devel", "--dependency-update", "--disable-openapi-validation", "--dry-run", "--insecure-skip-tls-verify", "--pass-credentials", "--reset-values", "--reuse-values", "--skip-crds", "--verify", "--force", "--no-hooks", "--plain-http", "--render-subchart-notes") {
+		if !equals && (packageEnum(flag, "--install", "--wait", "--wait-for-jobs", "--atomic", "--rollback-on-failure", "--create-namespace", "--debug", "--devel", "--dependency-update", "--disable-openapi-validation", "--dry-run", "--hide-secret", "--insecure-skip-tls-verify", "--pass-credentials", "--reset-values", "--reset-then-reuse-values", "--reuse-values", "--skip-crds", "--verify", "--force", "--force-replace", "--force-conflicts", "--no-hooks", "--plain-http", "--render-subchart-notes") || (flag == "--server-side" && fields[1] == "install")) {
 			out = append(out, flag)
 			continue
 		}
@@ -432,6 +432,14 @@ func sanitizeIssuePackageHelmCommand(command string) string {
 		}
 		safe := "<redacted>"
 		switch flag {
+		case "--wait", "--dry-run", "--server-side", "--rollback-on-failure", "--force-replace", "--force-conflicts":
+			if issuePackageSafeHelmMode(flag, value) {
+				safe = value
+			}
+			// Optional flag values require '='. Preserve that syntax so a second
+			// sanitization cannot mistake the value for a positional argument.
+			out = append(out, flag+"="+shellQuote(safe))
+			continue
 		case "--set", "--set-string", "--set-literal":
 			if strings.Contains(value, "={") {
 				safe = sanitizeIssuePackageHelmJSON(value)
@@ -450,6 +458,19 @@ func sanitizeIssuePackageHelmCommand(command string) string {
 		out = append(out, flag+" "+shellQuote(safe))
 	}
 	return strings.Join(out, " \\\n  ")
+}
+
+func issuePackageSafeHelmMode(flag, value string) bool {
+	switch flag {
+	case "--wait":
+		return packageEnum(value, "legacy", "watcher", "hookOnly", "true", "false")
+	case "--dry-run":
+		return packageEnum(value, "client", "server", "none")
+	case "--server-side":
+		return packageEnum(value, "true", "false", "auto")
+	default:
+		return packageEnum(value, "true", "false")
+	}
 }
 
 func safeIssuePackageHelmKey(key string) bool {

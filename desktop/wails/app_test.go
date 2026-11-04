@@ -2,9 +2,13 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/brudnak/ha-rancher-rke2/internal/localtools"
 )
 
 func TestShouldImportShellEnv(t *testing.T) {
@@ -62,8 +66,30 @@ func TestHardenDesktopPathDeduplicatesAndKeepsExistingEntries(t *testing.T) {
 	if !seen[customBin] {
 		t.Fatalf("PATH did not keep existing custom entry %q in %q", customBin, os.Getenv("PATH"))
 	}
-	if parts[0] != "/opt/homebrew/bin" {
-		t.Fatalf("expected Homebrew path to be preferred first, got %q from %q", parts[0], os.Getenv("PATH"))
+	preferred := localtools.SearchDirs()
+	if len(parts) < len(preferred) || !reflect.DeepEqual(parts[:len(preferred)], preferred) {
+		t.Fatalf("desktop tool precedence differs from readiness: %q", parts)
+	}
+}
+
+func TestHardenDesktopPathMatchesReadinessToolSelection(t *testing.T) {
+	customBin := t.TempDir()
+	for _, name := range []string{"helm", "kubectl", "terraform"} {
+		if err := os.WriteFile(filepath.Join(customBin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", customBin)
+	hardenDesktopPath()
+	for _, name := range []string{"helm", "kubectl", "terraform"} {
+		readinessPath, err := localtools.Resolve(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executionPath, err := exec.LookPath(name)
+		if err != nil || executionPath != readinessPath {
+			t.Fatalf("%s: execution selects %q (%v), readiness selects %q", name, executionPath, err, readinessPath)
+		}
 	}
 }
 

@@ -44,6 +44,7 @@ func buildAutoHelmCommand(operation, chartRepoAlias, chartVersion, bootstrapPass
 
 	baseSettings = append(baseSettings, []string{
 		"  --namespace cattle-system \\",
+		"  --server-side=false \\",
 		"  --version " + chartVersion + " \\",
 		"  --set hostname=placeholder \\",
 		"  --set-string " + shellQuoteHelmSetString("bootstrapPassword", bootstrapPassword) + " \\",
@@ -102,7 +103,7 @@ func buildAutoHelmCommand(operation, chartRepoAlias, chartVersion, bootstrapPass
 		// Optimus charts can use shell prereleases that do not exist in the
 		// production registry, so overriding only the registry breaks the hook.
 		baseSettings = append(baseSettings[:len(baseSettings)-1], append([]string{
-			"  --wait \\",
+			"  --wait=legacy \\",
 			"  --wait-for-jobs \\",
 			"  --timeout 30m \\",
 		}, baseSettings[len(baseSettings)-1:]...)...)

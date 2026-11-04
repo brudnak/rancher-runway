@@ -21,7 +21,7 @@
         </div>
       </div>
       <div class="flex min-w-0 flex-wrap items-center gap-2 lg:max-w-sm lg:justify-end">
-
+        <DestroyRunButton v-if="!isDownstream" :run-id="cluster.runId" />
         <button type="button" @click="toggleCluster" class="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50 dark:border-white/10 dark:bg-white/[0.06] dark:text-zinc-200 dark:hover:bg-white/[0.1]">
           {{ isClusterCollapsed ? 'Show details' : 'Hide details' }}
         </button>
@@ -290,6 +290,7 @@ import DeployedImageDetails from "./DeployedImageDetails.vue";
 import ClusterEvidenceHistory from "./ClusterEvidenceHistory.vue";
 import ClusterWorkspaceCard from "./ClusterWorkspaceCard.vue";
 import RancherOperations from "./RancherOperations.vue";
+import DestroyRunButton from "./DestroyRunButton.vue";
 import { clusterDisplayName } from "./cluster-workspace-store.mjs";
 
 const props = defineProps({

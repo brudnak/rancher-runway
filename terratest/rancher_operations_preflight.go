@@ -85,7 +85,8 @@ func prepareRancherUpgrade(ctx context.Context, plan *rancherUpgradePlan, comman
 	if err = os.WriteFile(valuesFile, overrides, 0600); err != nil {
 		return nil, nil, err
 	}
-	args := []string{"--kubeconfig", plan.kubeconfig, "upgrade", "rancher", chart, "-n", "cattle-system", "--reuse-values", "-f", valuesFile}
+	// Preserve the existing client-side apply behavior when using Helm 4.
+	args := []string{"--kubeconfig", plan.kubeconfig, "upgrade", "rancher", chart, "-n", "cattle-system", "--server-side=false", "--reuse-values", "-f", valuesFile}
 	if plan.imageFields {
 		registry, repository, ok := splitRegistryRepository(plan.Image)
 		if !ok {

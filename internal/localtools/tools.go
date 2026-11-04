@@ -110,8 +110,8 @@ func Path() string {
 
 func SearchDirs() []string {
 	return []string{
-		"/opt/homebrew/opt/helm@3/bin",
-		"/usr/local/opt/helm@3/bin",
+		"/opt/homebrew/opt/helm/bin",
+		"/usr/local/opt/helm/bin",
 		"/opt/homebrew/opt/terraform/bin",
 		"/usr/local/opt/terraform/bin",
 		"/opt/homebrew/bin",

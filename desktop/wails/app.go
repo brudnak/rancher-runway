@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/brudnak/ha-rancher-rke2/internal/buildinfo"
+	"github.com/brudnak/ha-rancher-rke2/internal/localtools"
 	harancher "github.com/brudnak/ha-rancher-rke2/terratest"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -387,17 +388,11 @@ func shouldImportShellEnv(key string) bool {
 
 func hardenDesktopPath() {
 	home, _ := os.UserHomeDir()
-	preferred := []string{
-		"/opt/homebrew/bin",
-		"/opt/homebrew/sbin",
-		"/usr/local/bin",
-		"/usr/local/sbin",
-		"/usr/local/go/bin",
-	}
+	// Readiness and subprocesses must discover the same tool installations.
+	preferred := append(localtools.SearchDirs(), "/usr/local/go/bin")
 	if home != "" {
 		preferred = append(preferred, filepath.Join(home, "go", "bin"))
 	}
-	preferred = append(preferred, "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 	seen := map[string]bool{}
 	var merged []string

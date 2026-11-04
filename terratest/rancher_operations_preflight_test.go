@@ -33,6 +33,9 @@ func TestRancherUpgradeReviewPreflightNeverApplies(t *testing.T) {
 				if !strings.Contains(joined, "--reuse-values") || !strings.Contains(joined, "rancherImageTag=head") {
 					t.Fatal("review and execution must use the same overrides")
 				}
+				if !strings.Contains(joined, "--server-side=false") {
+					t.Fatal("review must preserve client-side apply with Helm 4")
+				}
 				for i, arg := range args {
 					if arg == "-f" {
 						data, err := os.ReadFile(args[i+1])

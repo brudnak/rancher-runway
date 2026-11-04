@@ -28,7 +28,7 @@ Homebrew requires explicit trust for dependencies from non-official taps;
 installing Rancher Runway does not grant trust to Terraform automatically.
 See [Homebrew's tap trust instructions](https://docs.brew.sh/Tap-Trust).
 
-The Cask also installs Terraform, Helm 3, and `kubectl` for the core Rancher
+The Cask also installs Terraform, Helm 4, and `kubectl` for the core Rancher
 lifecycle, plus GitHub CLI (`gh`) for Issue Radar and PR Image Check. Sign in once
 with `gh auth login` to use GitHub features. Go is embedded in the lifecycle worker and
 is only needed separately for the optional Steve Lab workflow.
@@ -62,7 +62,9 @@ plan resolution is in progress. This copies settings only; it does not move
 Terraform state, existing runs, or shell credentials.
 
 Readiness uses current baselines and accepts newer versions within the supported
-major rather than requiring an exact match. Helm remains on major 3. See the
+major rather than requiring an exact match. Helm requires major 4, supplied by
+the `helm` formula. Existing `helm@3` installations can remain alongside it;
+Runway prefers the unversioned Homebrew Helm installation. See the
 [requirements table](desktop-guide.md#requirements) for versions and the kubectl
 client/server compatibility constraint.
 
@@ -327,7 +329,7 @@ are hosted outside `brudnak/rancher-runway`.
 Before announcing the tap, test on a Mac without the source checkout or a
 previous installation:
 
-1. Install through the tap and confirm the DMG checksum and Terraform, Helm 3,
+1. Install through the tap and confirm the DMG checksum and Terraform, Helm 4,
    `kubectl`, and GitHub CLI dependencies succeed.
 2. Launch from Applications, follow the per-app approval step if required,
    and confirm the control panel and lifecycle preflight work with the bundled

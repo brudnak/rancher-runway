@@ -77,16 +77,16 @@ func TestValidateRancherHelmVersion(t *testing.T) {
 		wantErr       bool
 		wantErrSubstr string
 	}{
-		{name: "recommended Helm 3", version: "v3.21.3"},
-		{name: "Helm 3 without v prefix", version: "3.21.3"},
-		{name: "Helm 3 with surrounding whitespace", version: "  v3.21.3\n"},
-		{name: "Helm 3 with build metadata", version: "v3.21.3+g1234567"},
-		{name: "Helm 3 prerelease", version: "v3.22.0-rc.1"},
-		{name: "minimum Helm 3 line", version: "v3.0.0"},
-		{name: "future Helm 3 minor", version: "v3.99.0"},
-		{name: "unsupported Helm 2", version: "v2.17.0", wantErr: true, wantErrSubstr: "require Helm 3"},
-		{name: "unsupported Helm 4", version: "v4.1.3", wantErr: true, wantErrSubstr: "found v4.1.3"},
-		{name: "unsupported future major", version: "v5.0.0", wantErr: true, wantErrSubstr: "require Helm 3"},
+		{name: "recommended Helm 4", version: "v4.3.1"},
+		{name: "Helm 4 without v prefix", version: "4.3.1"},
+		{name: "Helm 4 with surrounding whitespace", version: "  v4.3.1\n"},
+		{name: "Helm 4 with build metadata", version: "v4.3.1+g1234567"},
+		{name: "Helm 4 prerelease", version: "v4.4.0-rc.1"},
+		{name: "minimum Helm 4 line", version: "v4.0.0"},
+		{name: "future Helm 4 minor", version: "v4.99.0"},
+		{name: "unsupported Helm 2", version: "v2.17.0", wantErr: true, wantErrSubstr: "require Helm 4"},
+		{name: "unsupported Helm 3", version: "v3.22.0", wantErr: true, wantErrSubstr: "found v3.22.0"},
+		{name: "unsupported future major", version: "v5.0.0", wantErr: true, wantErrSubstr: "require Helm 4"},
 		{name: "malformed", version: "development", wantErr: true, wantErrSubstr: "could not parse"},
 		{name: "version prefix only", version: "v", wantErr: true, wantErrSubstr: "could not parse"},
 		{name: "empty", version: "", wantErr: true, wantErrSubstr: "could not parse"},
@@ -115,6 +115,45 @@ func TestHelmFlagConsumesSetLiteralValue(t *testing.T) {
 	}
 	if helmFlagConsumesValue("--set-literal=webhook={}") {
 		t.Fatal("expected an inline --set-literal value not to consume another argument")
+	}
+}
+
+func TestHelm4TemplateConversionPreservesChartArguments(t *testing.T) {
+	for _, serverSide := range []string{"--server-side=false", "--server-side auto"} {
+		command := "helm upgrade --rollback-on-failure --wait=legacy " + serverSide + " rancher rancher-latest/rancher --dry-run=server --timeout 30m --set-string hostname=rancher.example.test --version 2.15.2"
+		fields, err := parseHelmCommandFields(command)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invocation, err := manualHelmInvocationFromFields(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if invocation.releaseName != "rancher" || invocation.chartRef != "rancher-latest/rancher" {
+			t.Fatalf("Helm 4 flags consumed release/chart: %#v", invocation)
+		}
+		got := strings.Join(helmTemplateCompatibleArgs(invocation.trailingArgs), " ")
+		want := "--set-string hostname=rancher.example.test --version 2.15.2"
+		if got != want {
+			t.Fatalf("template arguments = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestHelm4InstallServerSideBooleanPreservesReleaseAndValues(t *testing.T) {
+	fields, err := parseHelmCommandFields("helm install --server-side rancher rancher-latest/rancher --set tls=external")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation, err := manualHelmInvocationFromFields(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocation.releaseName != "rancher" || invocation.chartRef != "rancher-latest/rancher" {
+		t.Fatalf("boolean flag consumed positionals: %#v", invocation)
+	}
+	if got := strings.Join(helmTemplateCompatibleArgs(invocation.trailingArgs), " "); got != "--set tls=external" {
+		t.Fatalf("template arguments = %q", got)
 	}
 }
 

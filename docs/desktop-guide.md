@@ -38,12 +38,12 @@ use. The setup path does not use `curl | bash`.
 - Linode API token for Linode Docker runs
 - Go, Git, Docker, and k3d only for the optional Steve Lab workflow
 
-Tool readiness baselines (September 2026):
+Tool readiness baselines (November 2026):
 
 | Tool | Baseline | Requirement |
 | --- | --- | --- |
 | kubectl | 1.37.0 | Major 1; choose a client within one minor of the target cluster |
-| Helm | 3.22.0 | Major 3 (`helm@3`); Helm 4 is not supported |
+| Helm | 4.3.1 | Major 4 (`helm`); minimum advisory baseline 4.0.0 |
 | Terraform | 1.16.3 | Major 1 from HashiCorp's tap |
 | Go | 1.27.1 | Source builds / Steve Lab only; core desktop operations use the bundled worker |
 
@@ -52,9 +52,17 @@ Newer versions within the required major pass the baseline check. Older versions
 show an advisory; missing tools and unsupported majors block setup. A tool
 version check does not establish compatibility with every target cluster; see
 [Kubernetes client version skew](https://kubernetes.io/releases/version-skew-policy/#kubectl).
-The package versions follow [Homebrew Helm 3](https://formulae.brew.sh/formula/helm@3),
+The package versions follow [Homebrew Helm](https://formulae.brew.sh/formula/helm),
 [Homebrew kubectl](https://formulae.brew.sh/formula/kubernetes-cli), and
 [HashiCorp's Terraform formula](https://github.com/hashicorp/homebrew-tap/blob/main/Formula/terraform.rb).
+
+Runway now selects Helm 4 rather than a side-by-side `helm@3` installation.
+Existing charts remain compatible with Helm 4, but deployment defaults changed;
+see the [Helm 4 migration notes](https://helm.sh/docs/overview/).
+Rancher's [published installation guide](https://documentation.suse.com/cloudnative/rancher-manager/latest/en/installation-and-upgrade/install-rancher.html)
+still assumes Helm 3. Runway's local command checks do not certify live Rancher
+compatibility; validate the selected Rancher chart and Kubernetes version in a
+disposable environment before relying on it for an existing deployment.
 
 ## First Run
 
@@ -304,8 +312,9 @@ browser storage.
 
 For a command using `values.yaml`, place its companion file in your terminal’s
 working directory with that exact name. Review exported scripts before running
-`sh setup.sh`. The workbench does not execute them. Merge upgrades use Helm 3.14+
-`--reset-then-reuse-values`; dry runs also require Helm 3.14+ for `--hide-secret`.
+`sh setup.sh`. The workbench does not execute them. Merge upgrades use
+`--reset-then-reuse-values`; dry runs use `--hide-secret` to omit Kubernetes
+Secrets from the output. Both flags are available in Helm 4.
 Checks guide preparation but do not inspect cluster readiness or installed values.
 
 ### Issue Radar

@@ -209,7 +209,7 @@ func (p *localControlPanel) runRancherUpgrade(record *rancherOperationRecord, pl
 	defer cleanup()
 	commandArgs := []string{"helm", "upgrade", "rancher", args[4], "--kubeconfig", plan.kubeconfig}
 	commandArgs = append(commandArgs, args[5:]...)
-	commandArgs = append(commandArgs, "--wait", "--wait-for-jobs")
+	commandArgs = append(commandArgs, "--wait=legacy", "--wait-for-jobs")
 	quoted := make([]string, len(commandArgs))
 	for i, arg := range commandArgs {
 		quoted[i] = shellQuote(arg)
@@ -224,7 +224,7 @@ func (p *localControlPanel) runRancherUpgrade(record *rancherOperationRecord, pl
 	}
 	result := make(chan error, 1)
 	go func() {
-		_, err := runtime.command(ctx, nil, "helm", append(args, "--wait", "--wait-for-jobs")...)
+		_, err := runtime.command(ctx, nil, "helm", append(args, "--wait=legacy", "--wait-for-jobs")...)
 		result <- err
 	}()
 	ticker := time.NewTicker(5 * time.Second)

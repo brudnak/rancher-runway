@@ -1343,7 +1343,7 @@ export const retryDownstream = async runId => {
   }
 };
 
-export const runCleanup = async (runId = selectedCleanupRunId.value) => {
+export const runCleanup = async (runId = selectedCleanupRunId.value, { preserveLabData = false } = {}) => {
   const targetRunId = String(runId || "").trim();
   if (!targetRunId) {
     refreshStatus.value = "Select a run before starting destroy.";
@@ -1352,26 +1352,41 @@ export const runCleanup = async (runId = selectedCleanupRunId.value) => {
 
   if (bootPending.value) return;
 
-  const targetRun = (state.value?.workspace?.runs || []).find(run => sameRunKey(run.runId, targetRunId));
+  const recordedTarget = () => (state.value?.workspace?.runs || []).find(run => sameRunKey(run.runId, targetRunId));
+  const targetRun = recordedTarget();
+  if (!targetRun) {
+    refreshStatus.value = `Run ${targetRunId} is no longer recorded. Refresh the cluster list before starting destroy.`;
+    return;
+  }
+  const deploymentType = targetRun.deploymentType;
   const linodeRun = runIsLinodeDocker(targetRun);
-  const destroyBlocked = linodeRun
-    ? state.value?.linodeCleanup?.running || state.value?.linodeSetup?.running
-    : state.value?.cleanup?.running || state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running;
 
-  if (cleanupStarting.value || cleanupBatchStarting.value || state.value?.cleanupBatch?.running || destroyBlocked) {
+  if (cleanupStarting.value || runDestroyBlocked(targetRun)) {
     return;
   }
 
-  const labCleanup = snapshotLabCleanup();
+  const labCleanup = preserveLabData
+    ? { cleanupTestLab: false, cleanupCacheLab: false }
+    : snapshotLabCleanup();
   const confirmed = await requestTypedConfirmation({
     title: `Destroy run ${targetRunId}?`,
     body: (linodeRun
-      ? "This runs Terraform destroy from the selected Linode run state. It deletes the Linode instance and its AWS Route53 record, then removes the run slot only after destroy succeeds."
-      : "Cleanup removes tracked downstream clusters and waits for their machines first. Management Terraform destroy is attempted even if downstream cleanup fails. Downstream failures are saved as warnings for manual Linode cleanup. The run slot is removed after management Terraform destroy succeeds.") + labCleanupDescription(labCleanup),
+      ? "This destroys the entire Linode run using its recorded Terraform state, including all Linode instances and AWS Route53 records in that run. The run slot is removed only after destroy succeeds."
+      : "This destroys the entire run, including all management clusters and tracked downstream clusters in that run. Cleanup removes tracked downstream clusters and waits for their machines first. Management Terraform destroy is attempted even if downstream cleanup fails. Downstream failures are saved as warnings for manual Linode cleanup. The run slot is removed after management Terraform destroy succeeds.") + labCleanupDescription(labCleanup),
     confirmText: "Start destroy",
     accentText: linodeRun ? "Linode destroy confirmation" : "Downstream-first destroy confirmation",
   });
   if (!confirmed) return;
+
+  const currentRun = recordedTarget();
+  if (!currentRun || currentRun.deploymentType !== deploymentType) {
+    refreshStatus.value = `Run ${targetRunId} changed or is no longer recorded. Review the run again before starting destroy.`;
+    return;
+  }
+  if (bootPending.value || cleanupStarting.value || runDestroyBlocked(currentRun)) {
+    refreshStatus.value = "Destroy was not started because another operation or startup check is now active. Review the run again when it finishes.";
+    return;
+  }
 
   selectedCleanupRunId.value = targetRunId;
   dismissedCleanupResultKey.value = "";

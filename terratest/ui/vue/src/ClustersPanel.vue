@@ -49,7 +49,10 @@
     <div v-else class="grid min-w-0 gap-4">
       <!-- Run Slot selection -->
       <div class="min-w-0 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-white/10 dark:bg-white/[0.03]">
-        <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Run slot</div>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">Run slot</div>
+          <DestroyRunButton :run-id="activeRunGroup?.run?.runId" />
+        </div>
         <div class="mt-2 flex flex-wrap gap-2">
           <button
             v-for="group in clusterGroups"
@@ -151,6 +154,7 @@ import {
   sameRunKey,
 } from "../../static/control_panel_utils.js";
 import ClusterCard from "./ClusterCard.vue";
+import DestroyRunButton from "./DestroyRunButton.vue";
 
 const {clusterWorkspaces,clusterWorkspaceError}=useClusterWorkspaces();
 watch(activeTab,tab=>{if(tab==='clusters')refreshIssuePackageSummaries().catch(()=>{});},{immediate:true});

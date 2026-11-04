@@ -67,10 +67,10 @@ func validateRancherHelmVersion(raw string) error {
 	raw = strings.TrimSpace(raw)
 	parsed, err := goversion.NewVersion(strings.TrimPrefix(raw, "v"))
 	if err != nil || raw == "" {
-		return fmt.Errorf("Rancher installs and upgrades require Helm 3; could not parse installed version %q", raw)
+		return fmt.Errorf("Rancher installs and upgrades require Helm 4; could not parse installed version %q", raw)
 	}
-	if parsed.Segments()[0] != 3 {
-		return fmt.Errorf("Rancher installs and upgrades require Helm 3; found %s", raw)
+	if parsed.Segments()[0] != 4 {
+		return fmt.Errorf("Rancher installs and upgrades require Helm 4; found %s", raw)
 	}
 	return nil
 }
@@ -239,7 +239,9 @@ func manualHelmInvocationFromFields(fields []string) (manualHelmInvocation, erro
 		}
 		if strings.HasPrefix(field, "-") {
 			trailingArgs = append(trailingArgs, field)
-			if helmFlagConsumesValue(field) && i+1 < len(fields) {
+			// Helm 4 install uses a boolean; upgrade uses true/false/auto.
+			installServerSide := operation == "install" && field == "--server-side"
+			if !installServerSide && helmFlagConsumesValue(field) && i+1 < len(fields) {
 				i++
 				trailingArgs = append(trailingArgs, fields[i])
 			}
@@ -334,7 +336,15 @@ func helmTemplateCompatibleArgs(args []string) []string {
 		arg := args[i]
 		name := strings.SplitN(arg, "=", 2)[0]
 		switch name {
-		case "--install", "--wait", "--wait-for-jobs", "--atomic", "--cleanup-on-fail", "--dry-run", "--debug":
+		case "--install", "--wait", "--wait-for-jobs", "--atomic", "--rollback-on-failure", "--cleanup-on-fail", "--dry-run", "--debug":
+			continue
+		case "--server-side":
+			if !strings.Contains(arg, "=") && i+1 < len(args) {
+				switch args[i+1] {
+				case "true", "false", "auto":
+					i++
+				}
+			}
 			continue
 		case "--timeout":
 			if !strings.Contains(arg, "=") && i+1 < len(args) {

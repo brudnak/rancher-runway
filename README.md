@@ -17,7 +17,7 @@ brew trust --formula hashicorp/tap/terraform
 brew install --cask brudnak/tap/rancher-runway
 ```
 
-The install includes Terraform, Helm 3, kubectl, and GitHub CLI. Core setup and
+The install includes Terraform, Helm 4, kubectl, and GitHub CLI. Core setup and
 cleanup do not require a source checkout, Go, or Node.js.
 
 Open **Rancher Runway** from Applications. If macOS blocks the first launch,
