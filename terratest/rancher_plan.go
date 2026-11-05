@@ -188,6 +188,11 @@ func resolveAutoRancherPlans(totalHAs int) ([]*RancherResolvedPlan, error) {
 			if err != nil {
 				return nil, fmt.Errorf("verify preferred Rancher images for %s: %w", requestedVersion, err)
 			}
+		case !isCustomImage && isCommunityMinorHeadSelector(requestedVersion):
+			preferredImageResolutions[planIndex], err = resolvePreferredRancherImageSettings(requestedVersion, []string{"docker.io"})
+			if err != nil {
+				return nil, fmt.Errorf("verify Community Rancher images for %s: %w", requestedVersion, err)
+			}
 		}
 		repoCandidates, _, _ := chooseRancherSourceCandidates(versionDistro, buildType)
 		for _, repoAlias := range repoCandidates {

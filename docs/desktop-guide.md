@@ -707,6 +707,14 @@ you are most likely to care about:
   `docker.io/example/rancher:my-fix`, or their matching `rancher-agent` images.
   The plain `head` selector also accepts `Head` or `HEAD`; exact custom image
   tags keep their original capitalization.
+  For Community on Docker Hub, `head` tracks the main development branch.
+  In HA RKE2 and hosted-tenant auto plans, a minor selector such as `2.16-head`
+  first checks the published `v2.16-head` alias. If that alias is missing,
+  Runway checks that Docker Hub's Community `head` belongs to the requested
+  release line, then verifies and pins its matching immutable server/agent
+  tags in Docker Hub. Resolution fails if the line does not match or the
+  immutable pair cannot be verified. This fallback stays within Docker Hub
+  and does not substitute a Prime build.
   Docker Hub namespace shorthand is accepted. Runway derives the sibling image
   with the same tag, verifies both, and uses a recognizable version in the image
   tag to select the Rancher release line for chart and Kubernetes compatibility
@@ -732,11 +740,14 @@ you are most likely to care about:
   Rancher's managed webhook chart. `RANCHER_WEBHOOK_IMAGE` remains an
   environment-level override for upgrade and lifecycle validation runs.
 - `rancher.preferred_image_registries` is an optional strict allow-list for
-  exact Rancher server and agent image tags. The setup UI exposes SUSE staging,
+  Rancher server and agent image registries. The setup UI exposes SUSE staging,
   Rancher Prime, SUSE registry, and Docker Hub as checkboxes. Runway tries only
   the checked registries in that fixed priority order, requires both images in
-  the same registry, and fails before Terraform starts if no complete pair exists. An
-  empty or omitted list preserves the current automatic behavior. The approval
+  the same registry, and fails before Terraform starts if no complete pair exists.
+  The Community minor-selector fallback described above is allowed only when
+  Docker Hub is selected and keeps both immutable images in Docker Hub; it never
+  tries an unchecked registry. An empty or omitted list uses automatic resolution,
+  including this fallback for Community minor-head selectors. The approval
   plan records the resolution-time OCI digests and shows the OCI build version
   and linked GitHub commit when the image declares canonical source labels.
   Docker Hub verification uses the credentials Runway installs on the nodes;

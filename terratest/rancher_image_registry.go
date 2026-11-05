@@ -25,6 +25,7 @@ type preferredRancherImageResolution struct {
 	AgentImage        string
 	RancherProvenance imagelookup.Provenance
 	AgentProvenance   imagelookup.Provenance
+	HeadAlias         string
 }
 
 type rancherImageInspectFunc func(context.Context, string) (imagelookup.Provenance, bool, error)
@@ -101,6 +102,15 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 		misses = append(misses, fmt.Sprintf("%s missing %s", imagelookup.PreferredRegistryLabel(registry), strings.Join(missing, " and ")))
 	}
 
+	for _, registry := range registries {
+		if registry == "docker.io" && isCommunityMinorHeadSelector(requestedVersion) {
+			resolution, err := resolveCommunityMainHeadAlias(requestedVersion)
+			if err == nil {
+				return resolution, nil
+			}
+			misses = append(misses, err.Error())
+		}
+	}
 	return nil, fmt.Errorf("preferred registries do not contain a complete Rancher server/agent image pair for %s: %s. No unselected registry fallback was attempted", tag, strings.Join(misses, "; "))
 }
 
@@ -408,6 +418,16 @@ func rancherImageSourceCommitURL(source, revision string) string {
 func preferredImageResolutionExplanation(resolution *preferredRancherImageResolution, registries []string) []string {
 	if resolution == nil {
 		return nil
+	}
+	if len(registries) == 0 {
+		registries = []string{resolution.Registry}
+	}
+	if resolution.HeadAlias != "" {
+		return []string{
+			fmt.Sprintf("Docker Hub did not publish a complete %s pair; verified its Community head belongs to the requested release line", resolution.HeadAlias),
+			fmt.Sprintf("Pinned server and agent images to the matching immutable Docker Hub tag %s", resolution.RancherImageTag),
+			"Recorded resolution-time OCI digests and provenance for both images",
+		}
 	}
 	return []string{
 		fmt.Sprintf("Verified the requested Rancher server and agent image pair in %s before provisioning", resolution.RegistryLabel),
