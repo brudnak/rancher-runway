@@ -11,10 +11,9 @@ Builds a universal Rancher Runway app and writes a DMG, ZIP, and SHA-256
 checksum file to RANCHER_RUNWAY_OUTPUT_DIR (default: dist).
 
 Signing modes (RANCHER_RUNWAY_SIGNING_MODE):
-  adhoc         Default. No Apple credentials or notarization; suitable for
-                our own Homebrew tap. macOS may require Open Anyway on launch.
-  developer-id  Developer ID signing, notarization, and stapling. Requires:
-  RANCHER_RUNWAY_SIGNING_IDENTITY       Developer ID Application identity
+  developer-id  Default. Sign with Developer ID, notarize, and staple.
+                Set RANCHER_RUNWAY_SIGNING_IDENTITY to a Developer ID Application identity.
+  adhoc         Local test build. macOS may require Open Anyway on launch.
 
 For developer-id, use one of these notarization methods:
   RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE
@@ -70,7 +69,7 @@ marketing_version="${release_version%%-*}"
 
 # Validate release credentials before installing dependencies or compiling.
 # Developer ID mode must never silently fall back to ad-hoc signing.
-signing_mode="${RANCHER_RUNWAY_SIGNING_MODE:-adhoc}"
+signing_mode="${RANCHER_RUNWAY_SIGNING_MODE:-developer-id}"
 notary_auth=()
 case "${signing_mode}" in
   adhoc)
@@ -308,6 +307,7 @@ if [[ "${signing_mode}" == "developer-id" ]]; then
   submit_for_notarization "${notary_zip}"
   xcrun stapler staple "${app_path}"
   xcrun stapler validate "${app_path}"
+  spctl --assess --type execute --verbose=2 "${app_path}"
 else
   printf 'Ad-hoc release: not notarized by Apple; macOS may require Open Anyway on first launch.\n'
 fi
@@ -345,6 +345,7 @@ if [[ "${signing_mode}" == "developer-id" ]]; then
   submit_for_notarization "${dmg_path}"
   xcrun stapler staple "${dmg_path}"
   xcrun stapler validate "${dmg_path}"
+  spctl --assess --type open --context context:primary-signature --verbose=2 "${dmg_path}"
 fi
 
 (

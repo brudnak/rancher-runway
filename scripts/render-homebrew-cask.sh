@@ -8,7 +8,7 @@ Usage: scripts/render-homebrew-cask.sh <version> <release.dmg> [output.rb]
 Renders the checksum-pinned Rancher Runway Cask for a GitHub Release asset.
 
 Optional:
-  RANCHER_RUNWAY_SIGNING_MODE        adhoc (default) or developer-id; match the packaged DMG
+  RANCHER_RUNWAY_SIGNING_MODE        developer-id (default) or adhoc; match the packaged DMG
   RANCHER_RUNWAY_RELEASE_REPOSITORY  Default: GITHUB_REPOSITORY or brudnak/rancher-runway
 EOF
 }
@@ -33,7 +33,7 @@ version_input="$1"
 dmg_path="$2"
 output_path="${3:-${repo_root}/dist/rancher-runway.rb}"
 
-signing_mode="${RANCHER_RUNWAY_SIGNING_MODE:-adhoc}"
+signing_mode="${RANCHER_RUNWAY_SIGNING_MODE:-developer-id}"
 case "${signing_mode}" in
   adhoc) caveats_filter='/@ADHOC_CAVEATS_/d' ;;
   developer-id) caveats_filter='/@ADHOC_CAVEATS_BEGIN@/,/@ADHOC_CAVEATS_END@/d' ;;

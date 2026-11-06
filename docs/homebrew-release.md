@@ -1,11 +1,8 @@
 # Rancher Runway Homebrew Releases
 
-Rancher Runway's release pipeline builds a universal macOS app for the
-project's own Homebrew tap. By default, the app and lifecycle worker are
-**ad-hoc signed and not notarized by Apple**. This requires no paid Apple
-Developer membership or Apple secrets. Users may need to approve the app on
-first launch. Developer ID signing and notarization are available as an
-explicit opt-in later.
+Homebrew releases require an Apple Developer ID signature and Apple notarization.
+The release workflow builds a universal app for Intel and Apple Silicon Macs
+and publishes it through the project's Homebrew tap.
 
 Homebrew replaces only the app bundle during an upgrade, so the workspace
 under `~/Library/Application Support/Rancher Runway` remains in place. Builds
@@ -96,25 +93,15 @@ safety locks immediately after the next successful status response.
 
 ### First launch
 
-Open Rancher Runway from Applications. If macOS blocks it because the
-developer cannot be verified or Apple cannot check it for malicious software,
-and you trust the downloaded release:
+Open **Rancher Runway** from Applications. For a release marked as notarized,
+macOS verifies the developer and may ask you to confirm opening a downloaded
+app. If macOS reports that it cannot verify the developer of that release,
+check which version Homebrew installed and report the warning with its version.
 
-1. Try opening the app once, then dismiss the alert.
-2. Open **System Settings → Privacy & Security**.
-3. Click **Open Anyway**, confirm **Open**, and authenticate if prompted.
-
-This creates an exception for this app using Apple's
-[documented approval process](https://support.apple.com/en-us/102445). Updates
-may require approval again. Managed Macs may restrict this option; users on
-those machines may need their administrator or a notarized release.
-
-The generated Cask and GitHub Release notes include these instructions for
-ad-hoc builds. The installer leaves macOS quarantine and Gatekeeper settings
-intact. Ad-hoc signing does not establish an Apple-verified publisher identity
-or provide Apple's notarization check. These builds are intended for our own
-tap and do not meet the official `homebrew/cask`
-[Gatekeeper requirements](https://docs.brew.sh/Acceptable-Casks).
+Older releases may be marked **ad-hoc signed** in their release notes. If
+you're using one of those versions, check for a newer signed release with
+`brew update` and `brew upgrade --cask rancher-runway`. The release notes for
+each older build describe its first-launch procedure.
 
 ### Upgrade and uninstall
 
@@ -148,24 +135,21 @@ as `v1.2.3-rc.1`. It performs these operations on a GitHub-hosted macOS runner:
    `Contents/Resources/runtime`, including the worker at
    `runtime/bin/rancher-runway-lifecycle`, and records the release version and
    numeric CI build in the app metadata.
-3. Ad-hoc signs the worker, writes a SHA-256 manifest for every runtime file,
-   then signs the outer app bundle without modifying the worker. The app
-   verifies the manifest again after staging an upgrade. In `developer-id`
-   mode, uses a Developer ID
-   Application certificate and hardened runtime, notarizes the app with
-   `notarytool`, and staples the ticket instead.
-4. Creates a DMG and ZIP and calculates SHA-256 sums. In `developer-id` mode,
-   also signs, notarizes, and staples the DMG before calculating its checksum.
-5. Renders a Cask containing the exact DMG checksum and, for ad-hoc builds,
-   first-launch instructions.
+3. Signs the worker with Developer ID and the hardened runtime, writes the
+   runtime SHA-256 manifest, then signs the outer app. The app verifies the
+   manifest again after staging an upgrade.
+4. Submits the app to Apple for notarization and staples its ticket before
+   building the ZIP and DMG. It signs the DMG, obtains and staples its own
+   ticket, and checks Gatekeeper acceptance for the app and DMG.
+5. Calculates SHA-256 sums for the finished artifacts and renders a Cask pinned
+   to the DMG checksum.
 6. Attests the artifacts and creates a draft GitHub Release before publishing
    it, so all assets are present when the release becomes visible.
 7. For stable releases, optionally updates the Cask in a separate Homebrew tap
    through the GitHub contents API. Prerelease artifacts remain available on
    their GitHub Release and never replace the stable Cask.
 
-GitHub artifact attestations record build provenance; they are separate from
-Apple notarization and do not remove macOS first-launch prompts.
+GitHub artifact attestations identify the workflow that produced the files.
 
 The workflow refuses to overwrite an existing GitHub Release. If a published
 artifact is wrong, create a new patch release rather than replacing bytes at an
@@ -178,8 +162,8 @@ existing URL and invalidating the Cask checksum.
 2. In the release repository's **Settings → Environments**, create
    `macos-release`. Add required reviewers if release publishing should require
    human approval.
-3. Leave `RANCHER_RUNWAY_SIGNING_MODE` unset or set it to `adhoc`. No Apple
-   secrets are needed in this mode.
+3. Add the six Apple secrets listed under [Signing credentials](#signing-credentials)
+   to the `macos-release` environment.
 4. Optionally add an environment secret named `HOMEBREW_TAP_TOKEN`: a
    fine-grained GitHub token with Contents write access to the tap repository.
    This enables automatic stable Cask updates.
@@ -194,7 +178,6 @@ The defaults can be changed with GitHub environment or repository variables:
 
 | Variable | Default |
 | --- | --- |
-| `RANCHER_RUNWAY_SIGNING_MODE` | `adhoc`; the other accepted value is `developer-id`. |
 | `RANCHER_RUNWAY_BUNDLE_ID` | `com.brudnak.rancher-runway` |
 | `HOMEBREW_TAP_REPOSITORY` | `brudnak/homebrew-tap` |
 | `HOMEBREW_CASK_PATH` | `Casks/rancher-runway.rb` |
@@ -207,12 +190,24 @@ homebrew-tap/
     └── rancher-runway.rb
 ```
 
-### Optional Developer ID signing and notarization
+### Signing credentials
 
-For notarized releases, use an Apple Developer Program membership (currently
-[$99 USD per year](https://developer.apple.com/support/compare-memberships/))
-and set the environment or repository variable
-`RANCHER_RUNWAY_SIGNING_MODE=developer-id`. Add all six environment secrets:
+1. On the signing Mac, open Keychain Access and create a certificate signing
+   request using **Certificate Assistant → Request a Certificate From a
+   Certificate Authority**. Save the request to disk.
+2. As the Apple Developer team's Account Holder, open **Certificates,
+   Identifiers & Profiles → Certificates → +**, choose **Developer ID
+   Application**, and upload the request. Download the issued certificate and
+   double-click it on the same Mac. [Apple's Developer ID certificate instructions](https://developer.apple.com/help/account/certificates/create-developer-id-certificates)
+3. Run `security find-identity -v -p codesigning` and copy the full
+   `Developer ID Application: … (TEAMID)` name. In Keychain Access, open
+   **My Certificates**, export that identity with its private key as a
+   password-protected `.p12`, and store it outside the checkout.
+4. Generate an app-specific password for notarization in your Apple Account
+   under **Sign-In and Security → App-Specific Passwords**.
+   [Apple's app-specific password instructions](https://support.apple.com/en-us/102654)
+5. Save the six values below as GitHub Actions secrets in the release
+   repository's **macos-release** environment.
 
 | Secret | Purpose |
 | --- | --- |
@@ -223,10 +218,17 @@ and set the environment or repository variable
 | `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password for that Apple account. |
 | `APPLE_TEAM_ID` | Apple Developer team identifier. |
 
-The workflow imports Apple credentials only in `developer-id` mode. Missing
-credentials, signing failures, or notarization failures stop that release;
-they never fall back to ad-hoc signing. Merely adding Apple secrets does not
-switch the release mode.
+To send the certificate directly from a local export to its GitHub secret,
+run the following with the path to your export. Use the environment's secret
+fields for the other values.
+
+```bash
+base64 -i "/path/to/Developer-ID-Application.p12" | \
+  gh secret set APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 \
+    --repo brudnak/rancher-runway --env macos-release
+```
+
+Missing credentials or failed verification stop the workflow before publication.
 
 ## Publish a release
 
@@ -282,44 +284,33 @@ prereleases such as `v1.1.0-rc.1`, use that workflow directly; the stable
 
 ## Local packaging
 
-On a Mac with the repository's Go and Node.js build dependencies and Xcode
-Command Line Tools, the default build needs no Apple account:
+On a Mac with the repository's Go and Node.js build dependencies, Xcode Command
+Line Tools, and the Developer ID Application identity in Keychain Access, store
+your notarization credentials once. Replace the account and team ID below and
+enter the app-specific password at the secure prompt.
 
 ```bash
+xcrun notarytool store-credentials rancher-runway-release-notary \
+  --apple-id "you@example.com" --team-id "YOURTEAMID"
+```
+
+Set the identity to the name from `security find-identity -v -p codesigning`.
+Both release scripts default to `developer-id`. Use the intended release
+version in place of the example.
+
+```bash
+RANCHER_RUNWAY_SIGNING_IDENTITY="Developer ID Application: Example (YOURTEAMID)" \
+RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE="rancher-runway-release-notary" \
 scripts/package-macos-release.sh v1.0.0
+
 scripts/render-homebrew-cask.sh \
   v1.0.0 \
   dist/Rancher-Runway-1.0.0-macOS-universal.dmg
 ```
 
-Both scripts default `RANCHER_RUNWAY_SIGNING_MODE` to `adhoc`. Use the same
-mode for packaging and Cask rendering so the installation notice matches the
-artifact. This setting replaces the older `RANCHER_RUNWAY_ALLOW_UNSIGNED` and
-`RANCHER_RUNWAY_SKIP_NOTARIZATION` switches; `developer-id` releases always
-require notarization.
-
-For a notarized build, the packaging script can use credentials stored in a
-local keychain:
-
-```bash
-xcrun notarytool store-credentials rancher-runway-release-notary \
-  --apple-id "you@example.com" \
-  --team-id "YOURTEAMID" \
-  --password "YOUR_APP_SPECIFIC_PASSWORD"
-
-RANCHER_RUNWAY_SIGNING_MODE=developer-id \
-RANCHER_RUNWAY_SIGNING_IDENTITY="Developer ID Application: Example (YOURTEAMID)" \
-RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE="rancher-runway-release-notary" \
-scripts/package-macos-release.sh v1.0.0
-```
-
-Render its Cask with the matching mode:
-
-```bash
-RANCHER_RUNWAY_SIGNING_MODE=developer-id scripts/render-homebrew-cask.sh \
-  v1.0.0 \
-  dist/Rancher-Runway-1.0.0-macOS-universal.dmg
-```
+For local packaging tests without Apple credentials, explicitly set
+`RANCHER_RUNWAY_SIGNING_MODE=adhoc` for both scripts. The rendered test Cask
+includes the first-launch notice for that build.
 
 Set `RANCHER_RUNWAY_RELEASE_REPOSITORY=owner/repository` when the release assets
 are hosted outside `brudnak/rancher-runway`.
@@ -331,14 +322,13 @@ previous installation:
 
 1. Install through the tap and confirm the DMG checksum and Terraform, Helm 4,
    `kubectl`, and GitHub CLI dependencies succeed.
-2. Launch from Applications, follow the per-app approval step if required,
-   and confirm the control panel and lifecycle preflight work with the bundled
-   worker.
+2. Launch from Applications and confirm Gatekeeper accepts the app, the control
+   panel opens, and lifecycle preflight works with the bundled worker.
 3. Install a newer patch release with `brew upgrade --cask rancher-runway` and
    confirm configuration and run records remain in Application Support.
 4. Check both Intel and Apple Silicon support before claiming both are tested.
 
 See Apple's
 [notarization guidance](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
-for optional Developer ID releases, and the
+for signed releases, and the
 [Homebrew Cask Cookbook](https://docs.brew.sh/Cask-Cookbook) for Cask conventions.

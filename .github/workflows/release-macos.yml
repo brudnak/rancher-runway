@@ -31,24 +31,17 @@ jobs:
       RANCHER_RUNWAY_BUNDLE_ID: ${{ vars.RANCHER_RUNWAY_BUNDLE_ID || 'com.brudnak.rancher-runway' }}
       RANCHER_RUNWAY_RELEASE_REPOSITORY: ${{ github.repository }}
       RANCHER_RUNWAY_OUTPUT_DIR: dist
-      RANCHER_RUNWAY_SIGNING_MODE: ${{ vars.RANCHER_RUNWAY_SIGNING_MODE || 'adhoc' }}
+      RANCHER_RUNWAY_SIGNING_MODE: developer-id
       NOTARY_KEYCHAIN_PROFILE: rancher-runway-release-notary
       HOMEBREW_TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'brudnak/homebrew-tap' }}
       HOMEBREW_CASK_PATH: ${{ vars.HOMEBREW_CASK_PATH || 'Casks/rancher-runway.rb' }}
 
     steps:
-      - name: Validate release tag and signing mode
+      - name: Validate release tag
         id: release
         shell: bash
         run: |
           set -euo pipefail
-          case "$RANCHER_RUNWAY_SIGNING_MODE" in
-            adhoc|developer-id) ;;
-            *)
-              echo "RANCHER_RUNWAY_SIGNING_MODE must be adhoc or developer-id" >&2
-              exit 1
-              ;;
-          esac
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
             echo "Release tag must look like v1.2.3 or v1.2.3-rc.1, got '$RELEASE_TAG'" >&2
             exit 1
@@ -91,24 +84,24 @@ jobs:
           go test -buildvcs=false ./scripts
 
       - name: Import Developer ID certificate and notary credentials
-        if: env.RANCHER_RUNWAY_SIGNING_MODE == 'developer-id'
         shell: bash
         env:
-          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
+          APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
+          APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          NOTARY_APPLE_ID: ${{ secrets.APPLE_ID }}
-          NOTARY_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          NOTARY_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          umask 077
           required=(
-            APPLE_CERTIFICATE_P12_BASE64
-            APPLE_CERTIFICATE_PASSWORD
+            APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64
+            APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD
             APPLE_SIGNING_IDENTITY
-            NOTARY_APPLE_ID
-            NOTARY_APP_SPECIFIC_PASSWORD
-            NOTARY_TEAM_ID
+            APPLE_ID
+            APPLE_APP_SPECIFIC_PASSWORD
+            APPLE_TEAM_ID
           )
           for name in "${required[@]}"; do
             if [[ -z "${!name:-}" ]]; then
@@ -120,14 +113,14 @@ jobs:
           certificate_path="$RUNNER_TEMP/rancher-runway-developer-id.p12"
           signing_keychain_path="$RUNNER_TEMP/rancher-runway-signing.keychain-db"
           keychain_password="$(openssl rand -base64 32)"
-          printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          printf '%s' "$APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64" | base64 --decode > "$certificate_path"
 
           security create-keychain -p "$keychain_password" "$signing_keychain_path"
           security set-keychain-settings -lut 21600 "$signing_keychain_path"
           security unlock-keychain -p "$keychain_password" "$signing_keychain_path"
           security import "$certificate_path" \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -A \
+            -P "$APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD" \
+            -T /usr/bin/codesign \
             -t cert \
             -f pkcs12 \
             -k "$signing_keychain_path"
@@ -139,9 +132,9 @@ jobs:
           security list-keychain -d user -s "$signing_keychain_path"
 
           xcrun notarytool store-credentials "$NOTARY_KEYCHAIN_PROFILE" \
-            --apple-id "$NOTARY_APPLE_ID" \
-            --password "$NOTARY_APP_SPECIFIC_PASSWORD" \
-            --team-id "$NOTARY_TEAM_ID" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
             --keychain "$signing_keychain_path"
 
           {
@@ -184,19 +177,7 @@ jobs:
           fi
 
           notes_path="$RUNNER_TEMP/rancher-runway-release-notes.md"
-          if [[ "$RANCHER_RUNWAY_SIGNING_MODE" == "adhoc" ]]; then
-            cat > "$notes_path" <<'EOF'
-          This release uses ad-hoc signing and is not notarized by Apple.
-          After installing, try opening Rancher Runway. If macOS blocks it because
-          the developer cannot be verified or Apple cannot check it for malicious
-          software, and you trust this download, open System Settings → Privacy &
-          Security → Open Anyway, then confirm Open. Updates may require approval again.
-
-          See [Apple's first-launch instructions](https://support.apple.com/en-us/102445).
-          EOF
-          else
-            printf '%s\n' 'This release is signed with Developer ID and notarized by Apple.' > "$notes_path"
-          fi
+          printf '%s\n' 'This release is signed with Developer ID and notarized by Apple.' > "$notes_path"
 
           release_args=(
             "$RELEASE_TAG"
@@ -260,7 +241,7 @@ jobs:
           echo "Updated $HOMEBREW_TAP_REPOSITORY/$HOMEBREW_CASK_PATH"
 
       - name: Remove signing credentials
-        if: always() && env.RANCHER_RUNWAY_SIGNING_MODE == 'developer-id'
+        if: always()
         shell: bash
         run: |
           signing_keychain_path="${SIGNING_KEYCHAIN_PATH:-$RUNNER_TEMP/rancher-runway-signing.keychain-db}"

@@ -74,17 +74,10 @@ Use **Refresh checks** to rerun status, preflight, and Setup tool readiness.
 A check that does not respond within 30 seconds shows an error and can be
 retried; setup remains locked until the startup safety check succeeds.
 
-After Homebrew finishes, open the macOS Applications folder and look for
-`Rancher Runway`. If macOS blocks it because the developer cannot be verified
-or Apple cannot check it for malicious software, and you trust the release:
-
-1. Try opening the app once, then dismiss the alert.
-2. Open **System Settings → Privacy & Security → Open Anyway**.
-3. Confirm **Open**, then authenticate if prompted.
-
-Apple documents this [per-app approval process](https://support.apple.com/en-us/102445).
-Updates may require approval again, and managed Macs may restrict this option.
-Launching the app opens the desktop control panel.
+After Homebrew finishes, open **Rancher Runway** from Applications to launch
+the desktop control panel. macOS may ask you to confirm opening a downloaded
+app. Check the release notes for your installed version if you see a developer
+verification warning. [Homebrew first-launch instructions](homebrew-release.md#first-launch)
 
 If `tool-config.yml` does not exist, the app creates a private starter config in
 its Application Support workspace. Open **Setup** and choose either path:

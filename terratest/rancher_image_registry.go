@@ -183,6 +183,12 @@ type patchHeadStagingResolution struct {
 
 type patchHeadStagingResolver func(string) (string, *preferredRancherImageResolution, error)
 
+type patchHeadStagingTimeouts struct {
+	tagList time.Duration
+	scan    time.Duration
+	image   time.Duration
+}
+
 func resolveCachedPatchHeadStagingBundle(cache map[string]patchHeadStagingResolution, requestedVersion string, resolver patchHeadStagingResolver) (string, *preferredRancherImageResolution, error) {
 	key := imagelookup.NormalizeVersionInput(requestedVersion)
 	if cached, ok := cache[key]; ok {
@@ -203,16 +209,27 @@ func resolveCachedPatchHeadStagingBundle(cache map[string]patchHeadStagingResolu
 // chart and retains the existing compatible-chart fallback when chart
 // publication lags the images.
 func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredRancherImageResolution, error) {
+	return resolvePatchHeadStagingBundleWithTimeouts(context.Background(), requestedVersion, patchHeadStagingTimeouts{
+		tagList: 2 * rancherResolverHTTPTimeout,
+		scan:    5 * time.Minute,
+		image:   rancherResolverHTTPTimeout,
+	})
+}
+
+func resolvePatchHeadStagingBundleWithTimeouts(parent context.Context, requestedVersion string, timeouts patchHeadStagingTimeouts) (string, *preferredRancherImageResolution, error) {
 	startedAt := time.Now()
 	requestedVersion = imagelookup.NormalizeVersionInput(requestedVersion)
 	if !imagelookup.IsPatchHeadAliasRancherVersion(requestedVersion) {
 		return "", nil, fmt.Errorf("%s is not a patch-qualified Rancher head selector", requestedVersion)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*rancherResolverHTTPTimeout)
-	defer cancel()
 	log.Printf("[resolver] Resolving Rancher %s from SUSE staging image tags", requestedVersion)
-	tags, err := listPatchHeadStagingImageTags(ctx, "stgregistry.suse.com", "rancher/rancher")
+	listCtx, listCancel := context.WithTimeout(parent, timeouts.tagList)
+	tags, err := listPatchHeadStagingImageTags(listCtx, "stgregistry.suse.com", "rancher/rancher")
+	if err == nil {
+		err = listCtx.Err()
+	}
+	listCancel()
 	if err != nil {
 		return "", nil, fmt.Errorf("list immutable Rancher head images in SUSE staging: %w", err)
 	}
@@ -235,6 +252,11 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 
 	imageLookup := newPreferredRancherImageLookupService()
 	defer imageLookup.CloseIdleConnections()
+	// A release line can contain hundreds of immutable builds. Give the full
+	// scan its own budget; listing tags must not consume the inspection time.
+	// Each individual image lookup still has a short deadline below.
+	ctx, cancel := context.WithTimeout(parent, timeouts.scan)
+	defer cancel()
 	ctx = context.WithValue(ctx, preferredRancherImageLookupServiceContextKey{}, imageLookup)
 
 	jobs := make(chan string)
@@ -243,7 +265,7 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 	if len(versions) < workerCount {
 		workerCount = len(versions)
 	}
-	log.Printf("[resolver] Inspecting %d SUSE staging Rancher server/agent image pair(s) with %d workers", len(versions), workerCount)
+	log.Printf("[resolver] Inspecting %d SUSE staging Rancher server/agent image pair(s) with %d workers (scan limit %s, image limit %s)", len(versions), workerCount, timeouts.scan, timeouts.image)
 
 	var workers sync.WaitGroup
 	for worker := 0; worker < workerCount; worker++ {
@@ -251,7 +273,10 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 		go func() {
 			defer workers.Done()
 			for version := range jobs {
-				results <- inspectPatchHeadStagingCandidate(ctx, version)
+				if ctx.Err() != nil {
+					return
+				}
+				results <- inspectPatchHeadStagingCandidate(ctx, version, timeouts.image)
 			}
 		}()
 	}
@@ -273,7 +298,17 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 	complete := make([]patchHeadStagingCandidate, 0, len(versions))
 	misses := make([]string, 0, len(versions))
 	lookupErrors := make([]string, 0)
+	inspected := 0
 	for candidate := range results {
+		// Lookup failures leave a candidate unverified; do not count them as
+		// inspected or use a partial scan to claim that a pair is newest.
+		if !candidate.lookupErr {
+			inspected++
+		}
+		finished := len(complete) + len(misses) + len(lookupErrors) + 1
+		if finished%25 == 0 || finished == len(versions) {
+			log.Printf("[resolver] SUSE staging scan processed %d/%d candidate pairs (%d inspected) after %s", finished, len(versions), inspected, time.Since(startedAt).Round(time.Second))
+		}
 		if candidate.err != nil {
 			detail := candidate.version + ": " + candidate.err.Error()
 			if candidate.lookupErr {
@@ -286,7 +321,7 @@ func resolvePatchHeadStagingBundle(requestedVersion string) (string, *preferredR
 		complete = append(complete, candidate)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", nil, fmt.Errorf("resolve %s from SUSE staging: %w", requestedVersion, err)
+		return "", nil, fmt.Errorf("resolve %s from SUSE staging: inspected %d of %d candidate pairs after %s (scan limit %s): %w; retry or select an explicit immutable %s-<SHA>-head version", requestedVersion, inspected, len(versions), time.Since(startedAt).Round(time.Second), timeouts.scan, err, patchVersion)
 	}
 	if len(lookupErrors) > 0 {
 		sort.Strings(lookupErrors)
@@ -319,21 +354,31 @@ func listRancherImageTags(ctx context.Context, registry, repository string) ([]s
 	return remote.List(parsed, remote.WithContext(ctx), remote.WithAuth(authn.Anonymous))
 }
 
-func inspectPatchHeadStagingCandidate(ctx context.Context, version string) patchHeadStagingCandidate {
+func inspectPatchHeadStagingCandidate(ctx context.Context, version string, imageTimeout time.Duration) patchHeadStagingCandidate {
 	tag := imagelookup.NormalizeDockerRancherTag(version)
 	serverRepository := "stgregistry.suse.com/rancher/rancher"
 	agentRepository := "stgregistry.suse.com/rancher/rancher-agent"
 	serverReference := serverRepository + ":" + tag
 	agentReference := agentRepository + ":" + tag
 
-	server, serverFound, err := inspectPreferredRancherImage(ctx, serverReference)
+	serverCtx, serverCancel := context.WithTimeout(ctx, imageTimeout)
+	server, serverFound, err := inspectPreferredRancherImage(serverCtx, serverReference)
+	if err == nil {
+		err = serverCtx.Err()
+	}
+	serverCancel()
 	if err != nil {
 		return patchHeadStagingCandidate{version: version, err: fmt.Errorf("inspect server image: %w", err), lookupErr: true}
 	}
 	if !serverFound {
 		return patchHeadStagingCandidate{version: version, err: fmt.Errorf("server image was not found")}
 	}
-	agent, agentFound, err := inspectPreferredRancherImage(ctx, agentReference)
+	agentCtx, agentCancel := context.WithTimeout(ctx, imageTimeout)
+	agent, agentFound, err := inspectPreferredRancherImage(agentCtx, agentReference)
+	if err == nil {
+		err = agentCtx.Err()
+	}
+	agentCancel()
 	if err != nil {
 		return patchHeadStagingCandidate{version: version, err: fmt.Errorf("inspect agent image: %w", err), lookupErr: true}
 	}

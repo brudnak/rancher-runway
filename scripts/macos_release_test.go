@@ -18,6 +18,7 @@ func TestReleaseSigningConfiguration(t *testing.T) {
 		env  []string
 		want string
 	}{
+		{"default requires identity", nil, "requires RANCHER_RUNWAY_SIGNING_IDENTITY"},
 		{"unknown mode", []string{"RANCHER_RUNWAY_SIGNING_MODE=invalid"}, "must be adhoc or developer-id"},
 		{"missing identity", []string{"RANCHER_RUNWAY_SIGNING_MODE=developer-id"}, "requires RANCHER_RUNWAY_SIGNING_IDENTITY"},
 		{"ad-hoc identity in developer mode", []string{"RANCHER_RUNWAY_SIGNING_MODE=developer-id", "RANCHER_RUNWAY_SIGNING_IDENTITY=-"}, "requires RANCHER_RUNWAY_SIGNING_IDENTITY"},
@@ -50,7 +51,7 @@ func TestReleaseSigningModesReachBuild(t *testing.T) {
 		env  []string
 		mode string
 	}{
-		{"default without Apple secrets", nil, "adhoc"},
+		{"default with keychain", []string{"RANCHER_RUNWAY_SIGNING_IDENTITY=Developer ID Application: Test (TESTTEAM)", "RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE=test-profile"}, "developer-id"},
 		{"explicit adhoc ignores leftover Apple configuration", []string{"RANCHER_RUNWAY_SIGNING_MODE=adhoc", "RANCHER_RUNWAY_SIGNING_IDENTITY=Developer ID Application: Test (TESTTEAM)", "APPLE_ID=test@example.com"}, "adhoc"},
 		{"developer ID with keychain", []string{"RANCHER_RUNWAY_SIGNING_MODE=developer-id", "RANCHER_RUNWAY_SIGNING_IDENTITY=Developer ID Application: Test (TESTTEAM)", "RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE=test-profile"}, "developer-id"},
 		{"developer ID with Apple credentials", []string{"RANCHER_RUNWAY_SIGNING_MODE=developer-id", "RANCHER_RUNWAY_SIGNING_IDENTITY=Developer ID Application: Test (TESTTEAM)", "APPLE_ID=test@example.com", "APPLE_TEAM_ID=TESTTEAM", "APPLE_APP_SPECIFIC_PASSWORD=test-password"}, "developer-id"},
@@ -107,7 +108,7 @@ func TestRenderedCaskSigningModes(t *testing.T) {
 					t.Errorf("rendered Cask missing %q", want)
 				}
 			}
-			wantNotice := mode != "developer-id"
+			wantNotice := mode == "adhoc"
 			if strings.Contains(cask, "not notarized by Apple") != wantNotice || strings.Contains(cask, "Open Anyway") != wantNotice {
 				t.Errorf("Cask first-launch notice does not match signing mode %q", mode)
 			}
