@@ -127,7 +127,7 @@ otherwise account for live infrastructure before using `--zap`.
 
 The [release workflow](../.github/workflows/release-macos.yml) runs for tags in
 the form `vMAJOR.MINOR.PATCH` and also accepts SemVer prerelease suffixes such
-as `v1.2.3-rc.1`. It performs these operations on a GitHub-hosted macOS runner:
+as `v1.2.3-rc.1`. It uses GitHub-hosted macOS runners for these steps:
 
 1. Builds an Intel and Apple Silicon universal Wails application and lifecycle
    worker.
@@ -138,9 +138,12 @@ as `v1.2.3-rc.1`. It performs these operations on a GitHub-hosted macOS runner:
 3. Signs the worker with Developer ID and the hardened runtime, writes the
    runtime SHA-256 manifest, then signs the outer app. The app verifies the
    manifest again after staging an upgrade.
-4. Submits the app to Apple for notarization and staples its ticket before
-   building the ZIP and DMG. It signs the DMG, obtains and staples its own
-   ticket, and checks Gatekeeper acceptance for the app and DMG.
+4. Submits the signed app to Apple and saves its ZIP and submission ID as a
+   workflow artifact. The next job waits for Apple to accept the app, attaches
+   the ticket, checks Gatekeeper, and creates the distribution ZIP and signed
+   DMG. It submits the DMG and saves both files with the DMG submission ID.
+   The final job waits for acceptance, attaches the DMG ticket, and checks
+   Gatekeeper before publishing.
 5. Calculates SHA-256 sums for the finished artifacts and renders a Cask pinned
    to the DMG checksum.
 6. Attests the artifacts and creates a draft GitHub Release before publishing
@@ -150,6 +153,20 @@ as `v1.2.3-rc.1`. It performs these operations on a GitHub-hosted macOS runner:
    their GitHub Release and never replace the stable Cask.
 
 GitHub artifact attestations identify the workflow that produced the files.
+
+### When Apple takes longer
+
+Each Apple review gets up to three hours per attempt. GitHub runs the whole
+release, so your Mac can be offline once the release starts. To include the
+Homebrew tap update while your Mac is offline, configure `HOMEBREW_TAP_TOKEN`.
+
+If a wait times out, Apple continues processing the original submission. Open
+the **same run** in Actions and select **Re-run failed jobs**, or retry
+`make release RELEASE_VERSION=vX.Y.Z` with the exact version. The next attempt
+uses the saved files and submission ID. GitHub retains these artifacts for up
+to 30 days. Starting a new run or re-running all jobs builds and submits again.
+For an Apple rejection, inspect the notarization log in the job output and
+correct the cause before building a new release.
 
 The workflow refuses to overwrite an existing GitHub Release. If a published
 artifact is wrong, create a new patch release rather than replacing bytes at an
@@ -278,7 +295,9 @@ published, the command only verifies the artifacts and completes the tap
 update; it never replaces published release assets. An existing draft or
 prerelease with that version must be resolved manually before retrying.
 
-The workflow can also be dispatched manually for an existing tag. For
+The workflow can also be dispatched manually for an existing tag. Select that
+tag as the workflow ref and enter the same tag as its input so the build and
+attestation identify the same source. For
 prereleases such as `v1.1.0-rc.1`, use that workflow directly; the stable
 `make release` command intentionally accepts only `MAJOR.MINOR.PATCH`.
 

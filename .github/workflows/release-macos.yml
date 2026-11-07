@@ -13,29 +13,28 @@ on:
         type: string
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 concurrency:
   group: release-macos-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  RANCHER_RUNWAY_RELEASE_REPOSITORY: ${{ github.repository }}
+  RANCHER_RUNWAY_OUTPUT_DIR: dist
+  RANCHER_RUNWAY_SIGNING_MODE: developer-id
+
 jobs:
-  release:
+  build:
     runs-on: macos-15
     timeout-minutes: 90
     environment: macos-release
-    env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-      RANCHER_RUNWAY_BUNDLE_ID: ${{ vars.RANCHER_RUNWAY_BUNDLE_ID || 'com.brudnak.rancher-runway' }}
-      RANCHER_RUNWAY_RELEASE_REPOSITORY: ${{ github.repository }}
-      RANCHER_RUNWAY_OUTPUT_DIR: dist
-      RANCHER_RUNWAY_SIGNING_MODE: developer-id
-      NOTARY_KEYCHAIN_PROFILE: rancher-runway-release-notary
-      HOMEBREW_TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'brudnak/homebrew-tap' }}
-      HOMEBREW_CASK_PATH: ${{ vars.HOMEBREW_CASK_PATH || 'Casks/rancher-runway.rb' }}
-
+    outputs:
+      commit: ${{ steps.checkout.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      app_artifact: ${{ steps.app.outputs.artifact-id }}
     steps:
       - name: Validate release tag
         id: release
@@ -44,6 +43,10 @@ jobs:
           set -euo pipefail
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
             echo "Release tag must look like v1.2.3 or v1.2.3-rc.1, got '$RELEASE_TAG'" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$RELEASE_TAG" ]]; then
+            echo "Selected tag $GITHUB_REF_NAME does not match requested tag $RELEASE_TAG" >&2
             exit 1
           fi
           version="${RELEASE_TAG#v}"
@@ -57,10 +60,21 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Checkout tagged source
+        id: checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ github.ref_type == 'tag' && github.sha || format('refs/tags/{0}', env.RELEASE_TAG) }}
           persist-credentials: false
+
+      - name: Verify the selected workflow source matches the tag
+        if: github.event_name == 'workflow_dispatch' && github.ref_type == 'branch'
+        env:
+          RELEASE_COMMIT: ${{ steps.checkout.outputs.commit }}
+        run: |
+          if [[ "$GITHUB_SHA" != "$RELEASE_COMMIT" ]]; then
+            echo "Run this workflow from tag $RELEASE_TAG so the attestation identifies the release source." >&2
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -84,7 +98,6 @@ jobs:
           go test -buildvcs=false ./scripts
 
       - name: Import Developer ID certificate and notary credentials
-        shell: bash
         env:
           APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
           APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
@@ -92,70 +105,136 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          umask 077
-          required=(
-            APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64
-            APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD
-            APPLE_SIGNING_IDENTITY
-            APPLE_ID
-            APPLE_APP_SPECIFIC_PASSWORD
-            APPLE_TEAM_ID
-          )
-          for name in "${required[@]}"; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "Required macos-release secret '$name' is not configured" >&2
-              exit 1
-            fi
-          done
+        run: bash .github/scripts/macos-release-keychain.sh signing
 
-          certificate_path="$RUNNER_TEMP/rancher-runway-developer-id.p12"
-          signing_keychain_path="$RUNNER_TEMP/rancher-runway-signing.keychain-db"
-          keychain_password="$(openssl rand -base64 32)"
-          printf '%s' "$APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64" | base64 --decode > "$certificate_path"
-
-          security create-keychain -p "$keychain_password" "$signing_keychain_path"
-          security set-keychain-settings -lut 21600 "$signing_keychain_path"
-          security unlock-keychain -p "$keychain_password" "$signing_keychain_path"
-          security import "$certificate_path" \
-            -P "$APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD" \
-            -T /usr/bin/codesign \
-            -t cert \
-            -f pkcs12 \
-            -k "$signing_keychain_path"
-          security set-key-partition-list \
-            -S apple-tool:,apple: \
-            -s \
-            -k "$keychain_password" \
-            "$signing_keychain_path"
-          security list-keychain -d user -s "$signing_keychain_path"
-
-          xcrun notarytool store-credentials "$NOTARY_KEYCHAIN_PROFILE" \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --keychain "$signing_keychain_path"
-
-          {
-            echo "SIGNING_KEYCHAIN_PATH=$signing_keychain_path"
-            echo "RANCHER_RUNWAY_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
-            echo "RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE=$NOTARY_KEYCHAIN_PROFILE"
-            echo "RANCHER_RUNWAY_NOTARY_KEYCHAIN=$signing_keychain_path"
-          } >> "$GITHUB_ENV"
-
-      - name: Build and package macOS release
-        shell: bash
+      - name: Build, sign, and submit the app to Apple
         env:
+          RANCHER_RUNWAY_BUNDLE_ID: ${{ vars.RANCHER_RUNWAY_BUNDLE_ID || 'com.brudnak.rancher-runway' }}
           RANCHER_RUNWAY_BUILD_NUMBER: ${{ github.run_number }}
-          RANCHER_RUNWAY_BUILD_COMMIT: ${{ github.sha }}
+          RANCHER_RUNWAY_BUILD_COMMIT: ${{ steps.checkout.outputs.commit }}
+          RANCHER_RUNWAY_NOTARY_STATE_DIR: ${{ runner.temp }}/notary-state
+          RANCHER_RUNWAY_RELEASE_PHASE: submit-app
+        run: scripts/package-macos-release.sh "$RELEASE_TAG"
+
+      - name: Save the submitted app and Apple submission ID
+        id: app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+          name: notary-app-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/notary-state/app.zip
+            ${{ runner.temp }}/notary-state/app-id
+
+      - name: Remove signing credentials
+        if: always() && steps.checkout.outcome == 'success'
+        run: bash .github/scripts/macos-release-keychain.sh cleanup
+
+  package-dmg:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 240
+    environment: macos-release
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      dmg_artifact: ${{ steps.dmg.outputs.artifact-id }}
+    steps:
+      - name: Checkout the signed release source
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+
+      - name: Restore the submitted app and Apple submission ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          artifact-ids: ${{ needs.build.outputs.app_artifact }}
+          path: ${{ runner.temp }}/notary-state
+
+      - name: Import Developer ID certificate and notary credentials
+        env:
+          APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_BASE64 }}
+          APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_APPLICATION_CERT_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .github/scripts/macos-release-keychain.sh signing
+
+      - name: Wait for the app, staple it, and submit the signed DMG
+        env:
+          RANCHER_RUNWAY_NOTARY_STATE_DIR: ${{ runner.temp }}/notary-state
+          RANCHER_RUNWAY_RELEASE_PHASE: submit-dmg
+        run: scripts/package-macos-release.sh "$RELEASE_TAG"
+
+      - name: Save the release ZIP, submitted DMG, and Apple submission ID
+        id: dmg
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+          name: notary-dmg-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/notary-state/release.zip
+            ${{ runner.temp }}/notary-state/signed.dmg
+            ${{ runner.temp }}/notary-state/dmg-id
+
+      - name: Remove signing credentials
+        if: always() && steps.checkout.outcome == 'success'
+        run: bash .github/scripts/macos-release-keychain.sh cleanup
+
+  release:
+    needs: [build, package-dmg]
+    runs-on: macos-15
+    timeout-minutes: 240
+    environment: macos-release
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout the signed release source
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.build.outputs.commit }}
+          persist-credentials: false
+
+      - name: Restore the release ZIP, submitted DMG, and Apple submission ID
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+          artifact-ids: ${{ needs.package-dmg.outputs.dmg_artifact }}
+          path: ${{ runner.temp }}/notary-state
+
+      - name: Import notary credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash .github/scripts/macos-release-keychain.sh notary-only
+
+      - name: Wait for the DMG, staple it, and verify release artifacts
+        env:
+          RANCHER_RUNWAY_NOTARY_STATE_DIR: ${{ runner.temp }}/notary-state
+          RANCHER_RUNWAY_RELEASE_PHASE: finish
         run: scripts/package-macos-release.sh "$RELEASE_TAG"
 
       - name: Render and validate Homebrew Cask
         shell: bash
         run: |
           set -euo pipefail
-          dmg="dist/Rancher-Runway-${{ steps.release.outputs.version }}-macOS-universal.dmg"
+          dmg="dist/Rancher-Runway-${{ needs.build.outputs.version }}-macOS-universal.dmg"
           scripts/render-homebrew-cask.sh "$RELEASE_TAG" "$dmg" dist/rancher-runway.rb
           ruby -c dist/rancher-runway.rb
 
@@ -168,7 +247,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          IS_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          RELEASE_COMMIT: ${{ needs.build.outputs.commit }}
+          IS_PRERELEASE: ${{ needs.build.outputs.prerelease }}
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
@@ -194,56 +274,36 @@ jobs:
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             release_args+=(--prerelease)
           fi
+          tag_commit="$(gh api -H 'Accept: application/vnd.github.sha' "repos/$GITHUB_REPOSITORY/commits/tags/$RELEASE_TAG")"
+          if [[ "$tag_commit" != "$RELEASE_COMMIT" ]]; then
+            echo "Tag $RELEASE_TAG moved since the app was signed; refusing publication." >&2
+            exit 1
+          fi
           gh release create "${release_args[@]}"
 
-          publish_args=(--draft=false)
+          latest=legacy
           if [[ "$IS_PRERELEASE" == "true" ]]; then
-            publish_args+=(--prerelease)
-          else
-            publish_args+=(--latest)
+            latest=false
           fi
-          gh release edit "$RELEASE_TAG" "${publish_args[@]}"
+          release_id="$(gh release view "$RELEASE_TAG" --json databaseId --jq '.databaseId')"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false -f "make_latest=$latest" --silent
 
       - name: Update Homebrew tap
-        if: steps.release.outputs.prerelease == 'false'
+        if: needs.build.outputs.prerelease == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.release.outputs.version }}
+          HOMEBREW_TAP_REPOSITORY: ${{ vars.HOMEBREW_TAP_REPOSITORY || 'brudnak/homebrew-tap' }}
+          HOMEBREW_CASK_PATH: ${{ vars.HOMEBREW_CASK_PATH || 'Casks/rancher-runway.rb' }}
         run: |
           set -euo pipefail
           if [[ -z "${GH_TOKEN:-}" ]]; then
             echo "::notice::HOMEBREW_TAP_TOKEN is not configured; the generated Cask is attached to the GitHub Release but the tap was not updated."
             exit 0
           fi
-          if [[ ! "$HOMEBREW_TAP_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
-            echo "Invalid HOMEBREW_TAP_REPOSITORY '$HOMEBREW_TAP_REPOSITORY'" >&2
-            exit 1
-          fi
-          if [[ ! "$HOMEBREW_CASK_PATH" =~ ^[A-Za-z0-9_./-]+\.rb$ || "$HOMEBREW_CASK_PATH" == /* || "$HOMEBREW_CASK_PATH" == *..* ]]; then
-            echo "Invalid HOMEBREW_CASK_PATH '$HOMEBREW_CASK_PATH'" >&2
-            exit 1
-          fi
-
-          endpoint="repos/$HOMEBREW_TAP_REPOSITORY/contents/$HOMEBREW_CASK_PATH"
-          existing_sha="$(gh api "$endpoint" --jq '.sha' 2>/dev/null || true)"
-          content="$(base64 < dist/rancher-runway.rb | tr -d '\n')"
-          api_args=(
-            --method PUT
-            "$endpoint"
-            -f "message=rancher-runway $VERSION"
-            -f "content=$content"
-          )
-          if [[ -n "$existing_sha" ]]; then
-            api_args+=(-f "sha=$existing_sha")
-          fi
-          gh api "${api_args[@]}" >/dev/null
-          echo "Updated $HOMEBREW_TAP_REPOSITORY/$HOMEBREW_CASK_PATH"
+          python3 scripts/release.py --update-tap-cask dist/rancher-runway.rb --version "$RELEASE_TAG"
 
       - name: Remove signing credentials
-        if: always()
-        shell: bash
-        run: |
-          signing_keychain_path="${SIGNING_KEYCHAIN_PATH:-$RUNNER_TEMP/rancher-runway-signing.keychain-db}"
-          security delete-keychain "$signing_keychain_path" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/rancher-runway-developer-id.p12"
+        if: always() && steps.checkout.outcome == 'success'
+        run: bash .github/scripts/macos-release-keychain.sh cleanup

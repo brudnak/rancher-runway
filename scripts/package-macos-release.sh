@@ -33,6 +33,8 @@ Optional:
   RANCHER_RUNWAY_APP_NAME               Default: Rancher Runway
   RANCHER_RUNWAY_ARTIFACT_BASENAME       Default: Rancher-Runway
   RANCHER_RUNWAY_OUTPUT_DIR              Default: dist
+  RANCHER_RUNWAY_RELEASE_PHASE           full (default), submit-app, submit-dmg, or finish
+  RANCHER_RUNWAY_NOTARY_STATE_DIR        Absolute checkpoint directory for phased releases
 
 Ad-hoc releases do not meet the official homebrew/cask Gatekeeper requirements.
 Use the same RANCHER_RUNWAY_SIGNING_MODE when rendering the Homebrew Cask.
@@ -70,6 +72,17 @@ marketing_version="${release_version%%-*}"
 # Validate release credentials before installing dependencies or compiling.
 # Developer ID mode must never silently fall back to ad-hoc signing.
 signing_mode="${RANCHER_RUNWAY_SIGNING_MODE:-developer-id}"
+release_phase="${RANCHER_RUNWAY_RELEASE_PHASE:-full}"
+state_dir="${RANCHER_RUNWAY_NOTARY_STATE_DIR:-}"
+case "${release_phase}" in
+  full) ;;
+  submit-app|submit-dmg|finish)
+    [[ "${signing_mode}" == "developer-id" ]] || die "phased releases require developer-id signing"
+    [[ "${state_dir}" == /* ]] || die "phased releases require an absolute RANCHER_RUNWAY_NOTARY_STATE_DIR"
+    ;;
+  *) die "unknown release phase: ${release_phase}" ;;
+esac
+
 notary_auth=()
 case "${signing_mode}" in
   adhoc)
@@ -77,7 +90,9 @@ case "${signing_mode}" in
     ;;
   developer-id)
     signing_identity="${RANCHER_RUNWAY_SIGNING_IDENTITY:-}"
-    [[ -n "${signing_identity}" && "${signing_identity}" != "-" ]] || die "developer-id mode requires RANCHER_RUNWAY_SIGNING_IDENTITY"
+    if [[ "${release_phase}" != "finish" ]]; then
+      [[ -n "${signing_identity}" && "${signing_identity}" != "-" ]] || die "developer-id mode requires RANCHER_RUNWAY_SIGNING_IDENTITY"
+    fi
     if [[ -n "${RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE:-}" ]]; then
       notary_auth+=(--keychain-profile "${RANCHER_RUNWAY_NOTARY_KEYCHAIN_PROFILE}")
       if [[ -n "${RANCHER_RUNWAY_NOTARY_KEYCHAIN:-}" ]]; then
@@ -120,233 +135,327 @@ fi
 mkdir -p "${output_dir}"
 
 [[ "$(uname -s)" == "Darwin" ]] || die "macOS release packaging must run on macOS"
-for command_name in go npm xcrun codesign ditto hdiutil lipo plutil rsync shasum; do
+required_tools=(xcrun codesign ditto hdiutil shasum)
+if [[ "${release_phase}" == full || "${release_phase}" == submit-app ]]; then
+  required_tools+=(go npm lipo plutil rsync)
+fi
+if [[ "${release_phase}" != full ]]; then
+  required_tools+=(jq)
+  mkdir -p "${state_dir}"
+fi
+for command_name in "${required_tools[@]}"; do
   require_command "${command_name}"
 done
 [[ -x /usr/libexec/PlistBuddy ]] || die "/usr/libexec/PlistBuddy is required"
 
 temporary_root="$(mktemp -d "${TMPDIR:-/tmp}/rancher-runway-release.XXXXXX")"
 cleanup() {
-	chmod -R u+w "${temporary_root}" 2>/dev/null || true
+  chmod -R u+w "${temporary_root}" 2>/dev/null || true
   rm -rf "${temporary_root}"
 }
 trap cleanup EXIT
 
-printf 'Building Rancher Runway %s (build %s)\n' "${release_version}" "${build_number}"
-printf 'Signing mode: %s\n' "${signing_mode}"
-(cd "${repo_root}" && npm ci)
-(cd "${repo_root}" && npm run build:panel-ui)
-(cd "${repo_root}/desktop/wails/frontend" && npm ci)
-(cd "${repo_root}/desktop/wails/frontend" && npm run build)
-
-release_icon="${repo_root}/packaging/macos/AppIcon.icns"
-release_plist="${repo_root}/packaging/macos/Info.release.plist"
-[[ -f "${release_icon}" ]] || die "macOS app icon was not found at ${release_icon}"
-[[ -f "${release_plist}" ]] || die "release Info.plist was not found at ${release_plist}"
-
-ldflags="-X github.com/brudnak/ha-rancher-rke2/internal/buildinfo.Version=${release_version}"
-ldflags+=" -X github.com/brudnak/ha-rancher-rke2/internal/buildinfo.BuildNumber=${build_number}"
-ldflags+=" -X github.com/brudnak/ha-rancher-rke2/internal/buildinfo.Commit=${build_commit}"
-ldflags+=" -X github.com/brudnak/ha-rancher-rke2/internal/buildinfo.BuildDate=${build_date}"
-release_cgo_ldflags="${CGO_LDFLAGS:-}"
-if [[ -n "${release_cgo_ldflags}" ]]; then
-  release_cgo_ldflags+=" "
-fi
-release_cgo_ldflags+="-framework UniformTypeIdentifiers -mmacosx-version-min=${minimum_macos_version}"
-release_cgo_cflags="${CGO_CFLAGS:-}"
-if [[ -n "${release_cgo_cflags}" ]]; then
-  release_cgo_cflags+=" "
-fi
-release_cgo_cflags+="-mmacosx-version-min=${minimum_macos_version}"
-release_cgo_cxxflags="${CGO_CXXFLAGS:-}"
-if [[ -n "${release_cgo_cxxflags}" ]]; then
-  release_cgo_cxxflags+=" "
-fi
-release_cgo_cxxflags+="-mmacosx-version-min=${minimum_macos_version}"
-
 app_path="${temporary_root}/${app_name}.app"
-mkdir -p "${app_path}/Contents/MacOS" "${app_path}/Contents/Resources"
-ditto "${release_plist}" "${app_path}/Contents/Info.plist"
-ditto "${release_icon}" "${app_path}/Contents/Resources/iconfile.icns"
-
-plist_path="${app_path}/Contents/Info.plist"
-for app_arch in amd64 arm64; do
-  (
-    cd "${repo_root}/desktop/wails"
-    GOOS=darwin GOARCH="${app_arch}" CGO_ENABLED=1 \
-    CGO_CFLAGS="${release_cgo_cflags}" \
-    CGO_CXXFLAGS="${release_cgo_cxxflags}" \
-    CGO_LDFLAGS="${release_cgo_ldflags}" \
-    MACOSX_DEPLOYMENT_TARGET="${minimum_macos_version}" \
-    RANCHER_RUNWAY_PORTABLE_BUILD=1 \
-    RANCHER_RUNWAY_VERSION="${release_version}" \
-    RANCHER_RUNWAY_BUILD_NUMBER="${build_number}" \
-      go build \
-        -buildvcs=false \
-        -trimpath \
-        -tags 'desktop,wv2runtime.download,production' \
-        -ldflags "${ldflags} -w -s" \
-        -o "${temporary_root}/rancher-runway-app-${app_arch}" \
-        .
-  )
-done
-lipo -create \
-  -output "${temporary_root}/rancher-runway-app-universal" \
-  "${temporary_root}/rancher-runway-app-amd64" \
-  "${temporary_root}/rancher-runway-app-arm64"
-chmod 0755 "${temporary_root}/rancher-runway-app-universal"
-executable_path="${app_path}/Contents/MacOS/${app_name}"
-mv "${temporary_root}/rancher-runway-app-universal" "${executable_path}"
-
-/usr/libexec/PlistBuddy -c "Set :CFBundleName ${app_name}" "${plist_path}"
-/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${app_name}" "${plist_path}"
-/usr/libexec/PlistBuddy -c "Set :CFBundleExecutable ${app_name}" "${plist_path}"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${bundle_id}" "${plist_path}"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${marketing_version}" "${plist_path}"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${build_number}" "${plist_path}"
-/usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion ${minimum_macos_version}" "${plist_path}"
-plutil -lint "${plist_path}"
-
-architectures="$(lipo -archs "${executable_path}")"
-[[ " ${architectures} " == *" arm64 "* ]] || die "the app executable is missing arm64"
-[[ " ${architectures} " == *" x86_64 "* ]] || die "the app executable is missing x86_64"
-
-runtime_stage="${temporary_root}/runtime"
-mkdir -p "${runtime_stage}/bin"
-printf '%s\n' "${release_version}" > "${runtime_stage}/.rancher-runway-runtime-version"
-ditto "${repo_root}/go.mod" "${runtime_stage}/go.mod"
-
-runtime_excludes=(
-  --exclude .DS_Store
-  --exclude '.tool-config-before-import-*.yml'
-  --exclude .terraform
-  --exclude .terraform.lock.hcl
-  --exclude automation-output
-  --exclude runway-data
-  --exclude 'high-availability-*'
-  --exclude '*.log'
-  --exclude '*.tfstate'
-  --exclude '*.tfstate.*'
-  --exclude backend.env
-  --exclude backend.tf
-  --exclude terraform.tfvars
-  --exclude 'tfplan*'
-)
-for runtime_directory in terratest modules bootstrap; do
-  rsync -a "${runtime_excludes[@]}" \
-    "${repo_root}/${runtime_directory}/" \
-    "${runtime_stage}/${runtime_directory}/"
-done
-
-for helper_arch in amd64 arm64; do
-  (
-    cd "${repo_root}"
-    GOOS=darwin GOARCH="${helper_arch}" CGO_ENABLED=1 \
-    MACOSX_DEPLOYMENT_TARGET="${minimum_macos_version}" \
-      go test -c -buildvcs=false -trimpath -o "${temporary_root}/rancher-runway-lifecycle-${helper_arch}" ./terratest
-  )
-done
-lipo -create \
-  -output "${runtime_stage}/bin/rancher-runway-lifecycle" \
-  "${temporary_root}/rancher-runway-lifecycle-amd64" \
-  "${temporary_root}/rancher-runway-lifecycle-arm64"
-chmod 0755 "${runtime_stage}/bin/rancher-runway-lifecycle"
-helper_architectures="$(lipo -archs "${runtime_stage}/bin/rancher-runway-lifecycle")"
-[[ " ${helper_architectures} " == *" arm64 "* ]] || die "the lifecycle worker is missing arm64"
-[[ " ${helper_architectures} " == *" x86_64 "* ]] || die "the lifecycle worker is missing x86_64"
-
-unexpected_runtime_file="$(find "${runtime_stage}" -type f \( \
-  -name 'tool-config.yml' -o \
-  -name '.tool-config-before-import-*.yml' -o \
-  -name '*.tfstate' -o \
-  -name '*.tfstate.*' -o \
-  -name 'terraform.tfvars' -o \
-  -name 'backend.env' \
-\) -print -quit)"
-[[ -z "${unexpected_runtime_file}" ]] || die "refusing to package runtime state or configuration: ${unexpected_runtime_file}"
-
-packaged_runtime="${app_path}/Contents/Resources/runtime"
-rm -rf "${packaged_runtime}"
-ditto "${runtime_stage}" "${packaged_runtime}"
-[[ -x "${packaged_runtime}/bin/rancher-runway-lifecycle" ]] || die "packaged lifecycle worker is missing"
-[[ -f "${packaged_runtime}/.rancher-runway-runtime-version" ]] || die "packaged runtime version marker is missing"
-
-submit_for_notarization() {
-  local artifact_path="$1"
-  xcrun notarytool submit "${notary_auth[@]}" --wait --timeout 45m "${artifact_path}"
-}
-
-codesign "${codesign_args[@]}" "${packaged_runtime}/bin/rancher-runway-lifecycle"
-codesign --verify --strict --verbose=2 "${packaged_runtime}/bin/rancher-runway-lifecycle"
-
-manifest_temp="${temporary_root}/runtime.sha256"
-(
-  cd "${packaged_runtime}"
-  find . -type f ! -name runtime.sha256 -print | LC_ALL=C sort | while IFS= read -r runtime_file; do
-    runtime_hash="$(shasum -a 256 "${runtime_file}" | awk '{print $1}')"
-    printf '%s  %s\n' "${runtime_hash}" "${runtime_file#./}"
-  done
-) > "${manifest_temp}"
-mv "${manifest_temp}" "${packaged_runtime}/runtime.sha256"
-[[ -s "${packaged_runtime}/runtime.sha256" ]] || die "packaged runtime SHA-256 manifest is empty"
-
-# The app copies this tree to Application Support before using it. Keeping the
-# signed source tree read-only prevents Go or another background process from
-# adding files after the manifest and code signature have been created.
-find "${packaged_runtime}" -type f -exec chmod a-w {} +
-find "${packaged_runtime}" -type d -exec chmod a-w {} +
-
-# Sign only the outer bundle: re-signing nested code here would change the
-# lifecycle worker after its checksum has been recorded in runtime.sha256.
-codesign "${codesign_args[@]}" "${app_path}"
-codesign --verify --deep --strict --verbose=2 "${app_path}"
-
-if [[ "${signing_mode}" == "developer-id" ]]; then
-  notary_zip="${temporary_root}/notary-upload.zip"
-  ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${notary_zip}"
-  submit_for_notarization "${notary_zip}"
-  xcrun stapler staple "${app_path}"
-  xcrun stapler validate "${app_path}"
-  spctl --assess --type execute --verbose=2 "${app_path}"
-else
-  printf 'Ad-hoc release: not notarized by Apple; macOS may require Open Anyway on first launch.\n'
-fi
-
 dmg_name="${artifact_basename}-${release_version}-macOS-universal.dmg"
 zip_name="${artifact_basename}-${release_version}-macOS-universal.zip"
 checksums_name="${artifact_basename}-${release_version}-checksums.txt"
 dmg_path="${output_dir}/${dmg_name}"
 zip_path="${output_dir}/${zip_name}"
 checksums_path="${output_dir}/${checksums_name}"
-rm -f "${dmg_path}" "${zip_path}" "${checksums_path}"
 
-codesign --verify --deep --strict --verbose=2 "${app_path}"
-ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${zip_path}"
+build_signed_app() (
+  printf 'Building Rancher Runway %s (build %s)\n' "${release_version}" "${build_number}"
+  printf 'Signing mode: %s\n' "${signing_mode}"
+  (cd "${repo_root}" && npm ci)
+  (cd "${repo_root}" && npm run build:panel-ui)
+  (cd "${repo_root}/desktop/wails/frontend" && npm ci)
+  (cd "${repo_root}/desktop/wails/frontend" && npm run build)
 
-dmg_root="${temporary_root}/dmg-root"
-mkdir -p "${dmg_root}"
-ditto "${app_path}" "${dmg_root}/${app_name}.app"
-ln -s /Applications "${dmg_root}/Applications"
-hdiutil create \
-  -quiet \
-  -volname "${app_name}" \
-  -srcfolder "${dmg_root}" \
-  -format UDZO \
-  -ov \
-  "${dmg_path}"
+  release_icon="${repo_root}/packaging/macos/AppIcon.icns"
+  release_plist="${repo_root}/packaging/macos/Info.release.plist"
+  [[ -f "${release_icon}" ]] || die "macOS app icon was not found at ${release_icon}"
+  [[ -f "${release_plist}" ]] || die "release Info.plist was not found at ${release_plist}"
 
-# Catch any mutation between signing and archive construction before checksums
-# or release metadata can be produced.
-codesign --verify --deep --strict --verbose=2 "${app_path}"
+  ldflags="-X github.com/brudnak/ha-rancher-rke2/internal/buildinfo.Version=${release_version}"
+  ldflags+=" -X github.com/brudnak/ha-rancher-rke2/internal/buildinfo.BuildNumber=${build_number}"
+  ldflags+=" -X github.com/brudnak/ha-rancher-rke2/internal/buildinfo.Commit=${build_commit}"
+  ldflags+=" -X github.com/brudnak/ha-rancher-rke2/internal/buildinfo.BuildDate=${build_date}"
+  release_cgo_ldflags="${CGO_LDFLAGS:-}"
+  if [[ -n "${release_cgo_ldflags}" ]]; then
+    release_cgo_ldflags+=" "
+  fi
+  release_cgo_ldflags+="-framework UniformTypeIdentifiers -mmacosx-version-min=${minimum_macos_version}"
+  release_cgo_cflags="${CGO_CFLAGS:-}"
+  if [[ -n "${release_cgo_cflags}" ]]; then
+    release_cgo_cflags+=" "
+  fi
+  release_cgo_cflags+="-mmacosx-version-min=${minimum_macos_version}"
+  release_cgo_cxxflags="${CGO_CXXFLAGS:-}"
+  if [[ -n "${release_cgo_cxxflags}" ]]; then
+    release_cgo_cxxflags+=" "
+  fi
+  release_cgo_cxxflags+="-mmacosx-version-min=${minimum_macos_version}"
 
-if [[ "${signing_mode}" == "developer-id" ]]; then
-  codesign --force --timestamp --sign "${signing_identity}" "${dmg_path}"
-  codesign --verify --verbose=2 "${dmg_path}"
-  submit_for_notarization "${dmg_path}"
-  xcrun stapler staple "${dmg_path}"
-  xcrun stapler validate "${dmg_path}"
-  spctl --assess --type open --context context:primary-signature --verbose=2 "${dmg_path}"
-fi
+  mkdir -p "${app_path}/Contents/MacOS" "${app_path}/Contents/Resources"
+  ditto "${release_plist}" "${app_path}/Contents/Info.plist"
+  ditto "${release_icon}" "${app_path}/Contents/Resources/iconfile.icns"
+
+  plist_path="${app_path}/Contents/Info.plist"
+  for app_arch in amd64 arm64; do
+    (
+      cd "${repo_root}/desktop/wails"
+      GOOS=darwin GOARCH="${app_arch}" CGO_ENABLED=1 \
+      CGO_CFLAGS="${release_cgo_cflags}" \
+      CGO_CXXFLAGS="${release_cgo_cxxflags}" \
+      CGO_LDFLAGS="${release_cgo_ldflags}" \
+      MACOSX_DEPLOYMENT_TARGET="${minimum_macos_version}" \
+      RANCHER_RUNWAY_PORTABLE_BUILD=1 \
+      RANCHER_RUNWAY_VERSION="${release_version}" \
+      RANCHER_RUNWAY_BUILD_NUMBER="${build_number}" \
+        go build \
+          -buildvcs=false \
+          -trimpath \
+          -tags 'desktop,wv2runtime.download,production' \
+          -ldflags "${ldflags} -w -s" \
+          -o "${temporary_root}/rancher-runway-app-${app_arch}" \
+          .
+    )
+  done
+  lipo -create \
+    -output "${temporary_root}/rancher-runway-app-universal" \
+    "${temporary_root}/rancher-runway-app-amd64" \
+    "${temporary_root}/rancher-runway-app-arm64"
+  chmod 0755 "${temporary_root}/rancher-runway-app-universal"
+  executable_path="${app_path}/Contents/MacOS/${app_name}"
+  mv "${temporary_root}/rancher-runway-app-universal" "${executable_path}"
+
+  /usr/libexec/PlistBuddy -c "Set :CFBundleName ${app_name}" "${plist_path}"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${app_name}" "${plist_path}"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleExecutable ${app_name}" "${plist_path}"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${bundle_id}" "${plist_path}"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${marketing_version}" "${plist_path}"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${build_number}" "${plist_path}"
+  /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion ${minimum_macos_version}" "${plist_path}"
+  plutil -lint "${plist_path}"
+
+  architectures="$(lipo -archs "${executable_path}")"
+  [[ " ${architectures} " == *" arm64 "* ]] || die "the app executable is missing arm64"
+  [[ " ${architectures} " == *" x86_64 "* ]] || die "the app executable is missing x86_64"
+
+  runtime_stage="${temporary_root}/runtime"
+  mkdir -p "${runtime_stage}/bin"
+  printf '%s\n' "${release_version}" > "${runtime_stage}/.rancher-runway-runtime-version"
+  ditto "${repo_root}/go.mod" "${runtime_stage}/go.mod"
+
+  runtime_excludes=(
+    --exclude .DS_Store
+    --exclude '.tool-config-before-import-*.yml'
+    --exclude .terraform
+    --exclude .terraform.lock.hcl
+    --exclude automation-output
+    --exclude runway-data
+    --exclude 'high-availability-*'
+    --exclude '*.log'
+    --exclude '*.tfstate'
+    --exclude '*.tfstate.*'
+    --exclude backend.env
+    --exclude backend.tf
+    --exclude terraform.tfvars
+    --exclude 'tfplan*'
+  )
+  for runtime_directory in terratest modules bootstrap; do
+    rsync -a "${runtime_excludes[@]}" \
+      "${repo_root}/${runtime_directory}/" \
+      "${runtime_stage}/${runtime_directory}/"
+  done
+
+  for helper_arch in amd64 arm64; do
+    (
+      cd "${repo_root}"
+      GOOS=darwin GOARCH="${helper_arch}" CGO_ENABLED=1 \
+      MACOSX_DEPLOYMENT_TARGET="${minimum_macos_version}" \
+        go test -c -buildvcs=false -trimpath -o "${temporary_root}/rancher-runway-lifecycle-${helper_arch}" ./terratest
+    )
+  done
+  lipo -create \
+    -output "${runtime_stage}/bin/rancher-runway-lifecycle" \
+    "${temporary_root}/rancher-runway-lifecycle-amd64" \
+    "${temporary_root}/rancher-runway-lifecycle-arm64"
+  chmod 0755 "${runtime_stage}/bin/rancher-runway-lifecycle"
+  helper_architectures="$(lipo -archs "${runtime_stage}/bin/rancher-runway-lifecycle")"
+  [[ " ${helper_architectures} " == *" arm64 "* ]] || die "the lifecycle worker is missing arm64"
+  [[ " ${helper_architectures} " == *" x86_64 "* ]] || die "the lifecycle worker is missing x86_64"
+
+  unexpected_runtime_file="$(find "${runtime_stage}" -type f \( \
+    -name 'tool-config.yml' -o \
+    -name '.tool-config-before-import-*.yml' -o \
+    -name '*.tfstate' -o \
+    -name '*.tfstate.*' -o \
+    -name 'terraform.tfvars' -o \
+    -name 'backend.env' \
+  \) -print -quit)"
+  [[ -z "${unexpected_runtime_file}" ]] || die "refusing to package runtime state or configuration: ${unexpected_runtime_file}"
+
+  packaged_runtime="${app_path}/Contents/Resources/runtime"
+  rm -rf "${packaged_runtime}"
+  ditto "${runtime_stage}" "${packaged_runtime}"
+  [[ -x "${packaged_runtime}/bin/rancher-runway-lifecycle" ]] || die "packaged lifecycle worker is missing"
+  [[ -f "${packaged_runtime}/.rancher-runway-runtime-version" ]] || die "packaged runtime version marker is missing"
+
+  codesign "${codesign_args[@]}" "${packaged_runtime}/bin/rancher-runway-lifecycle"
+  codesign --verify --strict --verbose=2 "${packaged_runtime}/bin/rancher-runway-lifecycle"
+
+  manifest_temp="${temporary_root}/runtime.sha256"
+  (
+    cd "${packaged_runtime}"
+    find . -type f ! -name runtime.sha256 -print | LC_ALL=C sort | while IFS= read -r runtime_file; do
+      runtime_hash="$(shasum -a 256 "${runtime_file}" | awk '{print $1}')"
+      printf '%s  %s\n' "${runtime_hash}" "${runtime_file#./}"
+    done
+  ) > "${manifest_temp}"
+  mv "${manifest_temp}" "${packaged_runtime}/runtime.sha256"
+  [[ -s "${packaged_runtime}/runtime.sha256" ]] || die "packaged runtime SHA-256 manifest is empty"
+
+  # The app copies this tree to Application Support before using it. Keeping the
+  # signed source tree read-only prevents Go or another background process from
+  # adding files after the manifest and code signature have been created.
+  find "${packaged_runtime}" -type f -exec chmod a-w {} +
+  find "${packaged_runtime}" -type d -exec chmod a-w {} +
+
+  # Sign only the outer bundle: re-signing nested code here would change the
+  # lifecycle worker after its checksum has been recorded in runtime.sha256.
+  codesign "${codesign_args[@]}" "${app_path}"
+  codesign --verify --deep --strict --verbose=2 "${app_path}"
+)
+
+submit_for_notarization() {
+  local artifact_path="$1"
+  xcrun notarytool submit "${notary_auth[@]}" --wait --timeout 45m "${artifact_path}"
+}
+
+# Persist the UUID as soon as Apple acknowledges the upload. A later job can
+# wait for exactly these signed bytes even if the original runner is gone.
+uuid_pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+
+submit_checkpoint() {
+  local artifact_path="$1" id_file="$2" id
+  xcrun notarytool submit "${artifact_path}" "${notary_auth[@]}" --no-wait --output-format json > "${temporary_root}/submission.json"
+  id="$(jq -er '.id' "${temporary_root}/submission.json")"
+  [[ "${id}" =~ ${uuid_pattern} ]] || die "Apple returned an invalid submission ID"
+  printf '%s\n' "${id}" > "${id_file}"
+  printf 'Submitted %s to Apple (%s)\n' "${artifact_path##*/}" "${id}"
+}
+
+wait_for_acceptance() {
+  local id_file="$1" id status
+  [[ -s "${id_file}" ]] || die "missing submission ID: ${id_file}"
+  id="$(cat "${id_file}")"
+  [[ "${id}" =~ ${uuid_pattern} ]] || die "invalid submission ID in ${id_file}"
+  printf 'Waiting for Apple submission %s\n' "${id}"
+  # A timeout or unsuccessful decision can produce a nonzero exit. Look up
+  # the saved ID once more to distinguish a pending request from rejection.
+  if ! xcrun notarytool wait "${id}" "${notary_auth[@]}" --timeout 3h --output-format json > "${temporary_root}/status.json"; then
+    xcrun notarytool info "${id}" "${notary_auth[@]}" --output-format json > "${temporary_root}/status.json"
+  fi
+  status="$(jq -er '.status' "${temporary_root}/status.json")"
+  case "${status}" in
+    Accepted) ;;
+    "In Progress") die "Apple is still processing ${id}. Retry this phase with the saved submission." ;;
+    Invalid|Rejected)
+      xcrun notarytool log "${id}" "${notary_auth[@]}" || true
+      die "Apple rejected submission ${id} (${status})"
+      ;;
+    *) die "unexpected status for Apple submission ${id}: ${status}" ;;
+  esac
+}
+
+staple_app() {
+  xcrun stapler staple "${app_path}"
+  xcrun stapler validate "${app_path}"
+  spctl --assess --type execute --verbose=2 "${app_path}"
+}
+
+create_archives() {
+  local zip_path="$1" dmg_path="$2" dmg_root
+  codesign --verify --deep --strict --verbose=2 "${app_path}"
+  ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${zip_path}"
+
+  dmg_root="${temporary_root}/dmg-root"
+  mkdir -p "${dmg_root}"
+  ditto "${app_path}" "${dmg_root}/${app_name}.app"
+  ln -s /Applications "${dmg_root}/Applications"
+  hdiutil create \
+    -quiet \
+    -volname "${app_name}" \
+    -srcfolder "${dmg_root}" \
+    -format UDZO \
+    -ov \
+    "${dmg_path}"
+
+  # Catch any mutation between signing and archive construction before checksums
+  # or release metadata can be produced.
+  codesign --verify --deep --strict --verbose=2 "${app_path}"
+
+  if [[ "${signing_mode}" == "developer-id" ]]; then
+    codesign --force --timestamp --sign "${signing_identity}" "${dmg_path}"
+    codesign --verify --verbose=2 "${dmg_path}"
+  fi
+}
+
+staple_dmg() {
+  local image="$1"
+  xcrun stapler staple "${image}"
+  xcrun stapler validate "${image}"
+  spctl --assess --type open --context context:primary-signature --verbose=2 "${image}"
+}
+
+case "${release_phase}" in
+  submit-app)
+    [[ ! -e "${state_dir}/app-id" ]] || die "app submission already exists in ${state_dir}"
+    build_signed_app
+    ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${state_dir}/app.zip"
+    submit_checkpoint "${state_dir}/app.zip" "${state_dir}/app-id"
+    exit 0
+    ;;
+  submit-dmg)
+    [[ ! -e "${state_dir}/dmg-id" ]] || die "DMG submission already exists in ${state_dir}"
+    [[ -s "${state_dir}/app.zip" ]] || die "missing signed app archive"
+    wait_for_acceptance "${state_dir}/app-id"
+    ditto -x -k "${state_dir}/app.zip" "${temporary_root}"
+    codesign --verify --deep --strict --verbose=2 "${app_path}"
+    staple_app
+    create_archives "${state_dir}/release.zip" "${state_dir}/signed.dmg"
+    submit_checkpoint "${state_dir}/signed.dmg" "${state_dir}/dmg-id"
+    exit 0
+    ;;
+  finish)
+    [[ -s "${state_dir}/release.zip" && -s "${state_dir}/signed.dmg" ]] || die "missing signed release archive"
+    wait_for_acceptance "${state_dir}/dmg-id"
+    finished_dmg="${temporary_root}/${dmg_name}"
+    cp "${state_dir}/signed.dmg" "${finished_dmg}"
+    codesign --verify --verbose=2 "${finished_dmg}"
+    staple_dmg "${finished_dmg}"
+    mv "${finished_dmg}" "${dmg_path}"
+    cp "${state_dir}/release.zip" "${zip_path}"
+    ;;
+  full)
+    build_signed_app
+    if [[ "${signing_mode}" == developer-id ]]; then
+      notary_zip="${temporary_root}/notary-upload.zip"
+      ditto -c -k --sequesterRsrc --keepParent "${app_path}" "${notary_zip}"
+      submit_for_notarization "${notary_zip}"
+      staple_app
+    else
+      printf 'Ad-hoc release: not notarized by Apple; macOS may require Open Anyway on first launch.\n'
+    fi
+    rm -f "${dmg_path}" "${zip_path}" "${checksums_path}"
+    create_archives "${zip_path}" "${dmg_path}"
+    if [[ "${signing_mode}" == developer-id ]]; then
+      submit_for_notarization "${dmg_path}"
+      staple_dmg "${dmg_path}"
+    fi
+    ;;
+esac
 
 (
   cd "${output_dir}"

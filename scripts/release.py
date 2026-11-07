@@ -23,8 +23,10 @@ WORKFLOW = "release-macos.yml"
 VERSION_RE = re.compile(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 RELEASE_FILES = (
     "Makefile", "README.md", ".github/workflows/release-macos.yml",
+    ".github/scripts/macos-release-keychain.sh",
     "scripts/release.py", "scripts/package-macos-release.sh",
     "scripts/test_release.py", "scripts/macos_release_test.go",
+    "scripts/macos_release_phases_test.go",
     "scripts/render-homebrew-cask.sh", "packaging/homebrew/Casks/rancher-runway.rb.tmpl",
     "docs/homebrew-release.md",
 )
@@ -134,7 +136,8 @@ def wait_for_run(tag, commit):
     else:
         raise ReleaseError(f"No release run started for {tag}. Retry with RELEASE_VERSION={tag}; the tag was preserved.")
     print(f"Workflow: {run['html_url']}", flush=True)
-    deadline = time.monotonic() + 100 * 60
+    # Both Apple submissions can wait up to three hours, on separate runners.
+    deadline = time.monotonic() + 10 * 60 * 60
     previous = None
     while time.monotonic() < deadline:
         status = run["status"]
@@ -160,20 +163,25 @@ def validate_cask(text, version, checksum, url):
             raise ReleaseError(f"Release Cask {key} does not match the downloaded release")
 
 
-def update_tap(tag):
+def read_verified_cask(tag, cask_path, source_repo):
     version = tag[1:]
     dmg_name = f"Rancher-Runway-{version}-macOS-universal.dmg"
-    with tempfile.TemporaryDirectory(prefix="runway-release-") as temp:
-        gh("release", "download", tag, "--repo", f"https://github.com/{SOURCE_REPO}",
-           "--pattern", "rancher-runway.rb", "--pattern", dmg_name, "--dir", temp)
-        cask = (Path(temp) / "rancher-runway.rb").read_bytes()
-        digest = hashlib.sha256()
-        with (Path(temp) / dmg_name).open("rb") as dmg:
-            for block in iter(lambda: dmg.read(1024 * 1024), b""):
-                digest.update(block)
-        validate_cask(cask.decode(), version, digest.hexdigest(),
-                      f"https://github.com/{SOURCE_REPO}/releases/download/{tag}/{dmg_name}")
-    endpoint = f"repos/{TAP_REPO}/contents/{CASK_PATH}"
+    cask = cask_path.read_bytes()
+    digest = hashlib.sha256()
+    with (cask_path.parent / dmg_name).open("rb") as dmg:
+        for block in iter(lambda: dmg.read(1024 * 1024), b""):
+            digest.update(block)
+    validate_cask(cask.decode(), version, digest.hexdigest(),
+                  f"https://github.com/{source_repo}/releases/download/{tag}/{dmg_name}")
+    return cask
+
+
+def update_tap_contents(version, cask, repository, path):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ReleaseError("Invalid Homebrew tap repository")
+    if not re.fullmatch(r"[A-Za-z0-9_./-]+\.rb", path) or path.startswith("/") or ".." in path:
+        raise ReleaseError("Invalid Homebrew Cask path")
+    endpoint = f"repos/{repository}/contents/{path}"
     current = api(endpoint, missing_ok=True)
     payload = {"message": f"rancher-runway {version}", "content": base64.b64encode(cask).decode()}
     if current:
@@ -188,7 +196,16 @@ def update_tap(tag):
             raise ReleaseError("The Homebrew tap has a newer version; refusing to downgrade it")
         payload["sha"] = current["sha"]
     api(endpoint, method="PUT", payload=payload)
-    print(f"Updated https://github.com/{TAP_REPO}/blob/main/{CASK_PATH}", flush=True)
+    print(f"Updated {repository}/{path}", flush=True)
+
+
+def update_tap(tag):
+    dmg_name = f"Rancher-Runway-{tag[1:]}-macOS-universal.dmg"
+    with tempfile.TemporaryDirectory(prefix="runway-release-") as temp:
+        gh("release", "download", tag, "--repo", f"https://github.com/{SOURCE_REPO}",
+           "--pattern", "rancher-runway.rb", "--pattern", dmg_name, "--dir", temp)
+        cask = read_verified_cask(tag, Path(temp) / "rancher-runway.rb", SOURCE_REPO)
+    update_tap_contents(tag[1:], cask, TAP_REPO, CASK_PATH)
 
 
 def run(args):
@@ -229,12 +246,15 @@ def run(args):
         if not existing_run:
             gh("workflow", "run", WORKFLOW, "--repo", f"https://github.com/{SOURCE_REPO}", "--ref", tag, "-f", f"tag={tag}")
         elif existing_run["status"] == "completed":
-            gh("run", "rerun", str(existing_run["id"]), "--repo", f"https://github.com/{SOURCE_REPO}")
-            # Wait for the rerun to leave its previous completed state.
+            gh("run", "rerun", str(existing_run["id"]), "--failed", "--repo", f"https://github.com/{SOURCE_REPO}")
+            # A fast retry can finish between polls. Watch the attempt number.
             for _ in range(36):
-                if api(f"repos/{SOURCE_REPO}/actions/runs/{existing_run['id']}")["status"] != "completed":
+                current = api(f"repos/{SOURCE_REPO}/actions/runs/{existing_run['id']}")
+                if current["run_attempt"] > existing_run["run_attempt"]:
                     break
                 time.sleep(5)
+            else:
+                raise ReleaseError(f"GitHub accepted the retry. Check its status at {existing_run['html_url']}")
     else:
         api(f"repos/{SOURCE_REPO}/git/refs", method="POST", payload={"ref": f"refs/tags/{tag}", "sha": sha})
         print(f"Created {tag}; its tag event starts the release workflow.", flush=True)
@@ -256,11 +276,20 @@ def main():
     parser.add_argument("--bump", choices=("patch", "minor", "major"), default=os.getenv("RELEASE_BUMP", "patch"))
     parser.add_argument("--version", default=os.getenv("RELEASE_VERSION", ""), help="explicit stable version, also used to retry a release")
     parser.add_argument("--ref", default=os.getenv("RELEASE_REF", "main"), help="published source branch or commit")
+    parser.add_argument("--update-tap-cask", type=Path, help="update the tap from the workflow's verified release files")
     args = parser.parse_args()
     if args.bump not in ("patch", "minor", "major"):
         parser.error("RELEASE_BUMP must be patch, minor, or major")
+    if args.update_tap_cask and (args.dry_run or not args.version):
+        parser.error("--update-tap-cask requires --version and cannot be combined with --dry-run")
     try:
-        run(args)
+        if args.update_tap_cask:
+            version = ".".join(map(str, parse_version(args.version)))
+            cask = read_verified_cask("v" + version, args.update_tap_cask, os.getenv("GITHUB_REPOSITORY", SOURCE_REPO))
+            update_tap_contents(version, cask, os.getenv("HOMEBREW_TAP_REPOSITORY", TAP_REPO),
+                                os.getenv("HOMEBREW_CASK_PATH", CASK_PATH))
+        else:
+            run(args)
     except (ReleaseError, OSError, ValueError, KeyError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

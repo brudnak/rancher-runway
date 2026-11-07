@@ -111,6 +111,25 @@ class ReleaseFlowTests(unittest.TestCase):
                 release.run(self.args())
         update.assert_not_called()
 
+    @patch.object(release, "all_pages", return_value=[{"name": "v1.0.0"}])
+    @patch.object(release, "source_mismatches", return_value=[])
+    def test_retry_keeps_completed_notary_jobs(self, *_):
+        args = self.args()
+        args.version = "v1.0.0"
+        original_run = {"id": 321, "status": "completed", "conclusion": "failure", "run_attempt": 1}
+
+        def api(endpoint, **kwargs):
+            if endpoint.endswith("/actions/runs/321"):
+                return {"status": "in_progress", "run_attempt": 2}
+            return self.fake_api(endpoint, **kwargs)
+
+        with patch.object(release, "api", side_effect=api), patch.object(release, "gh") as cli, \
+             patch.object(release, "find_run", return_value=original_run), \
+             patch.object(release, "wait_for_run", side_effect=release.ReleaseError("still waiting")):
+            with self.assertRaisesRegex(release.ReleaseError, "still waiting"):
+                release.run(args)
+        cli.assert_called_once_with("run", "rerun", "321", "--failed", "--repo", "https://github.com/brudnak/rancher-runway")
+
     @patch.object(release, "all_pages", return_value=[])
     def test_published_release_retry_only_updates_tap(self, *_):
         self.published = True
