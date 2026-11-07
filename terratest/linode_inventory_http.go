@@ -39,7 +39,7 @@ func (p *localControlPanel) handleLinodeInventory(w http.ResponseWriter, r *http
 		p.mu.Lock()
 		running := false
 		for _, op := range p.operations {
-			if op != nil && op.Running {
+			if panelOperationActive(op) {
 				running = true
 			}
 		}

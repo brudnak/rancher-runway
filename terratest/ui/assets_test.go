@@ -126,8 +126,8 @@ func TestControlPanelTabsUseMeaningfulGeometryNeutralStatuses(t *testing.T) {
 		`aria-label`,
 		`aria-busy`,
 		`aria-live="polite"`,
-		`AWS setup running; lifecycle actions are locked`,
-		`Linode setup running; lifecycle actions are locked`,
+		`AWS setup running`,
+		`Linode setup running`,
 		`K3D operation running; K3D controls are locked`,
 	} {
 		if !strings.Contains(source, marker) {
@@ -135,7 +135,11 @@ func TestControlPanelTabsUseMeaningfulGeometryNeutralStatuses(t *testing.T) {
 		}
 	}
 
-	for _, forbidden := range []string{`badgeSlot`, `data-empty`, `tab-count`, `badge("A"`, `badge("L"`} {
+	for _, forbidden := range []string{
+		`badgeSlot`, `data-empty`, `tab-count`, `badge("A"`, `badge("L"`,
+		`AWS setup running; lifecycle actions are locked`,
+		`Linode setup running; lifecycle actions are locked`,
+	} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("control panel tabs must not retain ambiguous or placeholder badge UI %q", forbidden)
 		}
@@ -145,7 +149,8 @@ func TestControlPanelTabsUseMeaningfulGeometryNeutralStatuses(t *testing.T) {
 		`tab-status--`,
 		`data-operation-status`,
 		`aria-busy`,
-		`lifecycle actions are locked`,
+		`AWS setup running`,
+		`Linode setup running`,
 	} {
 		if !strings.Contains(ControlPanelHeaderVueJS, marker) {
 			t.Fatalf("compiled control panel tabs must include geometry-neutral statuses; missing %q", marker)

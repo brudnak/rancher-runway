@@ -161,9 +161,9 @@ const statuses = computed(() => {
 
   return {
     setup: awsSetupRunning
-      ? status("busy", "AWS setup running; lifecycle actions are locked")
+      ? status("busy", "AWS setup running")
       : linodeSetupRunning
-        ? status("busy", "Linode setup running; lifecycle actions are locked")
+        ? status("busy", "Linode setup running")
         : status(),
     runs: contentStatus(runs.length, "recorded run"),
     clusters: contentStatus(clusters.length, "cluster record"),

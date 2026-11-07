@@ -162,7 +162,7 @@ func InspectLocalWorkspace(repoRoot string) (LocalWorkspaceStatus, error) {
 		testDir:                   testDir,
 		configPath:                viper.ConfigFileUsed(),
 		operations:                newPanelOperations(),
-		rancherTokens:             map[int]string{},
+		rancherTokens:             map[string]string{},
 		downstreamKubeconfigCache: map[string]string{},
 	}
 	panel.loadPersistedOperations(false)
@@ -230,7 +230,7 @@ func InspectGPUInfrastructure(repoRoot string) (GPUInfrastructureSummary, error)
 		testDir:       testDir,
 		configPath:    viper.ConfigFileUsed(),
 		operations:    newPanelOperations(),
-		rancherTokens: map[int]string{},
+		rancherTokens: map[string]string{},
 	}
 	return panel.gpuInfrastructure(), nil
 }

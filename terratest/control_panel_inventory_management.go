@@ -102,8 +102,8 @@ func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clus
 	}
 	downstreamRecords, _ := readDownstreamOutputRecordsForRun(record.RunID)
 	recordsByHA := downstreamRecordsByHA(downstreamRecords)
-	setupRunning := p.operationRunning(panelOperationSetup)
-	readinessRunning := p.operationRunning(panelOperationReadiness)
+	setupRunning := p.operationRunningForRun(panelOperationSetup, record.RunID)
+	readinessRunning := p.operationRunningForRun(panelOperationReadiness, record.RunID)
 	runID := safeRunPathSegment(record.RunID)
 	totalHAs := record.TotalHAs
 	if totalHAs < 1 {

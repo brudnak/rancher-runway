@@ -155,7 +155,7 @@ func (p *localControlPanel) reserveRancherOperation(clusterID, id string) error 
 	}
 	// Also reject overlapping Runway provisioning and destructive lifecycle work.
 	for _, op := range p.operations {
-		if op != nil && op.Running {
+		if panelOperationActive(op) {
 			return fmt.Errorf("wait for the current Runway lifecycle operation to finish")
 		}
 	}

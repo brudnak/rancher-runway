@@ -45,9 +45,9 @@
         type="button"
         @click="handleRunAction(null, 'open-setup')"
         class="run-action-button run-action-button--primary"
-        :class="{ 'run-action-button--disabled': bootPending || lifecycleRunning }"
-        :disabled="bootPending || lifecycleRunning"
-        :title="bootPending ? 'Startup safety check is still running.' : lifecycleRunning ? 'Wait for the active lifecycle operation to finish.' : ''"
+        :class="{ 'run-action-button--disabled': runProvisioningBlocked('') }"
+        :disabled="runProvisioningBlocked('')"
+        :title="workspace.setupBlockedReason || ''"
       >
         Open setup
       </button>
@@ -154,7 +154,7 @@
               :run-id="run.runId"
               label="Retry downstream"
               variant="blue"
-              :disabled="lifecycleRunning || downstreamRetryingRunId === run.runId"
+              :disabled="runProvisioningBlocked(run.runId) || downstreamRetryingRunId === run.runId"
               title="Retry only the frozen Linode downstream plan; management Rancher stays ready."
               @click="handleRunAction(run, 'retry-downstream')"
             />
@@ -216,6 +216,7 @@ import { computed, defineComponent, h } from "vue";
 import {
   state,
   bootPending,
+  canStartSetup,
   refreshStatus,
   activeClusterRunKey,
   activeClusterHAKey,
@@ -223,6 +224,7 @@ import {
   setActivePanelTab,
   setActiveDestroyTab,
   runReadiness,
+  runProvisioningBlocked,
   retryDownstream,
   downstreamRetryingRunId,
   openLocalPath,
@@ -234,6 +236,8 @@ import {
   abortOperation,
   stopOperationThenOpenDestroy,
 } from "./store.js";
+
+import { activeOperations as activeOperationsInState, operationSnapshot } from "../../static/control_panel_runs.js";
 
 const sameRunKey = (left, right) => String(left || "").trim() === String(right || "").trim();
 const trimTrailingPathSeparator = value => String(value || "").replace(/[\\/]+$/, "");
@@ -254,16 +258,11 @@ const totalHAs = computed(() => runs.value.reduce((total, run) => total + Number
 const awsLifecycleRunning = computed(() => Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running || state.value?.cleanup?.running || state.value?.awsCleanup?.running));
 const linodeLifecycleRunning = computed(() => Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running || state.value?.awsCleanup?.running));
 const lifecycleRunning = computed(() => Boolean(awsLifecycleRunning.value || linodeLifecycleRunning.value));
-const canStart = computed(() => Boolean(workspace.value?.canStartIsolatedRun && !lifecycleRunning.value && !bootPending.value));
+const canStart = canStartSetup;
 
-const activeOperations = computed(() => [
-  { mode: "setup", label: "Setup", operation: state.value?.setup },
-  { mode: "readiness", label: "Readiness", operation: state.value?.readiness },
-  { mode: "downstream", label: "Downstream", operation: state.value?.downstream },
-  { mode: "cleanup", label: "Destroy", operation: state.value?.cleanup },
-  { mode: "linodeSetup", label: "Linode setup", operation: state.value?.linodeSetup },
-  { mode: "linodeCleanup", label: "Linode destroy", operation: state.value?.linodeCleanup },
-].filter(item => item.operation?.running));
+const activeOperations = computed(() => activeOperationsInState(state.value)
+  .filter(([mode]) => !["awsCleanup", "cleanupBatch"].includes(mode))
+  .map(([mode, label, operation]) => ({ mode, label, operation })));
 
 const title = computed(() => runs.value.length
   ? `${runs.value.length} recorded run slot${runs.value.length === 1 ? "" : "s"}`
@@ -395,25 +394,21 @@ const runFolderAvailable = run => Boolean(runFolderPath(run) && run?.runFolderEx
 const runTerraformPath = run => run?.terraformModuleDir || (run?.terraformStatePath ? parentPath(run.terraformStatePath) : "") || run?.terraformBackend || "";
 const runIsLinodeDocker = run => run?.deploymentType === "linode-docker-cattle";
 const isCurrent = run => Boolean(currentRunID.value && sameRunKey(run.runId, currentRunID.value));
-const readinessRunningForRun = run => Boolean(state.value?.readiness?.running && sameRunKey(state.value.readiness.runId, run.runId));
-const downstreamRunningForRun = run => Boolean(state.value?.downstream?.running && sameRunKey(state.value.downstream.runId, run.runId));
-const setupRunningForRun = run => Boolean(state.value?.setup?.running && sameRunKey(state.value.setup.runId, run.runId));
-const linodeSetupRunningForRun = run => Boolean(state.value?.linodeSetup?.running && sameRunKey(state.value.linodeSetup.runId, run.runId));
+const readinessRunningForRun = run => Boolean(operationSnapshot(state.value, "readiness", run.runId).running);
+const downstreamRunningForRun = run => Boolean(operationSnapshot(state.value, "downstream", run.runId).running);
+const setupRunningForRun = run => Boolean(operationSnapshot(state.value, "setup", run.runId).running);
+const linodeSetupRunningForRun = run => Boolean(operationSnapshot(state.value, "linodeSetup", run.runId).running);
 const providerLifecycleRunning = run => runIsLinodeDocker(run) ? linodeLifecycleRunning.value : awsLifecycleRunning.value;
-
-const readinessDisabled = run => Boolean(providerLifecycleRunning(run) || state.value?.readiness?.running || !isCurrent(run));
-
-const readinessTitle = run => bootPending.value
-  ? "Startup safety check is still running."
-  : providerLifecycleRunning(run)
-    ? "Wait for the active lifecycle operation to finish."
-    : state.value?.readiness?.running
-      ? "Wait for the active readiness check to finish."
-      : !isCurrent(run)
-        ? "Readiness currently runs against the active/current slot only."
-        : runIsLinodeDocker(run)
-          ? "Check Docker Rancher readiness for the current run."
-          : "Check readiness for the current run.";
+const readinessDisabled = run => {
+  if (bootPending.value) return true;
+  if (!Array.isArray(state.value?.runOperations)) {
+    return Boolean(providerLifecycleRunning(run) || state.value?.readiness?.running || !isCurrent(run));
+  }
+  return runProvisioningBlocked(run.runId);
+};
+const readinessTitle = run => readinessDisabled(run)
+  ? "Wait for an available run slot and for this run's active work to finish."
+  : "Check readiness for this run.";
 
 const lifecycleAction = run => {
   if (setupRunningForRun(run) || linodeSetupRunningForRun(run)) {
@@ -540,7 +535,7 @@ const handleRunAction = (runOrId, action) => {
     activeClusterHAKey.value = '';
     setActivePanelTab('clusters');
   } else if (action === 'check-readiness') {
-    runReadiness();
+    runReadiness(runId);
   } else if (action === 'retry-downstream') {
     retryDownstream(runId);
   } else if (action === 'open-run-folder') {
@@ -552,11 +547,11 @@ const handleRunAction = (runOrId, action) => {
   } else if (action === 'copy-terraform-path') {
     copyTextToClipboard(runTerraformPath(run), 'Copied Terraform path to clipboard.');
   } else if (action === 'open-setup-logs') {
-    openSetupLogs(runIsLinodeDocker(run));
+    openSetupLogs(runIsLinodeDocker(run), runId);
   } else if (action === 'open-readiness-logs') {
-    openReadinessLogs();
+    openReadinessLogs(runId);
   } else if (action === 'open-downstream-logs') {
-    openDownstreamLogs();
+    openDownstreamLogs(runId);
   } else if (action === 'open-cleanup-logs') {
     openCleanupLogs(runIsLinodeDocker(run));
   } else if (action === 'open-destroy') {

@@ -74,7 +74,7 @@ func (p *localControlPanel) loadPersistedOperations(markStaleRunning bool) {
 }
 
 func (p *localControlPanel) markStaleRunningOperationsLocked() {
-	for _, name := range allPanelOperationNames() {
+	for _, name := range p.panelOperationNamesLocked() {
 		op := p.operationLocked(name)
 		if !op.Running {
 			continue
@@ -107,7 +107,7 @@ func (p *localControlPanel) markOperationStaleLocked(name panelOperationName, op
 	op.UpdatedAt = &now
 	op.Error = errorMessage
 	op.Output = append(op.Output, outputLine)
-	if name == panelOperationDownstream {
+	if panelOperationBase(name) == panelOperationDownstream {
 		p.updateRunDownstreamStatus(op.RunID, panelDownstreamStatusFailed, errorMessage)
 	}
 }

@@ -22,6 +22,7 @@ func (p *localControlPanel) buildState() panelState {
 			Build:                buildinfo.Current(),
 		},
 		Workspace:     workspace,
+		RunOperations: p.snapshotRunOperations(activeRunIDs),
 		TestLab:       p.testLabActivity(),
 		Setup:         p.snapshotOperationForRuns(panelOperationSetup, activeRunIDs),
 		Readiness:     p.snapshotOperationForRuns(panelOperationReadiness, activeRunIDs),
@@ -47,18 +48,38 @@ func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, ac
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	op := p.operationLocked(name)
-	if op.Running && !op.InProcess && op.PID > 0 && !processAlive(op.PID) {
-		p.markOperationStaleLocked(name, op,
-			"operation process exited before reporting completion",
-			"[control-panel] Operation process exited before reporting completion; status marked stale.",
-		)
-		p.persistOperationsLocked()
+	name = p.summaryOperationKeyLocked(name)
+	return p.snapshotOperationLocked(name, activeRunIDs)
+}
+
+func (p *localControlPanel) snapshotRunOperations(activeRunIDs map[string]bool) []panelOperationSnapshot {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	snapshots := []panelOperationSnapshot{}
+	for _, name := range p.panelOperationNamesLocked() {
+		op := p.operations[name]
+		if !isProvisioningPanelOperation(name) || op.RunID == "" || (op.StartedAt == nil && len(op.Output) == 0) {
+			continue
+		}
+		// A retained pre-upgrade summary may refer to a run now tracked by key.
+		if name == panelOperationBase(name) && p.operations[panelOperationForRun(name, op.RunID)] != nil {
+			continue
+		}
+		snapshot := p.snapshotOperationLocked(name, activeRunIDs)
+		if snapshot.RunID != "" {
+			snapshots = append(snapshots, snapshot)
+		}
 	}
+	return snapshots
+}
+
+func (p *localControlPanel) snapshotOperationLocked(name panelOperationName, activeRunIDs map[string]bool) panelOperationSnapshot {
+	op := p.operationLocked(name)
+	p.refreshOperationLocked(name, op)
 	cleanupOperation := name == panelOperationCleanup || name == panelOperationLinodeCleanup
 	recentCleanup := cleanupOperation && op.FinishedAt != nil && op.Error == "" && time.Since(*op.FinishedAt) < time.Hour
 	retainedCleanupWarning := cleanupOperation && op.FinishedAt != nil && strings.TrimSpace(op.Warning) != ""
-	if activeRunIDs != nil && !op.Running && op.RunID != "" && !activeRunIDs[safeRunPathSegment(op.RunID)] && !recentCleanup && !retainedCleanupWarning {
+	if activeRunIDs != nil && !panelOperationActive(op) && op.RunID != "" && !activeRunIDs[safeRunPathSegment(op.RunID)] && !recentCleanup && !retainedCleanupWarning {
 		return panelOperationSnapshot{Output: []string{}}
 	}
 	outputCopy := append([]string(nil), op.Output...)
@@ -66,6 +87,7 @@ func (p *localControlPanel) snapshotOperationForRuns(name panelOperationName, ac
 		outputCopy = []string{}
 	}
 	return panelOperationSnapshot{
+		Operation:  panelOperationBase(name),
 		Running:    op.Running,
 		PID:        op.PID,
 		StartedAt:  op.StartedAt,

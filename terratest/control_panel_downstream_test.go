@@ -179,7 +179,6 @@ func TestConfiguredDownstreamStartsOnlyForEnabledFrozenPlans(t *testing.T) {
 		t.Fatalf("completed run = %#v, %v", record, ok)
 	}
 
-	panel.operations[panelOperationDownstream] = &panelOperationState{}
 	panel.writeCurrentRunRecord(panelRunRecord{
 		RunID:                 "run-disabled",
 		Status:                "ready",
@@ -187,7 +186,7 @@ func TestConfiguredDownstreamStartsOnlyForEnabledFrozenPlans(t *testing.T) {
 		DownstreamLinodePlans: []settings.LinodeDownstreamPlan{settings.DefaultLinodeDownstreamPlan()},
 	})
 	panel.startConfiguredDownstreamsAfterReadiness("run-disabled")
-	if snapshot := panel.snapshotOperation(panelOperationDownstream); snapshot.StartedAt != nil || snapshot.Running {
+	if snapshot := panel.snapshotOperation(panelOperationForRun(panelOperationDownstream, "run-disabled")); snapshot.StartedAt != nil || snapshot.Running {
 		t.Fatalf("disabled downstream plan started an operation: %#v", snapshot)
 	}
 }

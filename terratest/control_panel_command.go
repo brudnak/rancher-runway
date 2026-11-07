@@ -14,7 +14,18 @@ import (
 func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if isCloudPanelOperation(spec.Operation) {
+	baseOperation := panelOperationBase(spec.Operation)
+	runID := safeRunPathSegment(spec.RunID)
+	if runID == "" || runID == "unknown" {
+		token, err := randomConfirmationToken()
+		if err != nil {
+			return fmt.Errorf("failed to create %s run id: %w", spec.DisplayName, err)
+		}
+		runID = token[:8]
+	}
+	spec.RunID = runID
+	spec.Operation = panelOperationForRun(baseOperation, runID)
+	if isCloudPanelOperation(baseOperation) {
 		batch := p.operationLocked(panelOperationCleanupBatch)
 		if batch.Running && !spec.BatchChild {
 			return fmt.Errorf("cleanup batch is already running")
@@ -23,13 +34,21 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 			return errCleanupBatchCanceled
 		}
 	}
-
-	if p.conflictingOperationRunningLocked(spec.Operation) {
+	if isProvisioningPanelOperation(baseOperation) {
+		if err := p.provisioningAdmissionErrorLocked(runID); err != nil {
+			return err
+		}
+	} else if p.conflictingOperationRunningLocked(spec.Operation) {
 		return fmt.Errorf("%s is already running", p.runningConflictingOperationNameLocked(spec.Operation))
+	}
+	if baseOperation == panelOperationSetup {
+		if ok, reason := p.awsPrefixAvailableForIsolatedRun(runID); !ok {
+			return fmt.Errorf("%s", reason)
+		}
 	}
 
 	op := p.operationLocked(spec.Operation)
-	if op.Running {
+	if panelOperationActive(op) {
 		return fmt.Errorf("%s is already running", spec.DisplayName)
 	}
 	_, workerDone, workerErr := p.workers.Begin()
@@ -44,27 +63,30 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 	}()
 
 	now := time.Now()
-	runID := safeRunPathSegment(spec.RunID)
-	if runID == "" || runID == "unknown" {
-		token, err := randomConfirmationToken()
-		if err != nil {
-			return fmt.Errorf("failed to create %s run id: %w", spec.DisplayName, err)
-		}
-		runID = token[:8]
-	}
 	invocation, err := p.lifecycleInvocation(spec)
 	if err != nil {
 		return err
 	}
 	command := invocation.display
 
-	if spec.Operation == panelOperationSetup || spec.Operation == panelOperationLinodeSetup {
+	if baseOperation == panelOperationSetup || baseOperation == panelOperationLinodeSetup {
+		if err := p.freezeRunConfig(runID); err != nil {
+			return err
+		}
 		if err := p.prepareTerraformModuleForRun(runID); err != nil {
 			return err
 		}
 	}
 
+	if isCloudPanelOperation(baseOperation) {
+		if err := p.prepareRunWorkerTools(runID); err != nil {
+			return err
+		}
+	}
+
 	op.Running = true
+	op.InProcess = true
+	op.Completing = false
 	op.CancelRequested = false
 	op.PID = 0
 	op.StartedAt = &now
@@ -79,9 +101,9 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 		"[control-panel] " + command,
 		spec.StartLine,
 	}
-	if spec.Operation == panelOperationSetup || spec.Operation == panelOperationLinodeSetup {
+	if baseOperation == panelOperationSetup || baseOperation == panelOperationLinodeSetup {
 		p.createCurrentRunRecord(runID, now)
-	} else if spec.Operation == panelOperationDownstream {
+	} else if baseOperation == panelOperationDownstream {
 		p.updateRunDownstreamStatus(runID, panelDownstreamStatusRunning, "")
 	}
 	p.persistOperationsLocked()
@@ -205,6 +227,7 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 	op := p.operationLocked(operation)
 	runID = strings.TrimSpace(op.RunID)
 	p.mu.Unlock()
+	operation = panelOperationBase(operation)
 
 	recordLoaded := false
 	if (operation == panelOperationSetup || operation == panelOperationLinodeSetup) && runID != "" {
@@ -292,6 +315,9 @@ func (p *localControlPanel) panelCommandEnv(operation panelOperationName) []stri
 			runDownstreamLinodePlansJSON = "[]"
 		}
 		env = panelEnvWithValue(env, panelDownstreamLinodePlansEnv, runDownstreamLinodePlansJSON)
+	}
+	if isCloudPanelOperation(operation) {
+		return p.panelRunWorkerEnv(env, runID)
 	}
 	return env
 }

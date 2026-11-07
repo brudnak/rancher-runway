@@ -46,6 +46,11 @@ type interactiveResult struct {
 	err   error
 }
 
+type interactiveRunStart struct {
+	RunID          string `json:"runId,omitempty"`
+	DeploymentType string `json:"deploymentType,omitempty"`
+}
+
 type interactiveSetupState struct {
 	Token                 string                           `json:"token"`
 	BasePath              string                           `json:"basePath,omitempty"`
@@ -88,7 +93,8 @@ type interactiveServer struct {
 	submitted   bool
 
 	resultCh        chan interactiveResult
-	responseHandler func(action string, plans []*RancherResolvedPlan) error
+	responseHandler func(action string, plans []*RancherResolvedPlan) (interactiveRunStart, error)
+	setupAdmission  func() error
 	configImporter  func([]byte, string) (string, error)
 }
 

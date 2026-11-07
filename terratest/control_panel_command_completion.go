@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,7 +46,14 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 	runID = op.RunID
 	canceled := op.CancelRequested
 	op.Running = false
+	op.Completing = true
 	op.PID = 0
+	defer func() {
+		p.mu.Lock()
+		op.Completing = false
+		op.InProcess = false
+		p.mu.Unlock()
+	}()
 	finishedAt := time.Now()
 	op.FinishedAt = &finishedAt
 	op.UpdatedAt = &finishedAt
@@ -64,7 +72,7 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 	op.Error = ""
 	op.Output = append(op.Output, spec.SuccessLine)
 	p.persistOperationsLocked()
-	shouldRunAfterSuccess = spec.AfterSuccess != nil
+	shouldRunAfterSuccess = spec.AfterSuccess != nil && !canceled
 	p.mu.Unlock()
 
 	if !spec.BatchChild {
@@ -85,7 +93,7 @@ func (p *localControlPanel) setOperationPID(operation panelOperationName, pid in
 	now := time.Now()
 	op.UpdatedAt = &now
 	op.Output = append(op.Output, fmt.Sprintf("[control-panel] Process pid %d", pid))
-	interruptForBatchCancel := p.mirrorCleanupBatchPIDLocked(operation, op.RunID, pid, now)
+	interruptForBatchCancel := p.mirrorCleanupBatchPIDLocked(operation, op.RunID, pid, now) || op.CancelRequested
 	p.persistOperationsLocked()
 	p.mu.Unlock()
 
@@ -98,7 +106,7 @@ func (p *localControlPanel) setOperationPID(operation panelOperationName, pid in
 
 func (p *localControlPanel) updateRunStatusAfterOperation(operation panelOperationName, runID string, operationErr error) {
 	success := operationErr == nil
-	switch operation {
+	switch panelOperationBase(operation) {
 	case panelOperationSetup, panelOperationLinodeSetup:
 		if success {
 			p.updateRunRecordStatus(runID, "setup_complete")
@@ -137,6 +145,9 @@ func (p *localControlPanel) operationLocked(name panelOperationName) *panelOpera
 	op, ok := p.operations[name]
 	if !ok {
 		op = &panelOperationState{}
+		if _, runID, found := strings.Cut(string(name), ":"); found {
+			op.RunID = runID
+		}
 		p.operations[name] = op
 	}
 	return op
@@ -149,7 +160,7 @@ func (p *localControlPanel) anyOperationRunningLocked() bool {
 	if rancherBusy {
 		return true
 	}
-	for _, name := range allPanelOperationNames() {
+	for _, name := range p.panelOperationNamesLocked() {
 		op := p.operationLocked(name)
 		if name != panelOperationCleanupBatch && op.Running && !op.InProcess && op.PID > 0 && !processAlive(op.PID) {
 			p.markOperationStaleLocked(name, op,
@@ -159,7 +170,7 @@ func (p *localControlPanel) anyOperationRunningLocked() bool {
 			p.persistOperationsLocked()
 			continue
 		}
-		if op.Running {
+		if panelOperationActive(op) {
 			return true
 		}
 	}
@@ -167,30 +178,7 @@ func (p *localControlPanel) anyOperationRunningLocked() bool {
 }
 
 func (p *localControlPanel) conflictingOperationRunningLocked(operation panelOperationName) bool {
-	p.rancherOps.mu.Lock()
-	rancherBusy := len(p.rancherOps.active) > 0
-	p.rancherOps.mu.Unlock()
-	if rancherBusy {
-		return true
-	}
-	if p.operationLocked(panelOperationAWSCleanup).Running {
-		return true
-	}
-	for _, name := range conflictingPanelOperationNames(operation) {
-		op := p.operationLocked(name)
-		if op.Running && !op.InProcess && op.PID > 0 && !processAlive(op.PID) {
-			p.markOperationStaleLocked(name, op,
-				"operation process exited before reporting completion",
-				"[control-panel] Operation process exited before reporting completion; status marked stale.",
-			)
-			p.persistOperationsLocked()
-			continue
-		}
-		if op.Running {
-			return true
-		}
-	}
-	return false
+	return p.runningConflictingOperationNameLocked(operation) != ""
 }
 
 func (p *localControlPanel) anyOperationRunning() bool {
@@ -206,9 +194,9 @@ func (p *localControlPanel) runningOperationNameLocked() string {
 	if rancherBusy {
 		return "Rancher upgrade or downstream creation"
 	}
-	for _, name := range allPanelOperationNames() {
-		if p.operationLocked(name).Running {
-			return string(name)
+	for _, name := range p.panelOperationNamesLocked() {
+		if panelOperationActive(p.operationLocked(name)) {
+			return string(panelOperationBase(name))
 		}
 	}
 	return "operation"
@@ -221,15 +209,25 @@ func (p *localControlPanel) runningConflictingOperationNameLocked(operation pane
 	if rancherBusy {
 		return "Rancher upgrade or downstream creation"
 	}
-	if p.operationLocked(panelOperationAWSCleanup).Running {
-		return "AWS inventory cleanup"
-	}
-	for _, name := range conflictingPanelOperationNames(operation) {
-		if p.operationLocked(name).Running {
-			return string(name)
+	base := panelOperationBase(operation)
+	for _, name := range p.panelOperationNamesLocked() {
+		op := p.operations[name]
+		p.refreshOperationLocked(name, op)
+		if !panelOperationActive(op) {
+			continue
+		}
+		existing := panelOperationBase(name)
+		if existing == panelOperationAWSCleanup ||
+			(isDestructivePanelOperation(base) && isProvisioningPanelOperation(existing)) {
+			return string(existing)
+		}
+		for _, conflict := range conflictingPanelOperationNames(base) {
+			if existing == conflict {
+				return string(existing)
+			}
 		}
 	}
-	return "operation"
+	return ""
 }
 
 func (p *localControlPanel) runningOperationName() string {

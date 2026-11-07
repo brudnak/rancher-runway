@@ -42,6 +42,7 @@
 </template>
 
 <script setup>
+import { activeOperations } from "../../static/control_panel_runs.js";
 import { computed } from "vue";
 import { inventoryExposure } from './panel-presentation.mjs';
 import {
@@ -72,15 +73,11 @@ const runClusterStats = run => {
 };
 
 const operationSummary = computed(() => {
-  const active = [
-    ["awsCleanup", "AWS cleanup", state.value?.awsCleanup],
-    ["setup", "Setup", state.value?.setup],
-    ["readiness", "Readiness", state.value?.readiness],
-    ["downstream", "Downstream", state.value?.downstream],
-    ["cleanup", "Destroy", state.value?.cleanup],
-    ["linodeSetup", "Linode setup", state.value?.linodeSetup],
-    ["linodeCleanup", "Linode destroy", state.value?.linodeCleanup],
-  ].find(([, , operation]) => operation?.running);
+  const operations = activeOperations(state.value);
+  if (operations.length > 1) {
+    return { label: "Active work", value: `${operations.length} operations`, tone: "sky", running: true };
+  }
+  const active = operations[0];
 
   if (active) {
     const [, label, operation] = active;
@@ -124,7 +121,7 @@ const tiles = computed(() => {
   const currentRun = state.value?.workspace?.currentRun || runs[0] || null;
   const operation = operationSummary.value;
   const lifecycleBusy = lifecycleRunning(state.value);
-  const readyForSetup = Boolean(state.value?.workspace?.canStartIsolatedRun && !lifecycleBusy && !bootPending.value);
+  const readyForSetup = Boolean(state.value?.workspace?.canStartIsolatedRun && !bootPending.value);
   const currentStats = currentRun ? runClusterStats(currentRun) : { total: 0, reachable: 0 };
 
   const safetyTile = bootPending.value
@@ -144,7 +141,7 @@ const tiles = computed(() => {
           tone: "sky",
           eyebrow: "Safety gate",
           title: `${operation.label} is active`,
-          detail: state.value?.awsCleanup?.running ? "AWS inventory cleanup is processing the reviewed resources. Keep Runway open and check per-resource results." : "Setup, readiness, downstream provisioning, and destroy are serialized so the run state and cloud targets stay unambiguous.",
+          detail: state.value?.awsCleanup?.running ? "AWS inventory cleanup is processing the reviewed resources. Keep Runway open and check per-resource results." : "Provisioning runs have separate configuration, progress, and logs. Follow each run in Runs.",
           meta: "Busy",
           action: state.value?.awsCleanup?.running ? "aws" : "runs",
           actionLabel: state.value?.awsCleanup?.running ? "View cleanup" : "Inspect run",

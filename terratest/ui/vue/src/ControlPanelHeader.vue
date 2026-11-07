@@ -16,6 +16,7 @@
 </template>
 
 <script setup>
+import { activeOperations } from "../../static/control_panel_runs.js";
 import { computed } from "vue";
 import { state, bootPending, refreshedAt, refreshError } from "./store.js";
 import { discoveryValue } from './panel-presentation.mjs';
@@ -47,17 +48,13 @@ const activeGPUClusters = currentState => clusterItems(currentState).filter(clus
   cluster?.type === "local" && (cluster.gpuWorkerIp || cluster.gpuWorkerPrivateIp)
 );
 
-const activeOperation = computed(() => [
-  ["awsCleanup", "AWS cleanup", state.value?.awsCleanup],
-  ["setup", "Setup", state.value?.setup],
-  ["readiness", "Readiness", state.value?.readiness],
-  ["downstream", "Downstream", state.value?.downstream],
-  ["cleanup", "Destroy", state.value?.cleanup],
-  ["linodeSetup", "Linode setup", state.value?.linodeSetup],
-  ["linodeCleanup", "Linode destroy", state.value?.linodeCleanup],
-].find(([, , operation]) => operation?.running));
+const operations = computed(() => activeOperations(state.value));
+const activeOperation = computed(() => operations.value[0]);
 
 const operationChip = computed(() => {
+  if (operations.value.length > 1) {
+    return { key: "operation", label: "Active work", value: `${operations.value.length} operations`, tone: "sky", running: true };
+  }
   if (activeOperation.value) {
     const [, label, operation] = activeOperation.value;
     return {

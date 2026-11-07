@@ -50,7 +50,7 @@ func (p *localControlPanel) discoverDownstreamClusters(local clusterView, record
 			continue
 		}
 
-		kubeconfigPath, err := p.ensureDownstreamKubeconfig(local.HAIndex, local.RancherURL, cluster.ID, item.ManagementClusterID, record.KubeconfigPath)
+		kubeconfigPath, err := p.ensureDownstreamKubeconfig(local.RunID, local.RancherURL, cluster.ID, item.ManagementClusterID, record.KubeconfigPath)
 		if err != nil {
 			cluster.Provisioning = true
 			cluster.ProvisioningMessage = "Waiting for downstream kubeconfig"

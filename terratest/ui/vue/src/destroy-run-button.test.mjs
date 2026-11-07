@@ -1,3 +1,4 @@
+import { activeOperations } from '../../static/control_panel_runs.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -16,7 +17,7 @@ function button({ runId = 'run-a', runs = [{ runId: 'run-a', deploymentType: 'ha
   const cleanupBatchStarting = ref(false);
   const calls = [];
   const navigation = [];
-  const { runDestroyBlocked } = new Function('computed', 'state', 'cleanupBatchStarting', `${lifecycleScript}\nreturn {runDestroyBlocked};`)(computed, state, cleanupBatchStarting);
+  const { runDestroyBlocked } = new Function('computed', 'state', 'cleanupBatchStarting', 'activeOperations', `${lifecycleScript}\nreturn {runDestroyBlocked};`)(computed, state, cleanupBatchStarting, activeOperations);
   const bindings = {
     computed, ref, state, bootPending, cleanupStarting, runDestroyBlocked,
     defineProps: () => props,
@@ -85,7 +86,7 @@ test('startup, pending cleanup and batches disable contextual destroy', async ()
   }
 });
 
-test('contextual destroy respects each deployment lane and global cleanup locks', async () => {
+test('contextual destroy waits for active work across both providers', async () => {
   const cases = [
     ['run-a', 'setup'], ['run-a', 'readiness'], ['run-a', 'downstream'], ['run-a', 'cleanup'],
     ['run-b', 'linodeSetup'], ['run-b', 'linodeCleanup'],
@@ -103,7 +104,7 @@ test('contextual destroy respects each deployment lane and global cleanup locks'
   for (const [runId, operation] of [['run-a', 'linodeSetup'], ['run-b', 'setup']]) {
     const ui = button({ runId });
     ui.state.value[operation] = { running: true };
-    assert.equal(ui.model.disabled.value, false, `${runId}: independent ${operation}`);
+    assert.equal(ui.model.disabled.value, true, `${runId}: active ${operation}`);
   }
 });
 

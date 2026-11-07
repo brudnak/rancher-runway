@@ -231,6 +231,19 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 
 		s.configMu.Lock()
 		defer s.configMu.Unlock()
+		s.mu.Lock()
+		submitted := s.submitted
+		s.mu.Unlock()
+		if submitted {
+			writeJSON(w, map[string]string{"status": "already_running"})
+			return
+		}
+		if s.setupAdmission != nil {
+			if err := s.setupAdmission(); err != nil {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+		}
 		readiness := collectSystemReadiness(s.configPath)
 		if !readiness.Ready {
 			http.Error(w, readiness.Summary, http.StatusBadRequest)
@@ -335,12 +348,20 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 
 		action := r.FormValue("action")
 		shouldContinue := action == "continue"
+		s.configMu.Lock()
+		defer s.configMu.Unlock()
 		s.mu.Lock()
 		plans := s.plans
+		phase := s.phase
 		s.mu.Unlock()
 
 		if s.responseHandler != nil {
-			if err := s.responseHandler(action, plans); err != nil {
+			if phase == phaseResolving || (shouldContinue && phase != phaseReview) {
+				http.Error(w, "resolve and review the setup plan before continuing", http.StatusConflict)
+				return
+			}
+			started, err := s.responseHandler(action, plans)
+			if err != nil {
 				http.Error(w, err.Error(), http.StatusConflict)
 				return
 			}
@@ -356,7 +377,9 @@ func (s *interactiveServer) registerHandlersAt(mux *http.ServeMux, initialVersio
 
 			s.broadcast(interactiveEvent{Type: "phase", Phase: phaseEditor})
 			writeJSON(w, map[string]string{
-				"status": action,
+				"status":         action,
+				"runId":          started.RunID,
+				"deploymentType": started.DeploymentType,
 			})
 			return
 		}

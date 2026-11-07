@@ -16,6 +16,11 @@ func (p *localControlPanel) newSetupEditor() *interactiveServer {
 		token:      p.token,
 		configPath: p.configPath,
 		phase:      phaseEditor,
+		setupAdmission: func() error {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			return p.provisioningAdmissionErrorLocked("")
+		},
 		configImporter: func(content []byte, revision string) (string, error) {
 			p.mu.Lock()
 			defer p.mu.Unlock()
@@ -24,20 +29,15 @@ func (p *localControlPanel) newSetupEditor() *interactiveServer {
 			}
 			return importToolConfig(p.configPath, content, revision)
 		},
-		responseHandler: func(action string, plans []*RancherResolvedPlan) error {
+		responseHandler: func(action string, plans []*RancherResolvedPlan) (interactiveRunStart, error) {
 			if action != "continue" {
-				return nil
+				return interactiveRunStart{}, nil
 			}
 			if len(plans) == 0 {
-				return fmt.Errorf("setup plan must resolve before starting")
+				return interactiveRunStart{}, fmt.Errorf("setup plan must resolve before starting")
 			}
-			viperConfigMu.RLock()
-			p.totalHAs = configuredRancherInstanceCount()
-			viperConfigMu.RUnlock()
-			if p.totalHAs < 1 {
-				p.totalHAs = len(plans)
-			}
-			return p.startIsolatedRun()
+			runID, err := p.startIsolatedRunWithID()
+			return interactiveRunStart{RunID: runID, DeploymentType: deploymentType()}, err
 		},
 	}
 }

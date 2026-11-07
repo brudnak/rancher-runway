@@ -27,7 +27,7 @@ func (p *localControlPanel) kubeconfigContentForDownload(cluster clusterView) ([
 		if cluster.ManagementClusterID == "" {
 			return nil, "", fmt.Errorf("downstream cluster has no management cluster id yet")
 		}
-		token, err := p.rancherToken(cluster.HAIndex, cluster.RancherURL)
+		token, err := p.rancherToken(cluster.RunID, cluster.RancherURL)
 		if err != nil {
 			return nil, "", err
 		}

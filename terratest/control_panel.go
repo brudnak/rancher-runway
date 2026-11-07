@@ -38,44 +38,45 @@ type localControlPanel struct {
 	doneCh               chan error
 
 	// Includes final record writes and chained completion callbacks, not just the subprocess.
-	workers                 panelWorkers
-	historyDiscovery        panelDiscoverySnapshot[struct{}]
-	lifecycleWorkers        sync.WaitGroup
-	mu                      sync.Mutex
-	operations              map[panelOperationName]*panelOperationState
-	awsMu                   sync.Mutex
-	awsCache                panelAWSInventoryState
-	awsCacheKey             string
-	awsCleanupPlan          *awsCleanupPlan
-	awsCleanupResults       []awsCleanupResult
-	awsCleanupClientFactory func(context.Context, string) (awsCleanupClient, error)
-	setupEditor             *interactiveServer
-	imageLookup             *imagelookup.Service
-	prBuildVerifier         *prbuild.Service
-	issueRadar              *issueRadarService
-	dailyReadiness          *dailyReadinessService
-	helmCatalog             helmLabCatalogService
-	rancherOps              rancherOperations
-	cacheLabMu              sync.Mutex
-	cacheLab                *cachelab.Service
-	testLabMu               sync.Mutex
-	testLab                 *testLabService
+	workers                  panelWorkers
+	historyDiscovery         panelDiscoverySnapshot[struct{}]
+	lifecycleWorkers         sync.WaitGroup
+	mu                       sync.Mutex
+	runRecordsMu             sync.Mutex
+	operations               map[panelOperationName]*panelOperationState
+	awsMu                    sync.Mutex
+	awsCache                 panelAWSInventoryState
+	awsCacheKey              string
+	awsCleanupPlan           *awsCleanupPlan
+	awsCleanupResults        []awsCleanupResult
+	awsCleanupClientFactory  func(context.Context, string) (awsCleanupClient, error)
+	setupEditor              *interactiveServer
+	imageLookup              *imagelookup.Service
+	prBuildVerifier          *prbuild.Service
+	issueRadar               *issueRadarService
+	dailyReadiness           *dailyReadinessService
+	helmCatalog              helmLabCatalogService
+	rancherOps               rancherOperations
+	cacheLabMu               sync.Mutex
+	cacheLab                 *cachelab.Service
+	testLabMu                sync.Mutex
+	testLab                  *testLabService
 	issuePackagesMu          sync.Mutex
 	issuePackages            *issuePackageService
 	issuePackageEnvironments map[string]issuePackageEnvironment // guarded by mu; never rewrites preserved sessions
-	historyStore            history.Store                     // Optional override, set before serving or starting workers.
-	historyMu               sync.Mutex
-	historyHashes           map[string]string
-	historyProbes           map[string]time.Time
-	clusterWorkspacesMu     sync.Mutex
-	clusterWorkspaces       map[string]clusterWorkspaceRecord
+	historyStore             history.Store                      // Optional override, set before serving or starting workers.
+	historyMu                sync.Mutex
+	historyHashes            map[string]string
+	historyProbes            map[string]time.Time
+	clusterWorkspacesMu      sync.Mutex
+	clusterWorkspaces        map[string]clusterWorkspaceRecord
 
 	// cleanupBatchRunner is nil in production. Tests may replace it with a
 	// deterministic runner so the batch coordinator can be exercised without
 	// launching Terraform.
 	cleanupBatchRunner func(string) error
 
-	rancherTokens             map[int]string
+	rancherTokens             map[string]string
 	downstreamKubeconfigCache map[string]string
 	clusterSnapshot           map[string]clusterView
 	clusterDiscovery          panelDiscoverySnapshot[panelClusterState]
@@ -148,7 +149,7 @@ func newLocalControlPanelWithNetwork(totalHAs int, bindNetwork bool) (*localCont
 		baseURL:                   baseURL,
 		doneCh:                    make(chan error, 1),
 		operations:                newPanelOperations(),
-		rancherTokens:             map[int]string{},
+		rancherTokens:             map[string]string{},
 		downstreamKubeconfigCache: map[string]string{},
 		clusterSnapshot:           map[string]clusterView{},
 	}

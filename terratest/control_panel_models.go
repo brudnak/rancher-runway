@@ -22,6 +22,7 @@ type GPUInfrastructureDetail struct {
 type panelState struct {
 	TestLab       testLabActivityState      `json:"testLab"`
 	Panel         panelSessionState         `json:"panel"`
+	RunOperations []panelOperationSnapshot  `json:"runOperations"`
 	Workspace     panelWorkspaceState       `json:"workspace"`
 	Setup         panelOperationSnapshot    `json:"setup"`
 	Readiness     panelOperationSnapshot    `json:"readiness"`
@@ -132,16 +133,17 @@ type containerImageView struct {
 }
 
 type panelOperationSnapshot struct {
-	Running    bool       `json:"running"`
-	PID        int        `json:"pid,omitempty"`
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	Warning    string     `json:"warning,omitempty"`
-	Output     []string   `json:"output"`
-	RunID      string     `json:"runId,omitempty"`
-	Command    string     `json:"command,omitempty"`
-	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
+	Operation  panelOperationName `json:"operation,omitempty"`
+	Running    bool               `json:"running"`
+	PID        int                `json:"pid,omitempty"`
+	StartedAt  *time.Time         `json:"startedAt,omitempty"`
+	FinishedAt *time.Time         `json:"finishedAt,omitempty"`
+	Error      string             `json:"error,omitempty"`
+	Warning    string             `json:"warning,omitempty"`
+	Output     []string           `json:"output"`
+	RunID      string             `json:"runId,omitempty"`
+	Command    string             `json:"command,omitempty"`
+	UpdatedAt  *time.Time         `json:"updatedAt,omitempty"`
 }
 
 type panelOperationName string
@@ -162,7 +164,8 @@ const (
 type panelOperationState struct {
 	// InProcess marks an orchestration goroutine owned by this panel instance.
 	// Its child PID can exit between steps without ending the operation.
-	InProcess bool `json:"-"`
+	InProcess  bool `json:"-"`
+	Completing bool `json:"-"`
 
 	Running    bool
 	PID        int

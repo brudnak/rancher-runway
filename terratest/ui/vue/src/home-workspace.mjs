@@ -1,3 +1,4 @@
+import { activeOperations } from "../../static/control_panel_runs.js";
 // The home guide describes navigation, never launches infrastructure or commands.
 export const workspaceTools = [
   { id: 'setup', label: 'Setup', group: 'operate', icon: 'compass', kind: 'Cloud', description: 'Plan and review a Rancher environment.', keywords: 'AWS RKE2 K3s hosted tenant Linode deploy install' },
@@ -64,12 +65,15 @@ const activeCloudKeys = [
 ];
 export function homeSnapshot(state = {}, { bootPending = false, error = '' } = {}) {
   state ||= {};
-  const cloud = activeCloudKeys.filter(([key]) => state[key]?.running).map(([key, label, tab]) => ({ id: key, label, tab, runId: state[key]?.runId || '' }));
+  const cloud = activeOperations(state).map(([key, fallbackLabel, operation]) => {
+    const [, label, tab] = activeCloudKeys.find(([name]) => name === key) || [key, fallbackLabel, 'runs'];
+    return { id: `${key}:${operation.runId || ''}`, operation: key, label, tab, runId: operation.runId || '' };
+  });
   const k3d = rows(state.k3d?.clusters).filter(item => ['creating', 'running'].includes(item.status)).length;
   const steve = rows(state.steve?.runs).filter(item => ['starting', 'running', 'serving'].includes(item.status)).length;
   const localBusy = Boolean(state.k3d?.operation?.running || state.steve?.operation?.running);
   const runs = rows(state.workspace?.runs).length;
-  const provisioning = cloud.some(item => ['setup', 'linodeSetup', 'downstream'].includes(item.id));
+  const provisioning = cloud.some(item => ['setup', 'linodeSetup', 'downstream'].includes(item.operation));
   const status = error ? { tone: 'warning', label: bootPending ? 'Status unavailable' : 'Last known status', title: 'Let’s refresh the picture.', detail: bootPending ? 'The startup check did not finish. You can explore the tools while Setup waits for a fresh safety check.' : 'The last refresh failed. Activity below may have changed; refresh before acting.', action: 'runs', actionLabel: 'Review workspace checks' }
     : bootPending ? { tone: 'checking', label: 'Checking workspace', title: 'Getting your bearings.', detail: 'Reading local state and checking for active work. Explore the guide while the safety check finishes.', action: 'runs', actionLabel: 'View workspace checks' }
     : cloud.length ? { tone: 'active', label: 'Work in progress', title: provisioning ? 'Your environment is taking shape.' : 'A cloud operation is running.', detail: 'Keep Runway open. You can switch tools and follow the operation in its workspace.', action: cloud[0].tab, actionLabel: cloud[0].tab === 'runs' ? 'Follow the active run' : 'View active cleanup' }

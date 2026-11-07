@@ -120,25 +120,13 @@ func (p *localControlPanel) startCleanupBatchWithLabCleanup(runIDs []string, tes
 		p.mu.Unlock()
 		return fmt.Errorf("cannot start cleanup batch while Rancher upgrade or downstream creation is running")
 	}
-	for _, operation := range []panelOperationName{
-		panelOperationSetup,
-		panelOperationReadiness,
-		panelOperationDownstream,
-		panelOperationCleanup,
-		panelOperationLinodeSetup,
-		panelOperationLinodeCleanup,
-		panelOperationCleanupBatch,
-		panelOperationAWSCleanup,
-	} {
-		op := p.operationLocked(operation)
-		if operation != panelOperationCleanupBatch && op.Running && op.PID > 0 && !processAlive(op.PID) {
-			p.markOperationStaleLocked(operation, op,
-				"operation process exited before reporting completion",
-				"[control-panel] Operation process exited before reporting completion; status marked stale.",
-			)
-			p.persistOperationsLocked()
+	for _, operation := range p.panelOperationNamesLocked() {
+		if !isCloudPanelOperation(panelOperationBase(operation)) && operation != panelOperationCleanupBatch && operation != panelOperationAWSCleanup {
+			continue
 		}
-		if op.Running {
+		op := p.operationLocked(operation)
+		p.refreshOperationLocked(operation, op)
+		if panelOperationActive(op) {
 			p.mu.Unlock()
 			return fmt.Errorf("cannot start cleanup batch while %s is running", operation)
 		}

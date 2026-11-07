@@ -16,7 +16,7 @@ func (p *localControlPanel) discoverLinodeDockerClustersForRun(record panelRunRe
 	if len(versions) == 0 {
 		versions = readRequestedRancherVersionsForPanel(p.totalHAs)
 	}
-	setupRunning := p.operationRunning(panelOperationLinodeSetup)
+	setupRunning := p.operationRunningForRun(panelOperationLinodeSetup, record.RunID)
 	runID := safeRunPathSegment(record.RunID)
 	total := record.TotalHAs
 	if total < 1 {
@@ -148,7 +148,7 @@ func (p *localControlPanel) discoverHostedTenantClustersForRun(record panelRunRe
 	if len(versions) == 0 {
 		versions = readRequestedRancherVersionsForPanel(p.totalHAs)
 	}
-	setupRunning := p.operationRunning(panelOperationSetup)
+	setupRunning := p.operationRunningForRun(panelOperationSetup, record.RunID)
 	runID := safeRunPathSegment(record.RunID)
 	totalInstances := record.TotalHAs
 	if totalInstances < 1 {
@@ -218,9 +218,23 @@ func (p *localControlPanel) discoverHostedTenantClustersForRun(record panelRunRe
 }
 
 func (p *localControlPanel) operationRunning(name panelOperationName) bool {
+	return p.snapshotOperation(name).Running
+}
+
+func (p *localControlPanel) operationRunningForRun(name panelOperationName, runID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.operationLocked(name).Running
+	key := panelOperationForRun(name, runID)
+	op := p.operations[key]
+	if op == nil {
+		key = panelOperationBase(name)
+		op = p.operations[key]
+	}
+	if op == nil || !sameRunID(op.RunID, runID) {
+		return false
+	}
+	p.refreshOperationLocked(key, op)
+	return op.Running
 }
 
 func hasHAFlatOutput(outputs map[string]string, instanceNum int) bool {

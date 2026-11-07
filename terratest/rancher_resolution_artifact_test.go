@@ -10,6 +10,8 @@ import (
 func TestWriteRancherResolutionArtifact(t *testing.T) {
 	workspace := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", workspace)
+	t.Setenv("RANCHER_RUNWAY_WORKSPACE", "")
+	t.Setenv(runToolConfigPathEnv, "")
 
 	plan := &RancherResolvedPlan{
 		RequestedVersion:         "2.14.1-alpha7",
@@ -58,5 +60,28 @@ func TestWriteRancherResolutionArtifact(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected artifact to contain %s:\n%s", want, got)
 		}
+	}
+}
+
+func TestRancherResolutionArtifactsStayWithFrozenRun(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("RANCHER_RUNWAY_WORKSPACE", root)
+	for _, distro := range []string{"prime", "community"} {
+		config := filepath.Join(root, "automation-output", "runs", distro, "tool-config.yml")
+		t.Setenv(runToolConfigPathEnv, config)
+		plan := &RancherResolvedPlan{RequestedDistro: distro}
+		if err := writeRancherResolutionArtifact("install", 1, plan); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, distro := range []string{"prime", "community"} {
+		path := filepath.Join(root, "automation-output", "runs", distro, "rancher-resolution-install-ha-1.json")
+		data, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(data), `"requested_distro": "`+distro+`"`) {
+			t.Fatalf("run %s resolution overwritten: %s, %v", distro, data, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "automation-output", "rancher-resolution-install-ha-1.json")); !os.IsNotExist(err) {
+		t.Fatalf("frozen run wrote shared resolution artifact: %v", err)
 	}
 }

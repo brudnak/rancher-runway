@@ -92,39 +92,42 @@ func (p *localControlPanel) startSetup() error {
 		return fmt.Errorf("preflight blocked setup: %s", preflight.Summary)
 	}
 
-	afterSuccess := p.startReadinessAfterSetup
-	if isHostedTenantK3SDeployment() {
-		afterSuccess = nil
-	}
-	operation := panelOperationSetup
-	if isLinodeDockerDeployment() {
-		operation = panelOperationLinodeSetup
-	}
-	return p.startPanelCommand(panelCommandSpec{
-		Operation:    operation,
-		DisplayName:  "setup",
-		TestName:     "TestHaSetup",
-		Timeout:      "90m",
-		StartLine:    "[control-panel] Starting canonical setup via go test -run ^TestHaSetup$",
-		SuccessLine:  "[control-panel] Setup completed successfully",
-		AfterSuccess: afterSuccess,
-	})
+	_, err := p.startSetupCommand()
+	return err
 }
 
 func (p *localControlPanel) startReadiness() error {
-	deployment, record, outputs := p.readinessDeploymentType()
+	return p.startReadinessForRun("")
+}
+
+func (p *localControlPanel) startReadinessForRun(runID string) error {
+	var deployment string
+	var record panelRunRecord
+	var outputs map[string]string
+	if strings.TrimSpace(runID) == "" {
+		deployment, record, outputs = p.readinessDeploymentType()
+	} else {
+		var ok bool
+		record, ok = p.readRunRecord(runID)
+		if !ok {
+			return fmt.Errorf("readiness requires a recorded run: %s", runID)
+		}
+		var err error
+		outputs, err = readTerraformFlatOutputsWithModule(p.repoRoot, record.TerraformStatePath, record.TerraformDataDir, record.TerraformModuleDir)
+		if err != nil {
+			return fmt.Errorf("readiness requires Terraform outputs from a completed setup: %w", err)
+		}
+		deployment = recordDeploymentType(record, outputs)
+	}
 	if err := p.readinessPreflightError(deployment, record, outputs); err != nil {
 		return err
 	}
 
 	spec := readinessCommandSpec(deployment)
-	if record.RunID != "" {
-		spec.RunID = record.RunID
-	}
+	spec.RunID = record.RunID
 	if deployment == deploymentTypeHARKE2 && record.RunID != "" {
-		runID := record.RunID
 		spec.AfterSuccess = func() {
-			p.startConfiguredDownstreamsAfterReadiness(runID)
+			p.startConfiguredDownstreamsAfterReadiness(record.RunID)
 		}
 	}
 	return p.startPanelCommand(spec)
@@ -133,6 +136,13 @@ func (p *localControlPanel) startReadiness() error {
 func (p *localControlPanel) startReadinessAfterSetup() {
 	if err := p.startReadiness(); err != nil {
 		p.appendOperationOutput(panelOperationReadiness, "[control-panel] Readiness was not started automatically: "+err.Error())
+	}
+}
+
+func (p *localControlPanel) startReadinessAfterSetupForRun(runID string) {
+	if err := p.startReadinessForRun(runID); err != nil {
+		p.updateRunRecordStatus(runID, "readiness_failed")
+		p.appendOperationOutput(panelOperationForRun(panelOperationReadiness, runID), "[control-panel] Readiness was not started automatically: "+err.Error())
 	}
 }
 
@@ -165,7 +175,7 @@ func (p *localControlPanel) startConfiguredDownstreamsAfterReadiness(runID strin
 	}
 	if err := p.startConfiguredDownstreamsForRun(runID); err != nil {
 		p.updateRunDownstreamStatus(runID, panelDownstreamStatusFailed, err.Error())
-		p.appendOperationOutput(panelOperationDownstream, "[control-panel] Downstream provisioning was not started automatically: "+err.Error())
+		p.appendOperationOutput(panelOperationForRun(panelOperationDownstream, runID), "[control-panel] Downstream provisioning was not started automatically: "+err.Error())
 	}
 }
 
@@ -187,7 +197,7 @@ func (p *localControlPanel) startConfiguredDownstreamsForRun(runID string) error
 	if !runRecordHasEnabledDownstreamPlans(record) {
 		return fmt.Errorf("run %s has no enabled Linode downstream plans", runID)
 	}
-	if p.operationRunning(panelOperationDownstream) || record.DownstreamStatus == panelDownstreamStatusRunning {
+	if p.operationRunning(panelOperationForRun(panelOperationDownstream, runID)) || record.DownstreamStatus == panelDownstreamStatusRunning {
 		return fmt.Errorf("downstream provisioning is already running")
 	}
 	if record.DownstreamStatus == panelDownstreamStatusReady {
@@ -265,13 +275,17 @@ func (p *localControlPanel) readinessPreflightError(deployment string, record pa
 		}
 		return nil
 	}
-	if p.totalHAs < 1 {
+	total := record.TotalHAs
+	if total < 1 {
+		total = p.totalHAs
+	}
+	if total < 1 {
 		return fmt.Errorf("readiness requires at least one configured HA")
 	}
 
-	missingKubeconfigs := make([]string, 0, p.totalHAs)
-	for i := 1; i <= p.totalHAs; i++ {
-		kubeconfigPath := filepath.Join(p.haInstanceDir(i), "kube_config.yaml")
+	missingKubeconfigs := make([]string, 0, total)
+	for i := 1; i <= total; i++ {
+		kubeconfigPath := filepath.Join(p.haInstanceDirForRun(record, i), "kube_config.yaml")
 		if !pathExists(kubeconfigPath) {
 			missingKubeconfigs = append(missingKubeconfigs, kubeconfigPath)
 		}
@@ -280,13 +294,15 @@ func (p *localControlPanel) readinessPreflightError(deployment string, record pa
 		return fmt.Errorf("readiness requires a completed setup; missing kubeconfig %s", strings.Join(missingKubeconfigs, ", "))
 	}
 
-	outputs, err := p.readTerraformFlatOutputs()
-	if err != nil {
-		return fmt.Errorf("readiness requires Terraform outputs from a completed setup: %w", err)
+	if record.RunID == "" {
+		var err error
+		outputs, err = p.readTerraformFlatOutputs()
+		if err != nil {
+			return fmt.Errorf("readiness requires Terraform outputs from a completed setup: %w", err)
+		}
 	}
-
-	missingOutputs := make([]string, 0, p.totalHAs)
-	for i := 1; i <= p.totalHAs; i++ {
+	missingOutputs := make([]string, 0, total)
+	for i := 1; i <= total; i++ {
 		if !hasHAFlatOutput(outputs, i) {
 			missingOutputs = append(missingOutputs, fmt.Sprintf("ha_%d_*", i))
 		}
@@ -356,6 +372,28 @@ func (p *localControlPanel) startCleanupForRunWithOptions(runID string, batchChi
 
 func (p *localControlPanel) abortOperation(operation panelOperationName, runID string) error {
 	p.mu.Lock()
+	if isProvisioningPanelOperation(operation) {
+		if strings.TrimSpace(runID) != "" {
+			key := panelOperationForRun(operation, runID)
+			if _, exists := p.operations[key]; exists {
+				operation = key
+			}
+		} else {
+			var matches []panelOperationName
+			for name, candidate := range p.operations {
+				if panelOperationBase(name) == operation && candidate.Running {
+					matches = append(matches, name)
+				}
+			}
+			if len(matches) > 1 {
+				p.mu.Unlock()
+				return fmt.Errorf("runId is required when multiple %s operations are running", operation)
+			}
+			if len(matches) == 1 {
+				operation = matches[0]
+			}
+		}
+	}
 	op := p.operationLocked(operation)
 	if !op.Running {
 		p.mu.Unlock()
@@ -391,7 +429,7 @@ func (p *localControlPanel) abortOperation(operation panelOperationName, runID s
 	pid := op.PID
 	if operation == panelOperationSteveLab {
 		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for %s run %s. Local k3d cluster and run files may need cleanup.", operation, op.RunID))
-	} else if operation == panelOperationDownstream {
+	} else if panelOperationBase(operation) == panelOperationDownstream {
 		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for downstream provisioning run %s. The ready management Rancher and run record will be preserved; partial downstream resources remain recorded for retry or destroy.", op.RunID))
 	} else {
 		op.Output = append(op.Output, fmt.Sprintf("[control-panel] Stop requested for %s run %s. Terraform state and run records will be preserved.", operation, op.RunID))

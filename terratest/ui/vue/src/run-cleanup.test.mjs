@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { computed, reactive, ref } from 'vue';
+import { activeOperations } from '../../static/control_panel_runs.js';
 import { sameRunKey } from '../../static/control_panel_utils.js';
 import { CONFIRMATION_TEXT } from './confirmation.mjs';
 
@@ -17,7 +18,7 @@ function cleanupWorkflow({ deploymentType = 'ha-rke2', submitError = '' } = {}) 
   const calls = [], confirmations = [], logRoutes = [];
   let resolveConfirmation;
   const bindings = {
-    computed, sameRunKey, CONFIRMATION_TEXT,
+    computed, sameRunKey, CONFIRMATION_TEXT, activeOperations,
     state: ref({workspace: {runs: [{runId: 'run-a', deploymentType}, {runId: 'run-b', deploymentType: 'ha-rke2'}]}}),
     selectedCleanupRunId: ref('run-b'),
     bootPending: ref(false), cleanupStarting: ref(false), cleanupBatchStarting: ref(false),
@@ -117,9 +118,9 @@ test('missing or blank run IDs cannot open review or fall back to another run', 
   }
 });
 
-const awsBlockers = ['setup', 'readiness', 'downstream', 'cleanup', 'awsCleanup', 'cleanupBatch'];
-const linodeBlockers = ['linodeSetup', 'linodeCleanup', 'awsCleanup', 'cleanupBatch'];
-test('active lifecycle operations prevent review and submission for the target provider', async () => {
+const awsBlockers = ['setup', 'readiness', 'downstream', 'cleanup', 'awsCleanup', 'cleanupBatch', 'linodeSetup', 'linodeCleanup'];
+const linodeBlockers = awsBlockers;
+test('active lifecycle operations prevent cleanup across both providers', async () => {
   for (const [deploymentType, operations] of [['ha-rke2', awsBlockers], ['linode-docker-cattle', linodeBlockers]]) {
     for (const operation of operations) {
       const flow = cleanupWorkflow({deploymentType});

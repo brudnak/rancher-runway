@@ -43,7 +43,10 @@ func setupConfigE(repoRoot string) error {
 		repoRoot = resolvedRoot
 	}
 
-	configPath := filepath.Join(repoRoot, "tool-config.yml")
+	configPath := strings.TrimSpace(os.Getenv(runToolConfigPathEnv))
+	if configPath == "" {
+		configPath = filepath.Join(repoRoot, "tool-config.yml")
+	}
 	viper.SetConfigFile(configPath)
 	viper.SetConfigType("yml")
 

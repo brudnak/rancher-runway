@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -45,7 +46,14 @@ func (p *localControlPanel) handleReadiness(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if err := p.startReadiness(); err != nil {
+	var req struct {
+		RunID string `json:"runId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := p.startReadinessForRun(req.RunID); err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -211,11 +219,6 @@ func (p *localControlPanel) handleCostLedgerReset(w http.ResponseWriter, r *http
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if p.anyOperationRunning() {
-		http.Error(w, fmt.Sprintf("cannot reset cost ledger while %s is running", p.runningOperationName()), http.StatusConflict)
-		return
-	}
-
 	var req struct {
 		Confirm string `json:"confirm"`
 	}
@@ -228,7 +231,16 @@ func (p *localControlPanel) handleCostLedgerReset(w http.ResponseWriter, r *http
 		return
 	}
 
-	if err := resetCostLedger(); err != nil {
+	p.mu.Lock()
+	if p.anyOperationRunningLocked() {
+		operation := p.runningOperationNameLocked()
+		p.mu.Unlock()
+		http.Error(w, fmt.Sprintf("cannot reset cost ledger while %s is running", operation), http.StatusConflict)
+		return
+	}
+	err := resetCostLedger()
+	p.mu.Unlock()
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -248,11 +260,6 @@ func (p *localControlPanel) handleLocalArtifactsClean(w http.ResponseWriter, r *
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if p.anyOperationRunning() {
-		http.Error(w, fmt.Sprintf("cannot clean local artifacts while %s is running", p.runningOperationName()), http.StatusConflict)
-		return
-	}
-
 	var req struct {
 		Confirm string `json:"confirm"`
 	}
@@ -265,7 +272,15 @@ func (p *localControlPanel) handleLocalArtifactsClean(w http.ResponseWriter, r *
 		return
 	}
 
+	p.mu.Lock()
+	if p.anyOperationRunningLocked() {
+		operation := p.runningOperationNameLocked()
+		p.mu.Unlock()
+		http.Error(w, fmt.Sprintf("cannot clean local artifacts while %s is running", operation), http.StatusConflict)
+		return
+	}
 	result, err := p.cleanLocalArtifacts()
+	p.mu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return

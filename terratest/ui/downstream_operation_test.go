@@ -13,12 +13,14 @@ func TestControlPanelBundlesIndependentDownstreamLifecycle(t *testing.T) {
 	storeSource := controlPanelVueSource(t, "store.js")
 
 	for _, marker := range []string{
-		`{ mode: "downstream", label: "Downstream", operation: state.value?.downstream }`,
+		`activeOperationsInState(state.value)`,
+		`operationSnapshot(state.value, "downstream", run.runId).running`,
 		`Management ready; downstream failed`,
 		`Management and downstream ready`,
 		`Retry downstream`,
 		`open-downstream-logs`,
 		`stop-downstream`,
+		`abortOperation('downstream', runId)`,
 		`downstreamStatus === "downstream_failed"`,
 	} {
 		if !strings.Contains(runsSource, marker) {
@@ -43,9 +45,11 @@ func TestControlPanelBundlesIndependentDownstreamLifecycle(t *testing.T) {
 	for _, marker := range []string{
 		`/api/downstream/retry`,
 		`confirmText: "Retry downstream"`,
-		`openDownstreamLogs`,
-		`state.value?.downstream?.running`,
-		`syncDownstreamLogModal`,
+		`export const openDownstreamLogs = (runId = "") =>`,
+		`operationSnapshot(state.value, "downstream", runId)`,
+		`runProvisioningBlocked(targetRunId)`,
+		`syncRunLogModal(fetched)`,
+		`operationSnapshot(currentState, logs.mode, logs.runId)`,
 	} {
 		if !strings.Contains(storeSource, marker) {
 			t.Fatalf("control panel store is missing downstream marker %q", marker)

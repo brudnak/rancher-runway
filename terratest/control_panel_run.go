@@ -23,6 +23,8 @@ type panelWorkspaceState struct {
 	SlotID                   string           `json:"slotId"`
 	SlotName                 string           `json:"slotName"`
 	CanStartFresh            bool             `json:"canStartFresh"`
+	CanConfigureSetup        bool             `json:"canConfigureSetup"`
+	SetupBlockedReason       string           `json:"setupBlockedReason,omitempty"`
 	CanStartIsolatedRun      bool             `json:"canStartIsolatedRun"`
 	IsolatedRunBlockedReason string           `json:"isolatedRunBlockedReason,omitempty"`
 	Summary                  string           `json:"summary"`
@@ -32,6 +34,7 @@ type panelWorkspaceState struct {
 }
 
 type panelRunRecord struct {
+	ConfigSnapshot        bool                            `json:"configSnapshot,omitempty"`
 	RunID                 string                          `json:"runId"`
 	SlotID                string                          `json:"slotId"`
 	SlotName              string                          `json:"slotName"`
@@ -73,12 +76,21 @@ func (p *localControlPanel) workspaceState() panelWorkspaceState {
 		records = upsertPanelRunRecord(records, primaryRun)
 	}
 	canStartIsolated, isolatedBlockedReason := p.isolatedRunStartStatus()
+	p.mu.Lock()
+	setupAdmissionErr := p.provisioningAdmissionErrorLocked("")
+	p.mu.Unlock()
+	setupBlockedReason := ""
+	if setupAdmissionErr != nil {
+		setupBlockedReason = setupAdmissionErr.Error()
+	}
 	state := panelWorkspaceState{
 		Mode:                     "run-slot workspace",
 		SlotID:                   defaultRunSlotID,
 		SlotName:                 "Run slots",
 		CanStartFresh:            len(records) == 0 && len(p.sharedWorkspaceResidueBlockers()) == 0,
 		CanStartIsolatedRun:      canStartIsolated,
+		CanConfigureSetup:        setupAdmissionErr == nil,
+		SetupBlockedReason:       setupBlockedReason,
 		IsolatedRunBlockedReason: isolatedBlockedReason,
 		Summary:                  "Each panel run gets isolated Terraform state, module files, HA output, kubeconfigs, logs, AWS names, and Route53 hostnames.",
 		Runs:                     records,
@@ -111,10 +123,24 @@ func (p *localControlPanel) ensureCurrentRunModuleIsolation(record panelRunRecor
 }
 
 func (p *localControlPanel) startIsolatedRun() error {
+	_, err := p.startIsolatedRunWithID()
+	return err
+}
+
+func (p *localControlPanel) startIsolatedRunWithID() (string, error) {
 	if ok, reason := p.isolatedRunStartStatus(); !ok {
-		return fmt.Errorf("isolated run blocked: %s", reason)
+		return "", fmt.Errorf("isolated run blocked: %s", reason)
 	}
-	afterSuccess := p.startReadinessAfterSetup
+	return p.startSetupCommand()
+}
+
+func (p *localControlPanel) startSetupCommand() (string, error) {
+	token, err := randomConfirmationToken()
+	if err != nil {
+		return "", err
+	}
+	runID := token[:8]
+	afterSuccess := func() { p.startReadinessAfterSetupForRun(runID) }
 	operation := panelOperationSetup
 	if isHostedTenantK3SDeployment() {
 		afterSuccess = nil
@@ -122,8 +148,9 @@ func (p *localControlPanel) startIsolatedRun() error {
 	if isLinodeDockerDeployment() {
 		operation = panelOperationLinodeSetup
 	}
-	return p.startPanelCommand(panelCommandSpec{
+	err = p.startPanelCommand(panelCommandSpec{
 		Operation:    operation,
+		RunID:        runID,
 		DisplayName:  "setup",
 		TestName:     "TestHaSetup",
 		Timeout:      "90m",
@@ -131,22 +158,21 @@ func (p *localControlPanel) startIsolatedRun() error {
 		SuccessLine:  "[control-panel] Setup completed successfully",
 		AfterSuccess: afterSuccess,
 	})
+	if err != nil {
+		return "", err
+	}
+	return runID, nil
 }
 
 func (p *localControlPanel) isolatedRunStartStatus() (bool, string) {
 	if blockers := p.sharedWorkspaceResidueBlockers(); len(blockers) > 0 {
 		return false, "cleanup shared workspace residue first: " + compactPathList(blockers, 3)
 	}
-	operation := panelOperationSetup
-	if isLinodeDockerDeployment() {
-		operation = panelOperationLinodeSetup
-	}
 	p.mu.Lock()
-	conflicting := p.conflictingOperationRunningLocked(operation)
-	runningName := p.runningConflictingOperationNameLocked(operation)
+	admissionErr := p.provisioningAdmissionErrorLocked("")
 	p.mu.Unlock()
-	if conflicting {
-		return false, fmt.Sprintf("%s is already running", runningName)
+	if admissionErr != nil {
+		return false, admissionErr.Error()
 	}
 	preflight := p.collectPanelPreflightForRunSlotStart()
 	if !preflight.Ready {
@@ -155,14 +181,21 @@ func (p *localControlPanel) isolatedRunStartStatus() (bool, string) {
 	if ok, reason := p.customHostnameAvailableForIsolatedRun(); !ok {
 		return false, reason
 	}
+	if ok, reason := p.awsPrefixAvailableForIsolatedRun(""); !ok {
+		return false, reason
+	}
 	return true, ""
 }
 
 func (p *localControlPanel) customHostnameAvailableForIsolatedRun() (bool, string) {
-	if isLinodeDockerDeployment() {
+	viperConfigMu.RLock()
+	linode := isLinodeDockerDeployment()
+	prefix, err := settings.ConfiguredCustomHostnamePrefix()
+	route53FQDN := strings.TrimSpace(viper.GetString("tf_vars.aws_route53_fqdn"))
+	viperConfigMu.RUnlock()
+	if linode {
 		return true, ""
 	}
-	prefix, err := settings.ConfiguredCustomHostnamePrefix()
 	if err != nil {
 		return false, err.Error()
 	}
@@ -170,7 +203,6 @@ func (p *localControlPanel) customHostnameAvailableForIsolatedRun() (bool, strin
 		return true, ""
 	}
 
-	route53FQDN := strings.TrimSpace(viper.GetString("tf_vars.aws_route53_fqdn"))
 	requestedHostname := customHostnameFQDN(prefix, route53FQDN)
 	for _, record := range p.listRunRecords() {
 		recordHostname := customHostnameFQDN(record.CustomHostnamePrefix, record.Route53FQDN)
@@ -178,6 +210,29 @@ func (p *localControlPanel) customHostnameAvailableForIsolatedRun() (bool, strin
 			continue
 		}
 		return false, fmt.Sprintf("custom Rancher hostname %s is already used by run %s; choose a unique custom_hostname_prefix or destroy that slot first", requestedHostname, record.RunID)
+	}
+	return true, ""
+}
+
+func (p *localControlPanel) awsPrefixAvailableForIsolatedRun(runID string) (bool, string) {
+	viperConfigMu.RLock()
+	linode := isLinodeDockerDeployment()
+	prefix := strings.ToLower(strings.TrimSpace(viper.GetString("tf_vars.aws_prefix")))
+	viperConfigMu.RUnlock()
+	if linode || prefix == "" {
+		return true, ""
+	}
+	// Ordinary prefixes become unique once admission generates a run ID.
+	// Imported run and automation prefixes retain their configured spelling.
+	if runID == "" && !settings.IsRunScopedAWSPrefix(prefix) && !settings.IsAutomationAWSPrefix(prefix) {
+		return true, ""
+	}
+	requestedPrefix := terraformAWSPrefixForRun(prefix, runID)
+	for _, record := range p.listRunRecords() {
+		if isLinodeDockerRecord(record) || strings.ToLower(strings.TrimSpace(record.AWSPrefix)) != requestedPrefix {
+			continue
+		}
+		return false, fmt.Sprintf("AWS prefix %s is already used by run %s. Choose a different aws_prefix or destroy that slot first.", requestedPrefix, record.RunID)
 	}
 	return true, ""
 }

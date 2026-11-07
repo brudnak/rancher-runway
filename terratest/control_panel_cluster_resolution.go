@@ -86,7 +86,7 @@ func (p *localControlPanel) recordedLocalHAClusterByID(clusterID string) (cluste
 	}
 
 	haDir := p.haInstanceDirForRun(record, haIndex)
-	if !pathExists(haDir) && !p.operationRunning(panelOperationSetup) && !p.operationRunning(panelOperationReadiness) {
+	if !pathExists(haDir) && !p.operationRunningForRun(panelOperationSetup, record.RunID) && !p.operationRunningForRun(panelOperationReadiness, record.RunID) {
 		// Terraform output or downstream records can also make a cluster visible.
 		// Let full discovery handle those uncommon cases to preserve its behavior.
 		return clusterView{}, false

@@ -328,6 +328,7 @@
 import { computed, ref } from "vue";
 import Icon from "./HelmLabIcon.vue";
 import CostHistoryPanel from "./CostHistoryPanel.vue";
+import { operationSnapshot } from "../../static/control_panel_runs.js";
 import {useClusterWorkspaces,openClusterWorkspace,clusterDisplayName} from "./cluster-workspace-store.mjs";
 import {
   state,
@@ -501,9 +502,9 @@ const hostnameLabel = run => {
 };
 
 const cleanupForRun = run => runIsLinodeDocker(run) ? state.value?.linodeCleanup || {} : state.value?.cleanup || {};
-const setupRunningForRun = run => runIsLinodeDocker(run) ? Boolean(state.value?.linodeSetup?.running) : Boolean(state.value?.setup?.running);
+const setupRunningForRun = run => Boolean(operationSnapshot(state.value, runIsLinodeDocker(run) ? "linodeSetup" : "setup", run.runId).running);
 const cleanupRunningForRun = run => runIsLinodeDocker(run) ? Boolean(state.value?.linodeCleanup?.running) : Boolean(state.value?.cleanup?.running);
-const readinessRunningForRun = run => !runIsLinodeDocker(run) && Boolean(state.value?.readiness?.running);
+const readinessRunningForRun = run => Boolean(operationSnapshot(state.value, "readiness", run.runId).running);
 const pendingDestroy = run => Boolean(cleanupStarting.value && sameRunKey(selectedRunId.value, run?.runId));
 const batchDestroying = run => Boolean(cleanupBatch.value?.running && sameRunKey(cleanupBatch.value?.currentRunId || cleanupBatch.value?.runId, run?.runId));
 const destroying = run => Boolean(batchDestroying(run) || (cleanupRunningForRun(run) && sameRunKey(cleanupForRun(run)?.runId, run?.runId)));
@@ -542,6 +543,8 @@ const slotDestroyTitle = run => bootPending.value
           ? "Wait for the destroy batch to finish before starting another destroy."
         : cleanupStarting.value
           ? "Destroy request is being submitted."
+            : lifecycleRunning.value
+              ? "Wait for active provisioning to finish before destroying a run."
           : `Destroy run ${run?.runId || "slot"}`;
 const slotDestroyLabel = run => destroying(run)
   ? "Destroy running"

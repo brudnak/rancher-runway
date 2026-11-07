@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type rancherResolutionArtifact struct {
@@ -70,7 +71,11 @@ func writeRancherResolutionArtifact(phase string, instanceNum int, plan *Rancher
 	if err != nil {
 		return err
 	}
-	path := automationOutputPath(fmt.Sprintf("rancher-resolution-%s-ha-%d.json", phase, instanceNum))
+	name := fmt.Sprintf("rancher-resolution-%s-ha-%d.json", phase, instanceNum)
+	path := automationOutputPath(name)
+	if configPath := strings.TrimSpace(os.Getenv(runToolConfigPathEnv)); configPath != "" {
+		path = filepath.Join(filepath.Dir(configPath), name)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

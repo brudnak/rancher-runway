@@ -1506,7 +1506,7 @@ const renderDeploymentType = () => {
     deploymentSummaryEl.textContent = hosted
       ? 'Hosted tenant K3s creates one host Rancher first, then one to three tenant Ranchers backed by RDS/Aurora MySQL.'
       : linode
-        ? 'Linode Docker creates standalone Rancher Docker installs on Linode with Route53 DNS records. It can run while the AWS lane is busy.'
+        ? 'Linode Docker creates standalone Rancher Docker installs on Linode with Route53 DNS records. Up to two provisioning runs can proceed at once.'
       : 'Each Rancher runs on its own RKE2 management cluster in AWS. Three servers per cluster is the default; use one for a smaller test.'
   }
   if (preloadImagesTextEl) {
@@ -3358,9 +3358,10 @@ const sendResponse = async action => {
     }
 
     if (embeddedSetup) {
+      const result = await response.json();
       resetEmbeddedSetupFlow()
       if (shouldContinue) {
-        window.dispatchEvent(new CustomEvent('rancher-setup-started'))
+        window.dispatchEvent(new CustomEvent('rancher-setup-started', { detail: result }))
       }
       return
     }

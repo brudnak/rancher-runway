@@ -28,14 +28,43 @@ export const runHostnameLabel = run => {
   return run.awsPrefix && run.route53Fqdn ? `${run.awsPrefix}-h*.${run.route53Fqdn}` : run.route53Fqdn || 'generated per slot'
 }
 
-export const activeOperations = state => [
-  ['setup', 'Setup', state?.setup],
-  ['readiness', 'Readiness', state?.readiness],
-  ['downstream', 'Downstream', state?.downstream],
-  ['cleanup', 'Destroy', state?.cleanup],
-  ['linodeSetup', 'Linode setup', state?.linodeSetup],
-  ['linodeCleanup', 'Linode destroy', state?.linodeCleanup]
-].filter(([, , operation]) => operation?.running)
+const operationLabels = {
+  setup: 'Setup', readiness: 'Readiness', downstream: 'Downstream',
+  cleanup: 'Destroy', linodeSetup: 'Linode setup', linodeCleanup: 'Linode destroy',
+  awsCleanup: 'AWS cleanup', cleanupBatch: 'Destroy batch'
+}
+
+export const operationSnapshot = (state, name, runId = '') => {
+  const operations = Array.isArray(state?.runOperations) ? state.runOperations : []
+  const match = runId && operations.find(item => item.operation === name && sameRunKey(item.runId, runId))
+  if (match) return match
+  const legacy = state?.[name]
+  return legacy && (!runId || sameRunKey(legacy.runId, runId)) ? legacy : {}
+}
+
+export const activeOperations = state => {
+  const operations = Array.isArray(state?.runOperations) ? state.runOperations : []
+  const entries = operations.map(item => [item.operation, operationLabels[item.operation] || item.operation, item])
+  for (const [name, label] of Object.entries(operationLabels)) {
+    const legacy = state?.[name]
+    if (legacy && !operations.some(item => item.operation === name && sameRunKey(item.runId, legacy.runId))) {
+      entries.push([name, label, legacy])
+    }
+  }
+  return entries.filter(([, , operation]) => operation?.running)
+}
+
+export const runAdmissionBlocked = (state, runId = '') => {
+  const active = activeOperations(state)
+  if (typeof state?.workspace?.canConfigureSetup === 'boolean') {
+    if (!state.workspace.canConfigureSetup) return true
+  } else {
+    if (!Array.isArray(state?.runOperations)) return active.length > 0
+    if (active.some(([name]) => ['cleanup', 'linodeCleanup', 'cleanupBatch', 'awsCleanup'].includes(name))) return true
+    if (new Set(active.map(([, , item]) => item.runId).filter(Boolean)).size >= 2) return true
+  }
+  return Boolean(runId && active.some(([, , item]) => sameRunKey(item.runId, runId)))
+}
 
 export const operationForRun = (run, state) => {
   const runId = run?.runId || ''
@@ -94,10 +123,10 @@ export const runTone = (run, operation) => {
 
 export const runTimelineHTML = (run, state) => {
   const status = String(run?.status || '').toLowerCase()
-  const setupRunning = (state?.setup?.running && sameRunKey(state.setup.runId, run.runId)) ||
-    (state?.linodeSetup?.running && sameRunKey(state.linodeSetup.runId, run.runId))
-  const readinessRunning = state?.readiness?.running && sameRunKey(state.readiness.runId, run.runId)
-  const downstreamRunning = state?.downstream?.running && sameRunKey(state.downstream.runId, run.runId)
+  const setupRunning = operationSnapshot(state, 'setup', run.runId).running ||
+    operationSnapshot(state, 'linodeSetup', run.runId).running
+  const readinessRunning = operationSnapshot(state, 'readiness', run.runId).running
+  const downstreamRunning = operationSnapshot(state, 'downstream', run.runId).running
   const cleanupRunning = (state?.cleanup?.running && sameRunKey(state.cleanup.runId, run.runId)) ||
     (state?.linodeCleanup?.running && sameRunKey(state.linodeCleanup.runId, run.runId))
   const setupDone = status.includes('setup_complete') || status === 'ready' || status.includes('readiness') || status.includes('cleanup')

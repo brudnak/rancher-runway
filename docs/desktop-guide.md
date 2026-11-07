@@ -777,6 +777,17 @@ Homebrew installs keep those files under
 `~/Library/Application Support/Rancher Runway/workspace/terratest/automation-output/`;
 source builds keep them under this checkout's `terratest/automation-output/`.
 
+Up to two provisioning runs can be active at once. While Prime is provisioning,
+return to Setup, choose Community, resolve its plan, and continue. Each run
+keeps its approved configuration, Helm files, Terraform provider cache, logs,
+and readiness checks. Open the run's logs or use its Stop action to manage
+that run. Start a third run after one of the active runs finishes.
+
+Destroy and inventory cleanup wait for provisioning to finish. Runs started
+by an older app must also finish before a second run can start because they
+use the shared configuration. Parallel runs add local Terraform/Helm activity
+and cloud resource usage. The two-run limit bounds simultaneous workers.
+
 Linode Docker slots use the same slot model, but they do not produce
 kubeconfigs. Cluster details show the Rancher URL and Linode IP instead.
 

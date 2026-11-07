@@ -336,6 +336,7 @@
 </template>
 
 <script setup>
+import { operationSnapshot } from "../../static/control_panel_runs.js";
 import AppBuildStamp from "./AppBuildStamp.vue";
 import { CONFIRMATION_TEXT, isConfirmed } from "./confirmation.mjs";
 import { computed, nextTick, ref, watch, onMounted, onUnmounted } from "vue";
@@ -394,6 +395,7 @@ const logModalKind = computed(() => {
 
 const logModalTitle = computed(() => {
   if (logs.mode === "docker") return state.value?.clusters?.items?.find(c => c.id === logs.clusterId)?.name || "Rancher container";
+  if (logs.runId) return `Run ${logs.runId}`;
   if (logs.mode === "setup") return "Setup";
   if (logs.mode === "linodeSetup") return "Linode setup";
   if (logs.mode === "readiness") return "Readiness";
@@ -413,8 +415,8 @@ const logModalSubtitle = computed(() => {
   }
   if (logs.mode === "setup") return "go test -v -run ^TestHaSetup$ -timeout 90m -count=1 ./terratest";
   if (logs.mode === "linodeSetup") return "go test -v -run ^TestHaSetup$ -timeout 90m -count=1 ./terratest";
-  if (logs.mode === "readiness") return state.value?.readiness?.command || "go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest";
-  if (logs.mode === "downstream") return state.value?.downstream?.command || "go test -v -run ^TestHAProvisionConfiguredLinodeDownstreams$ -timeout 35m -count=1 ./terratest";
+  if (logs.mode === "readiness") return operationSnapshot(state.value, "readiness", logs.runId).command || "go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest";
+  if (logs.mode === "downstream") return operationSnapshot(state.value, "downstream", logs.runId).command || "go test -v -run ^TestHAProvisionConfiguredLinodeDownstreams$ -timeout 35m -count=1 ./terratest";
   if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") return "go test -v -run ^TestHACleanup$ -timeout 60m -count=1 ./terratest";
   if (logs.mode === "cleanupBatch") return "Attempts tracked downstream cleanup before each run’s Terraform destroy; downstream failures are recorded as warnings";
   return `${logs.namespace} • ${logs.clusterId} • ${logs.mode === "live" ? "live stream" : "tail snapshot"}`;

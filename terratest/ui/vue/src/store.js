@@ -16,6 +16,9 @@ import {
   parentPath,
 } from "../../static/control_panel_utils.js";
 import {
+  activeOperations,
+  operationSnapshot,
+  runAdmissionBlocked,
   runFolderPath,
   runFolderAvailable,
   runTerraformPath,
@@ -50,6 +53,7 @@ export const fullscreen = ref(false);
 export const logs = reactive({
   show: false,
   mode: "", // 'live', 'tail', 'docker', 'setup', 'linodeSetup', 'readiness', 'downstream', 'cleanup', 'linodeCleanup', 'cleanupBatch'
+  runId: "",
   clusterId: "",
   namespace: "",
   podName: "",
@@ -119,6 +123,8 @@ export const activeClusterHAKey = ref("");
 // Setup pending safety locks
 export const setupLaunchPendingUntil = ref(0);
 export const pendingAbortOperation = ref("");
+const pendingAbortRunId = ref("");
+const pendingSetupRunId = ref("");
 export const refreshInFlight = ref(false);
 export const manualRefreshInFlight = ref(false);
 export const refreshError = ref("");
@@ -173,19 +179,26 @@ export const apiFetch = async (path, options = {}) => {
 
 // Lifecycle checkers
 export const awsLifecycleRunning = computed(() =>
-  Boolean(state.value?.setup?.running || state.value?.readiness?.running || state.value?.downstream?.running || state.value?.cleanup?.running || state.value?.awsCleanup?.running)
+  activeOperations(state.value).some(([name]) => ["setup", "readiness", "downstream", "cleanup", "awsCleanup"].includes(name))
 );
 export const linodeLifecycleRunning = computed(() =>
-  Boolean(state.value?.linodeSetup?.running || state.value?.linodeCleanup?.running)
+  activeOperations(state.value).some(([name]) => ["linodeSetup", "linodeCleanup"].includes(name))
 );
 export const cleanupBatchRunning = computed(() => Boolean(state.value?.cleanupBatch?.running));
 export const lifecycleRunning = computed(() =>
   Boolean(awsLifecycleRunning.value || linodeLifecycleRunning.value || cleanupBatchRunning.value || cleanupBatchStarting.value)
 );
+export const canStartSetup = computed(() => Boolean(
+  state.value?.workspace?.canStartIsolatedRun && !bootPending.value &&
+  !cleanupStarting.value && !cleanupBatchStarting.value && setupLaunchPendingUntil.value <= Date.now()
+));
+export const runProvisioningBlocked = runId => Boolean(
+  bootPending.value || cleanupStarting.value || cleanupBatchStarting.value ||
+  runAdmissionBlocked(state.value, runId)
+);
 
 export const runIsLinodeDocker = run => run?.deploymentType === "linode-docker-cattle";
-export const runDestroyBlocked = run =>
-  state.value?.awsCleanup?.running || cleanupBatchRunning.value || cleanupBatchStarting.value || (runIsLinodeDocker(run) ? linodeLifecycleRunning.value : awsLifecycleRunning.value);
+export const runDestroyBlocked = () => lifecycleRunning.value;
 
 const cleanupRunIdsInState = () => Array.isArray(state.value?.workspace?.runs)
   ? state.value.workspace.runs.map(run => String(run?.runId || "").trim()).filter(Boolean)
@@ -240,106 +253,11 @@ watch(cleanupRunIdsInState, availableRunIds => {
 }, { immediate: true });
 
 export const lifecycleBusyDetail = () => {
-  const curState = state.value;
-  if (curState?.awsCleanup?.running) {
-    return { busy: true, operation: "awsCleanup", message: "AWS inventory cleanup is running. Wait for the reviewed deletions to finish.", busyByDeployment: { "ha-rke2": true, "hosted-tenant-k3s": true, "linode-docker-cattle": true } };
-  }
-  if (curState?.cleanupBatch?.running || cleanupBatchStarting.value) {
-    const total = Array.isArray(curState?.cleanupBatch?.runIds) ? curState.cleanupBatch.runIds.length : 0;
-    return {
-      busy: true,
-      operation: "cleanupBatch",
-      message: total
-        ? `A destroy batch is processing ${total} run slot${total === 1 ? "" : "s"}. Other lifecycle actions stay locked until it finishes.`
-        : "A destroy batch is starting. Other lifecycle actions stay locked until it finishes.",
-      busyByDeployment: {
-        "ha-rke2": true,
-        "hosted-tenant-k3s": true,
-        "linode-docker-cattle": true,
-      },
-    };
-  }
-  if (curState?.setup?.running) {
-    return {
-      busy: true,
-      operation: "setup",
-      message: "Setup is running. New AWS setup actions are locked, but Linode Docker setup can run in parallel.",
-      busyByDeployment: {
-        "ha-rke2": true,
-        "hosted-tenant-k3s": true,
-        "linode-docker-cattle": linodeLifecycleRunning.value,
-      },
-    };
-  }
-  if (curState?.readiness?.running) {
-    return {
-      busy: true,
-      operation: "readiness",
-      message: "Readiness checks are running. AWS actions are locked, but Linode Docker setup can run in parallel.",
-      busyByDeployment: {
-        "ha-rke2": true,
-        "hosted-tenant-k3s": true,
-        "linode-docker-cattle": linodeLifecycleRunning.value,
-      },
-    };
-  }
-  if (curState?.downstream?.running) {
-    return {
-      busy: true,
-      operation: "downstream",
-      message: "Downstream provisioning is running against a ready management Rancher. Setup, readiness, and destroy stay locked until it finishes.",
-      busyByDeployment: {
-        "ha-rke2": true,
-        "hosted-tenant-k3s": true,
-        "linode-docker-cattle": linodeLifecycleRunning.value,
-      },
-    };
-  }
-  if (curState?.cleanup?.running) {
-    return {
-      busy: true,
-      operation: "destroy",
-      message: "Destroy is running. AWS actions are locked, but Linode Docker setup can run in parallel.",
-      busyByDeployment: {
-        "ha-rke2": true,
-        "hosted-tenant-k3s": true,
-        "linode-docker-cattle": linodeLifecycleRunning.value,
-      },
-    };
-  }
-  if (curState?.linodeSetup?.running) {
-    return {
-      busy: true,
-      operation: "linodeSetup",
-      message: "Linode setup is running. AWS setup and destroy can still run in their own lane.",
-      busyByDeployment: {
-        "ha-rke2": awsLifecycleRunning.value,
-        "hosted-tenant-k3s": awsLifecycleRunning.value,
-        "linode-docker-cattle": true,
-      },
-    };
-  }
-  if (curState?.linodeCleanup?.running) {
-    return {
-      busy: true,
-      operation: "linodeCleanup",
-      message: "Linode destroy is running. AWS setup and destroy can still run in their own lane.",
-      busyByDeployment: {
-        "ha-rke2": awsLifecycleRunning.value,
-        "hosted-tenant-k3s": awsLifecycleRunning.value,
-        "linode-docker-cattle": true,
-      },
-    };
-  }
+  const busy = runProvisioningBlocked("") || setupLaunchPendingUntil.value > Date.now();
   return {
-    busy: false,
-    operation: "",
-    message: "",
-    busyByDeployment: {
-      "ha-rke2": awsLifecycleRunning.value,
-      "hosted-tenant-k3s": awsLifecycleRunning.value,
-      "linode-docker-cattle": linodeLifecycleRunning.value,
-    },
+    busy,
+    message: busy ? state.value?.workspace?.setupBlockedReason || "Waiting for an available run slot." : "",
+    busyByDeployment: { "ha-rke2": busy, "hosted-tenant-k3s": busy, "linode-docker-cattle": busy },
   };
 };
 
@@ -697,6 +615,7 @@ export const renderLogViewer = () => {
 
 export const setActiveLogContext = (mode, clusterId, namespace, podName) => {
   logs.mode = mode;
+  logs.runId = "";
   logs.clusterId = clusterId;
   logs.namespace = namespace;
   logs.podName = podName;
@@ -902,10 +821,11 @@ export const streamSteveLogs = (run, options = {}) => {
   streamPollTimer = window.setInterval(poll, 3000);
 };
 
-export const openSetupLogs = (linode = false) => {
+export const openSetupLogs = (linode = false, runId = "") => {
   stopStream({ internal: true });
   setActiveLogContext(linode ? "linodeSetup" : "setup", linode ? "linode" : "local", "terratest", "setup");
-  const setup = linode ? state.value?.linodeSetup || {} : state.value?.setup || {};
+  const setup = operationSnapshot(state.value, linode ? "linodeSetup" : "setup", runId);
+  logs.runId = runId || setup.runId || "";
   const output = operationOutput(setup);
   logs.rawText = output.join("\n");
   logs.liveState = setup.running ? (linode ? "linodeSetupRunning" : "setupRunning") : setup.error ? "setupError" : setup.finishedAt ? "setupDone" : "idle";
@@ -913,10 +833,11 @@ export const openSetupLogs = (linode = false) => {
   openLogModal();
 };
 
-export const openReadinessLogs = () => {
+export const openReadinessLogs = (runId = "") => {
   stopStream({ internal: true });
   setActiveLogContext("readiness", "local", "terratest", "readiness");
-  const readiness = state.value?.readiness || {};
+  const readiness = operationSnapshot(state.value, "readiness", runId);
+  logs.runId = runId || readiness.runId || "";
   const output = operationOutput(readiness);
   logs.rawText = output.join("\n");
   logs.liveState = readiness.running ? "readinessRunning" : readiness.error ? "readinessError" : readiness.finishedAt ? "readinessDone" : "idle";
@@ -924,10 +845,11 @@ export const openReadinessLogs = () => {
   openLogModal();
 };
 
-export const openDownstreamLogs = () => {
+export const openDownstreamLogs = (runId = "") => {
   stopStream({ internal: true });
   setActiveLogContext("downstream", "local", "terratest", "downstream");
-  const downstream = state.value?.downstream || {};
+  const downstream = operationSnapshot(state.value, "downstream", runId);
+  logs.runId = runId || downstream.runId || "";
   logs.rawText = operationOutput(downstream).join("\n");
   logs.liveState = downstream.running ? "downstreamRunning" : downstream.error ? "downstreamError" : downstream.finishedAt ? "downstreamDone" : "idle";
   renderLogViewer();
@@ -1008,11 +930,11 @@ export const reviewManualLinodeCleanupWarning = () => {
   openCleanupLogs(false);
 };
 
-const syncDownstreamLogModal = currentState => {
-  if (!logs.show || logs.mode !== "downstream") return;
-  const downstream = currentState?.downstream || {};
-  logs.rawText = operationOutput(downstream).join("\n");
-  logs.liveState = downstream.running ? "downstreamRunning" : downstream.error ? "downstreamError" : downstream.finishedAt ? "downstreamDone" : "idle";
+const syncRunLogModal = currentState => {
+  if (!logs.show || !["setup", "linodeSetup", "readiness", "downstream"].includes(logs.mode)) return;
+  const operation = operationSnapshot(currentState, logs.mode, logs.runId);
+  logs.rawText = operationOutput(operation).join("\n");
+  logs.liveState = operation.running ? `${logs.mode}Running` : operation.error ? `${logs.mode}Error` : operation.finishedAt ? `${logs.mode}Done` : "idle";
   renderLogViewer();
 };
 
@@ -1227,6 +1149,7 @@ export const abortOperation = async (operation, runId = "", options = {}) => {
   }
 
   pendingAbortOperation.value = operation;
+  pendingAbortRunId.value = runId;
   refreshStatus.value = `Requesting stop for ${operation}...`;
 
   try {
@@ -1250,6 +1173,7 @@ export const abortOperation = async (operation, runId = "", options = {}) => {
   } catch (error) {
     refreshStatus.value = error instanceof Error ? error.message : "Abort request failed.";
     pendingAbortOperation.value = "";
+    pendingAbortRunId.value = "";
     return false;
   }
 };
@@ -1274,22 +1198,13 @@ export const stopOperationThenOpenDestroy = async (operation, runId = "") => {
   refresh();
 };
 
-export const runReadiness = async () => {
+export const runReadiness = async (runId = "") => {
   try {
-    await apiFetch("/api/readiness", { method: "POST", body: "{}" });
+    await apiFetch("/api/readiness", { method: "POST", body: JSON.stringify({ runId }) });
     refreshStatus.value = "Readiness requested...";
-    state.value = {
-      ...(state.value || {}),
-      readiness: {
-        ...(state.value?.readiness || {}),
-        running: true,
-        output: ["[control-panel] Readiness requested..."],
-        startedAt: new Date().toISOString(),
-      },
-    };
+    await refresh();
     dispatchSetupLifecycleState();
-    openReadinessLogs();
-    refresh();
+    openReadinessLogs(runId);
   } catch (error) {
     refreshStatus.value = error instanceof Error ? error.message : "Readiness failed.";
   }
@@ -1297,7 +1212,7 @@ export const runReadiness = async () => {
 
 export const retryDownstream = async runId => {
   const targetRunId = String(runId || "").trim();
-  if (!targetRunId || downstreamRetryingRunId.value || lifecycleRunning.value || bootPending.value) {
+  if (!targetRunId || downstreamRetryingRunId.value || runProvisioningBlocked(targetRunId)) {
     return;
   }
 
@@ -1315,27 +1230,10 @@ export const retryDownstream = async runId => {
       method: "POST",
       body: JSON.stringify({ runId: targetRunId, confirm: CONFIRMATION_TEXT }),
     });
-    state.value = {
-      ...(state.value || {}),
-      downstream: {
-        ...(state.value?.downstream || {}),
-        running: true,
-        runId: targetRunId,
-        error: "",
-        output: ["[control-panel] Downstream retry requested..."],
-        startedAt: new Date().toISOString(),
-      },
-      workspace: {
-        ...(state.value?.workspace || {}),
-        runs: (state.value?.workspace?.runs || []).map(run => sameRunKey(run.runId, targetRunId)
-          ? { ...run, downstreamStatus: "downstream_running", downstreamError: "" }
-          : run),
-      },
-    };
+    await refresh();
     refreshStatus.value = "Downstream retry requested...";
     dispatchSetupLifecycleState();
-    openDownstreamLogs();
-    refresh();
+    openDownstreamLogs(targetRunId);
   } catch (error) {
     refreshStatus.value = error instanceof Error ? error.message : "Downstream retry failed.";
   } finally {
@@ -1651,20 +1549,12 @@ const refreshState = async () => {
 
   try {
     const fetched = await fetchState();
-    if (
-      setupLaunchPendingUntil.value > Date.now() &&
-      !fetched?.setup?.running &&
-      !fetched?.setup?.finishedAt &&
-      !fetched?.setup?.error
-    ) {
-      fetched.setup = {
-        ...(fetched.setup || {}),
-        running: true,
-        output: ["[control-panel] AWS setup accepted. Waiting for lifecycle state to publish the run record..."],
-        startedAt: new Date().toISOString(),
-      };
-    } else if (fetched?.setup?.running || fetched?.setup?.finishedAt || fetched?.setup?.error) {
+    const launchRecorded = pendingSetupRunId.value
+      ? (fetched?.workspace?.runs || []).some(run => sameRunKey(run.runId, pendingSetupRunId.value))
+      : activeOperations(fetched).some(([name]) => ["setup", "linodeSetup"].includes(name));
+    if (launchRecorded || setupLaunchPendingUntil.value <= Date.now()) {
       setupLaunchPendingUntil.value = 0;
+      pendingSetupRunId.value = "";
     }
 
     state.value = fetched;
@@ -1682,11 +1572,12 @@ const refreshState = async () => {
     dispatchSetupLifecycleState();
     syncCleanupBatchLogModal(fetched);
     syncCleanupLogModal(fetched);
-    syncDownstreamLogModal(fetched);
+    syncRunLogModal(fetched);
     maybeShowManualLinodeCleanupWarning(fetched);
 
-    if (pendingAbortOperation.value && !fetched?.[pendingAbortOperation.value]?.running) {
+    if (pendingAbortOperation.value && !operationSnapshot(fetched, pendingAbortOperation.value, pendingAbortRunId.value).running) {
       pendingAbortOperation.value = "";
+      pendingAbortRunId.value = "";
     }
     if (cleanupStarting.value && (fetched?.cleanup?.running || fetched?.linodeCleanup?.running)) {
       cleanupStarting.value = false;
@@ -1764,20 +1655,11 @@ export const initStore = () => {
   syncFullscreenButton();
   document.addEventListener("fullscreenchange", syncFullscreenButton);
 
-  window.addEventListener("rancher-setup-started", () => {
-    const now = new Date().toISOString();
+  window.addEventListener("rancher-setup-started", event => {
+    pendingSetupRunId.value = event.detail?.runId || "";
     setupLaunchPendingUntil.value = Date.now() + 15000;
-    state.value = {
-      ...(state.value || {}),
-      setup: {
-        ...(state.value?.setup || {}),
-        running: true,
-        output: ["[control-panel] AWS setup accepted. Waiting for lifecycle state to publish the run record..."],
-        startedAt: now,
-      },
-    };
     dispatchSetupLifecycleState();
-    refreshStatus.value = "AWS setup accepted. Waiting for run state to appear...";
+    refreshStatus.value = "Setup accepted. Waiting for run state to appear...";
     setActivePanelTab("runs");
     refresh();
   });

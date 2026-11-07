@@ -14,6 +14,10 @@ import (
 )
 
 func (p *localControlPanel) createCurrentRunRecord(runID string, now time.Time) {
+	totalHAs := configuredRancherInstanceCount()
+	if totalHAs < 1 {
+		totalHAs = p.totalHAs
+	}
 	statePath := p.terraformStatePathForRun(runID)
 	dataDir := p.terraformDataDirForRun(runID)
 	moduleDir := p.terraformModuleDirForRun(runID)
@@ -24,7 +28,7 @@ func (p *localControlPanel) createCurrentRunRecord(runID string, now time.Time) 
 	}
 	gpuWorker := settings.CurrentGPUWorkerConfig()
 	gpuWorkerEnabled := deploymentType() == deploymentTypeHARKE2 && gpuWorker.Enabled
-	downstreamPlans := settings.CurrentLinodeDownstreamPlans(p.totalHAs)
+	downstreamPlans := settings.CurrentLinodeDownstreamPlans(totalHAs)
 	downstreamStatus := ""
 	if deploymentType() == deploymentTypeHARKE2 && settings.AnyLinodeDownstreamPlanEnabled(downstreamPlans) {
 		downstreamStatus = panelDownstreamStatusPending
@@ -35,14 +39,15 @@ func (p *localControlPanel) createCurrentRunRecord(runID string, now time.Time) 
 		SlotName:              "Run " + safeRunPathSegment(runID),
 		Status:                "setup_running",
 		DeploymentType:        deploymentType(),
+		ConfigSnapshot:        pathExists(p.runConfigPath(runID)),
 		CreatedAt:             now,
 		UpdatedAt:             now,
-		TotalHAs:              p.totalHAs,
+		TotalHAs:              totalHAs,
 		AWSPrefix:             terraformAWSPrefixForRun(viper.GetString("tf_vars.aws_prefix"), runID),
 		Route53FQDN:           strings.TrimSpace(viper.GetString("tf_vars.aws_route53_fqdn")),
 		Owner:                 settings.OwnerLabel(),
 		CustomHostnamePrefix:  customHostnamePrefix,
-		RancherVersions:       requestedRancherVersionsForRunRecord(p.totalHAs),
+		RancherVersions:       requestedRancherVersionsForRunRecord(totalHAs),
 		DownstreamLinodePlans: append([]settings.LinodeDownstreamPlan(nil), downstreamPlans...),
 		DownstreamStatus:      downstreamStatus,
 		GPUWorkerEnabled:      gpuWorkerEnabled,
@@ -66,16 +71,23 @@ func (p *localControlPanel) updateCurrentRunStatus(status string) {
 }
 
 func (p *localControlPanel) updateRunRecordStatus(runID string, status string) {
+	p.runRecordsMu.Lock()
+	defer p.runRecordsMu.Unlock()
 	record, ok := p.readRunRecord(runID)
 	if !ok {
 		return
 	}
 	record.Status = status
 	record.UpdatedAt = time.Now()
-	p.writeCurrentRunRecord(record)
+	p.writeRunRecord(record)
+	if current, ok := p.readCurrentRunRecord(); ok && sameRunID(current.RunID, runID) {
+		p.writeCurrentRunRecordLocked(record)
+	}
 }
 
 func (p *localControlPanel) updateRunDownstreamStatus(runID, status, errorMessage string) {
+	p.runRecordsMu.Lock()
+	defer p.runRecordsMu.Unlock()
 	record, ok := p.readRunRecord(runID)
 	if !ok {
 		return
@@ -87,7 +99,7 @@ func (p *localControlPanel) updateRunDownstreamStatus(runID, status, errorMessag
 	record.UpdatedAt = now
 	p.writeRunRecord(record)
 	if current, currentOK := p.readCurrentRunRecord(); currentOK && sameRunID(current.RunID, record.RunID) {
-		p.writeCurrentRunRecord(record)
+		p.writeCurrentRunRecordLocked(record)
 	}
 }
 
@@ -98,12 +110,32 @@ func (p *localControlPanel) removeCurrentRunRecord() {
 }
 
 func (p *localControlPanel) removeRunRecord(runID string) {
+	p.runRecordsMu.Lock()
 	safeRunID := safeRunPathSegment(runID)
 	if err := os.Remove(p.runRecordPath(safeRunID)); err != nil && !os.IsNotExist(err) {
 		log.Printf("[control-panel] Failed to remove run record %s: %v", safeRunID, err)
+		p.runRecordsMu.Unlock()
+		return
 	}
 	if current, ok := p.readCurrentRunRecord(); ok && sameRunID(current.RunID, safeRunID) {
 		p.removeCurrentRunRecord()
+	}
+	p.runRecordsMu.Unlock()
+
+	// Retain logs for recorded runs, without growing lifecycle state forever
+	// after their resources and records have been removed.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	changed := false
+	for name, op := range p.operations {
+		if name != panelOperationBase(name) && isProvisioningPanelOperation(name) &&
+			op != nil && sameRunID(op.RunID, safeRunID) && !panelOperationActive(op) {
+			delete(p.operations, name)
+			changed = true
+		}
+	}
+	if changed {
+		p.persistOperationsLocked()
 	}
 }
 
@@ -146,6 +178,12 @@ func (p *localControlPanel) readRunRecord(runID string) (panelRunRecord, bool) {
 }
 
 func (p *localControlPanel) writeCurrentRunRecord(record panelRunRecord) {
+	p.runRecordsMu.Lock()
+	defer p.runRecordsMu.Unlock()
+	p.writeCurrentRunRecordLocked(record)
+}
+
+func (p *localControlPanel) writeCurrentRunRecordLocked(record panelRunRecord) {
 	record.RunID = safeRunPathSegment(record.RunID)
 	if strings.TrimSpace(record.SlotID) == "" || record.SlotID == defaultRunSlotID {
 		record.SlotID = panelRunSlotID(record.RunID)
@@ -166,7 +204,7 @@ func (p *localControlPanel) writeCurrentRunRecord(record panelRunRecord) {
 		log.Printf("[control-panel] Failed to encode current run record: %v", err)
 		return
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := writePrivateConfigAtomically(path, data); err != nil {
 		log.Printf("[control-panel] Failed to write current run record %s: %v", path, err)
 	}
 }
@@ -184,7 +222,7 @@ func (p *localControlPanel) writeRunRecord(record panelRunRecord) {
 		log.Printf("[control-panel] Failed to encode run record: %v", err)
 		return
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := writePrivateConfigAtomically(path, data); err != nil {
 		log.Printf("[control-panel] Failed to write run record %s: %v", path, err)
 	}
 }
@@ -233,8 +271,16 @@ func (p *localControlPanel) listRunRecords() []panelRunRecord {
 	if current, ok := p.readCurrentRunRecord(); ok && strings.TrimSpace(current.RunID) != "" {
 		current.RunID = safeRunPathSegment(current.RunID)
 		current = p.enrichRunRecord(current)
-		recordsByID[current.RunID] = current
-		p.writeRunRecord(current)
+		if _, exists := recordsByID[current.RunID]; !exists {
+			recordsByID[current.RunID] = current
+			// Preserve legacy current-only records before a new setup selects a
+			// different current run. Never overwrite a concurrent status update.
+			p.runRecordsMu.Lock()
+			if _, err := os.Stat(p.runRecordPath(current.RunID)); os.IsNotExist(err) {
+				p.writeRunRecord(current)
+			}
+			p.runRecordsMu.Unlock()
+		}
 	}
 
 	records := make([]panelRunRecord, 0, len(recordsByID))
