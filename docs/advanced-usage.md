@@ -40,6 +40,24 @@ For GoLand, configure the package as
 `^TestHaSetup$`, `^TestHAWaitReady$`, `^TestLinodeDockerWaitReady$`,
 `^TestHAControlPanel$`, or `^TestHACleanup$`.
 
+## Rancher Server Images
+
+For HA and hosted Kubernetes installs, Runway checks `rancher/rancher-server`
+first and falls back to `rancher/rancher` when the requested production tag is
+absent. This supports the November 2026 server-image split while keeping older
+builds usable. Registry access errors stop resolution instead of selecting an
+older image. The requested tag and matching `rancher/rancher-agent` are preserved.
+Moving patch-head selectors search both repositories and choose the newest
+complete, verified pair; a stale legacy alias does not take priority over a
+published production-server alias.
+
+Exact image input accepts `/rancher-server`, `/rancher`, and `/rancher-agent`.
+For example, `stgregistry.suse.com/rancher/rancher-server:v2.16.0-d492998-head`
+uses that server image and the matching `rancher-agent` tag. Linode Docker
+installs keep their separate image selection: the production `rancher-server`
+image expects Kubernetes and is not a replacement for the standalone Docker
+image's bundled K3s runtime.
+
 ## Configured Linode Downstreams
 
 For `deployment.type: ha-rke2`, enable a downstream in `tool-config.yml` and
@@ -75,6 +93,29 @@ No Linode root password or Docker Hub setting is needed for these downstreams.
 The timeout covers management setup, readiness, and downstream provisioning.
 In GitHub Actions, keep the token in the setup step's environment alongside
 the same Terraform state settings you already use. No second command is needed.
+
+Default runs preserve Rancher's shipped machine provisioner, including failures.
+To bypass a known provisioner packaging failure while testing another feature,
+explicitly set `RANCHER_RUNWAY_MACHINE_PROVISIONER_WORKAROUND=true` in Runway's
+environment. This opt-in works around two machine provisioner builds whose
+driver-download script cannot find `sed` and `grep`:
+
+| Affected `rancher/machine` tag | Compatibility tag |
+| --- | --- |
+| `v0.15.0-rancher145.4-rc.1` | `v0.15.0-rancher145.3` |
+| `v0.15.0-rancher142.8-rc.1` | `v0.15.0-rancher142.7` |
+
+When enabled, Runway verifies the replacement in the configured system registry, updates
+Rancher's `machine-provision-image` setting, and confirms it before creating
+downstream resources. The change appears in the setup log or desktop operation
+history and applies to future machine jobs across that Rancher instance. It
+persists for subsequent provisioning and cleanup jobs. The Rancher server
+version and system registry stay unchanged. Other image tags, custom repositories,
+and digest-pinned images are preserved. If verification or the setting update
+fails, Runway stops before creating the downstream. This also applies to
+downstreams created from the deployed-cluster panel.
+After upgrading to a build with a corrected provisioner image, clear this
+`machine-provision-image` override to resume Rancher's default for that build.
 
 Provide one plan per `total_has` row, in the same order as the Rancher versions
 or manual Helm commands. Use `enabled: false` for rows without a downstream;

@@ -36,6 +36,7 @@ var imageLookupKnownRegistries = []string{
 }
 
 var imageLookupKnownRepositories = []string{
+	"rancher/rancher-server",
 	"rancher/rancher",
 	"rancher/rancher-agent",
 	"rancher/rancher-webhook",

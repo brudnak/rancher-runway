@@ -57,6 +57,8 @@ func TestRancherUpgradePlannerChartSchemas(t *testing.T) {
 	}{
 		{"community minor head", "image:\n  repository: rancher/rancher\n  tag: ''\n", "2.15.2", "docker.io/rancher/rancher:v2.15-head", "docker.io/rancher/rancher", "v2.15-head", "v2.15-19c92983f6f9d7f455de668e62fbfe55c045cde2-head", true, false},
 		{"modern stable", "image:\n  repository: rancher/rancher\n  tag: ''\n", "2.15.3", "", "docker.io/rancher/rancher", "v2.15.3", "v2.15.3", true, false},
+		{"production server chart", "image:\n  registry: registry.rancher.com\n  repository: rancher/rancher-server\n  tag: ''\n", "2.15.4", "", "registry.rancher.com/rancher/rancher-server", "v2.15.4", "v2.15.4", true, false},
+		{"production server override", "image:\n  repository: rancher/rancher\n  tag: ''\n", "2.15.2", "stgregistry.suse.com/rancher/rancher-server:v2.15.4-head", "stgregistry.suse.com/rancher/rancher-server", "v2.15.4-head", "v2.15.4-head", true, false},
 		{"modern staging exact image", "image:\n  repository: rancher/rancher\n  tag: ''\n", "2.15.2", "stgregistry.suse.com/rancher/rancher:v2.15.3-head", "stgregistry.suse.com/rancher/rancher", "v2.15.3-head", "v2.15.3-head", true, false},
 		{"legacy stable", "rancherImage: rancher/rancher\n", "2.15.3", "", "rancher/rancher", "v2.15.3", "v2.15.3", false, false},
 		{"failed preflight not saved", "image:\n  repository: rancher/rancher\n  tag: ''\n", "2.15.2", "docker.io/rancher/rancher:head", "docker.io/rancher/rancher", "head", "v2.16.0-head", true, true},
@@ -140,7 +142,7 @@ func TestRancherUpgradePlannerChartSchemas(t *testing.T) {
 					t.Fatalf("missing version evidence or uncertainty warning: %+v", plan)
 				}
 			}
-			agent := strings.TrimSuffix(tc.wantImage, "/rancher") + "/rancher-agent:" + tc.wantTag
+			agent := tc.wantImage[:strings.LastIndex(tc.wantImage, "/")] + "/rancher-agent:" + tc.wantTag
 			if len(inspected) != 2 || inspected[0] != tc.wantImage+":"+tc.wantTag || inspected[1] != agent {
 				t.Fatalf("wrong images inspected: %v", inspected)
 			}

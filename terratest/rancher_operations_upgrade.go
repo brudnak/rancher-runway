@@ -95,7 +95,7 @@ func (p *localControlPanel) planRancherUpgradeWithRuntime(ctx context.Context, c
 	if minorHeadVersion.MatchString(plan.TargetVersion) || minorHeadVersion.MatchString(before.Version) {
 		plan.Warnings = append(plan.Warnings, "This commit-based head declares a release line but no patch number. Patch-level upgrade/downgrade ordering cannot be verified; review the build commit and release history before confirming this experimental transition.")
 	}
-	plan.AgentImage = strings.TrimSuffix(plan.Image, "/rancher") + "/rancher-agent:" + plan.ImageTag
+	plan.AgentImage = plan.Image[:strings.LastIndex(plan.Image, "/")+1] + "rancher-agent:" + plan.ImageTag
 	agent, agentFound, agentErr := runtime.inspectImage(ctx, plan.AgentImage)
 	if agentErr != nil || !agentFound || agent.Digest == "" {
 		return nil, fmt.Errorf("matching Rancher agent image cannot be verified: %s", plan.AgentImage)

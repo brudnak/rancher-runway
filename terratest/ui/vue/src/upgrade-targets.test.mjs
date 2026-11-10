@@ -4,6 +4,11 @@ import { releaseTargets, headTargets, defaultHeadChart, upgradeSearchHints } fro
 const chart = version => ({ version, appVersion: `v${version}` });
 const image = tag => `docker.io/rancher/rancher:${tag}`;
 
+test('head choices preserve the production server and legacy image references', () => {
+  const images = ['docker.io/rancher/rancher-server:head', 'docker.io/rancher/rancher:head', 'docker.io/rancher/rancher-server:head'];
+  assert.deepEqual(headTargets('v2.15.2', images), images.slice(0, 2));
+});
+
 test('suggests the latest current patch before a minor upgrade and explains blocked targets', () => {
   const targets = releaseTargets('v2.15.2', ['2.16.2', '2.15.3', '2.15.10', '2.17.0', '2.14.9', '2.15.2'].map(chart));
   assert.deepEqual(targets.map(t => t.version), ['2.15.10', '2.15.3', '2.16.2']);

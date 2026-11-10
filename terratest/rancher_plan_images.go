@@ -33,58 +33,53 @@ func resolveImageSettings(requestedVersion, buildType, resolvedDistro string) (s
 }
 
 type commitHeadImageCandidate struct {
-	label        string
-	registry     string
-	rancherImage string
-	agentImage   string
+	label    string
+	registry string
 }
 
 func resolveCommitHeadImageSettings(requestedVersion string) (string, string, string, []string, error) {
 	imageTag := "v" + requestedVersion
 	candidates := []commitHeadImageCandidate{
 		{
-			label:        "staging registry",
-			registry:     "stgregistry.suse.com",
-			rancherImage: "stgregistry.suse.com/rancher/rancher",
-			agentImage:   "stgregistry.suse.com/rancher/rancher-agent:" + imageTag,
+			label:    "staging registry",
+			registry: "stgregistry.suse.com",
 		},
 	}
 	if !imagelookup.IsPrimeCommitHeadRancherVersion(requestedVersion) {
 		candidates = append(candidates, commitHeadImageCandidate{
-			label:        "Docker Hub",
-			registry:     "docker.io",
-			rancherImage: "docker.io/rancher/rancher",
-			agentImage:   "docker.io/rancher/rancher-agent:" + imageTag,
+			label:    "Docker Hub",
+			registry: "docker.io",
 		}, commitHeadImageCandidate{
-			label:        "Rancher registry",
-			registry:     "registry.rancher.com",
-			rancherImage: "registry.rancher.com/rancher/rancher",
-			agentImage:   "registry.rancher.com/rancher/rancher-agent:" + imageTag,
+			label:    "Rancher registry",
+			registry: "registry.rancher.com",
 		})
 	}
 
 	var misses []string
 	for _, candidate := range candidates {
-		serverFound, serverErr := registryImageTagExists(candidate.registry, "rancher/rancher", imageTag)
 		agentFound, agentErr := registryImageTagExists(candidate.registry, "rancher/rancher-agent", imageTag)
-		if serverErr == nil && agentErr == nil && serverFound && agentFound {
-			return candidate.rancherImage, imageTag, candidate.agentImage, []string{
-				fmt.Sprintf("Found commit-specific head images in %s; using %s:%s and %s", candidate.label, candidate.rancherImage, imageTag, candidate.agentImage),
+		if agentErr != nil {
+			return "", "", "", nil, fmt.Errorf("verify commit-specific head agent in %s: %w", candidate.label, agentErr)
+		}
+		if !agentFound {
+			misses = append(misses, candidate.label+" (rancher/rancher-agent missing)")
+			continue
+		}
+		for _, repository := range imagelookup.RancherServerRepositories() {
+			serverFound, serverErr := registryImageTagExists(candidate.registry, repository, imageTag)
+			if serverErr != nil {
+				return "", "", "", nil, fmt.Errorf("verify commit-specific head %s in %s: %w", repository, candidate.label, serverErr)
+			}
+			if !serverFound {
+				misses = append(misses, candidate.label+" ("+repository+" missing)")
+				continue
+			}
+			rancherImage := candidate.registry + "/" + repository
+			agentImage := candidate.registry + "/rancher/rancher-agent:" + imageTag
+			return rancherImage, imageTag, agentImage, []string{
+				fmt.Sprintf("Found commit-specific head images in %s; using %s:%s and %s", candidate.label, rancherImage, imageTag, agentImage),
 			}, nil
 		}
-
-		var detail []string
-		if serverErr != nil {
-			detail = append(detail, "rancher/rancher lookup error: "+serverErr.Error())
-		} else if !serverFound {
-			detail = append(detail, "rancher/rancher missing")
-		}
-		if agentErr != nil {
-			detail = append(detail, "rancher/rancher-agent lookup error: "+agentErr.Error())
-		} else if !agentFound {
-			detail = append(detail, "rancher/rancher-agent missing")
-		}
-		misses = append(misses, fmt.Sprintf("%s (%s)", candidate.label, strings.Join(detail, "; ")))
 	}
 
 	return "", "", "", nil, fmt.Errorf("commit-specific head tag %s was not found as a matching Rancher server and agent image pair in checked registries: %s", imageTag, strings.Join(misses, "; "))

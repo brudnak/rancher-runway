@@ -60,7 +60,9 @@ func TestResolvePreferredCommunityHeadPinsMatchingMainPair(t *testing.T) {
 				t.Fatalf("unexpected resolution: %#v", resolution)
 			}
 			wantCalls := []string{
+				"docker.io/rancher/rancher-server:v2.16-head",
 				"docker.io/rancher/rancher:v2.16-head",
+				"docker.io/rancher/rancher-server:head",
 				"docker.io/rancher/rancher:head",
 				"docker.io/rancher/rancher-agent:head",
 				"docker.io/rancher/rancher:" + communityHeadTestTag,
@@ -86,7 +88,7 @@ func TestResolvePreferredCommunityHeadKeepsPublishedAlias(t *testing.T) {
 	if resolution.RancherImageTag != "v2.16-head" || resolution.HeadAlias != "" {
 		t.Fatalf("published alias was replaced: %#v", resolution)
 	}
-	wantCalls := []string{"docker.io/rancher/rancher:v2.16-head", "docker.io/rancher/rancher-agent:v2.16-head"}
+	wantCalls := []string{"docker.io/rancher/rancher-server:v2.16-head", "docker.io/rancher/rancher:v2.16-head", "docker.io/rancher/rancher-agent:v2.16-head"}
 	if !slices.Equal(*calls, wantCalls) {
 		t.Fatalf("unexpected main-head lookup: %v", *calls)
 	}
@@ -141,7 +143,7 @@ func TestResolvePreferredCommunityHeadDoesNotUseUnselectedDockerHub(t *testing.T
 	if err == nil || resolution != nil || !strings.Contains(err.Error(), "No unselected registry fallback was attempted") {
 		t.Fatalf("resolution = %#v, error = %v; want selected registry failure", resolution, err)
 	}
-	if !slices.Equal(*calls, []string{"stgregistry.suse.com/rancher/rancher:v2.16-head"}) {
+	if !slices.Equal(*calls, []string{"stgregistry.suse.com/rancher/rancher-server:v2.16-head", "stgregistry.suse.com/rancher/rancher:v2.16-head"}) {
 		t.Fatalf("unexpected Docker Hub lookup: %v", *calls)
 	}
 }
@@ -163,8 +165,43 @@ func TestCommunityHeadFallbackOnlyAcceptsMinorSelectors(t *testing.T) {
 				t.Fatal("missing exact image unexpectedly resolved")
 			}
 			want := "docker.io/rancher/rancher:" + imagelookup.NormalizeDockerRancherTag(requested)
-			if !slices.Equal(*calls, []string{want}) {
+			if !slices.Equal(*calls, []string{strings.Replace(want, "/rancher:", "/rancher-server:", 1), want}) {
 				t.Fatalf("non-minor request caused fallback lookups: %v", *calls)
+			}
+		})
+	}
+}
+
+func TestResolveCommunityMainHeadUsesProductionRepositoryForNewHeads(t *testing.T) {
+	for _, line := range []string{"2.16", "2.17"} {
+		t.Run(line, func(t *testing.T) {
+			images := communityHeadTestImages()
+			tag := "v" + line + "-" + communityHeadTestSHA + "-head"
+			for _, repository := range []string{"rancher/rancher-server", "rancher/rancher-agent"} {
+				original := "rancher/rancher"
+				if strings.HasSuffix(repository, "-agent") {
+					original = repository
+				}
+				provenance := images["docker.io/"+original+":head"]
+				provenance.CanonicalReference = repository + ":" + tag
+				if strings.HasSuffix(repository, "-server") {
+					provenance.ServerVersion = tag
+				}
+				for _, candidateTag := range []string{"head", tag} {
+					provenance.Reference = "docker.io/" + repository + ":" + candidateTag
+					images[provenance.Reference] = provenance
+				}
+			}
+			calls := stubCommunityHeadImages(t, images)
+			resolution, err := resolvePreferredRancherImageSettings(line+"-head", []string{"docker.io"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolution.RancherImage != "docker.io/rancher/rancher-server" || resolution.RancherImageTag != tag || resolution.AgentImage != "docker.io/rancher/rancher-agent:"+tag || resolution.HeadAlias != line+"-head" {
+				t.Fatalf("wrong production head pair: %#v", resolution)
+			}
+			if slices.Contains(*calls, "docker.io/rancher/rancher:head") || slices.Contains(*calls, "docker.io/rancher/rancher:"+tag) {
+				t.Fatalf("new production head should not use stale legacy head: %v", *calls)
 			}
 		})
 	}

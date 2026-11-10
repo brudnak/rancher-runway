@@ -242,13 +242,6 @@ func provisionLinodeDownstreamForHA(instanceNum int, haOutputs TerraformOutputs,
 		return fmt.Errorf("kubeconfig not available for HA %d at %s: %w", instanceNum, kubeconfigPath, err)
 	}
 
-	if existing != nil {
-		log.Printf("[downstream][ha-%d] Cleaning recorded cluster %s before provisioning retry", instanceNum, existing.ClusterName)
-		if err := deleteLinodeDownstream(*existing, durationFromEnv("LINODE_DOWNSTREAM_DELETE_TIMEOUT", 20*time.Minute)); err != nil {
-			return fmt.Errorf("cannot safely retry HA %d while recorded downstream cluster %s remains: %w", instanceNum, existing.ClusterName, err)
-		}
-	}
-
 	suffix := randomHex(4)
 	clusterName := downstreamClusterName(namePrefix, runID, instanceNum, suffix)
 
@@ -258,6 +251,23 @@ func provisionLinodeDownstreamForHA(instanceNum int, haOutputs TerraformOutputs,
 	}
 	if err := configureRancherServerURL(haOutputs.RancherURL, adminToken); err != nil {
 		return err
+	}
+	// Repair the provisioner before retry cleanup too: Rancher uses the same
+	// machine image for removal jobs as it does for creation jobs.
+	provisionerCtx, cancelProvisioner := context.WithTimeout(context.Background(), time.Minute)
+	compatibility, err := prepareLinodeDownstreamProvisioner(provisionerCtx, haOutputs.RancherURL, adminToken)
+	cancelProvisioner()
+	if err != nil {
+		return err
+	}
+	if compatibility != "" {
+		log.Printf("[downstream][ha-%d] %s", instanceNum, compatibility)
+	}
+	if existing != nil {
+		log.Printf("[downstream][ha-%d] Cleaning recorded cluster %s before provisioning retry", instanceNum, existing.ClusterName)
+		if err := deleteLinodeDownstream(*existing, durationFromEnv("LINODE_DOWNSTREAM_DELETE_TIMEOUT", 20*time.Minute)); err != nil {
+			return fmt.Errorf("cannot safely retry HA %d while recorded downstream cluster %s remains: %w", instanceNum, existing.ClusterName, err)
+		}
 	}
 	kubernetesVersion, err := resolveDownstreamKubernetesVersion(haOutputs.RancherURL, adminToken, plan.Distribution, plan.KubernetesVersion)
 	if err != nil {

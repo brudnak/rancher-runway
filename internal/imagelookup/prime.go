@@ -10,7 +10,13 @@ import (
 	"time"
 )
 
+type imageLookupPrimePairCandidate struct {
+	repository string
+	tag        string
+}
+
 type imageLookupPrimePairResult struct {
+	candidate   imageLookupPrimePairCandidate
 	tag         string
 	status      string
 	detail      string
@@ -42,13 +48,13 @@ func (s *Service) verifyPrimeHeadPairs(ctx context.Context, response *SearchResp
 		return errors.New("Prime head pair verification is incomplete: neither the SUSE staging server nor agent search produced a successful complete candidate list")
 	}
 
-	candidateNames := map[string]struct{}{}
+	candidateNames := map[imageLookupPrimePairCandidate]struct{}{}
 	for _, groupIndex := range authorityGroups {
 		authority := &response.Groups[groupIndex]
 		for tagIndex := range authority.Tags {
 			tag := &authority.Tags[tagIndex]
 			if tag.IsPrimeHead && tag.HeadKind == "immutable" && (options.primeVersion == "" || tag.Version == options.primeVersion) {
-				candidateNames[tag.Name] = struct{}{}
+				candidateNames[imageLookupPrimePairCandidate{repository: authority.Repository, tag: tag.Name}] = struct{}{}
 			}
 		}
 	}
@@ -66,11 +72,13 @@ func (s *Service) verifyPrimeHeadPairs(ctx context.Context, response *SearchResp
 		}
 	}
 
-	names := make([]string, 0, len(candidateNames))
+	names := make([]imageLookupPrimePairCandidate, 0, len(candidateNames))
 	for tag := range candidateNames {
 		names = append(names, tag)
 	}
-	sort.Slice(names, func(i, j int) bool { return NaturalCompare(names[i], names[j]) > 0 })
+	sort.Slice(names, func(i, j int) bool {
+		return NaturalCompare(names[i].repository+":"+names[i].tag, names[j].repository+":"+names[j].tag) > 0
+	})
 
 	results := make(chan imageLookupPrimePairResult, len(names))
 	workerCount := 4
@@ -78,7 +86,7 @@ func (s *Service) verifyPrimeHeadPairs(ctx context.Context, response *SearchResp
 		workerCount = len(names)
 	}
 	if workerCount > 0 {
-		jobs := make(chan string)
+		jobs := make(chan imageLookupPrimePairCandidate)
 		var workers sync.WaitGroup
 		for worker := 0; worker < workerCount; worker++ {
 			workers.Add(1)
@@ -107,10 +115,10 @@ func (s *Service) verifyPrimeHeadPairs(ctx context.Context, response *SearchResp
 		close(results)
 	}
 
-	byTag := make(map[string]imageLookupPrimePairResult, len(names))
+	byTag := make(map[imageLookupPrimePairCandidate]imageLookupPrimePairResult, len(names))
 	var lookupErrors []string
 	for result := range results {
-		byTag[result.tag] = result
+		byTag[result.candidate] = result
 		if result.lookupErr != nil {
 			lookupErrors = append(lookupErrors, result.tag+": "+SafeError(result.lookupErr))
 		}
@@ -124,28 +132,33 @@ func (s *Service) verifyPrimeHeadPairs(ctx context.Context, response *SearchResp
 	}
 
 	verified := make([]imageLookupPrimePairResult, 0, len(byTag))
+	seenPairs := make(map[string]bool)
 	for _, result := range byTag {
-		if result.status == "verified" {
+		if result.status == "verified" && !seenPairs[result.server.Reference] {
+			seenPairs[result.server.Reference] = true
 			verified = append(verified, result)
 		}
 	}
 	sort.SliceStable(verified, func(i, j int) bool {
 		if verified[i].completedAt.Equal(verified[j].completedAt) {
-			return NaturalCompare(verified[i].tag, verified[j].tag) > 0
+			if verified[i].tag != verified[j].tag {
+				return NaturalCompare(verified[i].tag, verified[j].tag) > 0
+			}
+			return verified[i].server.Reference < verified[j].server.Reference
 		}
 		return verified[i].completedAt.After(verified[j].completedAt)
 	})
 	ranks := make(map[string]int, len(verified))
 	for index, result := range verified {
-		ranks[result.tag] = index + 1
+		ranks[result.server.Reference] = index + 1
 	}
 
 	for groupIndex := range response.Groups {
 		group := &response.Groups[groupIndex]
 		for tagIndex := range group.Tags {
 			tag := &group.Tags[tagIndex]
-			result, ok := byTag[tag.Name]
-			if !ok {
+			result, ok := byTag[imageLookupPrimePairCandidate{repository: group.Repository, tag: tag.Name}]
+			if !ok || group.Registry != "stgregistry.suse.com" || group.Error != "" || group.Truncated {
 				continue
 			}
 			tag.PairStatus = result.status
@@ -153,13 +166,16 @@ func (s *Service) verifyPrimeHeadPairs(ctx context.Context, response *SearchResp
 			tag.CompanionVerified = tag.PairComplete
 			tag.ProvenanceValid = tag.PairComplete
 			tag.PairError = result.detail
-			tag.ResolvedRank = ranks[tag.Name]
+			tag.ResolvedRank = ranks[result.server.Reference]
 			if !result.completedAt.IsZero() {
 				tag.PairCompletedAt = imageLookupFormatTime(result.completedAt)
 			}
 			provenance := result.server
 			if group.ImageRole == "agent" {
 				provenance = result.agent
+				if result.server.Reference != "" {
+					tag.CompanionReference = result.server.Reference
+				}
 			}
 			tag.PrimeSource = imageLookupRancherPrimeSource(result.server.SourceURL)
 			tag.Source = result.server.SourceURL
@@ -189,29 +205,39 @@ func (s *Service) verifyPrimeHeadPairs(ctx context.Context, response *SearchResp
 	return nil
 }
 
-func (s *Service) inspectPrimeHeadPair(ctx context.Context, tag string) imageLookupPrimePairResult {
-	result := imageLookupPrimePairResult{tag: tag}
+func (s *Service) inspectPrimeHeadPair(ctx context.Context, candidate imageLookupPrimePairCandidate) imageLookupPrimePairResult {
+	tag := candidate.tag
+	result := imageLookupPrimePairResult{tag: tag, candidate: candidate}
 	classification := imageLookupClassifyTag("stgregistry.suse.com", "rancher/rancher", tag)
 	if !classification.IsPrimeHead || classification.HeadKind != "immutable" {
 		result.status = "invalid"
 		result.detail = "candidate is not an immutable patch-qualified Prime head tag"
 		return result
 	}
-	serverReference := "stgregistry.suse.com/rancher/rancher:" + tag
-	agentReference := "stgregistry.suse.com/rancher/rancher-agent:" + tag
-
-	server, serverFound, err := InspectProvenance(ctx, s, serverReference)
-	result.server = server
-	if err != nil {
-		result.lookupErr = fmt.Errorf("inspect server image: %w", err)
-		return result
+	serverRepositories := []string{candidate.repository}
+	if candidate.repository == "rancher/rancher-agent" {
+		serverRepositories = RancherServerRepositories()
 	}
+	var server Provenance
+	serverFound := false
+	for _, repository := range serverRepositories {
+		var err error
+		server, serverFound, err = InspectProvenance(ctx, s, "stgregistry.suse.com/"+repository+":"+tag)
+		if err != nil {
+			result.lookupErr = fmt.Errorf("inspect server image: %w", err)
+			return result
+		}
+		if serverFound {
+			break
+		}
+	}
+	result.server = server
 	if !serverFound {
 		result.status = "missing"
 		result.detail = "server image was not found"
 		return result
 	}
-	agent, agentFound, err := InspectProvenance(ctx, s, agentReference)
+	agent, agentFound, err := InspectProvenance(ctx, s, "stgregistry.suse.com/rancher/rancher-agent:"+tag)
 	result.agent = agent
 	if err != nil {
 		result.lookupErr = fmt.Errorf("inspect agent image: %w", err)
@@ -257,8 +283,16 @@ func imageLookupValidateExactPrimeHeadPair(tag string, server, agent Provenance)
 	if serverErr != nil || agentErr != nil || serverCanonicalTag == "" || agentCanonicalTag == "" {
 		return fmt.Errorf("exact Rancher head image pair %s did not declare canonical server and agent org.opensuse.reference labels", expectedTag)
 	}
-	if serverCanonicalRepository != "rancher/rancher" || agentCanonicalRepository != "rancher/rancher-agent" {
+	if !IsRancherServerRepository(serverCanonicalRepository) || agentCanonicalRepository != "rancher/rancher-agent" {
 		return fmt.Errorf("exact Rancher head image pair %s has unexpected canonical repositories: server %s, agent %s", expectedTag, serverCanonicalRepository, agentCanonicalRepository)
+	}
+	// Canonical labels must describe the image actually inspected, not another
+	// server repository that happens to publish the same tag.
+	if server.Reference != "" {
+		_, requestedRepository, _, err := ParseRegistryImage(server.Reference)
+		if err != nil || requestedRepository != serverCanonicalRepository {
+			return fmt.Errorf("exact Rancher head image pair %s has a server canonical repository that differs from the requested image", expectedTag)
+		}
 	}
 	if serverCanonicalTag != expectedTag || agentCanonicalTag != expectedTag {
 		return fmt.Errorf("exact Rancher head image pair %s has mismatched canonical tags: server %s, agent %s", expectedTag, serverCanonicalTag, agentCanonicalTag)

@@ -1395,8 +1395,8 @@ func TestResolvePatchCommitHeadImageSettingsDoesNotFallBackFromStaging(t *testin
 	if err == nil || !strings.Contains(err.Error(), "staging registry") {
 		t.Fatalf("expected staging miss to fail, got %v", err)
 	}
-	if stagingCalls != 2 {
-		t.Fatalf("expected staging server and agent checks, got %d", stagingCalls)
+	if stagingCalls != 1 {
+		t.Fatalf("expected missing staging agent to stop the pair check, got %d calls", stagingCalls)
 	}
 	if fallbackCalls != 0 {
 		t.Fatalf("patch-qualified head unexpectedly checked a non-staging registry %d times", fallbackCalls)

@@ -21,7 +21,7 @@ func resolveCommunityMainHeadAlias(requestedVersion string) (*preferredRancherIm
 	if !isCommunityMinorHeadSelector(requestedVersion) {
 		return nil, fmt.Errorf("%s is not a Community minor-head selector", requestedVersion)
 	}
-	head, err := inspectExplicitRancherImagePair("docker.io/rancher/rancher", "head", "docker.io/rancher/rancher-agent:head")
+	head, err := resolvePreferredRancherImageSettings("head", []string{"docker.io"})
 	if err != nil {
 		return nil, fmt.Errorf("could not verify Docker Hub Community head for %s: %w", requestedVersion, err)
 	}
@@ -42,7 +42,7 @@ func resolveCommunityMainHeadAlias(requestedVersion string) (*preferredRancherIm
 	if err := validateExactHeadImagePair(tag, head.RancherProvenance, head.AgentProvenance); err != nil {
 		return nil, err
 	}
-	pinned, err := inspectExplicitRancherImagePair("docker.io/rancher/rancher", tag, "docker.io/rancher/rancher-agent:"+tag)
+	pinned, err := inspectExplicitRancherImagePair(head.RancherImage, tag, "docker.io/rancher/rancher-agent:"+tag)
 	if err != nil {
 		return nil, fmt.Errorf("verify immutable Community head pair for %s: %w", requestedVersion, err)
 	}

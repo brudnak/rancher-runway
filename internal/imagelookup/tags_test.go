@@ -132,7 +132,7 @@ func TestImageLookupPrimeHeadClassificationAndFiltering(t *testing.T) {
 			wantVersion:       "2.15.1",
 			wantLine:          "2.15",
 			wantCommit:        sha,
-			wantCompanionRepo: "stgregistry.suse.com/rancher/rancher:v2.15.1-" + sha + "-head-arm64",
+			wantCompanionRepo: "stgregistry.suse.com/rancher/rancher-server:v2.15.1-" + sha + "-head-arm64",
 		},
 		{
 			name:              "minor head is not syntactically Prime",
@@ -197,6 +197,7 @@ func TestImageLookupPrimeTargetNarrowingAndValidation(t *testing.T) {
 		t.Fatalf("primehead parameters: %v", err)
 	}
 	wantTargets := []searchTarget{
+		{registry: "stgregistry.suse.com", repository: "rancher/rancher-server"},
 		{registry: "stgregistry.suse.com", repository: "rancher/rancher"},
 		{registry: "stgregistry.suse.com", repository: "rancher/rancher-agent"},
 	}

@@ -38,7 +38,7 @@ func resolveUpgradeImageVersion(image imagelookup.Provenance, tag string) (strin
 	// Canonical references provide exact build identities for images that don't
 	// carry the runtime environment variable. Branch labels and moving aliases
 	// are deliberately excluded from this fallback.
-	if _, repository, canonicalTag, err := imagelookup.ParseRegistryImage(image.CanonicalReference); err == nil && strings.HasSuffix(repository, "/rancher") && isExactUpgradeVersion(canonicalTag) {
+	if _, repository, canonicalTag, err := imagelookup.ParseRegistryImage(image.CanonicalReference); err == nil && (strings.HasSuffix(repository, "/rancher") || strings.HasSuffix(repository, "/rancher-server")) && isExactUpgradeVersion(canonicalTag) {
 		return canonicalTag, "Canonical image reference", nil
 	}
 	if isExactUpgradeVersion(tag) {

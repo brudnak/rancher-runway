@@ -2,9 +2,11 @@ package test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 type preferredRancherImageResolution struct {
@@ -52,21 +55,19 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 
 	misses := make([]string, 0, len(registries))
 	for _, registry := range registries {
-		serverRepository := registry + "/rancher/rancher"
-		agentRepository := registry + "/rancher/rancher-agent"
-		serverReference := serverRepository + ":" + tag
-		agentReference := agentRepository + ":" + tag
-
-		serverCtx, serverCancel := context.WithTimeout(context.Background(), rancherResolverHTTPTimeout)
-		serverProvenance, serverFound, serverErr := inspectPreferredRancherImage(serverCtx, serverReference)
-		serverCancel()
+		serverRepository, serverProvenance, serverFound, serverErr := inspectPreferredRancherServer(context.Background(), registry, tag, rancherResolverHTTPTimeout)
 		if serverErr != nil {
-			return nil, fmt.Errorf("could not verify %s in %s: %w", serverReference, imagelookup.PreferredRegistryLabel(registry), serverErr)
+			return nil, serverErr
 		}
 		if !serverFound {
-			misses = append(misses, fmt.Sprintf("%s missing %s", imagelookup.PreferredRegistryLabel(registry), serverReference))
+			references := make([]string, 0, len(imagelookup.RancherServerRepositories()))
+			for _, repository := range imagelookup.RancherServerRepositories() {
+				references = append(references, registry+"/"+repository+":"+tag)
+			}
+			misses = append(misses, fmt.Sprintf("%s missing %s", imagelookup.PreferredRegistryLabel(registry), strings.Join(references, " and ")))
 			continue
 		}
+		agentReference := registry + "/rancher/rancher-agent:" + tag
 
 		agentCtx, agentCancel := context.WithTimeout(context.Background(), rancherResolverHTTPTimeout)
 		agentProvenance, agentFound, agentErr := inspectPreferredRancherImage(agentCtx, agentReference)
@@ -112,6 +113,29 @@ func resolvePreferredRancherImageSettings(requestedVersion string, registries []
 		}
 	}
 	return nil, fmt.Errorf("preferred registries do not contain a complete Rancher server/agent image pair for %s: %s. No unselected registry fallback was attempted", tag, strings.Join(misses, "; "))
+}
+
+// Production Rancher moved to rancher-server in November 2026. Probe it first,
+// retaining legacy builds only when the production tag is genuinely absent.
+// Authentication, network, and other lookup errors must never select stale data.
+func inspectPreferredRancherServer(ctx context.Context, registry, tag string, timeout time.Duration) (string, imagelookup.Provenance, bool, error) {
+	for _, repository := range imagelookup.RancherServerRepositories() {
+		serverRepository := registry + "/" + repository
+		reference := serverRepository + ":" + tag
+		imageCtx, cancel := context.WithTimeout(ctx, timeout)
+		provenance, found, err := inspectPreferredRancherImage(imageCtx, reference)
+		if err == nil {
+			err = imageCtx.Err()
+		}
+		cancel()
+		if err != nil {
+			return "", imagelookup.Provenance{}, false, fmt.Errorf("could not verify %s in %s: %w", reference, imagelookup.PreferredRegistryLabel(registry), err)
+		}
+		if found {
+			return serverRepository, provenance, true, nil
+		}
+	}
+	return "", imagelookup.Provenance{}, false, nil
 }
 
 func inspectExplicitRancherImagePair(serverRepository, tag, agentReference string) (*preferredRancherImageResolution, error) {
@@ -225,14 +249,19 @@ func resolvePatchHeadStagingBundleWithTimeouts(parent context.Context, requested
 
 	log.Printf("[resolver] Resolving Rancher %s from SUSE staging image tags", requestedVersion)
 	listCtx, listCancel := context.WithTimeout(parent, timeouts.tagList)
-	tags, err := listPatchHeadStagingImageTags(listCtx, "stgregistry.suse.com", "rancher/rancher")
-	if err == nil {
-		err = listCtx.Err()
+	var tags []string
+	for _, repository := range imagelookup.RancherServerRepositories() {
+		repositoryTags, err := listPatchHeadStagingImageTags(listCtx, "stgregistry.suse.com", repository)
+		if err == nil {
+			err = listCtx.Err()
+		}
+		if err != nil {
+			listCancel()
+			return "", nil, fmt.Errorf("list immutable Rancher head images in SUSE staging repository %s: %w", repository, err)
+		}
+		tags = append(tags, repositoryTags...)
 	}
 	listCancel()
-	if err != nil {
-		return "", nil, fmt.Errorf("list immutable Rancher head images in SUSE staging: %w", err)
-	}
 
 	patchVersion := strings.TrimSuffix(requestedVersion, "-head")
 	seen := map[string]bool{}
@@ -351,28 +380,24 @@ func listRancherImageTags(ctx context.Context, registry, repository string) ([]s
 	if err != nil {
 		return nil, err
 	}
-	return remote.List(parsed, remote.WithContext(ctx), remote.WithAuth(authn.Anonymous))
+	tags, err := remote.List(parsed, remote.WithContext(ctx), remote.WithAuth(authn.Anonymous))
+	var registryErr *transport.Error
+	if errors.As(err, &registryErr) && registryErr.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	return tags, err
 }
 
 func inspectPatchHeadStagingCandidate(ctx context.Context, version string, imageTimeout time.Duration) patchHeadStagingCandidate {
 	tag := imagelookup.NormalizeDockerRancherTag(version)
-	serverRepository := "stgregistry.suse.com/rancher/rancher"
-	agentRepository := "stgregistry.suse.com/rancher/rancher-agent"
-	serverReference := serverRepository + ":" + tag
-	agentReference := agentRepository + ":" + tag
-
-	serverCtx, serverCancel := context.WithTimeout(ctx, imageTimeout)
-	server, serverFound, err := inspectPreferredRancherImage(serverCtx, serverReference)
-	if err == nil {
-		err = serverCtx.Err()
-	}
-	serverCancel()
+	serverRepository, server, serverFound, err := inspectPreferredRancherServer(ctx, "stgregistry.suse.com", tag, imageTimeout)
 	if err != nil {
 		return patchHeadStagingCandidate{version: version, err: fmt.Errorf("inspect server image: %w", err), lookupErr: true}
 	}
 	if !serverFound {
 		return patchHeadStagingCandidate{version: version, err: fmt.Errorf("server image was not found")}
 	}
+	agentReference := "stgregistry.suse.com/rancher/rancher-agent:" + tag
 	agentCtx, agentCancel := context.WithTimeout(ctx, imageTimeout)
 	agent, agentFound, err := inspectPreferredRancherImage(agentCtx, agentReference)
 	if err == nil {
@@ -428,7 +453,7 @@ func validateExactHeadImagePair(tag string, server, agent imagelookup.Provenance
 	if serverErr != nil || agentErr != nil || serverCanonicalTag == "" || agentCanonicalTag == "" {
 		return fmt.Errorf("exact Rancher head image pair %s did not declare canonical server and agent org.opensuse.reference labels", expectedTag)
 	}
-	if serverCanonicalRepository != "rancher/rancher" || agentCanonicalRepository != "rancher/rancher-agent" {
+	if !imagelookup.IsRancherServerRepository(serverCanonicalRepository) || agentCanonicalRepository != "rancher/rancher-agent" {
 		return fmt.Errorf("exact Rancher head image pair %s has unexpected canonical repositories: server %s, agent %s", expectedTag, serverCanonicalRepository, agentCanonicalRepository)
 	}
 	if serverCanonicalTag != expectedTag || agentCanonicalTag != expectedTag {

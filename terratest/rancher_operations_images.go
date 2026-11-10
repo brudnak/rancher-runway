@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 )
 
 type deployedImageSource struct {
@@ -40,17 +42,19 @@ func deployedHeadTargets(ctx context.Context, distribution, registry string, lis
 	if !allowed {
 		return nil, fmt.Errorf("choose a listed image source, or use an exact image reference")
 	}
-	tags, err := list(ctx, registry, "rancher/rancher")
-	if err != nil {
-		return nil, fmt.Errorf("could not list published head images from %s: %w", registry, err)
-	}
 	images := []string{}
-	for _, tag := range tags {
-		if tag == "head" || strings.Contains(tag, "-head") {
-			images = append(images, registry+"/rancher/rancher:"+tag)
+	for _, repository := range imagelookup.RancherServerRepositories() {
+		tags, err := list(ctx, registry, repository)
+		if err != nil {
+			return nil, fmt.Errorf("could not list published head images from %s/%s: %w", registry, repository, err)
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(tags)))
+		for _, tag := range tags {
+			if tag == "head" || strings.Contains(tag, "-head") {
+				images = append(images, registry+"/"+repository+":"+tag)
+			}
 		}
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(images)))
 	return map[string]any{"images": images, "registry": registry}, nil
 }
 

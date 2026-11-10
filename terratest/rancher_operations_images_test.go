@@ -12,21 +12,27 @@ import (
 func TestDeployedHeadTargetsSources(t *testing.T) {
 	for _, source := range deployedImageSources {
 		t.Run(source.Registry, func(t *testing.T) {
+			var repositories []string
 			result, err := deployedHeadTargets(context.Background(), source.Distribution, source.Registry, func(_ context.Context, registry, repository string) ([]string, error) {
-				if registry != source.Registry || repository != "rancher/rancher" {
+				if registry != source.Registry || !imagelookup.IsRancherServerRepository(repository) {
 					t.Fatalf("unexpected repository: %s/%s", registry, repository)
 				}
+				repositories = append(repositories, repository)
 				return []string{"v2.15.2", "head", "v2.15.3-head", "v2.15.3-head-abcd"}, nil
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			images := result.(map[string]any)["images"].([]string)
-			if len(images) != 3 {
+			if len(images) != 6 || strings.Join(repositories, ",") != "rancher/rancher-server,rancher/rancher" {
 				t.Fatalf("head targets: %v", images)
 			}
-			for _, image := range images {
-				if !strings.HasPrefix(image, source.Registry+"/rancher/rancher:") {
+			for i, image := range images {
+				repository := "rancher/rancher-server"
+				if i >= 3 {
+					repository = "rancher/rancher"
+				}
+				if !strings.HasPrefix(image, source.Registry+"/"+repository+":") {
 					t.Fatal(image)
 				}
 			}
@@ -47,6 +53,22 @@ func TestDeployedHeadTargetsSources(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "stgregistry.suse.com") {
 		t.Fatal("registry failure must identify its source")
+	}
+}
+
+func TestDeployedHeadTargetsDoesNotHideRepositoryFailures(t *testing.T) {
+	for _, failed := range []string{"rancher/rancher-server", "rancher/rancher"} {
+		t.Run(failed, func(t *testing.T) {
+			result, err := deployedHeadTargets(context.Background(), "community", "docker.io", func(_ context.Context, _, repository string) ([]string, error) {
+				if repository == failed {
+					return nil, fmt.Errorf("registry access failed")
+				}
+				return []string{"head"}, nil
+			})
+			if err == nil || result != nil || !strings.Contains(err.Error(), "docker.io/"+failed) {
+				t.Fatalf("partial image list hid repository failure: result=%v err=%v", result, err)
+			}
+		})
 	}
 }
 

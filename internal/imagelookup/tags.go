@@ -174,6 +174,10 @@ func imageLookupEnrichedSearchRequested(request SearchRequest) bool {
 func imageLookupRepositoryRole(repository string) (string, string) {
 	repository = strings.Trim(strings.ToLower(strings.TrimSpace(repository)), "/")
 	switch {
+	case repository == "rancher/rancher-agent":
+		return "agent", RancherServerRepositories()[0]
+	case strings.HasSuffix(repository, "/rancher-server"):
+		return "server", strings.TrimSuffix(repository, "/rancher-server") + "/rancher-agent"
 	case strings.HasSuffix(repository, "/rancher-agent"):
 		return "agent", strings.TrimSuffix(repository, "/rancher-agent") + "/rancher"
 	case strings.HasSuffix(repository, "/rancher-webhook"):

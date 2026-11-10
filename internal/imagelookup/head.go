@@ -61,7 +61,10 @@ func imageLookupInspectPrimeHead(parsed imageLookupReference, labels map[string]
 	expectedRepository := ""
 	switch result.ImageRole {
 	case "server":
-		expectedRepository = "rancher/rancher"
+		expectedRepository = parsed.repository
+		if !IsRancherServerRepository(expectedRepository) {
+			result.Issues = append(result.Issues, "requested server repository is not canonical")
+		}
 		if !result.PrimeSource {
 			result.Issues = append(result.Issues, "org.opencontainers.image.source is not the canonical Rancher Prime repository")
 		}
@@ -76,12 +79,16 @@ func imageLookupInspectPrimeHead(parsed imageLookupReference, labels map[string]
 		if expectedRepository != "" && canonicalRepository != expectedRepository {
 			result.Issues = append(result.Issues, "org.opensuse.reference names an unexpected canonical repository")
 		}
-		result.CanonicalMatchesRequest = canonical.IsPrimeHead && canonical.HeadKind == "immutable" && canonical.Version == result.Version
+		result.CanonicalMatchesRequest = canonicalRepository == expectedRepository && canonical.IsPrimeHead && canonical.HeadKind == "immutable" && canonical.Version == result.Version
 		if requested.HeadKind == "immutable" {
 			result.CanonicalMatchesRequest = result.CanonicalMatchesRequest && strings.EqualFold(canonicalTag, requested.Name)
 		}
 		if !result.CanonicalMatchesRequest {
 			result.Issues = append(result.Issues, "org.opensuse.reference does not identify the expected immutable Prime head tag")
+		} else if result.Mutable {
+			// A moving selector has no commit of its own. Validate its resolved
+			// immutable canonical tag against the OSS revision instead.
+			result.Commit = canonical.Commit
 		}
 	}
 	if result.ImageRole == "server" {

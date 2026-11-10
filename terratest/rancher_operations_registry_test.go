@@ -16,6 +16,11 @@ func TestRancherUpgradeSystemRegistry(t *testing.T) {
 		{"stgregistry.suse.com/rancher/rancher", "registry.rancher.com", "stgregistry.suse.com", true},
 		{"docker.io/rancher/rancher", "stgregistry.suse.com", "docker.io", true},
 		{"registry.rancher.com/rancher/rancher", "docker.io", "registry.rancher.com", true},
+		{"stgregistry.suse.com/rancher/rancher-server", "registry.rancher.com", "stgregistry.suse.com", true},
+		{"registry.rancher.com/rancher/rancher-server", "stgregistry.suse.com", "registry.rancher.com", true},
+		{"rancher/rancher-server", "stgregistry.suse.com", "docker.io", true},
+		{"stgregistry.suse.com/rancher/rancher-server", "mirror.example/rancher", "mirror.example/rancher", false},
+		{"docker.io/custom/rancher-server", "registry.rancher.com", "registry.rancher.com", false},
 		{"stgregistry.suse.com/rancher/rancher", "mirror.example/rancher", "mirror.example/rancher", false},
 		{"example.org/custom/rancher", "registry.rancher.com", "registry.rancher.com", false},
 	} {

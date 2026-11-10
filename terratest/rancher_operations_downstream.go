@@ -122,6 +122,15 @@ func (p *localControlPanel) runDeployedDownstream(cluster clusterView, in ranche
 	if err = p.operationEvent(record, "Checking Rancher's machine provisioner image before creating resources."); err != nil {
 		return err
 	}
+	compatibility, err := prepareDownstreamProvisionerCompatibility(ctx, call, runtime.inspect)
+	if err != nil {
+		return err
+	}
+	if compatibility != "" {
+		if err = p.operationEvent(record, compatibility); err != nil {
+			return err
+		}
+	}
 	verified, err := checkDownstreamProvisioner(ctx, call, runtime.inspect)
 	if err != nil {
 		return err

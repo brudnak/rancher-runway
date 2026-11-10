@@ -155,7 +155,7 @@ func isRancherComponentImage(_ string, containerName, image string) bool {
 	if lastSlash = strings.LastIndex(reference, "/"); lastSlash >= 0 {
 		reference = reference[lastSlash+1:]
 	}
-	return reference == "rancher" || reference == "rancher-webhook" || reference == "rancher-agent"
+	return reference == "rancher" || reference == "rancher-server" || reference == "rancher-webhook" || reference == "rancher-agent"
 }
 
 func discoverLeaderLabels(kubeconfigPath string) map[string]string {

@@ -123,8 +123,8 @@ onMounted(() => { if (props.cluster.kubeconfigPath && !props.running) void disco
             <details v-if="sourceResults.length" class="upgrade-source-status"><summary>Registry results · {{ sourceResults.filter(source => !source.error).length }} of {{ sourceResults.length }} reached</summary><p v-for="source in sourceResults" :key="source.registry"><strong>{{ source.label }}</strong> · {{ source.registry }}<br>{{ source.error || `${source.images.length} published head tags` }}</p></details>
           </div>
           <div v-if="mode === 'image'" class="upgrade-source">
-            <label>Rancher server image<input v-model.trim="image" placeholder="stgregistry.suse.com/rancher/rancher:v2.15.3-head" spellcheck="false" autocomplete="off"></label>
-            <p class="upgrade-help">Paste a full repository and tag, including a staging build or a private mirror. The repository must end in /rancher; preflight checks its version and the matching /rancher-agent image. Registry access uses Runway's existing credentials.</p>
+            <label>Rancher server image<input v-model.trim="image" placeholder="stgregistry.suse.com/rancher/rancher-server:v2.15.4-head" spellcheck="false" autocomplete="off"></label>
+            <p class="upgrade-help">Paste a full repository and tag, including a staging build or a private mirror. Use /rancher-server for current server builds or /rancher for older builds; preflight checks its version and the matching /rancher-agent image. Registry access uses Runway's existing credentials.</p>
             <p class="upgrade-help">This is a Helm installation, so the image still uses a chart. A chart from the installed release line is proposed below; you can change it under Advanced.</p>
           </div>
           <template v-if="catalog && mode !== 'image'">
@@ -155,7 +155,7 @@ onMounted(() => { if (props.cluster.kubeconfigPath && !props.running) void disco
               <p class="upgrade-help">The installed release line supplies the initial chart choice. Review chart compatibility for your head image; Helm checks run before applying it.</p>
               <label>Chart channel<select v-model="channel" @change="reloadTargets"><option value="ga">Stable</option><option value="rc">Release candidate</option><option value="alpha">Alpha</option><option v-if="distribution === 'prime'" value="head">Head</option></select></label>
               <label>Helm chart<select v-model="chartVersion"><option value="" disabled>Choose a chart</option><option v-for="chart in catalog?.versions || []" :key="chart.version" :value="chart.version">{{ chart.version }} · Rancher {{ chart.appVersion }}</option></select></label>
-              <label v-if="isHead">Exact server image<input v-model.trim="image" placeholder="docker.io/rancher/rancher:head" spellcheck="false"></label>
+              <label v-if="isHead">Exact server image<input v-model.trim="image" placeholder="docker.io/rancher/rancher-server:head" spellcheck="false"></label>
             </template>
           </details>
           <p v-if="isImage && catalog && !chartVersion" class="upgrade-message">No chart matched the installed release line. Choose a published chart under Advanced to continue.</p>

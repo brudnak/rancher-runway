@@ -14,7 +14,7 @@ func TestCommunityHeadAutoPlanPreservesVerifiedImages(t *testing.T) {
 	previousInspector := inspectPreferredRancherImage
 	t.Cleanup(func() { inspectPreferredRancherImage = previousInspector; viper.Reset() })
 	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
-		if strings.HasSuffix(reference, ":v2.16-head") {
+		if strings.HasSuffix(reference, ":v2.16-head") || strings.Contains(reference, "/rancher-server:") {
 			return imagelookup.Provenance{}, false, nil
 		}
 		repository := "rancher/rancher"

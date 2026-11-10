@@ -198,7 +198,7 @@ func (s *Service) searchParameters(request SearchRequest) ([]searchTarget, searc
 	repositories := []string{repositoryValue}
 	if repositoryValue == "all" {
 		if options.primeHead == "only" || primeQueryKind != "" {
-			repositories = []string{"rancher/rancher", "rancher/rancher-agent"}
+			repositories = append(RancherServerRepositories(), "rancher/rancher-agent")
 		} else {
 			repositories = append([]string(nil), imageLookupKnownRepositories...)
 		}
@@ -217,8 +217,8 @@ func (s *Service) searchParameters(request SearchRequest) ([]searchTarget, searc
 			if target.registry != "stgregistry.suse.com" {
 				return nil, searchOptions{}, &InputError{Message: "Prime-head image search is supported only in stgregistry.suse.com"}
 			}
-			if target.repository != "rancher/rancher" && target.repository != "rancher/rancher-agent" {
-				return nil, searchOptions{}, &InputError{Message: "Prime-head image search requires the canonical rancher/rancher or rancher/rancher-agent repository"}
+			if !IsRancherServerRepository(target.repository) && target.repository != "rancher/rancher-agent" {
+				return nil, searchOptions{}, &InputError{Message: "Prime-head image search requires a canonical Rancher server or rancher/rancher-agent repository"}
 			}
 		}
 	}

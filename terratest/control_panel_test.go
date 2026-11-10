@@ -102,6 +102,8 @@ func TestIsRancherComponentImageTargetsVersionedComponents(t *testing.T) {
 		want      bool
 	}{
 		{name: "server", pod: "rancher-abc", container: "rancher", image: "custom.example/team/rancher:v2.15.1", want: true},
+		{name: "production server", pod: "custom", container: "server", image: "stgregistry.suse.com/rancher/rancher-server:v2.15.4-head", want: true},
+		{name: "production server digest", pod: "custom", container: "server", image: "registry.example:5000/team/rancher-server@sha256:abc", want: true},
 		{name: "webhook", pod: "rancher-webhook-abc", container: "rancher-webhook", image: "custom.example/team/custom:v1", want: true},
 		{name: "agent", pod: "cattle-cluster-agent-abc", container: "cluster-register", image: "registry.rancher.com/rancher/rancher-agent:v2.15.1", want: true},
 		{name: "registry port", pod: "custom", container: "custom", image: "registry.example:5000/team/rancher-webhook:v0.11.1", want: true},

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -23,7 +24,7 @@ func TestResolvePreferredRancherImageSettingsUsesFirstCompletePair(t *testing.T)
 	var calls []string
 	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
 		calls = append(calls, reference)
-		if !strings.HasPrefix(reference, "docker.io/") {
+		if !strings.HasPrefix(reference, "docker.io/") || strings.Contains(reference, "/rancher-server:") {
 			return imagelookup.Provenance{Reference: reference}, false, nil
 		}
 		provenance := imagelookup.Provenance{Reference: reference, Digest: "sha256:" + strings.Repeat("a", 64)}
@@ -47,8 +48,11 @@ func TestResolvePreferredRancherImageSettingsUsesFirstCompletePair(t *testing.T)
 		t.Fatalf("unexpected resolution: %#v", resolution)
 	}
 	wantCalls := []string{
+		"stgregistry.suse.com/rancher/rancher-server:v2.14-head",
 		"stgregistry.suse.com/rancher/rancher:v2.14-head",
+		"registry.suse.com/rancher/rancher-server:v2.14-head",
 		"registry.suse.com/rancher/rancher:v2.14-head",
+		"docker.io/rancher/rancher-server:v2.14-head",
 		"docker.io/rancher/rancher:v2.14-head",
 		"docker.io/rancher/rancher-agent:v2.14-head",
 	}
@@ -78,8 +82,8 @@ func TestResolvePreferredRancherImageSettingsFailsClosedForSelectedRegistry(t *t
 	if !strings.Contains(message, "stgregistry.suse.com/rancher/rancher:v2.14-head") || !strings.Contains(message, "No unselected registry fallback was attempted") {
 		t.Fatalf("missing actionable failure detail: %v", err)
 	}
-	if len(calls) != 1 {
-		t.Fatalf("a missing server should skip the irrelevant agent lookup, got %#v", calls)
+	if len(calls) != 2 {
+		t.Fatalf("missing server repositories should skip the irrelevant agent lookup, got %#v", calls)
 	}
 }
 
@@ -90,6 +94,9 @@ func TestResolvePreferredRancherImageSettingsValidatesPrimeHeadProvenance(t *tes
 	sha := strings.Repeat("a", 40)
 	tag := "v2.15.1-" + sha + "-head"
 	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
+		if strings.Contains(reference, "/rancher-server:") {
+			return imagelookup.Provenance{}, false, nil
+		}
 		repository := "rancher/rancher"
 		if strings.Contains(reference, "rancher-agent") {
 			repository = "rancher/rancher-agent"
@@ -121,6 +128,9 @@ func TestResolvePatchHeadStagingBundlePinsNewestCompletePair(t *testing.T) {
 	var callsMu sync.Mutex
 	var calls []string
 	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
+		if strings.Contains(reference, "/rancher-server:") {
+			return imagelookup.Provenance{}, false, nil
+		}
 		callsMu.Lock()
 		calls = append(calls, reference)
 		callsMu.Unlock()
@@ -174,6 +184,9 @@ func TestResolvePatchHeadStagingBundleRejectsMismatchedCanonicalPair(t *testing.
 
 	sha := strings.Repeat("a", 40)
 	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
+		if strings.Contains(reference, "/rancher-server:") {
+			return imagelookup.Provenance{}, false, nil
+		}
 		canonicalSHA := sha
 		repository := "rancher/rancher"
 		if strings.Contains(reference, "rancher-agent") {
@@ -201,6 +214,9 @@ func TestResolvePatchHeadStagingBundleSkipsNewerIncompletePair(t *testing.T) {
 	newerSHA := strings.Repeat("a", 40)
 	olderSHA := strings.Repeat("b", 40)
 	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
+		if strings.Contains(reference, "/rancher-server:") {
+			return imagelookup.Provenance{}, false, nil
+		}
 		sha := olderSHA
 		createdAt := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC)
 		if strings.Contains(reference, newerSHA) {
@@ -243,6 +259,9 @@ func TestResolvePatchHeadStagingBundleFailsClosedOnLookupError(t *testing.T) {
 	newerSHA := strings.Repeat("a", 40)
 	olderSHA := strings.Repeat("b", 40)
 	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
+		if strings.Contains(reference, "/rancher-server:") {
+			return imagelookup.Provenance{}, false, nil
+		}
 		if strings.Contains(reference, newerSHA) {
 			return imagelookup.Provenance{Reference: reference}, false, errors.New("registry returned 429 Too Many Requests")
 		}
@@ -277,6 +296,9 @@ func TestResolvePatchHeadStagingBundleRequiresBothCreationTimestamps(t *testing.
 	for _, missingRole := range []string{"server", "agent"} {
 		t.Run(missingRole, func(t *testing.T) {
 			inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
+				if strings.Contains(reference, "/rancher-server:") {
+					return imagelookup.Provenance{}, false, nil
+				}
 				role := "server"
 				repository := "rancher/rancher"
 				if strings.Contains(reference, "rancher-agent") {
@@ -349,8 +371,11 @@ func stubPatchHeadTagList(t *testing.T, tags []string) {
 	previousLister := listPatchHeadStagingImageTags
 	t.Cleanup(func() { listPatchHeadStagingImageTags = previousLister })
 	listPatchHeadStagingImageTags = func(_ context.Context, registry, repository string) ([]string, error) {
-		if registry != "stgregistry.suse.com" || repository != "rancher/rancher" {
+		if registry != "stgregistry.suse.com" || !imagelookup.IsRancherServerRepository(repository) {
 			t.Fatalf("unexpected patch-head tag listing target %s/%s", registry, repository)
+		}
+		if repository == "rancher/rancher-server" {
+			return nil, nil
 		}
 		return append([]string(nil), tags...), nil
 	}
@@ -450,7 +475,7 @@ func TestResolvePreferredRancherImageSettingsSurfacesLookupErrorWithoutFallback(
 	if err == nil || !strings.Contains(err.Error(), "429 Too Many Requests") {
 		t.Fatalf("expected registry lookup error, got %v", err)
 	}
-	if len(calls) != 1 || calls[0] != "stgregistry.suse.com/rancher/rancher:head" {
+	if len(calls) != 1 || calls[0] != "stgregistry.suse.com/rancher/rancher-server:head" {
 		t.Fatalf("lookup error should stop before fallback, got calls %#v", calls)
 	}
 }
@@ -545,5 +570,85 @@ func TestInspectRancherImageReferenceReusesRequestScopedService(t *testing.T) {
 	}
 	if !found || provenance.Reference != reference || provenance.Digest != digest {
 		t.Fatalf("unexpected provenance: found=%v provenance=%#v", found, provenance)
+	}
+}
+
+func TestResolvePreferredRancherImageSettingsSupportsProductionServerRepository(t *testing.T) {
+	for _, line := range []string{"2.16.0", "2.17.0"} {
+		for _, legacyOnly := range []bool{false, true} {
+			t.Run(line+"/legacy="+strconv.FormatBool(legacyOnly), func(t *testing.T) {
+				sha := strings.Repeat("a", 40)
+				tag := "v" + line + "-" + sha + "-head"
+				previous := inspectPreferredRancherImage
+				t.Cleanup(func() { inspectPreferredRancherImage = previous })
+				var calls []string
+				inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
+					calls = append(calls, reference)
+					if !strings.HasPrefix(reference, "stgregistry.suse.com/") {
+						t.Fatalf("unexpected registry: %s", reference)
+					}
+					if legacyOnly && strings.Contains(reference, "/rancher-server:") {
+						return imagelookup.Provenance{}, false, nil
+					}
+					return patchHeadTimeoutTestProvenance(reference, sha), true, nil
+				}
+				resolution, err := resolvePreferredRancherImageSettings(tag, []string{"stgregistry.suse.com"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantRepository := "stgregistry.suse.com/rancher/rancher-server"
+				if legacyOnly {
+					wantRepository = "stgregistry.suse.com/rancher/rancher"
+				}
+				if resolution.RancherImage != wantRepository || resolution.RancherImageTag != tag || resolution.AgentImage != "stgregistry.suse.com/rancher/rancher-agent:"+tag {
+					t.Fatalf("incorrect image pair: %#v", resolution)
+				}
+				if !legacyOnly && slices.Contains(calls, "stgregistry.suse.com/rancher/rancher:"+tag) {
+					t.Fatal("production image should win without inspecting the legacy demo image")
+				}
+			})
+		}
+	}
+}
+
+func TestResolvePatchHeadStagingBundleUnionsRepositoriesBeforeSelectingNewest(t *testing.T) {
+	previousLister, previousInspector := listPatchHeadStagingImageTags, inspectPreferredRancherImage
+	t.Cleanup(func() {
+		listPatchHeadStagingImageTags, inspectPreferredRancherImage = previousLister, previousInspector
+	})
+	oldSHA, newSHA := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	oldTag, newTag := "v2.16.0-"+oldSHA+"-head", "v2.16.0-"+newSHA+"-head"
+	var listed []string
+	listPatchHeadStagingImageTags = func(_ context.Context, registry, repository string) ([]string, error) {
+		listed = append(listed, repository)
+		if registry != "stgregistry.suse.com" {
+			t.Fatalf("unexpected registry: %s", registry)
+		}
+		if repository == "rancher/rancher-server" {
+			return []string{newTag}, nil
+		}
+		return []string{oldTag}, nil
+	}
+	inspectPreferredRancherImage = func(_ context.Context, reference string) (imagelookup.Provenance, bool, error) {
+		newBuild := strings.HasSuffix(reference, ":"+newTag)
+		if strings.Contains(reference, "/rancher-server:") != newBuild && !strings.Contains(reference, "/rancher-agent:") {
+			return imagelookup.Provenance{}, false, nil
+		}
+		sha := oldSHA
+		if newBuild {
+			sha = newSHA
+		}
+		provenance := patchHeadTimeoutTestProvenance(reference, sha)
+		if newBuild {
+			provenance.CreatedAt = provenance.CreatedAt.Add(24 * time.Hour)
+		}
+		return provenance, true, nil
+	}
+	version, images, err := resolvePatchHeadStagingBundle("2.16.0-head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(listed, imagelookup.RancherServerRepositories()) || version != strings.TrimPrefix(newTag, "v") || images.RancherImage != "stgregistry.suse.com/rancher/rancher-server" {
+		t.Fatalf("new production head was hidden by legacy catalog: listed=%v version=%s images=%#v", listed, version, images)
 	}
 }

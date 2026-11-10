@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 )
 
 // Only migrate official distribution registries. Private mirrors and custom
@@ -17,7 +19,7 @@ func upgradeSystemRegistry(image, current string) (string, bool) {
 	official := func(s string) bool {
 		return s == "" || s == "docker.io" || s == "registry.rancher.com" || s == "stgregistry.suse.com"
 	}
-	if repository != "rancher/rancher" || !official(registry) || !official(current) {
+	if !imagelookup.IsRancherServerRepository(repository) || !official(registry) || !official(current) {
 		return current, false
 	}
 

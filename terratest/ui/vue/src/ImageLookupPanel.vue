@@ -718,7 +718,8 @@ const registryOptions = [
 
 const imageFamilyOptions = [
   { value: "all", label: "All Rancher images" },
-  { value: "rancher/rancher", label: "Rancher server" },
+  { value: "rancher/rancher-server", label: "Rancher server" },
+  { value: "rancher/rancher", label: "Rancher legacy / Docker" },
   { value: "rancher/rancher-agent", label: "Rancher agent" },
   { value: "rancher/rancher-webhook", label: "Rancher webhook" },
   { value: "custom", label: "Custom repository" },
@@ -1039,7 +1040,7 @@ const normalizedImageRole = (value, repository = "") => {
   const path = String(repository || "").toLowerCase().replace(/\/+$/, "");
   if (path.endsWith("/rancher-agent")) return "agent";
   if (path.endsWith("/rancher-webhook")) return "webhook";
-  if (path.endsWith("/rancher")) return "server";
+  if (path.endsWith("/rancher") || path.endsWith("/rancher-server")) return "server";
   return normalized || "other";
 };
 
@@ -1788,7 +1789,7 @@ const searchImages = async () => {
       || ((quickFilter.value === "prime-head" || primeHeadFilter.value === "only") && /^\d+\.\d+\.\d+$/.test(normalizedVersionLine));
     const pairLookupEligible = primePairSelector
       && (effectiveRegistry === "all" || effectiveRegistry === "stgregistry.suse.com")
-      && ["all", "rancher/rancher", "rancher/rancher-agent"].includes(effectiveRepository);
+      && ["all", "rancher/rancher-server", "rancher/rancher", "rancher/rancher-agent"].includes(effectiveRepository);
     const sortRequest = resultSortRequest(pairLookupEligible);
     const supportedArchitectures = new Set(["all", "multi", "amd64", "arm64", "s390x", "ppc64le", "386", "arm"]);
     const requestedChannel = quickFilter.value === "prime-head"

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -20,24 +19,11 @@ type downstreamProvisioningRuntime struct {
 // Read the running server's settings rather than guessing system image versions
 // from the chart or the Rancher tag. This check runs before any resource POST.
 func checkDownstreamProvisioner(ctx context.Context, call downstreamRancherCall, inspect rancherImageInspectFunc) (string, error) {
-	read := func(name string) (string, error) {
-		var setting struct {
-			Value   *string `json:"value"`
-			Default string  `json:"default"`
-		}
-		if err := call(http.MethodGet, "/v3/settings/"+name, nil, &setting); err != nil {
-			return "", fmt.Errorf("cannot read Rancher's %s setting; no resources were created: %w", name, err)
-		}
-		if setting.Value != nil {
-			return *setting.Value, nil
-		}
-		return setting.Default, nil
-	}
-	image, err := read("machine-provision-image")
+	image, err := readDownstreamRancherSetting(call, "machine-provision-image")
 	if err != nil {
 		return "", err
 	}
-	registry, err := read("system-default-registry")
+	registry, err := readDownstreamRancherSetting(call, "system-default-registry")
 	if err != nil {
 		return "", err
 	}

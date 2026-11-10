@@ -442,7 +442,7 @@ const classifyImage = (declaredReference, containerName) => {
   const normalizedContainer = String(containerName || "").trim().toLowerCase();
   if (repositoryName === "rancher-webhook" || normalizedContainer === "rancher-webhook") return "webhook";
   if (repositoryName === "rancher-agent" || normalizedContainer === "rancher-agent") return "agent";
-  if (repositoryName === "rancher" || normalizedContainer === "rancher") return "server";
+  if (repositoryName === "rancher" || repositoryName === "rancher-server" || normalizedContainer === "rancher") return "server";
   return "other";
 };
 

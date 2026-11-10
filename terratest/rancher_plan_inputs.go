@@ -239,11 +239,14 @@ func parseCustomRancherImageRequest(value string) (customRancherImageRequest, bo
 	case "rancher":
 		serverRepository = repository
 		agentRepository = strings.TrimSuffix(repository, "/rancher") + "/rancher-agent"
+	case "rancher-server":
+		serverRepository = repository
+		agentRepository = strings.TrimSuffix(repository, "/rancher-server") + "/rancher-agent"
 	case "rancher-agent":
 		agentRepository = repository
 		serverRepository = strings.TrimSuffix(repository, "/rancher-agent") + "/rancher"
 	default:
-		return customRancherImageRequest{}, true, fmt.Errorf("custom Rancher image repository must end in /rancher or /rancher-agent, got %q", value)
+		return customRancherImageRequest{}, true, fmt.Errorf("custom Rancher image repository must end in /rancher-server, /rancher, or /rancher-agent, got %q", value)
 	}
 
 	return customRancherImageRequest{
