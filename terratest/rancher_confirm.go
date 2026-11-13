@@ -364,6 +364,9 @@ func buildResolvedPlansDialogMessage(plans []*RancherResolvedPlan) string {
 		sectionLines := []string{
 			resolvedPlanDisplayName(i, hostedTenant, linodeDocker),
 		}
+		if plan.SystemChartPreflight != "" {
+			sectionLines = append(sectionLines, "System chart preflight: "+plan.SystemChartPreflight)
+		}
 		if plan.RequestedVersion != "" {
 			sectionLines = append(sectionLines, "Requested Rancher: "+plan.RequestedVersion)
 		}

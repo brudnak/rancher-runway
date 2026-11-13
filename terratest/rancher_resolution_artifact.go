@@ -9,6 +9,7 @@ import (
 )
 
 type rancherResolutionArtifact struct {
+	SystemChartPreflight     string   `json:"system_chart_preflight,omitempty"`
 	Phase                    string   `json:"phase"`
 	HAIndex                  int      `json:"ha_index"`
 	RequestedVersion         string   `json:"requested_version,omitempty"`
@@ -41,6 +42,7 @@ func writeRancherResolutionArtifact(phase string, instanceNum int, plan *Rancher
 		return nil
 	}
 	artifact := rancherResolutionArtifact{
+		SystemChartPreflight:     plan.SystemChartPreflight,
 		Phase:                    phase,
 		HAIndex:                  instanceNum,
 		RequestedVersion:         plan.RequestedVersion,

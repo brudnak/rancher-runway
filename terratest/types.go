@@ -32,6 +32,7 @@ type TerraformOutputs struct {
 }
 
 type RancherResolvedPlan struct {
+	SystemChartPreflight     string
 	Mode                     string
 	RequestedVersion         string
 	RequestedDistro          string

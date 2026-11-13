@@ -162,7 +162,7 @@ func readinessCommandSpec(deployment string) panelCommandSpec {
 		DisplayName: "readiness",
 		TestName:    "TestHAWaitReady",
 		Timeout:     "35m",
-		StartLine:   "[control-panel] Waiting for Rancher and rancher-webhook readiness via go test -run ^TestHAWaitReady$",
+		StartLine:   "[control-panel] Waiting for Rancher and its managed system deployments readiness via go test -run ^TestHAWaitReady$",
 		SuccessLine: "[control-panel] Readiness checks completed successfully",
 	}
 }

@@ -45,7 +45,11 @@ func prepareRancherConfiguration(totalHAs int) ([]*RancherResolvedPlan, error) {
 	mode := rancherMode()
 	switch mode {
 	case "", "manual":
-		return prepareManualRKE2Plans(totalHAs)
+		plans, err := prepareManualRKE2Plans(totalHAs)
+		if err != nil {
+			return nil, err
+		}
+		return preflightRancherAssets(plans)
 	case "auto":
 		plans, err := resolveAutoRancherPlans(totalHAs)
 		if err != nil {
@@ -57,7 +61,7 @@ func prepareRancherConfiguration(totalHAs int) ([]*RancherResolvedPlan, error) {
 			helmCommands = append(helmCommands, plan.HelmCommands...)
 		}
 		viper.Set("rancher.helm_commands", helmCommands)
-		return plans, nil
+		return preflightRancherAssets(plans)
 	default:
 		return nil, fmt.Errorf("unsupported rancher.mode %q", mode)
 	}

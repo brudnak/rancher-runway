@@ -278,20 +278,10 @@ func helmFlagValue(fields []string, flagName string) string {
 }
 
 func renderManualHelmCommandTemplate(helmCommand, kubeVersion string) (string, error) {
-	fields, err := parseHelmCommandFields(helmCommand)
+	args, err := rancherHelmTemplateArgs(helmCommand, kubeVersion)
 	if err != nil {
 		return "", err
 	}
-	invocation, err := manualHelmInvocationFromFields(fields)
-	if err != nil {
-		return "", err
-	}
-	args := []string{"template", invocation.releaseName, invocation.chartRef}
-	args = append(args, helmTemplateCompatibleArgs(invocation.trailingArgs)...)
-	if kubeVersion != "" && !helmArgsIncludeFlag(args, "--kube-version") {
-		args = append(args, "--kube-version", kubeVersion)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, "helm", args...).CombinedOutput()
@@ -306,6 +296,24 @@ func renderManualHelmCommandTemplate(helmCommand, kubeVersion string) (string, e
 		return "helm template completed without output", nil
 	}
 	return firstNLines(trimmed, 8), nil
+}
+
+func rancherHelmTemplateArgs(helmCommand, kubeVersion string) ([]string, error) {
+	fields, err := parseHelmCommandFields(helmCommand)
+	if err != nil {
+		return nil, err
+	}
+	invocation, err := manualHelmInvocationFromFields(fields)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"template", invocation.releaseName, invocation.chartRef}
+	args = append(args, helmTemplateCompatibleArgs(invocation.trailingArgs)...)
+	if kubeVersion != "" && !helmArgsIncludeFlag(args, "--kube-version") {
+		args = append(args, "--kube-version", kubeVersion)
+	}
+
+	return args, nil
 }
 
 func helmKubeVersionFromRKE2Version(rke2Version string) string {

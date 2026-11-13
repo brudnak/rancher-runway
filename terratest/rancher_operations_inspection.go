@@ -52,37 +52,14 @@ func inspectInstalledRancher(ctx context.Context, kubeconfig string) (rancherIns
 	if err != nil {
 		return result, err
 	}
-	var dep struct {
-		Metadata struct{ Generation int64 }
-		Spec     struct {
-			Replicas int
-			Template struct {
-				Spec struct {
-					Containers []struct {
-						Name  string
-						Image string
-					}
-				}
-			}
-		}
-		Status struct {
-			ObservedGeneration int64
-			ReadyReplicas      int
-			UpdatedReplicas    int
-			AvailableReplicas  int
-		}
-	}
+	var dep rancherDeployment
 	if err = json.Unmarshal(raw, &dep); err != nil {
 		return result, err
 	}
-	if dep.Spec.Replicas < 1 || dep.Status.ObservedGeneration < dep.Metadata.Generation || dep.Status.ReadyReplicas != dep.Spec.Replicas || dep.Status.UpdatedReplicas != dep.Spec.Replicas || dep.Status.AvailableReplicas != dep.Spec.Replicas {
+	if !dep.fullyReady() {
 		return result, fmt.Errorf("Rancher deployment is not fully ready; finish or repair its current rollout first")
 	}
-	for _, container := range dep.Spec.Template.Spec.Containers {
-		if container.Name == "rancher" {
-			result.Image = container.Image
-		}
-	}
+	result.Image = dep.server().Image
 	if result.Image == "" {
 		return result, fmt.Errorf("cannot identify the installed Rancher container")
 	}
@@ -91,7 +68,7 @@ func inspectInstalledRancher(ctx context.Context, kubeconfig string) (rancherIns
 	if err != nil {
 		return result, err
 	}
-	result.Version, err = parseRancherServerVersionSettingJSON(raw)
+	result.Version, err = parseRancherSettingValue(raw)
 	if err != nil {
 		return result, err
 	}

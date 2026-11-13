@@ -58,6 +58,25 @@ installs keep their separate image selection: the production `rancher-server`
 image expects Kubernetes and is not a replacement for the standalone Docker
 image's bundled K3s runtime.
 
+## Rancher system chart preflight and readiness
+
+Use **Resolve & review plan** in Setup to check a Kubernetes install before provisioning.
+Runway renders the selected Helm chart, reads the server's chart versions, and
+compares them with the exact `rancher/charts` revision in the rendered
+`rancher-assets` image. A missing version stops the plan and identifies the
+server image, assets image, chart revision, and missing chart versions. The
+check includes Fleet's separate `fleet-crd` chart. If image metadata or the
+index is unavailable, the plan reports an inconclusive check and can proceed.
+Older charts without a separate assets image use runtime verification.
+
+On HA RKE2 and hosted K3s, readiness checks the Rancher HTTP endpoints and the
+rollout of each required deployment. Runway checks Rancher, the webhook, the
+Fleet controller, managed Turtles (2.13 and later), and the system upgrade
+controller when Rancher manages local cluster upgrades. While a deployment is
+pending, a recent Rancher install error identifying a version missing from the
+index ends the wait and names the chart. An ordinary startup delay or a
+closest-version warning alone keeps the check pending.
+
 ## Configured Linode Downstreams
 
 For `deployment.type: ha-rke2`, enable a downstream in `tool-config.yml` and

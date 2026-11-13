@@ -31,7 +31,7 @@ var lifecycleCommands = map[string]lifecycleCommand{
 		CountOne:    true,
 	},
 	"wait-ready": {
-		Description: "Wait until Rancher and rancher-webhook are healthy",
+		Description: "Wait until Rancher and its managed system deployments are healthy",
 		TestName:    "TestHAWaitReady",
 		Timeout:     "35m",
 		CountOne:    true,

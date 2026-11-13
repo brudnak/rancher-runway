@@ -119,13 +119,13 @@ func TestClusterDeploymentImagesFromPodsDeduplicatesReplicasButPreservesRolloutD
 
 func TestClusterDeploymentVersionParsers(t *testing.T) {
 	t.Run("Rancher Setting value", func(t *testing.T) {
-		got, err := parseRancherServerVersionSettingJSON([]byte(`{"value":" v2.15.1-rc1+up0.11.1 ","default":"v2.15.0"}`))
+		got, err := parseRancherSettingValue([]byte(`{"value":" v2.15.1-rc1+up0.11.1 ","default":"v2.15.0"}`))
 		if err != nil || got != "v2.15.1-rc1+up0.11.1" {
 			t.Fatalf("got version %q, error %v", got, err)
 		}
 	})
 	t.Run("Rancher Setting default fallback", func(t *testing.T) {
-		got, err := parseRancherServerVersionSettingJSON([]byte(`{"value":"","default":"v2.15.0"}`))
+		got, err := parseRancherSettingValue([]byte(`{"value":"","default":"v2.15.0"}`))
 		if err != nil || got != "v2.15.0" {
 			t.Fatalf("got version %q, error %v", got, err)
 		}
@@ -143,7 +143,7 @@ func TestClusterDeploymentVersionParsers(t *testing.T) {
 		}
 	})
 	t.Run("empty values fail", func(t *testing.T) {
-		if _, err := parseRancherServerVersionSettingJSON([]byte(`{}`)); err == nil {
+		if _, err := parseRancherSettingValue([]byte(`{}`)); err == nil {
 			t.Fatal("expected empty Rancher Setting to fail")
 		}
 		if _, err := parseKubernetesServerVersionJSON([]byte(`{}`)); err == nil {

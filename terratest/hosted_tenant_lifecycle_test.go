@@ -91,7 +91,7 @@ func runHostedTenantSetup(t *testing.T) {
 	if err := executeHostedTenantScript(hostDir, "install.sh"); err != nil {
 		t.Fatalf("Failed to install host Rancher: %v", err)
 	}
-	if err := waitForHostedTenantRancherStable(hostConfig.RancherURL, 10*time.Minute); err != nil {
+	if err := waitForHostedTenantRancherStable(hostConfig.RancherURL, filepath.Join(hostDir, "kube_config.yaml"), 10*time.Minute); err != nil {
 		t.Fatalf("Host Rancher failed to become stable: %v", err)
 	}
 
@@ -455,15 +455,19 @@ func executeHostedTenantScript(scriptDir, scriptName string) error {
 	return cmd.Run()
 }
 
-func waitForHostedTenantRancherStable(rancherURL string, timeout time.Duration) error {
+func waitForHostedTenantRancherStable(rancherURL, kubeconfig string, timeout time.Duration) error {
 	client := rancherReadyHTTPClient()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		deploymentsReady, deployments, err := rancherSystemDeploymentsReady(kubeconfig)
+		if err != nil {
+			return err
+		}
 		ready, summary := rancherHTTPReady(client, clickableURL(rancherURL))
-		if ready {
+		if ready && deploymentsReady {
 			return nil
 		}
-		log.Printf("[hosted-tenant] Waiting for Rancher %s: %s", rancherURL, summary)
+		log.Printf("[hosted-tenant] Waiting for Rancher %s: http=%s deployments=%s", rancherURL, summary, deployments)
 		time.Sleep(15 * time.Second)
 	}
 	return fmt.Errorf("timed out after %s waiting for Rancher %s to become stable", timeout, rancherURL)
@@ -579,7 +583,7 @@ func installHostedTenantRancher(tenantNumber int, tenantConfig hostedTenantK3SCo
 	if err := executeHostedTenantScript(scriptDir, "install.sh"); err != nil {
 		return fmt.Errorf("tenant %d install: %w", tenantNumber, err)
 	}
-	if err := waitForHostedTenantRancherStable(tenantConfig.RancherURL, 8*time.Minute); err != nil {
+	if err := waitForHostedTenantRancherStable(tenantConfig.RancherURL, filepath.Join(scriptDir, "kube_config.yaml"), 8*time.Minute); err != nil {
 		return fmt.Errorf("tenant %d readiness: %w", tenantNumber, err)
 	}
 	return nil

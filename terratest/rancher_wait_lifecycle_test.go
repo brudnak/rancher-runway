@@ -9,7 +9,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -214,27 +213,32 @@ func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initial
 	log.Printf("[ready][ha-%d] Initial delay: %s, timeout: %s", instanceNum, initialDelay, timeout)
 
 	if initialDelay > 0 {
+		// Rechecking a known broken install should fail before the initial delay.
+		if _, _, err := rancherSystemDeploymentsReady(kubeconfigPath); err != nil {
+			return fmt.Errorf("[ha-%d] %w", instanceNum, err)
+		}
 		time.Sleep(initialDelay)
 	}
 
 	client := rancherReadyHTTPClient()
 	deadline := time.Now().Add(timeout)
+	lastSummary := "no readiness observations"
 	attempt := 0
 	consecutiveReady := 0
 
 	for time.Now().Before(deadline) {
 		attempt++
 
-		httpReady, httpSummary := rancherHTTPReady(client, rancherURL)
-		podsReady, podsSummary, podsErr := rancherPodsReady(kubeconfigPath)
-		if podsErr != nil {
-			podsSummary = podsErr.Error()
+		deploymentsReady, deploymentsSummary, err := rancherSystemDeploymentsReady(kubeconfigPath)
+		if err != nil {
+			return fmt.Errorf("[ha-%d] %w", instanceNum, err)
 		}
-
-		if httpReady && podsReady {
+		httpReady, httpSummary := rancherHTTPReady(client, rancherURL)
+		lastSummary = fmt.Sprintf("http=%s deployments=%s", httpSummary, deploymentsSummary)
+		if httpReady && deploymentsReady {
 			consecutiveReady++
-			log.Printf("[ready][ha-%d] Attempt %d ready check passed (%d/2): http=%s pods=%s",
-				instanceNum, attempt, consecutiveReady, httpSummary, podsSummary)
+			log.Printf("[ready][ha-%d] Attempt %d ready check passed (%d/2): %s",
+				instanceNum, attempt, consecutiveReady, lastSummary)
 			if consecutiveReady >= 2 {
 				if settleDelay > 0 {
 					log.Printf("[ready][ha-%d] Rancher is ready; settling for %s before continuing", instanceNum, settleDelay)
@@ -245,15 +249,15 @@ func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initial
 			}
 		} else {
 			consecutiveReady = 0
-			log.Printf("[ready][ha-%d] Attempt %d not ready yet: http=%s pods=%s",
-				instanceNum, attempt, httpSummary, podsSummary)
+			log.Printf("[ready][ha-%d] Attempt %d not ready yet: %s",
+				instanceNum, attempt, lastSummary)
 		}
 
 		time.Sleep(20 * time.Second)
 	}
 
 	logRancherReadinessDiagnostics(kubeconfigPath, instanceNum)
-	return fmt.Errorf("[ha-%d] timed out after %s waiting for Rancher readiness", instanceNum, timeout)
+	return fmt.Errorf("[ha-%d] timed out after %s waiting for Rancher readiness: %s", instanceNum, timeout, lastSummary)
 }
 
 func TestRancherHTTPReadyRejectsAPIAggregationPlaceholder(t *testing.T) {
@@ -372,81 +376,6 @@ func rancherProbeNotReadyReason(probe rancherHTTPProbeResult) string {
 		return "body=API Aggregation not ready"
 	}
 	return "not ready"
-}
-
-func rancherPodsReady(kubeconfigPath string) (bool, string, error) {
-	if _, err := os.Stat(kubeconfigPath); err != nil {
-		return false, "", fmt.Errorf("kubeconfig not available at %s: %w", kubeconfigPath, err)
-	}
-
-	pods, err := fetchRelevantPods(kubeconfigPath)
-	if err != nil {
-		return false, "", err
-	}
-
-	ready, summary := summarizeRancherPods(pods)
-	return ready, summary, nil
-}
-
-func summarizeRancherPods(pods []podView) (bool, string) {
-	seenRancher := false
-	seenWebhook := false
-	notReady := make([]string, 0)
-	interesting := 0
-
-	for _, pod := range pods {
-		name := strings.ToLower(pod.Name)
-		isWebhook := strings.Contains(name, "rancher-webhook")
-		isRancher := strings.HasPrefix(name, "rancher-") && !isWebhook
-		if !isRancher && !isWebhook {
-			continue
-		}
-
-		interesting++
-		if isWebhook {
-			seenWebhook = true
-		}
-		if isRancher {
-			seenRancher = true
-		}
-		if !podReadyForSignoff(pod) {
-			notReady = append(notReady, fmt.Sprintf("%s ready=%s status=%s restarts=%d", pod.Name, pod.Ready, pod.Status, pod.Restarts))
-		}
-	}
-
-	missing := make([]string, 0, 2)
-	if !seenRancher {
-		missing = append(missing, "rancher")
-	}
-	if !seenWebhook {
-		missing = append(missing, "rancher-webhook")
-	}
-
-	switch {
-	case len(missing) > 0:
-		summary := fmt.Sprintf("waiting for pod groups: %s (found %d relevant pods)", strings.Join(missing, ", "), interesting)
-		if len(notReady) > 0 {
-			summary += "; not ready: " + strings.Join(notReady, "; ")
-		}
-		return false, summary
-	case len(notReady) > 0:
-		return false, strings.Join(notReady, "; ")
-	default:
-		return true, fmt.Sprintf("rancher and rancher-webhook pods ready (%d relevant pods)", interesting)
-	}
-}
-
-func podReadyForSignoff(pod podView) bool {
-	parts := strings.Split(pod.Ready, "/")
-	if len(parts) != 2 {
-		return false
-	}
-	ready, readyErr := strconv.Atoi(parts[0])
-	total, totalErr := strconv.Atoi(parts[1])
-	if readyErr != nil || totalErr != nil || total == 0 || ready != total {
-		return false
-	}
-	return strings.EqualFold(pod.Status, "Running")
 }
 
 func logRancherReadinessDiagnostics(kubeconfigPath string, instanceNum int) {

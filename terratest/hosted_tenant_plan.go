@@ -17,7 +17,11 @@ func prepareHostedTenantRancherConfiguration(totalInstances int) ([]*RancherReso
 	mode := rancherMode()
 	switch mode {
 	case "", "manual":
-		return prepareManualHostedTenantPlans(totalInstances)
+		plans, err := prepareManualHostedTenantPlans(totalInstances)
+		if err != nil {
+			return nil, err
+		}
+		return preflightRancherAssets(plans)
 	case "auto":
 		plans, err := resolveAutoHostedTenantPlans(totalInstances)
 		if err != nil {
@@ -40,7 +44,7 @@ func prepareHostedTenantRancherConfiguration(totalInstances int) ([]*RancherReso
 		viper.Set("k3s.versions", k3sVersions)
 		viper.Set("k3s.install_script_sha256s", installChecksums)
 		viper.Set("k3s.airgap_image_sha256s", airgapChecksums)
-		return plans, nil
+		return preflightRancherAssets(plans)
 	default:
 		return nil, fmt.Errorf("unsupported rancher.mode %q", mode)
 	}

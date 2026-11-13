@@ -187,7 +187,7 @@ func (p *localControlPanel) collectClusterDeploymentDetails(ctx context.Context,
 			output, err := runKubectlContext(ctx, kubeconfigPath, "get", "settings.management.cattle.io", "server-version", "-o", "json")
 			if err == nil {
 				var parseErr error
-				output, parseErr = parseRancherServerVersionSettingJSON([]byte(output))
+				output, parseErr = parseRancherSettingValue([]byte(output))
 				err = parseErr
 			}
 			results <- probeResult{name: "Rancher server version", value: output, err: err}
@@ -222,7 +222,7 @@ func isKubeconfigBackedManagementCluster(cluster clusterView) bool {
 	return strings.TrimSpace(cluster.KubeconfigPath) != "" && cluster.Type != "downstream" && !isLinodeDockerCluster(cluster)
 }
 
-func parseRancherServerVersionSettingJSON(data []byte) (string, error) {
+func parseRancherSettingValue(data []byte) (string, error) {
 	var setting struct {
 		Value   string `json:"value"`
 		Default string `json:"default"`
@@ -232,14 +232,14 @@ func parseRancherServerVersionSettingJSON(data []byte) (string, error) {
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(data, &setting); err != nil {
-		return "", fmt.Errorf("failed to parse server-version Setting: %w", err)
+		return "", fmt.Errorf("failed to parse Rancher Setting: %w", err)
 	}
 	for _, value := range []string{setting.Value, setting.Default, setting.Spec.Value, setting.Spec.Default} {
 		if value = strings.TrimSpace(value); value != "" {
 			return value, nil
 		}
 	}
-	return "", fmt.Errorf("server-version Setting value is empty")
+	return "", fmt.Errorf("Rancher Setting value is empty")
 }
 
 func parseKubernetesServerVersionJSON(data []byte) (string, error) {

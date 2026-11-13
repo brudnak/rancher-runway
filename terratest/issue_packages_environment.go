@@ -305,7 +305,7 @@ func probeIssuePackageEnvironment(ctx context.Context, e issuePackageEnvironment
 	management := cluster.Type != "downstream" && !packageEnum(cluster.Role, "downstream", "k3d", "steve", "docker") && !isLinodeDockerCluster(cluster)
 	if management {
 		probes = append(probes,
-			probe{"Rancher server version", []string{"get", "settings.management.cattle.io", "server-version", "-o", "json"}, parseRancherServerVersionSettingJSON},
+			probe{"Rancher server version", []string{"get", "settings.management.cattle.io", "server-version", "-o", "json"}, parseRancherSettingValue},
 			probe{"Webhook chart version", []string{"get", "apps.catalog.cattle.io", "rancher-webhook", "-n", "cattle-system", "-o", "json"}, parseRancherWebhookChartVersionJSON},
 			probe{"Runtime images", []string{"get", "pods", "-n", "cattle-system", "-o", "json"}, nil})
 	}

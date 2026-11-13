@@ -252,7 +252,7 @@ printf '%s' '[{"chart":"rancher-2.15.0","app_version":"v2.15.0","revision":"4","
 `
 	kubectl := `#!/bin/sh
 case "$*" in
- *deployment*) printf '%s' '{"metadata":{"generation":3},"spec":{"replicas":1,"template":{"spec":{"containers":[{"name":"rancher","image":"rancher/rancher:v2.15.2"}]}}},"status":{"observedGeneration":3,"readyReplicas":1,"updatedReplicas":1,"availableReplicas":1}}';;
+ *deployment*) printf '%s' '{"metadata":{"generation":3},"spec":{"replicas":1,"template":{"spec":{"containers":[{"name":"rancher","image":"rancher/rancher:v2.15.2"}]}}},"status":{"observedGeneration":3,"replicas":1,"readyReplicas":1,"updatedReplicas":1,"availableReplicas":1}}';;
  *server-version*) printf '%s' '{"default":"v2.15.2"}';;
  *) printf '%s' '{"items":[]}';;
 esac
