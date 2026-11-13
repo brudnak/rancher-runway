@@ -217,17 +217,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y kubectl
 
-      - name: Set up Helm 3
+      - name: Read Runway Helm version
+        id: helm-version
+        run: |
+          version="$(jq -er '.tools[] | select(.command == "helm") | .recommended_version' terratest/system_readiness.json)"
+          echo "version=v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
         with:
-          version: v3.21.3
+          version: ${{ steps.helm-version.outputs.version }}
 
       - name: Verify CLI versions
+        env:
+          EXPECTED_HELM_VERSION: ${{ steps.helm-version.outputs.version }}
         run: |
           set -euo pipefail
           helm_version="$(helm version --template '{{ .Version }}')"
-          if [ "$helm_version" != "v3.21.3" ]; then
-            echo "Expected Helm v3.21.3, found $helm_version" >&2
+          if [ "$helm_version" != "$EXPECTED_HELM_VERSION" ]; then
+            echo "Expected Helm $EXPECTED_HELM_VERSION, found $helm_version" >&2
             exit 1
           fi
           helm version
