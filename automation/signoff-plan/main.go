@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"github.com/brudnak/ha-rancher-rke2/internal/registryhttp"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -946,44 +947,37 @@ func (c githubClient) resolvePatchHeadImagePair(ctx context.Context, requested s
 	if lister == nil {
 		lister = listOCIImageTags
 	}
-	tags, err := lister(ctx, registry, rancherRepo)
-	if err != nil {
-		return rancherImagePair{}, fmt.Errorf("list Rancher head tags in %s: %w", registry, err)
-	}
-	sort.Strings(tags)
-
-	inspector := c.inspectImage
-	if inspector == nil {
-		inspector = inspectOCIImage
-	}
-	var matchingTags []string
-	for _, tag := range tags {
-		parsed, err := parseTargetVersion(tag)
-		if err != nil || parsed.Kind != "head" || parsed.Commit == "" || !parsed.PatchSpecified || parsed.Major != requested.Major || parsed.Minor != requested.Minor || parsed.Patch != requested.Patch {
+	// Record only repositories that list each candidate, in server preference order.
+	repositoriesByTag := make(map[string][]string)
+	for _, repository := range imagelookup.RancherServerRepositories() {
+		listed, err := lister(ctx, registry, repository)
+		if registryNotFound(err) {
 			continue
 		}
-		matchingTags = append(matchingTags, tag)
+		if err != nil {
+			return rancherImagePair{}, fmt.Errorf("list Rancher head tags in %s/%s: %w", registry, repository, err)
+		}
+		for _, tag := range listed {
+			parsed, err := parseTargetVersion(tag)
+			if err != nil || parsed.Kind != "head" || parsed.Commit == "" || !parsed.PatchSpecified || parsed.Major != requested.Major || parsed.Minor != requested.Minor || parsed.Patch != requested.Patch {
+				continue
+			}
+			repositoriesByTag[tag] = append(repositoriesByTag[tag], repository)
+		}
 	}
 
-	jobs := make(chan string, len(matchingTags))
-	results := make(chan discoveredHeadInspection, len(matchingTags))
-	workerCount := patchHeadInspectionConcurrency
-	if len(matchingTags) < workerCount {
-		workerCount = len(matchingTags)
-	}
+	jobs := make(chan string, len(repositoriesByTag))
+	results := make(chan discoveredHeadInspection, len(repositoriesByTag))
+	workerCount := min(patchHeadInspectionConcurrency, len(repositoriesByTag))
 	var workers sync.WaitGroup
 	for range workerCount {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			for tag := range jobs {
-				serverReference := registry + "/rancher/rancher:" + tag
-				server, found, err := inspector(ctx, serverReference)
-				if server.Reference == "" {
-					server.Reference = serverReference
-				}
+				server, found, err := c.inspectHeadServer(ctx, registry, tag, repositoriesByTag[tag])
 				if err != nil {
-					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("inspect server image %s: %w", serverReference, err), lookupErr: true}
+					results <- discoveredHeadInspection{tag: tag, err: err, lookupErr: true}
 					continue
 				}
 				if !found {
@@ -991,7 +985,7 @@ func (c githubClient) resolvePatchHeadImagePair(ctx context.Context, requested s
 					continue
 				}
 				if server.Created.IsZero() {
-					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("server image %s did not declare an OCI creation time", serverReference)}
+					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("server image %s did not declare an OCI creation time", server.Reference)}
 					continue
 				}
 				canonical, err := canonicalHeadTarget(requested, server)
@@ -1018,12 +1012,9 @@ func (c githubClient) resolvePatchHeadImagePair(ctx context.Context, requested s
 				}
 
 				agentReference := registry + "/rancher/rancher-agent:" + tag
-				agent, agentFound, err := inspector(ctx, agentReference)
-				if agent.Reference == "" {
-					agent.Reference = agentReference
-				}
+				agent, agentFound, err := c.inspectRancherImage(ctx, agentReference)
 				if err != nil {
-					results <- discoveredHeadInspection{tag: tag, err: fmt.Errorf("inspect agent image %s: %w", agentReference, err), lookupErr: true}
+					results <- discoveredHeadInspection{tag: tag, err: err, lookupErr: true}
 					continue
 				}
 				if !agentFound {
@@ -1047,14 +1038,14 @@ func (c githubClient) resolvePatchHeadImagePair(ctx context.Context, requested s
 			}
 		}()
 	}
-	for _, tag := range matchingTags {
+	for tag := range repositoriesByTag {
 		jobs <- tag
 	}
 	close(jobs)
 	workers.Wait()
 	close(results)
 
-	inspections := make([]discoveredHeadInspection, 0, len(matchingTags))
+	inspections := make([]discoveredHeadInspection, 0, len(repositoriesByTag))
 	for inspection := range results {
 		inspections = append(inspections, inspection)
 	}
@@ -1097,6 +1088,7 @@ func (c githubClient) resolvePatchHeadImagePair(ctx context.Context, requested s
 }
 
 func (c githubClient) resolveHeadImagePair(ctx context.Context, tag string, registries []string) (rancherImagePair, error) {
+	repositories := imagelookup.RancherServerRepositories()
 	var misses []string
 	for _, registry := range registries {
 		pair, found, err := c.inspectHeadImagePair(ctx, registry, tag)
@@ -1106,46 +1098,47 @@ func (c githubClient) resolveHeadImagePair(ctx context.Context, tag string, regi
 		if found {
 			return pair, nil
 		}
-		misses = append(misses, registry)
+		if pair.Server.Reference != "" {
+			misses = append(misses, fmt.Sprintf("%s found, matching %s/rancher/rancher-agent:%s missing", pair.Server.Reference, registry, tag))
+		} else {
+			misses = append(misses, fmt.Sprintf("%s (server tag missing in %s)", registry, strings.Join(repositories, ", ")))
+		}
 	}
 	return rancherImagePair{}, fmt.Errorf("Rancher head tag %s was not found as a matching server and agent image pair in checked registries: %s", tag, strings.Join(misses, ", "))
 }
 
-func (c githubClient) inspectHeadImagePair(ctx context.Context, registry, tag string) (rancherImagePair, bool, error) {
+func (c githubClient) inspectRancherImage(ctx context.Context, reference string) (rancherImageMetadata, bool, error) {
 	inspector := c.inspectImage
 	if inspector == nil {
 		inspector = inspectOCIImage
 	}
-	serverReference := registry + "/rancher/rancher:" + tag
-
-	server, found, err := inspector(ctx, serverReference)
+	image, found, err := inspector(ctx, reference)
 	if err != nil {
-		return rancherImagePair{}, false, err
+		return rancherImageMetadata{}, false, fmt.Errorf("inspect %s: %w", reference, err)
 	}
-	if !found {
-		return rancherImagePair{}, false, nil
-	}
-	if server.Reference == "" {
-		server.Reference = serverReference
-	}
-	return c.inspectHeadImagePairWithServer(ctx, registry, tag, server)
+	image.Reference = reference
+	return image, found, nil
 }
 
-func (c githubClient) inspectHeadImagePairWithServer(ctx context.Context, registry, tag string, server rancherImageMetadata) (rancherImagePair, bool, error) {
-	inspector := c.inspectImage
-	if inspector == nil {
-		inspector = inspectOCIImage
+func (c githubClient) inspectHeadServer(ctx context.Context, registry, tag string, repositories []string) (rancherImageMetadata, bool, error) {
+	for _, repository := range repositories {
+		server, found, err := c.inspectRancherImage(ctx, registry+"/"+repository+":"+tag)
+		if err != nil || found {
+			return server, found, err
+		}
 	}
-	agentReference := registry + "/rancher/rancher-agent:" + tag
-	agent, found, err := inspector(ctx, agentReference)
-	if err != nil {
+	return rancherImageMetadata{}, false, nil
+}
+
+func (c githubClient) inspectHeadImagePair(ctx context.Context, registry, tag string) (rancherImagePair, bool, error) {
+	server, found, err := c.inspectHeadServer(ctx, registry, tag, imagelookup.RancherServerRepositories())
+	if err != nil || !found {
 		return rancherImagePair{}, false, err
 	}
-	if !found {
-		return rancherImagePair{}, false, nil
-	}
-	if agent.Reference == "" {
-		agent.Reference = agentReference
+	agentReference := registry + "/rancher/rancher-agent:" + tag
+	agent, found, err := c.inspectRancherImage(ctx, agentReference)
+	if err != nil || !found {
+		return rancherImagePair{Registry: registry, Server: server}, false, err
 	}
 
 	pair := rancherImagePair{Registry: registry, Server: server, Agent: agent}
@@ -1174,8 +1167,11 @@ func validateHeadImagePair(requestedTag string, pair rancherImagePair) error {
 	}
 	serverCanonicalRepository := imageReferenceRepository(pair.Server.CanonicalReference)
 	agentCanonicalRepository := imageReferenceRepository(pair.Agent.CanonicalReference)
-	if serverCanonicalRepository != "rancher/rancher" || agentCanonicalRepository != "rancher/rancher-agent" {
+	if !imagelookup.IsRancherServerRepository(serverCanonicalRepository) || agentCanonicalRepository != "rancher/rancher-agent" {
 		return fmt.Errorf("Rancher head image pair %s has unexpected canonical repositories: server %s, agent %s", requestedTag, serverCanonicalRepository, agentCanonicalRepository)
+	}
+	if serverCanonicalRepository != imageReferenceRepository(pair.Server.Reference) {
+		return fmt.Errorf("server image %s declares a different canonical repository %s", pair.Server.Reference, serverCanonicalRepository)
 	}
 
 	requested, err := parseTargetVersion(requestedTag)
@@ -1192,6 +1188,11 @@ func validateHeadImagePair(requestedTag string, pair rancherImagePair) error {
 	return nil
 }
 
+func registryNotFound(err error) bool {
+	var registryError *transport.Error
+	return errors.As(err, &registryError) && registryError.StatusCode == http.StatusNotFound
+}
+
 func inspectOCIImage(ctx context.Context, reference string) (rancherImageMetadata, bool, error) {
 	parsed, err := name.ParseReference(reference, name.WeakValidation)
 	if err != nil {
@@ -1204,8 +1205,7 @@ func inspectOCIImage(ctx context.Context, reference string) (rancherImageMetadat
 		remote.WithPlatform(v1.Platform{OS: "linux", Architecture: "amd64"}),
 	)
 	if err != nil {
-		var registryError *transport.Error
-		if errors.As(err, &registryError) && registryError.StatusCode == http.StatusNotFound {
+		if registryNotFound(err) {
 			return rancherImageMetadata{Reference: reference}, false, nil
 		}
 		return rancherImageMetadata{}, false, err

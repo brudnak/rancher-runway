@@ -5,10 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 func TestWebhookTagFromBuild(t *testing.T) {
@@ -201,16 +204,16 @@ func TestBuildPlanAcceptsCommunityCommitHeadAndPinsExactImages(t *testing.T) {
 
 func TestBuildPlanMarksPatchQualifiedPrimeHead(t *testing.T) {
 	const (
-		ossSHA     = "97845ced7ee6df9a36cae65ded9bbb73e14500b5"
-		privateSHA = "a4af84edd99705d3dc9b36a60fc06131e4afd6ee"
-		targetTag  = "v2.14.5-" + ossSHA + "-head"
-		serverRef  = "stgregistry.suse.com/rancher/rancher:" + targetTag
+		ossSHA     = "e68b3954fbf8b12a68dc111a8177e47583cd76b3"
+		privateSHA = "45ff113f3649cf8154e9f386b6f1c004617552d9"
+		targetTag  = "v2.16.0-e68b395-head"
+		serverRef  = "stgregistry.suse.com/rancher/rancher-server:" + targetTag
 		agentRef   = "stgregistry.suse.com/rancher/rancher-agent:" + targetTag
 	)
 	client := fakeGitHubClient(t, map[string]string{
-		"/rancher/rancher/" + ossSHA + "/build.yaml":              `webhookVersion: 109.0.6+up0.10.10-rc.3`,
-		"/rancher/rancher/v2.14.4/build.yaml":                     `webhookVersion: 109.0.5+up0.10.9`,
-		"/stg/v2/rancher/rancher-webhook/manifests/v0.10.10-rc.3": "ok",
+		"/rancher/rancher/" + ossSHA + "/build.yaml":              `webhookVersion: 111.0.0+up0.12.1-rc.17`,
+		"/rancher/rancher/v2.15.0/build.yaml":                     `webhookVersion: 110.0.0+up0.11.0`,
+		"/stg/v2/rancher/rancher-webhook/manifests/v0.12.1-rc.17": "ok",
 	})
 	client.inspectImage = fixtureImageInspector(map[string]imageInspectionFixture{
 		serverRef: {
@@ -220,18 +223,21 @@ func TestBuildPlanMarksPatchQualifiedPrimeHead(t *testing.T) {
 				Source:             "https://github.com/rancher/rancher-prime.git",
 				Revision:           privateSHA,
 				OSSRevision:        ossSHA,
-				CanonicalReference: "rancher/rancher:" + targetTag,
+				CanonicalReference: "rancher/rancher-server:" + targetTag,
 			},
 		},
 		agentRef: {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("4", 64), CanonicalReference: "rancher/rancher-agent:" + targetTag}},
 	})
 
-	got, err := buildPlan(context.Background(), client, targetTag, "v2.14.4", "stgregistry.suse.com/rancher/rancher-webhook:v0.10.10-rc.3", "auto", "", "rancher-runway/signoff", "")
+	got, err := buildPlan(context.Background(), client, targetTag, "v2.15.0", "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rc.17", "auto", "", "rancher-runway/signoff", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.RancherDistro != "prime" || got.RancherImageSource != "https://github.com/rancher/rancher-prime.git" || got.RancherImageRevision != privateSHA || got.RancherOSSRevision != ossSHA {
 		t.Fatalf("unexpected Prime provenance: %#v", got)
+	}
+	if got.RancherImage != serverRef || got.RancherAgentImage != agentRef || got.Lanes[0].InstallRancher != serverRef {
+		t.Fatalf("plan did not pin the published server and agent: %#v", got)
 	}
 	if got.Lanes[0].InstallRancherDistro != "prime" || got.Lanes[1].InstallRancherDistro != "prime" {
 		t.Fatalf("fresh Prime lanes did not use Prime distro: %#v", got.Lanes)
@@ -296,7 +302,7 @@ func TestBuildPlanResolvesPatchHeadAliasToNewestStagingPair(t *testing.T) {
 		privateSHA   = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 		selectedTag  = "v2.15.1-" + selectedSHA + "-head"
 		olderTag     = "v2.15.1-" + olderSHA + "-head"
-		serverRef    = "stgregistry.suse.com/rancher/rancher:" + selectedTag
+		serverRef    = "stgregistry.suse.com/rancher/rancher-server:" + selectedTag
 		agentRef     = "stgregistry.suse.com/rancher/rancher-agent:" + selectedTag
 	)
 	client := fakeGitHubClient(t, map[string]string{
@@ -307,6 +313,9 @@ func TestBuildPlanResolvesPatchHeadAliasToNewestStagingPair(t *testing.T) {
 	var listCalls []string
 	client.listImageTags = func(_ context.Context, registry, repository string) ([]string, error) {
 		listCalls = append(listCalls, registry+"/"+repository)
+		if repository == "rancher/rancher-server" {
+			return []string{selectedTag}, nil
+		}
 		return []string{
 			requestedTag,
 			olderTag,
@@ -341,7 +350,7 @@ func TestBuildPlanResolvesPatchHeadAliasToNewestStagingPair(t *testing.T) {
 				Source:             "https://github.com/rancher/rancher-prime.git",
 				Revision:           privateSHA,
 				OSSRevision:        selectedSHA,
-				CanonicalReference: "rancher/rancher:" + selectedTag,
+				CanonicalReference: "rancher/rancher-server:" + selectedTag,
 				Created:            time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
 			},
 		},
@@ -368,8 +377,11 @@ func TestBuildPlanResolvesPatchHeadAliasToNewestStagingPair(t *testing.T) {
 	if got.RancherOSSRevision != selectedSHA || got.Lanes[2].UpgradeToRancher != serverRef {
 		t.Fatalf("patch alias did not retain selected provenance and image reference: %#v", got)
 	}
-	if len(listCalls) != 1 || listCalls[0] != "stgregistry.suse.com/rancher/rancher" {
-		t.Fatalf("expected one staging tag listing, got %v", listCalls)
+	if !slices.Equal(listCalls, []string{"stgregistry.suse.com/rancher/rancher-server", "stgregistry.suse.com/rancher/rancher"}) {
+		t.Fatalf("expected both staging server repositories, got %v", listCalls)
+	}
+	if len(inspectCalls) != 4 || slices.Contains(inspectCalls, "stgregistry.suse.com/rancher/rancher:"+selectedTag) {
+		t.Fatalf("expected one server/agent inspection per tag, got %v", inspectCalls)
 	}
 	for _, call := range inspectCalls {
 		if strings.HasPrefix(call, "docker.io/") {
@@ -407,8 +419,11 @@ func TestResolvePatchHeadAliasRejectsCanonicalPatchMismatch(t *testing.T) {
 	var calls []string
 	client := githubClient{
 		listImageTags: func(_ context.Context, registry, repository string) ([]string, error) {
-			if registry != "stgregistry.suse.com" || repository != rancherRepo {
+			if registry != "stgregistry.suse.com" {
 				t.Fatalf("unexpected tag listing target %s/%s", registry, repository)
+			}
+			if repository == "rancher/rancher-server" {
+				return nil, &transport.Error{StatusCode: http.StatusNotFound}
 			}
 			return []string{listedTag}, nil
 		},
@@ -639,12 +654,13 @@ func TestResolveMovingPrimeHeadUsesOSSRevision(t *testing.T) {
 		OSSRevision:        ossSHA,
 		CanonicalReference: "rancher/rancher:" + canonicalTag,
 	}
-	client := githubClient{inspectImage: fixtureImageInspector(map[string]imageInspectionFixture{
+	fixtures := map[string]imageInspectionFixture{
 		aliasServer: {Found: true, Metadata: serverMetadata},
 		aliasAgent:  {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("9", 64), CanonicalReference: "rancher/rancher-agent:" + canonicalTag}},
 		exactServer: {Found: true, Metadata: serverMetadata},
 		exactAgent:  {Found: true, Metadata: rancherImageMetadata{Digest: "sha256:" + strings.Repeat("9", 64), CanonicalReference: "rancher/rancher-agent:" + canonicalTag}},
-	})}
+	}
+	client := githubClient{inspectImage: fixtureImageInspector(fixtures)}
 	requested, err := parseTargetVersion(aliasTag)
 	if err != nil {
 		t.Fatal(err)
@@ -655,6 +671,15 @@ func TestResolveMovingPrimeHeadUsesOSSRevision(t *testing.T) {
 	}
 	if resolved.Raw != canonicalTag || !resolved.PatchSpecified || resolved.Patch != 5 || pair.Server.Reference != exactServer || buildRef != ossSHA {
 		t.Fatalf("unexpected Prime alias resolution: target=%#v pair=%#v buildRef=%s", resolved, pair, buildRef)
+	}
+
+	// Dispatched lanes resolve the immutable tag afresh. If that selects a
+	// different server image, the planner must reject the alias.
+	fixtures["stgregistry.suse.com/rancher/rancher-server:"+canonicalTag] = imageInspectionFixture{
+		Found: true, Metadata: rancherImageMetadata{Digest: "sha256:other", CanonicalReference: "rancher/rancher-server:" + canonicalTag},
+	}
+	if _, _, _, err := client.resolveHeadTarget(context.Background(), requested); err == nil || !strings.Contains(err.Error(), "alias digest") {
+		t.Fatalf("expected conflicting immutable server digest to fail, got %v", err)
 	}
 }
 
@@ -754,6 +779,34 @@ func TestValidateHeadImagePairRejectsWrongCanonicalRepositories(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "unexpected canonical repositories") {
 		t.Fatalf("expected canonical repository roles to be enforced, got %v", err)
+	}
+}
+
+func TestResolvePatchCommitHeadReportsMissingAgent(t *testing.T) {
+	const tag = "v2.16.0-e68b395-head"
+	const server = "stgregistry.suse.com/rancher/rancher-server:" + tag
+	const agent = "stgregistry.suse.com/rancher/rancher-agent:" + tag
+	var calls []string
+	client := githubClient{inspectImage: recordingFixtureImageInspector(&calls, map[string]imageInspectionFixture{
+		server: {Found: true},
+	})}
+	_, err := client.resolveHeadImagePair(context.Background(), tag, []string{"stgregistry.suse.com"})
+	if err == nil || !strings.Contains(err.Error(), agent+" missing") {
+		t.Fatalf("expected missing agent %s, got %v", agent, err)
+	}
+	if !slices.Equal(calls, []string{server, agent}) {
+		t.Fatalf("unexpected inspection order: %v", calls)
+	}
+}
+
+func TestValidateHeadImagePairRejectsOtherServerRepository(t *testing.T) {
+	const tag = "v2.16.0-e68b395-head"
+	err := validateHeadImagePair(tag, rancherImagePair{
+		Server: rancherImageMetadata{Reference: "stgregistry.suse.com/rancher/rancher-server:" + tag, CanonicalReference: "rancher/rancher:" + tag},
+		Agent:  rancherImageMetadata{CanonicalReference: "rancher/rancher-agent:" + tag},
+	})
+	if err == nil || !strings.Contains(err.Error(), "different canonical repository") {
+		t.Fatalf("expected mismatched server repository to fail, got %v", err)
 	}
 }
 

@@ -210,10 +210,11 @@ identical active run, so concurrent planners do not launch duplicate lanes.
 Head image publication changes as a release line moves through its lifecycle.
 Current community lines can publish on Docker Hub, while Prime-only lines
 publish on `stgregistry.suse.com`. Resolution is publication-aware: the planner
-locates an exact tag for which both `rancher/rancher` and
-`rancher/rancher-agent` exist in the same supported registry and declare the
-same canonical head tag, then records those exact image references for the
-lane. Do not infer the registry from the version number or assume a line remains
+checks `rancher/rancher-server` first and falls back to `rancher/rancher` when
+the server tag is absent. The server and `rancher/rancher-agent` must exist in
+the same registry and declare their respective repositories and the same
+canonical head tag. The planner records both image references for the lane.
+Do not infer the registry from the version number or assume a line remains
 on Docker Hub. For a mutable alias, the exact resolved references in the
 generated plan and receipt identify what that run actually tested.
 Parent-planned lanes receive that immutable resolved tag, so the alias cannot
@@ -221,8 +222,9 @@ move between planning and execution.
 
 Patch-qualified heads are staging-only, including both `v2.15.1-head` and an
 exact `v2.15.1-SHA-head` tag. Because staging does not publish a literal patch
-alias image, the planner lists immutable `v2.15.1-SHA-head` tags, verifies their
-canonical OCI metadata and matching server/agent pair, and pins the newest pair
+alias image, the planner lists immutable `v2.15.1-SHA-head` tags from both
+server repositories, verifies their canonical OCI metadata and matching
+server/agent pair, and pins the newest pair
 by the later of the server and agent OCI creation times. Both timestamps are
 required. Tags from a different patch and Docker Hub images are not candidates.
 
