@@ -771,9 +771,9 @@ func TestRKE2PatchRequestCacheFetchesOnce(t *testing.T) {
 		case "/release-notes/v1.35.X":
 			hits++
 			body = `v1.35.7+rke2r1 v1.35.6+rke2r1`
-		case "/repos/rancher/rke2/releases/tags/v1.35.7+rke2r1":
+		case "/rancher/rke2/releases/download/v1.35.7+rke2r1/rke2-images.linux-amd64.tar.zst",
+			"/rancher/rke2/releases/download/v1.35.7+rke2r1/sha256sum-amd64.txt":
 			assetHits++
-			body = `{"assets":[{"name":"rke2-images.linux-amd64.tar.zst"},{"name":"sha256sum-amd64.txt"}]}`
 		default:
 			t.Fatalf("unexpected RKE2 lookup: %s", req.URL)
 		}
@@ -800,8 +800,8 @@ func TestRKE2PatchRequestCacheFetchesOnce(t *testing.T) {
 	if hits != 1 {
 		t.Fatalf("expected one RKE2 release-notes HTTP request, got %d", hits)
 	}
-	if assetHits != 1 {
-		t.Fatalf("expected one RKE2 release asset lookup, got %d", assetHits)
+	if assetHits != 2 {
+		t.Fatalf("expected one lookup for each of the two RKE2 release assets, got %d", assetHits)
 	}
 }
 
@@ -1072,12 +1072,9 @@ func TestResolveLatestReleasePatchGitHubFallbackSkipsTagsMissingRequiredAssets(t
 				{"ref":"refs/tags/v1.31.10+rke2r1"},
 				{"ref":"refs/tags/v1.31.10+rke2r2"}
 			]`))
-		case strings.HasSuffix(r.URL.Path, "/repos/rancher/rke2/releases/tags/v1.31.10+rke2r2"):
-			_, _ = w.Write([]byte(`{"assets":[]}`))
-		case strings.HasSuffix(r.URL.Path, "/repos/rancher/rke2/releases/tags/v1.31.10+rke2r1"):
-			_, _ = w.Write([]byte(`{"assets":[{"name":"rke2-images.linux-amd64.tar.zst"},{"name":"sha256sum-amd64.txt"}]}`))
-		case strings.HasSuffix(r.URL.Path, "/repos/rancher/rke2/releases/tags/v1.31.9+rke2r1"):
-			_, _ = w.Write([]byte(`{"assets":[{"name":"rke2-images.linux-amd64.tar.zst"},{"name":"sha256sum-amd64.txt"}]}`))
+		case r.Method == http.MethodHead && (strings.HasPrefix(r.URL.Path, "/rancher/rke2/releases/download/v1.31.10+rke2r1/") ||
+			strings.HasPrefix(r.URL.Path, "/rancher/rke2/releases/download/v1.31.9+rke2r1/")):
+			w.WriteHeader(http.StatusOK)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1085,12 +1082,12 @@ func TestResolveLatestReleasePatchGitHubFallbackSkipsTagsMissingRequiredAssets(t
 	t.Cleanup(server.Close)
 
 	got, err := resolveLatestCachedReleasePatch(releaseProductConfig{
-		ProductName:       "RKE2",
-		CacheKey:          "rke2",
-		Pattern:           rke2ReleasePattern(31),
-		GitHubTagRefsURL:  server.URL + "/repos/rancher/rke2/git/matching-refs/tags/v1.31.",
-		GitHubBuildPrefix: "+rke2",
-		GitHubReleaseURL:  server.URL + "/repos/rancher/rke2/releases/tags/%s",
+		ProductName:           "RKE2",
+		CacheKey:              "rke2",
+		Pattern:               rke2ReleasePattern(31),
+		GitHubTagRefsURL:      server.URL + "/repos/rancher/rke2/git/matching-refs/tags/v1.31.",
+		GitHubBuildPrefix:     "+rke2",
+		GitHubDownloadBaseURL: server.URL + "/rancher/rke2/releases/download",
 		GitHubAssetNames: []string{
 			"rke2-images.linux-amd64.tar.zst",
 			"sha256sum-amd64.txt",

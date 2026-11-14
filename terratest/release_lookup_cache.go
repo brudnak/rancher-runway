@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -56,7 +57,7 @@ type releaseProductConfig struct {
 	ReleaseNotesFallbackURLs []string
 	GitHubTagRefsURL         string
 	GitHubBuildPrefix        string
-	GitHubReleaseURL         string
+	GitHubDownloadBaseURL    string
 	GitHubAssetNames         []string
 }
 
@@ -67,12 +68,6 @@ type httpStatusError struct {
 
 type githubTagRef struct {
 	Ref string `json:"ref"`
-}
-
-type githubRelease struct {
-	Assets []struct {
-		Name string `json:"name"`
-	} `json:"assets"`
 }
 
 func (e httpStatusError) Error() string {
@@ -326,7 +321,7 @@ func resolveLatestCachedReleasePatch(config releaseProductConfig, highestMinor i
 			log.Printf("[resolver] Warning: using %s GitHub tags for v1.%d because docs lookup failed and no cached lookup was available: %v", config.ProductName, highestMinor, err)
 			return latest, nil
 		}
-		log.Printf("[resolver] Warning: %s GitHub tag fallback failed for v1.%d after docs lookup failed: %v", config.ProductName, highestMinor, fallbackErr)
+		return "", fmt.Errorf("%w; GitHub tag fallback failed: %w", releaseLookupError(config.ProductName, releaseNotesURL, err, cachePath, cacheErr), fallbackErr)
 	}
 	return "", releaseLookupError(config.ProductName, releaseNotesURL, err, cachePath, cacheErr)
 }
@@ -352,10 +347,17 @@ func resolveLatestGitHubTagRelease(config releaseProductConfig, highestMinor int
 		return "", fmt.Errorf("could not find any %s v1.%d patch tags in %s", config.ProductName, highestMinor, config.GitHubTagRefsURL)
 	}
 	if len(config.GitHubAssetNames) > 0 {
-		versions, err = githubTagReleasesWithAssets(config, versions)
-		if err != nil {
-			return "", err
+		var published []string
+		for _, version := range versions {
+			available, err := releaseHasPublicAssets(config, version)
+			if err != nil {
+				return "", err
+			}
+			if available {
+				published = append(published, version)
+			}
 		}
+		versions = published
 		if len(versions) == 0 {
 			return "", fmt.Errorf("could not find any %s v1.%d patch tags with required assets %s", config.ProductName, highestMinor, strings.Join(config.GitHubAssetNames, ", "))
 		}
@@ -368,44 +370,30 @@ func resolveLatestGitHubTagRelease(config releaseProductConfig, highestMinor int
 	return latest, nil
 }
 
-func githubTagReleasesWithAssets(config releaseProductConfig, versions []string) ([]string, error) {
-	if strings.TrimSpace(config.GitHubReleaseURL) == "" {
-		return nil, fmt.Errorf("%s GitHub release asset validation requires GitHubReleaseURL", config.ProductName)
-	}
-	filtered := make([]string, 0, len(versions))
-	for _, version := range versions {
-		releaseURL := fmt.Sprintf(config.GitHubReleaseURL, url.PathEscape(version))
-		body, err := fetchURLBody(releaseURL)
+// Check the public files the installer consumes without downloading the archives.
+func releaseHasPublicAssets(config releaseProductConfig, version string) (bool, error) {
+	for _, asset := range config.GitHubAssetNames {
+		assetURL := config.GitHubDownloadBaseURL + "/" + url.PathEscape(version) + "/" + url.PathEscape(asset)
+		resp, err := rancherLookupHTTPClient.Head(assetURL)
 		if err != nil {
-			log.Printf("[resolver] Warning: skipping %s tag %s because release metadata lookup failed: %v", config.ProductName, version, err)
+			// A redirected download URL can contain an expiring signature.
+			var requestErr *url.Error
+			if errors.As(err, &requestErr) {
+				err = requestErr.Err
+			}
+			return false, fmt.Errorf("check release asset %s: %w", assetURL, err)
+		}
+		resp.Body.Close()
+		switch resp.StatusCode {
+		case http.StatusOK:
 			continue
-		}
-		var release githubRelease
-		if err := json.Unmarshal([]byte(body), &release); err != nil {
-			log.Printf("[resolver] Warning: skipping %s tag %s because release metadata could not be parsed: %v", config.ProductName, version, err)
-			continue
-		}
-		if githubReleaseHasAssets(release, config.GitHubAssetNames) {
-			filtered = append(filtered, version)
+		case http.StatusNotFound:
+			return false, nil
+		default:
+			return false, httpStatusError{URL: assetURL, StatusCode: resp.StatusCode}
 		}
 	}
-	return filtered, nil
-}
-
-func githubReleaseHasAssets(release githubRelease, requiredNames []string) bool {
-	if len(requiredNames) == 0 {
-		return true
-	}
-	assets := map[string]bool{}
-	for _, asset := range release.Assets {
-		assets[asset.Name] = true
-	}
-	for _, name := range requiredNames {
-		if !assets[name] {
-			return false
-		}
-	}
-	return true
+	return true, nil
 }
 
 func releaseLookupError(productName, url string, liveErr error, cachePath string, cacheErr error) error {

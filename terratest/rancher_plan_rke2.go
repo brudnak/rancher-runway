@@ -89,7 +89,7 @@ func resolveLatestRKE2Patch(highestMinor int) (string, error) {
 		ReleaseNotesFallbackURLs: []string{fmt.Sprintf("https://docs.rke2.io/release-notes-old/v1.%d.X", highestMinor)},
 		GitHubTagRefsURL:         fmt.Sprintf("https://api.github.com/repos/rancher/rke2/git/matching-refs/tags/v1.%d.", highestMinor),
 		GitHubBuildPrefix:        "+rke2",
-		GitHubReleaseURL:         "https://api.github.com/repos/rancher/rke2/releases/tags/%s",
+		GitHubDownloadBaseURL:    "https://github.com/rancher/rke2/releases/download",
 		GitHubAssetNames: []string{
 			"rke2-images.linux-amd64.tar.zst",
 			"sha256sum-amd64.txt",
@@ -100,12 +100,12 @@ func resolveLatestRKE2Patch(highestMinor int) (string, error) {
 		// required by the installer. Keep the docs order, but validate each
 		// candidate just as the GitHub tag fallback does.
 		for _, version := range versions {
-			available, err := githubTagReleasesWithAssets(config, []string{version})
+			available, err := releaseHasPublicAssets(config, version)
 			if err != nil {
 				return "", err
 			}
-			if len(available) > 0 {
-				return available[0], nil
+			if available {
+				return version, nil
 			}
 		}
 		return "", fmt.Errorf("no RKE2 releases have required public assets %s", strings.Join(config.GitHubAssetNames, ", "))
