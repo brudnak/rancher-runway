@@ -9,7 +9,7 @@
     @click="destroy"
   >
     <Icon name="trash" />
-    Destroy run
+    Destroy entire run
   </button>
 </template>
 

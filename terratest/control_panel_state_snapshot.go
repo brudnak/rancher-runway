@@ -88,6 +88,7 @@ func (p *localControlPanel) snapshotOperationLocked(name panelOperationName, act
 	}
 	return panelOperationSnapshot{
 		Operation:  panelOperationBase(name),
+		ClusterID: op.ClusterID,
 		Running:    op.Running,
 		PID:        op.PID,
 		StartedAt:  op.StartedAt,

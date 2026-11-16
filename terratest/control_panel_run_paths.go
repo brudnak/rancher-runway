@@ -8,6 +8,11 @@ import (
 
 func (p *localControlPanel) enrichRunRecord(record panelRunRecord) panelRunRecord {
 	record = p.normalizeRunRecordArtifactPaths(record)
+	for i := range record.DownstreamLinodePlans {
+		if destroyedHA(record.TerraformModuleDir, i+1) {
+			record.DownstreamLinodePlans[i].Enabled = false
+		}
+	}
 	record.RunFolderPath = runFolderPathForRecord(record)
 	record.RunFolderExists = record.RunFolderPath != "" && pathExists(record.RunFolderPath)
 	return record

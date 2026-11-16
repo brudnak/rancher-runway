@@ -322,7 +322,7 @@ func terraformBackendLabelForRun(runID string, localStatePath string) string {
 	if backendConfig == nil {
 		return "local"
 	}
-	if path := strings.TrimSpace(fmt.Sprint(backendConfig["path"])); path != "" {
+	if path, local := backendConfig["path"].(string); local {
 		return "local (" + path + ")"
 	}
 

@@ -395,6 +395,7 @@ const logModalKind = computed(() => {
 
 const logModalTitle = computed(() => {
   if (logs.mode === "docker") return state.value?.clusters?.items?.find(c => c.id === logs.clusterId)?.name || "Rancher container";
+  if (logs.mode === "cleanup" && state.value?.cleanup?.clusterId) return `Destroy cluster ${state.value.cleanup.clusterId}`;
   if (logs.runId) return `Run ${logs.runId}`;
   if (logs.mode === "setup") return "Setup";
   if (logs.mode === "linodeSetup") return "Linode setup";
@@ -417,6 +418,7 @@ const logModalSubtitle = computed(() => {
   if (logs.mode === "linodeSetup") return "go test -v -run ^TestHaSetup$ -timeout 90m -count=1 ./terratest";
   if (logs.mode === "readiness") return operationSnapshot(state.value, "readiness", logs.runId).command || "go test -v -run ^TestHAWaitReady$ -timeout 35m -count=1 ./terratest";
   if (logs.mode === "downstream") return operationSnapshot(state.value, "downstream", logs.runId).command || "go test -v -run ^TestHAProvisionConfiguredLinodeDownstreams$ -timeout 35m -count=1 ./terratest";
+  if (logs.mode === "cleanup" && state.value?.cleanup?.command) return state.value.cleanup.command;
   if (logs.mode === "cleanup" || logs.mode === "linodeCleanup") return "go test -v -run ^TestHACleanup$ -timeout 60m -count=1 ./terratest";
   if (logs.mode === "cleanupBatch") return "Attempts tracked downstream cleanup before each run’s Terraform destroy; downstream failures are recorded as warnings";
   return `${logs.namespace} • ${logs.clusterId} • ${logs.mode === "live" ? "live stream" : "tail snapshot"}`;

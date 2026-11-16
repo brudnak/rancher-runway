@@ -1,8 +1,10 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +100,40 @@ func TestWebhookDiscoveryKubectlHonorsContextDeadline(t *testing.T) {
 	}
 }
 
+func TestWebhookRolloutFailureLogsDeploymentAndPreviousContainer(t *testing.T) {
+	callLog := installWebhookDiscoveryKubectlFixture(t, "rollout-failure")
+	t.Setenv("GITHUB_ACTIONS", "true")
+	t.Setenv("RANCHER_BOOTSTRAP_PASSWORD", "fixture-password")
+	var output bytes.Buffer
+	prior := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(prior) })
+
+	_, err := overrideWebhookDeploymentWithDiscovery(context.Background(), 1, "downstream", "test-cluster", "/tmp/downstream.yaml", "", "registry.example/rancher-webhook:candidate", time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "kubectl rollout status") || !strings.Contains(err.Error(), "registry.example/rancher-webhook:candidate") {
+		t.Fatalf("expected original rollout failure and candidate image, got %v", err)
+	}
+	for _, want := range []string{"ProgressDeadlineExceeded", "failed to load serving cert", "missing tls.crt", "[REDACTED_IP]", "***"} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("missing %q in diagnostics: %s", want, output.String())
+		}
+	}
+	for _, sensitive := range []string{"192.0.2.1", "fixture-password"} {
+		if strings.Contains(output.String(), sensitive) {
+			t.Errorf("diagnostics included sensitive fixture data")
+		}
+	}
+	calls := readWebhookDiscoveryCalls(t, callLog)
+	if len(calls) != 6 || !strings.HasPrefix(calls[3], "get deployment/rancher-webhook -n cattle-system -o custom-columns=") {
+		t.Fatalf("unexpected diagnostic commands: %q", calls)
+	}
+	for _, call := range calls[4:] {
+		if !strings.HasPrefix(call, "logs deployment/rancher-webhook -n cattle-system -c rancher-webhook --all-pods=true ") {
+			t.Fatalf("logs must select the deployment and container discovered for the override: %q", call)
+		}
+	}
+}
+
 func installWebhookDiscoveryKubectlFixture(t *testing.T, mode string) string {
 	t.Helper()
 	root := t.TempDir()
@@ -138,6 +174,18 @@ case "$*" in
     ;;
   "set image "*|"rollout status "*)
     [ "$WEBHOOK_FIXTURE_MODE" != missing ]
+    if [ "$WEBHOOK_FIXTURE_MODE" = rollout-failure ] && [ "$1" = rollout ]; then exit 1; fi
+    ;;
+  "get deployment/rancher-webhook -n cattle-system -o custom-columns="*)
+    [ "$request_timeout" = bounded ]
+    echo ProgressDeadlineExceeded
+    ;;
+  "logs deployment/rancher-webhook "*)
+    [ "$request_timeout" = bounded ]
+    case "$*" in
+      *" --previous") echo 'failed to load serving cert: missing tls.crt' ;;
+      *) echo 'connection to 192.0.2.1 failed fixture-password' ;;
+    esac
     ;;
   "get deployments,pods,jobs -A -o wide"|"get apps.catalog.cattle.io -A"|"get events -A --sort-by=.lastTimestamp")
     [ "$request_timeout" = bounded ]

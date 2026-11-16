@@ -67,6 +67,9 @@ func (p *localControlPanel) gpuInfrastructureForRun(record panelRunRecord) []GPU
 	runID := safeRunPathSegment(record.RunID)
 	details := make([]GPUInfrastructureDetail, 0, totalHAs)
 	for i := 1; i <= totalHAs; i++ {
+		if destroyedHA(record.TerraformModuleDir, i) {
+			continue
+		}
 		prefix := fmt.Sprintf("ha_%d", i)
 		ip := strings.TrimSpace(outputs[fmt.Sprintf("%s_gpu_worker_ip", prefix)])
 		privateIP := strings.TrimSpace(outputs[fmt.Sprintf("%s_gpu_worker_private_ip", prefix)])
@@ -112,10 +115,14 @@ func (p *localControlPanel) discoverClustersForRun(record panelRunRecord) []clus
 
 	clusters := make([]clusterView, 0, totalHAs)
 	for i := 1; i <= totalHAs; i++ {
+		if destroyedHA(record.TerraformModuleDir, i) {
+			continue
+		}
 		haDir := p.haInstanceDirForRun(record, i)
 		kubeconfigPath := filepath.Join(haDir, "kube_config.yaml")
 		kubeconfigExists := pathExists(kubeconfigPath)
 		hasRunSignal := kubeconfigExists ||
+			(record.TerraformModuleDir != "" && pathExists(destroyedHAPath(record.TerraformModuleDir, i)+".pending")) ||
 			pathExists(haDir) ||
 			hasHAFlatOutput(outputs, i) ||
 			len(recordsByHA[i]) > 0 ||

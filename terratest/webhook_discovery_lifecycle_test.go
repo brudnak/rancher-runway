@@ -66,15 +66,28 @@ func runWebhookDiscoveryKubectlOutput(ctx context.Context, kubeconfigPath string
 }
 
 func logWebhookDiscoveryDiagnostics(kubeconfigPath, logPrefix string) {
-	// Use a separate, short budget after discovery expires so a missing chart
-	// leaves useful evidence without consuming the workflow's rollout budget.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	commands := [][]string{
+	logWebhookDiagnostics(kubeconfigPath, logPrefix, [][]string{
 		{"get", "deployments,pods,jobs", "-A", "-o", "wide"},
 		{"get", "apps.catalog.cattle.io", "-A"},
 		{"get", "events", "-A", "--sort-by=.lastTimestamp"},
-	}
+	})
+}
+
+func logWebhookRolloutDiagnostics(kubeconfigPath, logPrefix string, target webhookDeploymentTarget) {
+	deploy := "deployment/" + target.DeploymentName
+	// The old ReplicaSet can still be serving. Ask for every pod of this
+	// deployment, including the last terminated instance of the webhook.
+	logs := []string{"logs", deploy, "-n", target.Namespace, "-c", target.ContainerName, "--all-pods=true", "--ignore-errors=true", "--tail=40", "--limit-bytes=8192"}
+	logWebhookDiagnostics(kubeconfigPath, logPrefix, [][]string{
+		{"get", deploy, "-n", target.Namespace, "-o", "custom-columns=IMAGES:.spec.template.spec.containers[*].image,SECRET-VOLUMES:.spec.template.spec.volumes[*].secret.secretName,MOUNT-PATHS:.spec.template.spec.containers[*].volumeMounts[*].mountPath,CONDITIONS:.status.conditions[*].reason"},
+		append(logs, "--previous"),
+		logs,
+	})
+}
+
+func logWebhookDiagnostics(kubeconfigPath, logPrefix string, commands [][]string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 	for _, args := range commands {
 		if ctx.Err() != nil {
 			break

@@ -43,6 +43,9 @@ func waitForConfiguredHAsReady(t *testing.T, totalHAs int, outputs map[string]st
 	var wg sync.WaitGroup
 	errCh := make(chan error, totalHAs)
 	for i := 1; i <= totalHAs; i++ {
+		if destroyedHA(terraformModuleDir(), i) {
+			continue
+		}
 		instanceNum := i
 		wg.Add(1)
 		go func() {

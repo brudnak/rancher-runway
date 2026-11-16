@@ -3,6 +3,10 @@
     <header class="cluster-home-hero"><div><span class="cluster-home-eyebrow"><Icon name="layers"/>RANCHER RUNWAY / CLUSTER WORKSPACES</span><h2>Clusters<span>.</span></h2><p>Cluster access, health, and test history.</p></div><div class="cluster-home-totals"><span><strong>{{ items.length }}</strong> discovered</span><button type="button" @click="setActivePanelTab('history')"><strong>{{ retainedWorkspaces.length }}</strong> retained · Open History →</button></div></header>
     <div class="cluster-home-search"><label><Icon name="search"/><input v-model="clusterSearch" type="search" aria-label="Search cluster workspaces" placeholder="Find a cluster, nickname, hostname, or run…"/></label><button type="button" @click="refreshClusterWorkspaces"><Icon name="refresh"/>Refresh history</button></div>
     <div v-if="clusterWorkspaceError" class="cluster-home-error" role="alert">{{ clusterWorkspaceError }} <button type="button" @click="refreshClusterWorkspaces">Try again</button></div>
+    <div v-if="state.cleanup?.clusterId && state.cleanup.running" class="flex items-center gap-3 text-sm">
+      <span class="spinner"></span>Destroying {{ clusterDisplayName(state.cleanup.clusterId, state.cleanup.clusterId) }}
+      <button type="button" class="underline" @click="openCleanupLogs()">View logs</button>
+    </div>
     <template v-if="!clusterSearch.trim()">
     <RefreshStatus v-if="!cleanupRunning" :refreshing="state.clusters?.refreshing" label="cluster status" />
     <!-- Active operation is running teardown -->
@@ -32,7 +36,7 @@
       class="rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600 dark:border-white/10 dark:bg-white/[0.04] dark:text-zinc-400"
     >
       <div
-        v-if="state.cleanup?.finishedAt && !state.cleanup?.error && !cleanupDismissed"
+        v-if="state.cleanup?.finishedAt && !state.cleanup?.clusterId && !state.cleanup?.error && !cleanupDismissed"
         :class="cleanupWarning ? 'text-amber-800 dark:text-amber-200' : 'text-emerald-800 dark:text-emerald-200'"
       >
         <template v-if="cleanupWarning">
@@ -171,7 +175,7 @@ const inactiveTabClass = "border-zinc-200 bg-white text-zinc-700 hover:bg-zinc-5
 // Global properties
 const items = computed(() => clusterItems(state.value));
 const workspace = computed(() => state.value?.workspace || {});
-const cleanupRunning = computed(() => Boolean(state.value?.cleanup?.running || state.value?.linodeCleanup?.running));
+const cleanupRunning = computed(() => Boolean((state.value?.cleanup?.running && !state.value.cleanup.clusterId) || state.value?.linodeCleanup?.running));
 const cleanupWarning = computed(() => String(state.value?.cleanup?.warning || "").trim());
 
 const cleanupDismissed = computed(() => {

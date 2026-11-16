@@ -67,6 +67,7 @@ func (p *localControlPanel) handler() http.Handler {
 	mux.HandleFunc("/api/k3d/output/clear", p.handleK3DLabOutputClear)
 	mux.HandleFunc("/api/readiness", p.handleReadiness)
 	mux.HandleFunc("/api/downstream/retry", p.handleDownstreamRetry)
+	mux.HandleFunc("/api/clusters/destroy", p.handleClusterCleanup)
 	mux.HandleFunc("/api/cleanup", p.handleCleanup)
 	mux.HandleFunc("/api/linode/inventory", p.handleLinodeInventory)
 	mux.HandleFunc("/api/aws/cleanup/preview", p.handleAWSCleanupPreview)

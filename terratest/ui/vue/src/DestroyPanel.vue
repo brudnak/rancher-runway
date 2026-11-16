@@ -507,7 +507,7 @@ const cleanupRunningForRun = run => runIsLinodeDocker(run) ? Boolean(state.value
 const readinessRunningForRun = run => Boolean(operationSnapshot(state.value, "readiness", run.runId).running);
 const pendingDestroy = run => Boolean(cleanupStarting.value && sameRunKey(selectedRunId.value, run?.runId));
 const batchDestroying = run => Boolean(cleanupBatch.value?.running && sameRunKey(cleanupBatch.value?.currentRunId || cleanupBatch.value?.runId, run?.runId));
-const destroying = run => Boolean(batchDestroying(run) || (cleanupRunningForRun(run) && sameRunKey(cleanupForRun(run)?.runId, run?.runId)));
+const destroying = run => Boolean(batchDestroying(run) || (!cleanupForRun(run)?.clusterId && cleanupRunningForRun(run) && sameRunKey(cleanupForRun(run)?.runId, run?.runId)));
 const isBulkSelected = run => selectedCleanupRunIds.value.some(runId => sameRunKey(runId, run?.runId));
 const isSelected = run => isBulkSelected(run) || Boolean(selectedRunId.value && sameRunKey(selectedRunId.value, run?.runId));
 const batchFailureForRun = run => batchFailures.value.find(failure => sameRunKey(failure.runId, run?.runId));
@@ -670,6 +670,12 @@ const cleanupStatusLabel = computed(() => {
     return `Batch finished: ${batchCompletedRunIds.value.length} succeeded`;
   }
   const cleanup = activeCleanup.value;
+  if (cleanup?.clusterId && !cleanupDismissed.value) {
+    const name = clusterDisplayName(cleanup.clusterId, cleanup.clusterId);
+    if (cleanup.running) return `Destroying ${name}`;
+    if (cleanup.error) return `Destroy failed for ${name}`;
+    if (cleanup.finishedAt) return `Destroyed ${name}`;
+  }
   if (cleanup?.running) {
     return `Destroy running${cleanup.runId ? ` for ${cleanup.runId}` : ""}${cleanup.startedAt ? ` since ${new Date(cleanup.startedAt).toLocaleTimeString()}` : ""}`;
   }

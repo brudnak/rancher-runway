@@ -133,6 +133,7 @@ type containerImageView struct {
 }
 
 type panelOperationSnapshot struct {
+	ClusterID  string             `json:"clusterId,omitempty"`
 	Operation  panelOperationName `json:"operation,omitempty"`
 	Running    bool               `json:"running"`
 	PID        int                `json:"pid,omitempty"`
@@ -162,6 +163,7 @@ const (
 )
 
 type panelOperationState struct {
+	ClusterID string `json:",omitempty"`
 	// InProcess marks an orchestration goroutine owned by this panel instance.
 	// Its child PID can exit between steps without ending the operation.
 	InProcess  bool `json:"-"`
@@ -187,6 +189,7 @@ type panelOperationState struct {
 }
 
 type panelCommandSpec struct {
+	ClusterID      string
 	Operation      panelOperationName
 	DisplayName    string
 	TestName       string

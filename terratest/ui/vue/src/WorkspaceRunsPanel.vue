@@ -455,7 +455,7 @@ const timelineSteps = run => {
   const setupRunning = setupRunningForRun(run) || linodeSetupRunningForRun(run);
   const readinessRunning = readinessRunningForRun(run);
   const downstreamRunning = downstreamRunningForRun(run);
-  const cleanupRunning = (state.value?.cleanup?.running && sameRunKey(state.value.cleanup.runId, run.runId)) ||
+  const cleanupRunning = (state.value?.cleanup?.running && !state.value.cleanup.clusterId && sameRunKey(state.value.cleanup.runId, run.runId)) ||
     (state.value?.linodeCleanup?.running && sameRunKey(state.value.linodeCleanup.runId, run.runId));
   const setupDone = status.includes("setup_complete") || status === "ready" || status.includes("readiness") || status.includes("cleanup");
   const readinessDone = status === "ready";

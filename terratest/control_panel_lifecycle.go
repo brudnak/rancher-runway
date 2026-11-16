@@ -283,12 +283,20 @@ func (p *localControlPanel) readinessPreflightError(deployment string, record pa
 		return fmt.Errorf("readiness requires at least one configured HA")
 	}
 
+	activeHAs := 0
 	missingKubeconfigs := make([]string, 0, total)
 	for i := 1; i <= total; i++ {
+		if destroyedHA(record.TerraformModuleDir, i) {
+			continue
+		}
+		activeHAs++
 		kubeconfigPath := filepath.Join(p.haInstanceDirForRun(record, i), "kube_config.yaml")
 		if !pathExists(kubeconfigPath) {
 			missingKubeconfigs = append(missingKubeconfigs, kubeconfigPath)
 		}
+	}
+	if activeHAs == 0 {
+		return fmt.Errorf("run %s has no remaining RKE2 management clusters", record.RunID)
 	}
 	if len(missingKubeconfigs) > 0 {
 		return fmt.Errorf("readiness requires a completed setup; missing kubeconfig %s", strings.Join(missingKubeconfigs, ", "))
@@ -303,7 +311,7 @@ func (p *localControlPanel) readinessPreflightError(deployment string, record pa
 	}
 	missingOutputs := make([]string, 0, total)
 	for i := 1; i <= total; i++ {
-		if !hasHAFlatOutput(outputs, i) {
+		if !destroyedHA(record.TerraformModuleDir, i) && !hasHAFlatOutput(outputs, i) {
 			missingOutputs = append(missingOutputs, fmt.Sprintf("ha_%d_*", i))
 		}
 	}

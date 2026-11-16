@@ -81,7 +81,7 @@ func (p *localControlPanel) recordedLocalHAClusterByID(clusterID string) (cluste
 	if totalHAs < 1 {
 		totalHAs = p.totalHAs
 	}
-	if haIndex < 1 || haIndex > totalHAs {
+	if haIndex < 1 || haIndex > totalHAs || destroyedHA(record.TerraformModuleDir, haIndex) {
 		return clusterView{}, false
 	}
 

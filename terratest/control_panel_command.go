@@ -47,6 +47,12 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 		}
 	}
 
+	if spec.ClusterID != "" {
+		if _, _, err := p.clusterCleanupRecord(spec.ClusterID); err != nil {
+			return err
+		}
+	}
+
 	op := p.operationLocked(spec.Operation)
 	if panelOperationActive(op) {
 		return fmt.Errorf("%s is already running", spec.DisplayName)
@@ -95,6 +101,7 @@ func (p *localControlPanel) startPanelCommand(spec panelCommandSpec) error {
 	op.Warning = ""
 	op.RunID = runID
 	op.Command = command
+	op.ClusterID = spec.ClusterID
 	op.UpdatedAt = &now
 	op.Output = []string{
 		fmt.Sprintf("[control-panel] Run %s", runID),
@@ -127,6 +134,9 @@ func (p *localControlPanel) runPanelCommand(spec panelCommandSpec) {
 	cmd := exec.Command(invocation.path, invocation.args...)
 	cmd.Dir = invocation.dir
 	cmd.Env = p.panelCommandEnv(spec.Operation)
+	if spec.ClusterID != "" {
+		cmd.Env = panelEnvWithValue(cmd.Env, cleanupClusterIDEnv, spec.ClusterID)
+	}
 	cmd.SysProcAttr = panelCommandSysProcAttr()
 
 	stdout, err := cmd.StdoutPipe()

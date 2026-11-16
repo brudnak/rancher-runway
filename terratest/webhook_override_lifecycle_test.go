@@ -451,7 +451,8 @@ func overrideWebhookDeploymentWithDiscovery(ctx context.Context, instanceNum int
 		return webhookDeploymentTarget{}, err
 	}
 	if err := runKubectlDirect(kubeconfigPath, "rollout", "status", "deployment/"+target.DeploymentName, "-n", target.Namespace, "--timeout=10m"); err != nil {
-		return webhookDeploymentTarget{}, err
+		logWebhookRolloutDiagnostics(kubeconfigPath, logPrefix, target)
+		return webhookDeploymentTarget{}, fmt.Errorf("HA %d %s cluster %s: rollout of %s/%s to %s failed: %w", instanceNum, scope, clusterName, target.Namespace, target.DeploymentName, webhookImage, err)
 	}
 
 	log.Printf("[webhook][ha-%d][%s:%s] rancher-webhook rollout completed", instanceNum, scope, clusterName)

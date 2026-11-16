@@ -140,15 +140,20 @@ func (p *localControlPanel) handleCleanup(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		Confirm         string   `json:"confirm"`
-		RunID           string   `json:"runId"`
-		RunIDs          []string `json:"runIds"`
-		All             bool     `json:"all"`
-		CleanupTestLab  bool     `json:"cleanupTestLab"`
-		CleanupCacheLab bool     `json:"cleanupCacheLab"`
+		Confirm         string          `json:"confirm"`
+		RunID           string          `json:"runId"`
+		ClusterID       json.RawMessage `json:"clusterId"`
+		RunIDs          []string        `json:"runIds"`
+		All             bool            `json:"all"`
+		CleanupTestLab  bool            `json:"cleanupTestLab"`
+		CleanupCacheLab bool            `json:"cleanupCacheLab"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.ClusterID != nil {
+		http.Error(w, "use the cluster destroy endpoint for a single cluster", http.StatusBadRequest)
 		return
 	}
 	confirm := req.Confirm

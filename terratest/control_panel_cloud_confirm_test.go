@@ -18,6 +18,7 @@ func TestControlPanelCloudActionsRequireExactConfirmation(t *testing.T) {
 	}{
 		{"retry downstream", panel.handleDownstreamRetry, map[string]any{"runId": "missing"}},
 		{"stop operation", panel.handleAbortOperation, map[string]any{"operation": "cleanupBatch"}},
+		{"destroy cluster", panel.handleClusterCleanup, map[string]any{"clusterId": "missing"}},
 		{"destroy run", panel.handleCleanup, map[string]any{"runId": "missing"}},
 		{"destroy all", panel.handleCleanup, map[string]any{"all": true}},
 		{"destroy selected", panel.handleCleanup, map[string]any{"runIds": []string{"missing"}}},

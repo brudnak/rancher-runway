@@ -36,6 +36,12 @@ func (p *localControlPanel) appendOperationOutput(operation panelOperationName, 
 }
 
 func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error) {
+	if err == nil && spec.ClusterID != "" {
+		runID, index, ok := parseLocalHAClusterID(spec.ClusterID)
+		if !ok || runID != spec.RunID || !destroyedHA(p.terraformModuleDirForRun(runID), index) {
+			err = fmt.Errorf("the lifecycle worker did not report completing destroy for %s", spec.ClusterID)
+		}
+	}
 	if spec.Completion != nil {
 		defer func() { spec.Completion <- err }()
 	}
@@ -63,7 +69,7 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 		op.Output = append(op.Output, fmt.Sprintf("[control-panel] %s finished with error: %s", panelDisplayTitle(spec.DisplayName), err.Error()))
 		p.persistOperationsLocked()
 		p.mu.Unlock()
-		if !spec.BatchChild {
+		if !spec.BatchChild && spec.ClusterID == "" {
 			p.updateRunStatusAfterOperation(spec.Operation, runID, err)
 		}
 		return
@@ -75,11 +81,11 @@ func (p *localControlPanel) finishPanelCommand(spec panelCommandSpec, err error)
 	shouldRunAfterSuccess = spec.AfterSuccess != nil && !canceled
 	p.mu.Unlock()
 
-	if !spec.BatchChild {
+	if !spec.BatchChild && spec.ClusterID == "" {
 		p.updateRunStatusAfterOperation(spec.Operation, runID, nil)
-	}
-	if !spec.BatchChild && (spec.Operation == panelOperationCleanup || spec.Operation == panelOperationLinodeCleanup) {
-		p.finishRunLabCleanup(runID, spec.LabCleanup, spec.Operation, canceled)
+		if spec.Operation == panelOperationCleanup || spec.Operation == panelOperationLinodeCleanup {
+			p.finishRunLabCleanup(runID, spec.LabCleanup, spec.Operation, canceled)
+		}
 	}
 	if shouldRunAfterSuccess {
 		spec.AfterSuccess()
