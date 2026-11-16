@@ -445,6 +445,8 @@ func readAndSanitizeEvents(path string) ([]resultEvent, error) {
 			return nil, fmt.Errorf("line %d: decode event: %w", lineNumber, err)
 		}
 		switch raw.Action {
+		case "build-fail":
+			return nil, fmt.Errorf("line %d contains a failed build event", lineNumber)
 		case "fail":
 			return nil, fmt.Errorf("line %d contains a failed test event", lineNumber)
 		case "run", "pass", "skip":
@@ -456,8 +458,8 @@ func readAndSanitizeEvents(path string) ([]resultEvent, error) {
 				return nil, fmt.Errorf("line %d: %w", lineNumber, err)
 			}
 			events = append(events, event)
-		case "start", "output", "pause", "cont", "bench":
-			// Non-result and package-level test2json events are intentionally dropped.
+		case "start", "output", "pause", "cont", "bench", "build-output":
+			// Go interleaves build diagnostics with test events. Only test results go to Qase.
 		default:
 			return nil, fmt.Errorf("line %d has unknown test action %q", lineNumber, raw.Action)
 		}

@@ -53,6 +53,7 @@ func TestPrepareEnabledSanitizesAndVerifyGeneratesSchemas(t *testing.T) {
 	goJSON := filepath.Join(workspace, "test-results", "charts.json")
 	mustMkdirAll(t, filepath.Dir(goJSON))
 	mustWrite(t, goJSON, strings.Join([]string{
+		`{"ImportPath":"example.org/dependency","Action":"build-output","Output":"compiler diagnostic: must-never-survive\n"}`,
 		`{"Time":"` + testTime + `","Action":"start","Package":"` + chartsPackage + `"}`,
 		`{"Time":"` + testTime + `","Action":"run","Package":"` + chartsPackage + `","Test":"TestWebhookTestSuite"}`,
 		`{"Time":"` + testTime + `","Action":"output","Package":"` + chartsPackage + `","Test":"TestWebhookTestSuite/TestChart","Output":"QASE_AUTOMATION_TOKEN=must-never-survive\\n"}`,
@@ -239,6 +240,12 @@ func TestPrepareRejectsUnsafeResultStreams(t *testing.T) {
 			stream: eventLine("run", chartsPackage, "TestSuite/TestCase", "") +
 				eventLine("fail", chartsPackage, "TestSuite/TestCase", "0.1"),
 			want: "failed test event",
+		},
+		{
+			name: "build failure after passing tests",
+			stream: validEventStream(chartsPackage, "TestSuite/TestCase") +
+				`{"ImportPath":"example.org/dependency","Action":"build-fail"}` + "\n",
+			want: "failed build event",
 		},
 		{
 			name:   "unknown action",
