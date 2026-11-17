@@ -390,6 +390,8 @@ func logRancherReadinessDiagnostics(kubeconfigPath string, instanceNum int) {
 	log.Printf("[ready][ha-%d][diagnostics] collecting bounded cattle-system diagnostics", instanceNum)
 	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system pods", 120, "get", "pods", "-n", "cattle-system", "-o", "wide")
 	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system deployments", 120, "get", "deployments", "-n", "cattle-system", "-o", "wide")
+	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system chart releases", 40, "get", "apps.catalog.cattle.io", "-n", "cattle-system", "-o",
+		"custom-columns=RELEASE:.metadata.name,CHART:.spec.chart.metadata.name,VERSION:.spec.chart.metadata.version,STATUS:.spec.info.status")
 	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system services", 120, "get", "svc,endpoints", "-n", "cattle-system", "-o", "wide")
 	logKubectlDiagnostic(kubeconfigPath, instanceNum, "recent cattle-system events", 120, "get", "events", "-n", "cattle-system", "--sort-by=.lastTimestamp")
 

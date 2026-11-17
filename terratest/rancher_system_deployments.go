@@ -77,13 +77,20 @@ func (d rancherDeployment) assetsImage() string {
 	return ""
 }
 
-func featureDisabled(flags, feature string) bool {
+func featureEnabled(flags, feature string, fallback bool) bool {
 	for _, flag := range strings.Split(flags, ",") {
-		if strings.TrimSpace(flag) == feature+"=false" {
+		switch strings.TrimSpace(flag) {
+		case feature + "=true":
 			return true
+		case feature + "=false":
+			return false
 		}
 	}
-	return false
+	return fallback
+}
+
+func featureDisabled(flags, feature string) bool {
+	return !featureEnabled(flags, feature, true)
 }
 
 const (
@@ -150,12 +157,16 @@ func rancherSystemDeploymentsReady(kubeconfig string) (bool, string, error) {
 	if !featureDisabled(flags, "turtles") && (!versionKnown || compareVersionStrings(version, "2.13") >= 0) {
 		required = append(required, turtlesDeployment)
 	}
+	var upgradePolicy string
 	if !versionKnown || compareVersionStrings(version, "2.10") >= 0 {
 		requireUpgrade := !featureDisabled(flags, "managed-system-upgrade-controller")
 		if server.Image != "" && versionKnown && compareVersionStrings(version, "2.11") >= 0 {
 			// Only query policy when it would hold up readiness. A local cluster
 			// override takes precedence over the global Rancher setting.
-			requireUpgrade = deployments[upgradeDeployment].fullyReady() || localUpgradeControllerEnabled(kubeconfig, server)
+			requireUpgrade = true
+			if !deployments[upgradeDeployment].fullyReady() {
+				requireUpgrade, upgradePolicy = localUpgradeControllerPolicy(kubeconfig, server, version)
+			}
 		}
 		if requireUpgrade {
 			required = append(required, upgradeDeployment)
@@ -178,9 +189,8 @@ func rancherSystemDeploymentsReady(kubeconfig string) (bool, string, error) {
 		}
 	}
 	if len(pending) == 0 {
-		return true, strings.Join(required, ", ") + " ready", nil
-	}
-	if server.Image != "" {
+		details = append(details, strings.Join(required, ", ")+" ready")
+	} else if server.Image != "" {
 		// The chart controller may be on any HA replica. Ignore historical failures on
 		// healthy components, startup warnings, and transient errors fetching logs.
 		logs, err := runKubectl(kubeconfig, "logs", "-n", "cattle-system", "-l", "app=rancher", "-c", "rancher", "--since=90s", "--tail=300")
@@ -190,23 +200,61 @@ func rancherSystemDeploymentsReady(kubeconfig string) (bool, string, error) {
 			}
 		}
 	}
-	return false, strings.Join(details, "; "), nil
+	if upgradePolicy != "" {
+		details = append(details, "system-upgrade-controller policy: "+upgradePolicy)
+	}
+	return len(pending) == 0, strings.Join(details, "; "), nil
 }
 
-func localUpgradeControllerEnabled(kubeconfig string, server systemChartContainer) bool {
-	override, err := runKubectl(kubeconfig, "get", "clusters.management.cattle.io", "local", "-o", `jsonpath={.metadata.annotations.rancher\.io/imported-cluster-version-management}`)
-	if err != nil {
-		return true
+func localUpgradeControllerPolicy(kubeconfig string, server systemChartContainer, version string) (bool, string) {
+	flags := server.envValue("CATTLE_FEATURES")
+	mcm := !featureDisabled(flags, "multi-cluster-management")
+	agent := featureEnabled(flags, "multi-cluster-management-agent", false)
+	agentRequiresUpgrade := agent && !featureDisabled(flags, "managed-system-upgrade-controller")
+	harvester := !mcm && !agent && !featureDisabled(flags, "harvester") && compareVersionStrings(version, "2.12") >= 0
+	if !mcm && !harvester {
+		return agentRequiresUpgrade, fmt.Sprintf("management disabled, agent requires controller=%t", agentRequiresUpgrade)
 	}
-	if override == "true" || override == "false" {
-		return override == "true"
-	}
-	value := server.envValue("CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT")
-	if value == "" {
-		raw, err := runKubectl(kubeconfig, "get", "settings.management.cattle.io", "imported-cluster-version-management", "-o", "json")
-		if err == nil {
-			value, _ = parseRancherSettingValue([]byte(raw))
+
+	var cluster struct {
+		Metadata struct{ Annotations map[string]string }
+		Status   struct {
+			Driver, Provider string
+			Version          struct{ GitVersion string }
 		}
 	}
-	return value != "false"
+	raw, err := runKubectl(kubeconfig, "get", "clusters.management.cattle.io", "local", "-o", "json")
+	if err != nil || json.Unmarshal([]byte(raw), &cluster) != nil {
+		return true, "waiting for local cluster status"
+	}
+	driver, kubeVersion := cluster.Status.Driver, cluster.Status.Version.GitVersion
+	detail := fmt.Sprintf("local driver=%q kubernetes=%q", driver, kubeVersion)
+	// Rancher can initially publish "local" or "imported" before it detects
+	// RKE2/K3s from the Kubernetes version and nodes. Keep polling in that state.
+	pendingDriver := driver == "" || ((driver == "local" || driver == "imported") &&
+		(kubeVersion == "" || strings.Contains(kubeVersion, "rke2") || strings.Contains(kubeVersion, "k3s")))
+	managedLocal := mcm && (driver == "rke2" || driver == "k3s")
+	managedHarvester := harvester && driver == "imported" && cluster.Status.Provider == "harvester"
+	if !managedLocal && !managedHarvester {
+		if !pendingDriver || agentRequiresUpgrade {
+			return agentRequiresUpgrade, detail
+		}
+		detail += ", driver detection pending"
+	}
+	value := cluster.Metadata.Annotations["rancher.io/imported-cluster-version-management"]
+	source := "annotation"
+	if value != "true" && value != "false" {
+		source, value = "server environment", server.envValue("CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT")
+		if value == "" {
+			source = "global setting"
+			raw, err := runKubectl(kubeconfig, "get", "settings.management.cattle.io", "imported-cluster-version-management", "-o", "json")
+			if err == nil {
+				value, _ = parseRancherSettingValue([]byte(raw))
+			}
+		}
+	}
+	if value != "true" && value != "false" {
+		return true, detail + ", waiting for version-management policy"
+	}
+	return value == "true", fmt.Sprintf("%s, version management=%s (%s)", detail, value, source)
 }

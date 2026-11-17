@@ -50,11 +50,13 @@ func installSystemKubectlFixture(t *testing.T, deployments []rancherDeployment, 
 case "$*" in
   *"get deployments.apps -A -o json"*) cat "$CHART_FIXTURE/deployments";;
   *"logs "*"-l app=rancher -c rancher --since=90s --tail=300"*) cat "$CHART_FIXTURE/logs";;
-  *"get clusters.management.cattle.io local"*) printf '%s' "$LOCAL_SUC_OVERRIDE";;
-  *"get settings.management.cattle.io imported-cluster-version-management"*) echo '{"default":"true"}';;
+  *"get clusters.management.cattle.io local -o json") cat "$CHART_FIXTURE/cluster";;
+  *"get settings.management.cattle.io imported-cluster-version-management -o json") cat "$CHART_FIXTURE/setting";;
   *) exit 1;;
 esac
 `}
+	files["cluster"] = `{"status":{"driver":"rke2","version":{"gitVersion":"v1.36.6+rke2r1"}}}`
+	files["setting"] = `{"default":"true"}`
 	for name, value := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0700); err != nil {
 			t.Fatal(err)
@@ -101,11 +103,57 @@ func TestRancherSystemReadiness(t *testing.T) {
 			}
 		})
 	}
-	t.Run("version management disabled locally", func(t *testing.T) {
-		t.Setenv("LOCAL_SUC_OVERRIDE", "false")
+}
+
+func TestRancherLocalUpgradeControllerReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name, driver, provider, kubeVersion string
+		annotation, setting, flags          string
+		ready                               bool
+		detail                              string
+	}{
+		{"required on local RKE2", "rke2", "", "v1.36.6+rke2r1", "", "true", "", false, "version management=true (global setting)"},
+		{"required on local K3s", "k3s", "", "v1.35.1+k3s1", "true", "false", "", false, "version management=true (annotation)"},
+		{"disabled locally", "rke2", "", "", "false", "true", "", true, "version management=false (annotation)"},
+		{"disabled globally", "k3s", "", "", "system-default", "false", "", true, "version management=false (global setting)"},
+		{"generic local Kubernetes", "local", "", "v1.35.1", "", "true", "", true, `driver="local"`},
+		{"imported Harvester local", "imported", "harvester", "v1.35.1", "", "true", "multi-cluster-management=false", false, "version management=true"},
+		{"imported other provider", "imported", "other", "v1.35.1", "", "true", "", true, `driver="imported"`},
+		{"driver not yet reported", "", "", "", "", "true", "", false, `driver=""`},
+		{"local before RKE2 detection", "local", "", "v1.36.6+rke2r1", "", "true", "", false, "driver detection pending"},
+		{"version not yet reported", "local", "", "", "", "true", "", false, `kubernetes=""`},
+		{"setting not yet available", "rke2", "", "", "", "", "", false, "waiting for version-management policy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := readyDeploymentsFixture()[:4]
+			d[0].Spec.Template.Spec.Containers[0] = systemChartContainer{Name: "rancher", Image: "rancher/rancher:v2.15.3", Env: []systemChartEnvVar{{Name: "CATTLE_FEATURES", Value: tc.flags}}}
+			kc := installSystemKubectlFixture(t, d, "")
+			cluster := map[string]any{
+				"metadata": map[string]any{"annotations": map[string]string{"rancher.io/imported-cluster-version-management": tc.annotation}},
+				"status":   map[string]any{"driver": tc.driver, "provider": tc.provider, "version": map[string]string{"gitVersion": tc.kubeVersion}},
+			}
+			for name, fixture := range map[string]any{"cluster": cluster, "setting": map[string]string{"value": tc.setting}} {
+				data, err := json.Marshal(fixture)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(filepath.Dir(kc), name), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ready, summary, err := rancherSystemDeploymentsReady(kc)
+			if err != nil || ready != tc.ready || !strings.Contains(summary, tc.detail) || strings.Contains(summary, upgradeDeployment+" missing") == tc.ready {
+				t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
+			}
+		})
+	}
+	t.Run("unreadable local cluster is retryable", func(t *testing.T) {
 		kc := installSystemKubectlFixture(t, readyDeploymentsFixture()[:4], "")
-		if ready, summary, err := rancherSystemDeploymentsReady(kc); !ready || err != nil {
-			t.Fatalf("%s: %v", summary, err)
+		if err := os.Remove(filepath.Join(filepath.Dir(kc), "cluster")); err != nil {
+			t.Fatal(err)
+		}
+		if ready, summary, err := rancherSystemDeploymentsReady(kc); ready || err != nil || !strings.Contains(summary, "waiting for local cluster status") {
+			t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
 		}
 	})
 }
