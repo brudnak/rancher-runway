@@ -2102,3 +2102,49 @@ body[data-workspace] #panelTabs{background:var(--runway-card);isolation:isolate}
 .rancher-token-generator .rancher-password-sources button[aria-pressed=true]{border-color:var(--runway-accent);box-shadow:inset 0 0 0 1px var(--runway-accent);background:color-mix(in srgb,var(--runway-accent) 9%,var(--runway-card));color:var(--runway-ink)}
 .rancher-password-sources .hl-icon{color:var(--runway-accent)}
 @media(max-width:640px){.rancher-password-sources{grid-template-columns:1fr}}
+
+#interactiveSetupRoot .setup-find-build {
+  justify-self: start;
+  color: var(--runway-accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+#setupBuildPicker {
+  width: min(56rem, calc(100% - 2rem));
+  max-height: 85vh;
+  margin: auto;
+  padding: 1.5rem;
+  overflow: auto;
+  color: var(--runway-ink);
+  background: var(--runway-card);
+  border: 1px solid var(--runway-border);
+  border-radius: 16px;
+}
+#setupBuildPicker::backdrop { background: rgb(10 16 22 / 60%); }
+#setupBuildPicker input, #setupBuildPicker button {
+  padding: .45rem .75rem;
+  border: 1px solid var(--runway-control);
+  border-radius: 8px;
+  background: var(--runway-raised);
+  color: var(--runway-ink);
+}
+#setupBuildPicker [data-builds] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: .75rem;
+}
+#setupBuildPicker article {
+  padding: 1rem;
+  border: 1px solid var(--runway-border);
+  border-radius: 10px;
+  overflow-wrap: anywhere;
+}
+#setupBuildPicker h3, #setupBuildPicker h4 { font-weight: 650; }
+#setupBuildPicker h4, #setupBuildPicker p, #setupBuildPicker details, #setupBuildPicker [data-more] { margin-block: .75rem; }
+#setupBuildPicker article, #setupBuildPicker summary, #setupBuildPicker li { font-size: 13px; }
+#setupBuildPicker code, #setupBuildPicker p, #setupBuildPicker dt { color: var(--runway-muted); }
+#setupBuildPicker summary { cursor: pointer; }
+.setup-build-facts { display: grid; gap: .25rem; margin-top: .5rem; }
+.setup-build-facts > div { display: grid; grid-template-columns: minmax(6rem, 2fr) minmax(0, 3fr); gap: .5rem; }
+.setup-build-facts dd { font-family: ui-monospace, monospace; }
+#setupBuildPicker [data-evidence] button { color: var(--runway-accent); font-weight: 600; }

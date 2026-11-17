@@ -8,6 +8,9 @@ var InteractiveSetupHTML string
 //go:embed static/interactive_setup.js
 var InteractiveSetupJS string
 
+//go:embed static/setup_build_picker.js
+var SetupBuildPickerJS string
+
 //go:embed templates/control_panel.html
 var ControlPanelHTML string
 

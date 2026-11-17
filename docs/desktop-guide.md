@@ -97,6 +97,15 @@ Registry overrides and GPU options expand when needed; validation opens and
 focuses the relevant field. The progress rail follows configuration, resolution,
 and final approval. Setup and the labs share the same light/dark design tokens.
 
+In **From a version**, choose **Find builds** on a Rancher row. Search
+`2.17-head` for a minor line or `2.16.0-head` for a single patch. Each result
+shows the registry, build time in UTC, and system chart versions. Expand
+**Hashes and catalog evidence** for the image digest, source commits, and
+versions in the pinned chart index when available. **Use this build** fills
+that row with the selected image. **Use moving tag** identifies aliases that
+can change before plan resolution. Linode uses the selected repository for
+all Docker rows.
+
 Import accepts a single `.yml` or `.yaml` file up to 1 MB, including partial
 Runway configs. Invalid YAML and unrelated files are rejected without changing
 settings. It is unavailable during plan resolution or a running operation.

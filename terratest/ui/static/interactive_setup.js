@@ -1519,6 +1519,43 @@ const renderDeploymentType = () => {
   setPanelLifecycleState(panelLifecycleDetail)
 }
 
+rowsEl.addEventListener('click', async event => {
+  const button = event.target.closest('button[data-find-build]')
+  if (!button || button.disabled) return
+  const index = Number(button.dataset.findBuild)
+  const dialog = byId('setupBuildPicker')
+  const docker = isLinodeDockerDeployment()
+  const label = autoRowLabel(index)
+  const params = new URLSearchParams({ token })
+  try {
+    const { pickRancherBuild } = await import(setupEndpoint(`/static/setup_build_picker.js?${params}`))
+    if (!button.isConnected || button.disabled || dialog.open) return
+    const reference = await pickRancherBuild(dialog, {
+      endpoint: setupEndpoint('/api/rancher-builds'), token, docker, label, version: versions[index], escapeHtml
+    })
+    if (!reference || !button.isConnected || button.disabled || setupRootEl.dataset.phase !== 'editor') return
+    if (docker) {
+      const separator = reference.lastIndexOf(':')
+      versions[index] = reference.slice(separator + 1)
+      linodeDockerHubSelectEl.value = linodeDockerHubSelectValue(reference.slice(0, separator))
+      linodeDockerHubSelectEl.dispatchEvent(new Event('change', { bubbles: true }))
+      linodeImageSearchResults = []
+      linodeImageSearchError = ''
+      linodeImageSearchTag = ''
+      renderLinodeImageSearch()
+    } else {
+      versions[index] = reference
+    }
+    saveDeploymentVersions()
+    clearValidationError()
+    renderRows()
+    renderSetupChecklist()
+    rowsEl.querySelector(`button[data-find-build="${index}"]`)?.focus()
+  } catch (error) {
+    editorErrorBoxEl.textContent = `Could not open Rancher build lookup. ${error.message}`
+  }
+})
+
 const renderRows = () => {
 	ensureDeploymentCompatibleRows()
   if (singleHARunLocked() && versions.length !== 1) {
@@ -1548,6 +1585,7 @@ const renderRows = () => {
 			`<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
 			'<div class="grid gap-2">',
 			`<input class="${inputClass}" type="text" name="versions" aria-label="${escapeHtml(label)} version or image" autocapitalize="off" autocorrect="off" spellcheck="false" value="${escapeHtml(version)}" data-index="${index}" placeholder="${versionPlaceholder}" />`,
+			`<button class="setup-find-build" type="button" data-find-build="${index}" aria-haspopup="dialog" aria-label="Find builds for ${escapeHtml(label)}">Find builds</button>`,
 			agentControls,
 			downstreamLinodeControls,
 			'</div>',
@@ -2867,6 +2905,8 @@ const resetEmbeddedSetupFlow = () => {
 const setSubmittingState = nextSubmitting => {
   submitting = nextSubmitting
   const actionDisabled = nextSubmitting || panelBooting || panelLifecycleBusy || configImportBusy || configImportSaved
+  rowsEl.querySelectorAll('button[data-find-build]').forEach(button => { button.disabled = actionDisabled })
+  if (actionDisabled && byId('setupBuildPicker')?.open) byId('setupBuildPicker').close()
   for (const id of ['importConfigButton', 'applyConfigImport']) {
     const button = byId(id)
     if (button) button.disabled = actionDisabled

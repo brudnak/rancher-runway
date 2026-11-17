@@ -3,10 +3,12 @@ package test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -34,8 +36,8 @@ func TestWebhookOverrideWaitsForDiscovery(t *testing.T) {
 				t.Fatalf("unexpected discovered target: %#v", target)
 			}
 			calls := readWebhookDiscoveryCalls(t, logPath)
-			if len(calls) != tc.wantAttempts+2 {
-				t.Fatalf("expected %d discoveries followed by image update and rollout, got %q", tc.wantAttempts, calls)
+			if len(calls) != tc.wantAttempts+3 {
+				t.Fatalf("expected %d discoveries followed by image update, rollout and image verification, got %q", tc.wantAttempts, calls)
 			}
 			for _, call := range calls[:tc.wantAttempts] {
 				if call != "get deployments -A -o json" {
@@ -70,7 +72,7 @@ func TestWebhookOverrideDiscoveryTimeoutCollectsDiagnosticsWithoutMutation(t *te
 		t.Fatalf("expected discovery before diagnostics, got %q", calls)
 	}
 	for _, call := range calls {
-		if strings.HasPrefix(call, "set ") || strings.HasPrefix(call, "rollout ") {
+		if strings.HasPrefix(call, "set ") || strings.HasPrefix(call, "patch ") || strings.HasPrefix(call, "rollout ") {
 			t.Fatalf("missing deployment must not be mutated: %q", calls)
 		}
 	}
@@ -83,6 +85,96 @@ func TestWebhookOverrideDiscoveryTimeoutCollectsDiagnosticsWithoutMutation(t *te
 		if got := calls[len(calls)-len(wantDiagnostics)+i]; got != want {
 			t.Fatalf("timeout diagnostics = %q, want final commands %q", calls, wantDiagnostics)
 		}
+	}
+}
+
+func TestWebhookOverrideLegacyServingCertificate(t *testing.T) {
+	const candidate = "stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rc.17"
+	for _, scope := range []string{"local", "downstream"} {
+		t.Run(scope, func(t *testing.T) {
+			logPath := installWebhookDiscoveryKubectlFixture(t, "delayed-keypair")
+			t.Setenv("WEBHOOK_FIXTURE_IMAGE", candidate)
+			// The previous chart can already have a client CA and injected sidecar volumes.
+			t.Setenv("WEBHOOK_FIXTURE_DEPLOYMENT", `{"items":[{"metadata":{"name":"rancher-webhook","namespace":"cattle-system"},"spec":{"template":{"spec":{"volumes":[{"name":"runway-webhook-tls","emptyDir":{}},{"name":"client-ca","secret":{"secretName":"client-ca"}}],"containers":[{"name":"proxy","image":"example.com/proxy:v1"},{"name":"rancher-webhook","image":"registry.rancher.com/rancher/rancher-webhook:v0.11.4","volumeMounts":[{"name":"client-ca","mountPath":"/tmp/k8s-webhook-server/client-ca"}]}]}}}}]}`)
+			namespace := ""
+			if scope == "local" {
+				namespace = "cattle-system"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, err := overrideWebhookDeploymentWithDiscovery(ctx, 1, scope, scope, "/tmp/downstream.yaml", namespace, candidate, time.Millisecond)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := readWebhookDiscoveryCalls(t, logPath)
+			if len(calls) != 7 || calls[0] != calls[2] || !strings.HasPrefix(calls[1], "get secret cattle-webhook-tls -n cattle-system ") || calls[1] != calls[3] {
+				t.Fatalf("expected two discoveries and two keypair checks before the mutation: %q", calls)
+			}
+			payload, ok := strings.CutPrefix(calls[4], "patch deployment/rancher-webhook -n cattle-system --type=strategic -p ")
+			if !ok || !strings.HasPrefix(calls[5], "rollout status ") || !strings.Contains(calls[6], "jsonpath=") {
+				t.Fatalf("expected one patch followed by rollout and image verification: %q", calls)
+			}
+			const want = `{"spec":{"template":{"spec":{
+				"containers":[{"name":"rancher-webhook","image":"stgregistry.suse.com/rancher/rancher-webhook:v0.12.1-rc.17","volumeMounts":[{"name":"runway-webhook-tls-2","mountPath":"/tmp/k8s-webhook-server/serving-certs","readOnly":true}]}],
+				"volumes":[{"name":"runway-webhook-tls-2","secret":{"secretName":"cattle-webhook-tls","items":[{"key":"tls.crt","path":"tls.crt"},{"key":"tls.key","path":"tls.key"}]}}]
+			}}}}`
+			var gotPatch, wantPatch any
+			if err := json.Unmarshal([]byte(payload), &gotPatch); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(want), &wantPatch); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(gotPatch, wantPatch) {
+				t.Fatalf("unexpected strategic patch: %s", payload)
+			}
+		})
+	}
+}
+
+func TestWebhookOverridePreservesExistingCertSetup(t *testing.T) {
+	for _, tc := range []struct{ tag, config string }{
+		{"v0.12.1-rc.5", ""},
+		{"v0.11.4", ""},
+		{"v0.12.1-rc.6", `,"volumeMounts":[{"name":"tls","mountPath":"/tmp/k8s-webhook-server/serving-certs"}]`},
+		{"v0.12.1", `,"env":[{"name":"CATTLE_WEBHOOK_CERT_DIR","value":"/custom/certs"}]`},
+	} {
+		t.Run(tc.tag, func(t *testing.T) {
+			logPath := installWebhookDiscoveryKubectlFixture(t, "ok")
+			image := "registry.example/rancher-webhook:" + tc.tag
+			t.Setenv("WEBHOOK_FIXTURE_IMAGE", image)
+			t.Setenv("WEBHOOK_FIXTURE_DEPLOYMENT", `{"items":[{"metadata":{"name":"rancher-webhook","namespace":"cattle-system"},"spec":{"template":{"spec":{"containers":[{"name":"rancher-webhook","image":"previous"`+tc.config+`}]}}}}]}`)
+			if _, err := overrideWebhookDeploymentWithDiscovery(context.Background(), 1, "local", "local", "/tmp/downstream.yaml", "cattle-system", image, time.Millisecond); err != nil {
+				t.Fatal(err)
+			}
+			if calls := readWebhookDiscoveryCalls(t, logPath); len(calls) != 4 || !strings.HasPrefix(calls[1], "set image ") {
+				t.Fatalf("expected image-only update: %q", calls)
+			}
+		})
+	}
+}
+
+func TestWebhookOverrideRequiresServingKeypairBeforeMutation(t *testing.T) {
+	logPath := installWebhookDiscoveryKubectlFixture(t, "no-keypair")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := overrideWebhookDeploymentWithDiscovery(ctx, 1, "downstream", "slow-cluster", "/tmp/downstream.yaml", "", "registry.example/rancher-webhook:v0.12.1-rc.6", 2*time.Second)
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "Secret cattle-system/cattle-webhook-tls with tls.crt and tls.key") {
+		t.Fatalf("expected missing keypair diagnostic: %v", err)
+	}
+	for _, call := range readWebhookDiscoveryCalls(t, logPath) {
+		if !strings.HasPrefix(call, "get ") {
+			t.Fatalf("unexpected mutation while waiting for keypair: %q", call)
+		}
+	}
+}
+
+func TestWebhookOverrideRejectsReconciledImage(t *testing.T) {
+	installWebhookDiscoveryKubectlFixture(t, "ok")
+	t.Setenv("WEBHOOK_FIXTURE_IMAGE", "registry.example/rancher-webhook:previous")
+	_, err := overrideWebhookDeploymentWithDiscovery(context.Background(), 1, "downstream", "test-cluster", "/tmp/downstream.yaml", "", "registry.example/rancher-webhook:candidate", time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "after rollout") || !strings.Contains(err.Error(), "previous") {
+		t.Fatalf("expected a reconciled candidate to fail verification: %v", err)
 	}
 }
 
@@ -142,6 +234,8 @@ func installWebhookDiscoveryKubectlFixture(t *testing.T, mode string) string {
 	t.Setenv("WEBHOOK_FIXTURE_MODE", mode)
 	t.Setenv("WEBHOOK_FIXTURE_LOG", logPath)
 	t.Setenv("WEBHOOK_FIXTURE_COUNT", filepath.Join(root, "count"))
+	t.Setenv("WEBHOOK_FIXTURE_IMAGE", "registry.example/rancher-webhook:candidate")
+	t.Setenv("WEBHOOK_FIXTURE_DEPLOYMENT", `{"items":[{"metadata":{"name":"rancher-webhook","namespace":"cattle-system"},"spec":{"template":{"spec":{"containers":[{"name":"rancher-webhook","image":"registry.example/rancher-webhook:previous"}]}}}}]}`)
 	script := `#!/bin/sh
 set -eu
 [ "$1" = --kubeconfig ] && [ "$2" = /tmp/downstream.yaml ]
@@ -153,7 +247,7 @@ if [ "${1:-}" = --request-timeout=20s ]; then
 fi
 printf '%s\n' "$*" >> "$WEBHOOK_FIXTURE_LOG"
 case "$*" in
-  "get deployments -A -o json")
+  "get deployments -A -o json"|"get deployments -n cattle-system -o json")
     [ "$request_timeout" = bounded ]
     count=0
     if [ -f "$WEBHOOK_FIXTURE_COUNT" ]; then count=$(cat "$WEBHOOK_FIXTURE_COUNT"); fi
@@ -170,9 +264,21 @@ case "$*" in
         ;;
       warning) echo 'Warning: use TokenRequest API tokens' >&2 ;;
     esac
-    printf '%s\n' '{"items":[{"metadata":{"name":"rancher-webhook","namespace":"cattle-system"},"spec":{"template":{"spec":{"containers":[{"name":"rancher-webhook","image":"registry.example/rancher-webhook:previous"}]}}}}]}'
+    printf '%s\n' "$WEBHOOK_FIXTURE_DEPLOYMENT"
     ;;
-  "set image "*|"rollout status "*)
+  "get secret cattle-webhook-tls -n cattle-system --ignore-not-found -o go-template="*)
+    [ "$request_timeout" = bounded ]
+    case "$WEBHOOK_FIXTURE_MODE" in
+      no-keypair) exit 0 ;;
+      delayed-keypair) if [ "$(cat "$WEBHOOK_FIXTURE_COUNT")" -eq 1 ]; then exit 0; fi ;;
+    esac
+    echo ready
+    ;;
+  'get deployment/rancher-webhook -n cattle-system -o jsonpath={.spec.template.spec.containers[?(@.name=="rancher-webhook")].image}')
+    [ "$request_timeout" = bounded ]
+    echo "$WEBHOOK_FIXTURE_IMAGE"
+    ;;
+  "set image "*|"patch "*|"rollout status "*)
     [ "$WEBHOOK_FIXTURE_MODE" != missing ]
     if [ "$WEBHOOK_FIXTURE_MODE" = rollout-failure ] && [ "$1" = rollout ]; then exit 1; fi
     ;;

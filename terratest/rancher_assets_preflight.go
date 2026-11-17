@@ -95,7 +95,7 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 	if err != nil {
 		return "Inconclusive: could not inspect " + assets, nil
 	}
-	revision := cmp.Or(bundle.Config.Labels["io.rancher.charts.commit"], imageEnvironment(bundle.Config.Env)["CHART_COMMIT"])
+	revision := rancherChartsRevision(bundle.Config)
 	if !imagelookup.GitRevisionPattern.MatchString(revision) {
 		return "Inconclusive: " + assets + " has no pinned rancher/charts revision", nil
 	}
@@ -112,6 +112,37 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 			env[e.Name] = e.Value
 		}
 	}
+	pins := rancherSystemChartPins(ctx, image, env, images, catalog)
+	index, err := readSystemChartIndex(ctx, revision, catalog)
+	if err != nil {
+		return fmt.Sprintf("Inconclusive: %s for %s", err, assets), nil
+	}
+	var missing, unknown, verified []string
+	for chart, version := range pins {
+		if version == "" {
+			unknown = append(unknown, chart)
+			continue
+		}
+		pin := chart + "@" + version
+		if index.contains(chart, version) {
+			verified = append(verified, pin)
+		} else {
+			missing = append(missing, pin)
+		}
+	}
+	slices.Sort(missing)
+	slices.Sort(unknown)
+	slices.Sort(verified)
+	if len(missing) > 0 {
+		return "", fmt.Errorf("%s requires %s, missing from %s (rancher/charts %s). Select a Rancher build or assets image containing these chart versions", server.Image, strings.Join(missing, ", "), assets, revision)
+	}
+	if len(unknown) > 0 {
+		return fmt.Sprintf("Inconclusive for %s: version pins unavailable for %s", server.Image, strings.Join(unknown, ", ")), nil
+	}
+	return fmt.Sprintf("Verified %s in %s (rancher/charts %s)", strings.Join(verified, ", "), assets, revision), nil
+}
+
+func rancherSystemChartPins(ctx context.Context, image imagelookup.InspectResponse, env map[string]string, images systemChartImageLookup, catalog *helmLabCatalogService) map[string]string {
 	pins := map[string]string{
 		"rancher-webhook": env["CATTLE_RANCHER_WEBHOOK_VERSION"],
 	}
@@ -138,41 +169,32 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 	if env["CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT"] != "false" {
 		pins["system-upgrade-controller"] = env["CATTLE_SYSTEM_UPGRADE_CONTROLLER_CHART_VERSION"]
 	}
+	return pins
+}
 
+func rancherChartsRevision(config imagelookup.ImageConfig) string {
+	return cmp.Or(config.Labels["io.rancher.charts.commit"], imageEnvironment(config.Env)["CHART_COMMIT"])
+}
+
+type systemChartIndex map[string][]struct{ Version string }
+
+func (index systemChartIndex) contains(chart, version string) bool {
+	return slices.ContainsFunc(index[chart], func(entry struct{ Version string }) bool { return entry.Version == version })
+}
+
+func readSystemChartIndex(ctx context.Context, revision string, catalog *helmLabCatalogService) (systemChartIndex, error) {
 	data, err := catalog.fetch(ctx, "https://raw.githubusercontent.com/rancher/charts/"+revision+"/index.yaml", 32<<20, false)
 	if err != nil {
-		return fmt.Sprintf("Inconclusive: could not read rancher/charts index at %s for %s", revision, assets), nil
+		return nil, fmt.Errorf("could not read rancher/charts index at %s", revision)
 	}
 	var index struct {
 		APIVersion string `yaml:"apiVersion"`
-		Entries    map[string][]struct{ Version string }
+		Entries    systemChartIndex
 	}
 	if yaml.Unmarshal(data, &index) != nil || index.APIVersion != "v1" || len(index.Entries) == 0 {
-		return "Inconclusive: invalid rancher/charts index at " + revision, nil
+		return nil, fmt.Errorf("invalid rancher/charts index at %s", revision)
 	}
-	var missing, unknown, verified []string
-	for chart, version := range pins {
-		if version == "" {
-			unknown = append(unknown, chart)
-			continue
-		}
-		pin := chart + "@" + version
-		if slices.ContainsFunc(index.Entries[chart], func(entry struct{ Version string }) bool { return entry.Version == version }) {
-			verified = append(verified, pin)
-		} else {
-			missing = append(missing, pin)
-		}
-	}
-	slices.Sort(missing)
-	slices.Sort(unknown)
-	slices.Sort(verified)
-	if len(missing) > 0 {
-		return "", fmt.Errorf("%s requires %s, missing from %s (rancher/charts %s). Select a Rancher build or assets image containing these chart versions", server.Image, strings.Join(missing, ", "), assets, revision)
-	}
-	if len(unknown) > 0 {
-		return fmt.Sprintf("Inconclusive for %s: version pins unavailable for %s", server.Image, strings.Join(unknown, ", ")), nil
-	}
-	return fmt.Sprintf("Verified %s in %s (rancher/charts %s)", strings.Join(verified, ", "), assets, revision), nil
+	return index.Entries, nil
 }
 
 // Public build metadata works on CI runners without a GitHub CLI login. For

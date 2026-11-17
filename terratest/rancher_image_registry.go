@@ -380,7 +380,7 @@ func listRancherImageTags(ctx context.Context, registry, repository string) ([]s
 	if err != nil {
 		return nil, err
 	}
-	tags, err := remote.List(parsed, remote.WithContext(ctx), remote.WithAuth(authn.Anonymous))
+	tags, err := remote.List(parsed, remote.WithContext(ctx), remote.WithAuthFromKeychain(preferredRancherImageKeychain{}))
 	var registryErr *transport.Error
 	if errors.As(err, &registryErr) && registryErr.StatusCode == http.StatusNotFound {
 		return nil, nil

@@ -152,12 +152,14 @@ func normalizeRKE2VersionInput(value string) (string, error) {
 	return version, nil
 }
 
-func classifyRancherVersion(version string) (buildType string, minorLine string, err error) {
-	headPattern := regexp.MustCompile(`^\d+\.\d+-head$`)
-	alphaPattern := regexp.MustCompile(`^\d+\.\d+\.\d+-alpha\d+$`)
-	rcPattern := regexp.MustCompile(`^\d+\.\d+\.\d+-rc\d+$`)
-	releasePattern := regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+var (
+	headPattern    = regexp.MustCompile(`^\d+\.\d+-head$`)
+	alphaPattern   = regexp.MustCompile(`^\d+\.\d+\.\d+-alpha\d+$`)
+	rcPattern      = regexp.MustCompile(`^\d+\.\d+\.\d+-rc\d+$`)
+	releasePattern = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+)
 
+func classifyRancherVersion(version string) (buildType string, minorLine string, err error) {
 	switch {
 	case version == "head":
 		return "head", "", nil

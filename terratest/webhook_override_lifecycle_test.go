@@ -8,13 +8,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/imagelookup"
 	"github.com/spf13/viper"
+	"golang.org/x/mod/semver"
 )
+
+const (
+	webhookServingCertDir = "/tmp/k8s-webhook-server/serving-certs"
+	webhookTLSSecret      = "cattle-webhook-tls"
+)
+
+type webhookContainer struct {
+	Name         string                       `json:"name"`
+	Image        string                       `json:"image"`
+	VolumeMounts []struct{ MountPath string } `json:"volumeMounts"`
+	Env          []struct{ Name string }      `json:"env"`
+}
+
+type webhookVolume struct{ Name string }
 
 type webhookDeploymentList struct {
 	Items []struct {
@@ -25,10 +42,8 @@ type webhookDeploymentList struct {
 		Spec struct {
 			Template struct {
 				Spec struct {
-					Containers []struct {
-						Name  string `json:"name"`
-						Image string `json:"image"`
-					} `json:"containers"`
+					Containers []webhookContainer `json:"containers"`
+					Volumes    []webhookVolume    `json:"volumes"`
 				} `json:"spec"`
 			} `json:"template"`
 		} `json:"spec"`
@@ -40,6 +55,8 @@ type webhookDeploymentTarget struct {
 	DeploymentName string
 	ContainerName  string
 	CurrentImage   string
+	// Empty when the webhook already has a serving mount or configures its own cert directory.
+	ServingVolumeToAdd string
 }
 
 func TestHAOverrideLocalWebhook(t *testing.T) {
@@ -433,7 +450,13 @@ func overrideWebhookDeployment(instanceNum int, scope, clusterName, kubeconfigPa
 
 func overrideWebhookDeploymentWithDiscovery(ctx context.Context, instanceNum int, scope, clusterName, kubeconfigPath, namespace, webhookImage string, interval time.Duration) (webhookDeploymentTarget, error) {
 	logPrefix := fmt.Sprintf("[webhook][ha-%d][%s:%s]", instanceNum, scope, clusterName)
-	target, err := waitForWebhookDeployment(ctx, kubeconfigPath, namespace, interval, logPrefix)
+	_, _, tag, err := imagelookup.ParseRegistryImage(webhookImage)
+	if err != nil {
+		return webhookDeploymentTarget{}, err
+	}
+	// v0.12.1-rc.6 switched from dynamiclistener to reading the serving keypair from disk.
+	needsServingCert := semver.Compare("v"+strings.TrimPrefix(tag, "v"), "v0.12.1-rc.6") >= 0
+	target, err := waitForWebhookDeployment(ctx, kubeconfigPath, namespace, interval, logPrefix, needsServingCert)
 	if err != nil {
 		logWebhookDiscoveryDiagnostics(kubeconfigPath, logPrefix)
 		return webhookDeploymentTarget{}, fmt.Errorf("HA %d %s cluster %s webhook discovery failed: %w", instanceNum, scope, clusterName, err)
@@ -447,7 +470,17 @@ func overrideWebhookDeploymentWithDiscovery(ctx context.Context, instanceNum int
 
 	log.Printf("[webhook][ha-%d][%s:%s] Overriding %s/%s container %s image from %s to %s",
 		instanceNum, scope, clusterName, target.Namespace, target.DeploymentName, target.ContainerName, target.CurrentImage, webhookImage)
-	if err := runKubectlDirect(kubeconfigPath, "set", "image", "deployment/"+target.DeploymentName, target.ContainerName+"="+webhookImage, "-n", target.Namespace); err != nil {
+	deploy := "deployment/" + target.DeploymentName
+	args := []string{"set", "image", deploy, target.ContainerName + "=" + webhookImage, "-n", target.Namespace}
+	if needsServingCert && target.ServingVolumeToAdd != "" {
+		patch, err := webhookServingCertPatch(target, webhookImage)
+		if err != nil {
+			return webhookDeploymentTarget{}, err
+		}
+		log.Printf("%s Mounting %s/%s at %s for %s", logPrefix, target.Namespace, webhookTLSSecret, webhookServingCertDir, target.ContainerName)
+		args = []string{"patch", deploy, "-n", target.Namespace, "--type=strategic", "-p", string(patch)}
+	}
+	if err := runKubectlDirect(kubeconfigPath, args...); err != nil {
 		return webhookDeploymentTarget{}, err
 	}
 	if err := runKubectlDirect(kubeconfigPath, "rollout", "status", "deployment/"+target.DeploymentName, "-n", target.Namespace, "--timeout=10m"); err != nil {
@@ -455,8 +488,42 @@ func overrideWebhookDeploymentWithDiscovery(ctx context.Context, instanceNum int
 		return webhookDeploymentTarget{}, fmt.Errorf("HA %d %s cluster %s: rollout of %s/%s to %s failed: %w", instanceNum, scope, clusterName, target.Namespace, target.DeploymentName, webhookImage, err)
 	}
 
+	// Rancher owns this Deployment. A rollout of its reconciled image must
+	// not count as a successful rollout of the candidate.
+	imagePath := fmt.Sprintf(`jsonpath={.spec.template.spec.containers[?(@.name=="%s")].image}`, target.ContainerName)
+	image, err := runWebhookDiscoveryKubectlOutput(context.Background(), kubeconfigPath, "get", deploy, "-n", target.Namespace, "-o", imagePath)
+	if err != nil {
+		return webhookDeploymentTarget{}, err
+	}
+	observed := target
+	observed.CurrentImage = image
+	if err := webhookDeploymentImageMatches(observed, webhookImage); err != nil {
+		return webhookDeploymentTarget{}, fmt.Errorf("HA %d %s cluster %s after rollout: %w", instanceNum, scope, clusterName, err)
+	}
+
 	log.Printf("[webhook][ha-%d][%s:%s] rancher-webhook rollout completed", instanceNum, scope, clusterName)
 	return target, nil
+}
+
+// Include the image in the same pod-template update as its required mount so
+// the Deployment creates only one new ReplicaSet. Strategic merge preserves sidecars and client CA mounts.
+func webhookServingCertPatch(target webhookDeploymentTarget, image string) ([]byte, error) {
+	volume := map[string]any{
+		"name": target.ServingVolumeToAdd,
+		"secret": map[string]any{
+			"secretName": webhookTLSSecret,
+			"items": []map[string]string{
+				{"key": "tls.crt", "path": "tls.crt"},
+				{"key": "tls.key", "path": "tls.key"},
+			},
+		},
+	}
+	container := map[string]any{
+		"name": target.ContainerName, "image": image,
+		"volumeMounts": []map[string]any{{"name": target.ServingVolumeToAdd, "mountPath": webhookServingCertDir, "readOnly": true}},
+	}
+	pod := map[string]any{"volumes": []any{volume}, "containers": []any{container}}
+	return json.Marshal(map[string]any{"spec": map[string]any{"template": map[string]any{"spec": pod}}})
 }
 
 func discoverLocalWebhookDeployment(kubeconfigPath string) (webhookDeploymentTarget, error) {
@@ -492,11 +559,17 @@ func selectWebhookDeployment(data []byte, fallbackNamespace string) (webhookDepl
 		return webhookDeploymentTarget{}, fmt.Errorf("failed to parse deployments: %w", err)
 	}
 	for _, deployment := range deployments.Items {
-		for _, container := range deployment.Spec.Template.Spec.Containers {
+		pod := deployment.Spec.Template.Spec
+		containers := pod.Containers
+		// An injected sidecar's name or image can also mention rancher-webhook.
+		if i := slices.IndexFunc(containers, func(c webhookContainer) bool { return c.Name == "rancher-webhook" }); i >= 0 {
+			containers = containers[i : i+1]
+		}
+		for _, container := range containers {
 			deploymentName := strings.ToLower(deployment.Metadata.Name)
 			containerName := strings.ToLower(container.Name)
 			image := strings.ToLower(container.Image)
-			if strings.Contains(deploymentName, "rancher-webhook") ||
+			if (len(pod.Containers) == 1 && strings.Contains(deploymentName, "rancher-webhook")) ||
 				strings.Contains(containerName, "rancher-webhook") ||
 				strings.Contains(image, "rancher-webhook") {
 				namespace := deployment.Metadata.Namespace
@@ -504,16 +577,35 @@ func selectWebhookDeployment(data []byte, fallbackNamespace string) (webhookDepl
 					namespace = fallbackNamespace
 				}
 				return webhookDeploymentTarget{
-					Namespace:      namespace,
-					DeploymentName: deployment.Metadata.Name,
-					ContainerName:  container.Name,
-					CurrentImage:   container.Image,
+					Namespace:          namespace,
+					DeploymentName:     deployment.Metadata.Name,
+					ContainerName:      container.Name,
+					CurrentImage:       container.Image,
+					ServingVolumeToAdd: container.newServingVolumeName(pod.Volumes),
 				}, nil
 			}
 		}
 	}
 
 	return webhookDeploymentTarget{}, fmt.Errorf("could not find a deployment/container/image matching rancher-webhook")
+}
+
+func (container webhookContainer) newServingVolumeName(volumes []webhookVolume) string {
+	for _, mount := range container.VolumeMounts {
+		if strings.TrimRight(mount.MountPath, "/") == webhookServingCertDir {
+			return ""
+		}
+	}
+	for _, env := range container.Env {
+		if env.Name == "CATTLE_WEBHOOK_CERT_DIR" {
+			return ""
+		}
+	}
+	name := "runway-webhook-tls"
+	for n := 2; slices.ContainsFunc(volumes, func(v webhookVolume) bool { return v.Name == name }); n++ {
+		name = fmt.Sprintf("runway-webhook-tls-%d", n)
+	}
+	return name
 }
 
 func writeWebhookOverrideRecord(scope string, instanceNum int, clusterName string, target webhookDeploymentTarget, webhookImage string) error {

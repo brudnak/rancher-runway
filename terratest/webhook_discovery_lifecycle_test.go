@@ -11,7 +11,7 @@ import (
 
 // Cluster connectivity can precede Rancher's installation of downstream system
 // charts. Wait for the deployment before attempting to replace its image.
-func waitForWebhookDeployment(ctx context.Context, kubeconfigPath, namespace string, interval time.Duration, logPrefix string) (webhookDeploymentTarget, error) {
+func waitForWebhookDeployment(ctx context.Context, kubeconfigPath, namespace string, interval time.Duration, logPrefix string, needsServingCert bool) (webhookDeploymentTarget, error) {
 	if interval <= 0 {
 		return webhookDeploymentTarget{}, fmt.Errorf("webhook discovery interval must be positive")
 	}
@@ -21,6 +21,16 @@ func waitForWebhookDeployment(ctx context.Context, kubeconfigPath, namespace str
 	for ctx.Err() == nil {
 		attempt++
 		target, err := discoverWebhookDeploymentContext(ctx, kubeconfigPath, namespace)
+		if err == nil && needsServingCert && target.ServingVolumeToAdd != "" {
+			// A freshly connected downstream can have a Deployment before the old
+			// webhook has persisted its keypair. Keep it running until both keys exist.
+			const readyTemplate = `go-template={{with .data}}{{if and (index . "tls.crt") (index . "tls.key")}}ready{{end}}{{end}}`
+			var ready string
+			ready, err = runWebhookDiscoveryKubectlOutput(ctx, kubeconfigPath, "get", "secret", webhookTLSSecret, "-n", target.Namespace, "--ignore-not-found", "-o", readyTemplate)
+			if err == nil && strings.TrimSpace(ready) != "ready" {
+				err = fmt.Errorf("waiting for Secret %s/%s with tls.crt and tls.key before replacing the webhook", target.Namespace, webhookTLSSecret)
+			}
+		}
 		if err == nil && ctx.Err() == nil {
 			return target, nil
 		}
