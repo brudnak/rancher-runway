@@ -81,6 +81,7 @@ type interactiveSetupTemplateData struct {
 type interactiveServer struct {
 	token      string
 	configPath string
+	buildIndex setupBuildIndex
 
 	mu          sync.Mutex
 	configMu    sync.Mutex

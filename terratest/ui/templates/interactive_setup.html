@@ -735,46 +735,42 @@
   </main>
 
   <dialog id="setupBuildPicker" aria-labelledby="setupBuildTitle">
-    <header class="flex items-center justify-between gap-3">
-      <h2 id="setupBuildTitle" class="text-xl font-semibold">Rancher builds</h2>
-      <button type="button" data-close>Close</button>
+    <header class="setup-picker-header">
+      <div><span class="setup-build-kicker">RANCHER RUNWAY</span><h2 id="setupBuildTitle">Find your next Rancher</h2><p data-target></p></div>
+      <button type="button" data-close aria-label="Close build picker">Close</button>
     </header>
-    <p data-target class="setup-field-help"></p>
-    <form class="mt-4">
-      <label for="setupBuildQuery" class="text-sm font-semibold">Search a release, head selector, or exact image tag</label>
-      <div class="mt-1 flex gap-2">
-        <input id="setupBuildQuery" class="min-w-0 flex-1" type="search" placeholder="Latest heads · or enter 2.17, 2.16.0-head…" maxlength="127" spellcheck="false" autocomplete="off" />
-        <button type="submit">Search</button>
+    <div data-browse>
+      <div class="setup-picker-toolbar">
+        <label class="setup-picker-search"><span class="sr-only">Filter builds</span><input data-search type="search" placeholder="Find a line, version, or webhook…" maxlength="127" autocomplete="off" /></label>
+        <label><span class="sr-only">Build dates</span><select data-age><option value="30">Last 30 days</option><option value="7">Last 7 days</option><option value="90">Last 90 days</option><option value="0">All dates</option></select></label>
+        <button type="button" data-refresh>Refresh</button>
       </div>
-    </form>
-    <div class="setup-build-shortcuts" aria-label="Quick searches">
-      <button type="button" data-latest>Latest 2.x.0 heads</button>
-      <button type="button" data-current hidden></button>
-      <span data-heads></span>
+      <div class="setup-picker-view-heading">
+        <button type="button" data-back hidden>← All release lines</button>
+        <h3 data-view-title>Latest reported heads</h3><p data-view-hint></p>
+      </div>
+      <div class="setup-picker-status"><span data-spinner class="setup-build-spinner" aria-hidden="true" hidden></span><p data-status role="status" aria-live="polite"></p></div>
+      <div data-error class="setup-picker-error" role="alert" hidden><p data-error-message></p><button type="button" data-retry>Try again</button></div>
+      <div data-skeleton class="setup-picker-skeleton" aria-hidden="true" hidden><div></div><div></div><div></div></div>
+      <div data-builds aria-label="Rancher builds"></div>
+      <p data-empty class="setup-picker-empty" hidden></p>
+      <button type="button" data-more hidden>Show older builds</button>
+      <details data-warnings class="setup-picker-warnings" hidden><summary>Some release lines could not be loaded</summary><ul></ul></details>
+      <div class="setup-picker-provenance"><p data-index-note></p><a href="https://github.com/brudnak/webhook-ranch-hand" target="_blank" rel="noopener noreferrer">View source ↗</a></div>
+      <details data-direct class="setup-picker-direct">
+        <summary>Have an exact image or need another registry?</summary>
+        <p>Inspect one image directly, including Community builds and moving head tags.</p>
+        <form data-direct-form><label class="sr-only" for="setupDirectImage">Full Rancher image reference</label><input id="setupDirectImage" data-direct-image type="text" required placeholder="stgregistry.suse.com/rancher/rancher-server:v2.17.0-head" spellcheck="false" autocomplete="off" /><button type="submit">Inspect image</button></form>
+      </details>
     </div>
-    <p class="setup-field-help">Latest heads covers the three newest published 2.x.0 release lines. Search a version to include its build history, or <code>2.x.0-head</code> for every .0 head line.</p>
-    <div class="setup-build-filters">
-      <label>Filter results<input data-filter type="search" placeholder="Tag, commit, digest, registry…" /></label>
-      <label>Registry<select data-registry><option value="">All registries</option></select></label>
-      <label>Sort by<select data-sort><option value="newest">Newest built first</option><option value="version">Highest version first</option><option value="oldest">Oldest built first</option></select></label>
-      <label>Built within<select data-age><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="all">All dates (including unknown)</option><option value="custom">Custom dates (UTC)</option></select></label>
+    <div data-review hidden>
+      <button type="button" data-review-back>← Back to builds</button>
+      <div class="setup-picker-review-heading"><span class="setup-build-kicker">REVIEW YOUR BUILD</span><h3 data-review-title></h3><code data-verified-reference></code><a data-report-link target="_blank" rel="noopener noreferrer" hidden>Ranch Hand report ↗</a></div>
+      <div data-detail-loading class="setup-picker-verifying" role="status"><span class="setup-build-spinner" aria-hidden="true"></span><div><strong>Verifying this image</strong><p>Checking its registry, chart versions, and hashes.</p></div></div>
+      <div data-detail-error class="setup-picker-error" role="alert" hidden><p data-detail-error-message></p><button type="button" data-detail-retry>Retry verification</button></div>
+      <div data-evidence></div>
+      <footer class="setup-picker-review-footer"><p>Applies this image to your setup. Plan review comes next.</p><button type="button" data-use disabled>Use this build</button></footer>
     </div>
-    <div data-dates class="setup-build-dates" hidden>
-      <label>Built from (UTC)<input data-from type="date" /></label>
-      <label>Built through (UTC)<input data-to type="date" /></label>
-    </div>
-    <label class="setup-build-latest"><input data-latest-only type="checkbox" checked /> Newest matching build per release line and image repository</label>
-    <p data-filter-error role="alert" hidden></p>
-    <div class="setup-build-search-state">
-      <span data-spinner class="setup-build-spinner" aria-hidden="true" hidden></span>
-      <p data-status role="status" aria-live="polite"></p>
-      <button type="button" data-stop hidden>Stop search</button>
-      <progress data-progress hidden aria-label="Build dates checked"></progress>
-    </div>
-    <details data-warnings hidden><summary>Registry lookup details</summary><ul></ul></details>
-    <p data-empty hidden></p>
-    <div data-builds aria-label="Matching Rancher builds"></div>
-    <button type="button" data-more hidden>Show more builds</button>
   </dialog>
 
   <div id="confirmModal" class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto bg-zinc-950/45 p-4 py-10 backdrop-blur-sm dark:bg-zinc-950/80" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalBody">

@@ -1,94 +1,40 @@
-// Interleave repositories so the first page can compare the same line across registries.
-export function buildReferences(groups) {
-  const references = []
-  const count = Math.max(0, ...groups.map(group => group.tags?.length || 0))
-  for (let i = 0; i < count; i++) {
-    for (const group of groups) {
-      if (group.tags?.[i]) references.push(`${group.registry}/${group.repository}:${group.tags[i]}`)
-    }
-  }
-  return [...new Set(references)]
+// The browse view uses dated Ranch Hand reports. Registry inspection happens
+// only after a person chooses a build to review.
+const indexCache = new Map()
+const indexCacheTTL = 2 * 60 * 1000
+
+export function filterIndexedBuilds(builds, query = '') {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  return builds.filter(build => words.every(word =>
+    [build.line, build.version, build.webhook, build.reference, 'SUSE staging'].join(' ').toLowerCase().includes(word)
+  ))
 }
 
-function versionParts(record) {
-  const tag = record.reference.slice(record.reference.lastIndexOf(':') + 1)
-  const match = String(record.summary?.version || tag).match(/^v?(\d+)\.(\d+)(?:\.(\d+))?/)
-    || tag.match(/^v?(\d+)\.(\d+)(?:\.(\d+))?/)
-  return match ? match.slice(1).map(value => Number(value || 0)) : [0, 0, 0]
+export function buildDateLabel(build, now = Date.now()) {
+  const value = build.created
+  const time = Date.parse(value || '')
+  if (!Number.isFinite(time)) return 'Date unavailable'
+  const day = new Date(time).toISOString().slice(0, 10)
+  const today = new Date(now).toISOString().slice(0, 10)
+  const days = Math.round((Date.parse(today) - Date.parse(day)) / 86400000)
+  if (days === 0) return 'Today'
+  if (days === 1) return 'Yesterday'
+  return days > 1 && days < 8 ? `${days} days ago` : day
 }
 
-function compareVersions(a, b) {
-  const av = versionParts(a), bv = versionParts(b)
-  return bv[0] - av[0] || bv[1] - av[1] || bv[2] - av[2]
-}
-
-const createdTime = record => Date.parse(record.summary?.created || '')
-const displayTime = value => Number.isFinite(Date.parse(value || ''))
-  ? new Date(value).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : 'Build date unavailable'
-
-export function headSelectors(references) {
-  const selectors = [...new Set(references.flatMap(reference => {
-    const match = reference.match(/:v?(2\.\d+\.0)(?:-[a-f0-9]+)?-head$/i)
-    return match ? [match[1] + '-head'] : []
-  }))]
-  return selectors.sort((a, b) => compareVersions({ reference: ':' + a }, { reference: ':' + b }))
-}
-
-// Dates come from image configs, never tag lexicography or registry push times.
-export function selectBuilds(records, { text = '', registry = '', sort = 'newest', age = '30', from = '', to = '', latest = true, now = Date.now() } = {}) {
-  const start = age === 'custom' ? (from ? Date.parse(from + 'T00:00:00Z') : -Infinity)
-    : age === 'all' ? -Infinity : now - Number(age) * 86400000
-  const end = age === 'custom' && to ? Date.parse(to + 'T00:00:00Z') + 86400000 : Infinity
-  const dated = age !== 'all'
-  const words = text.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  let matches = records.filter(record => {
-    if (!record.summary || (registry && !record.reference.startsWith(registry + '/'))) return false
-    const timestamp = createdTime(record)
-    if (dated && (!Number.isFinite(timestamp) || timestamp < start || timestamp >= end)) return false
-    const haystack = [record.reference, record.summary.version, record.summary.revision, record.summary.ossRevision,
-      record.summary.digest, record.summary.created, ...Object.entries(record.details?.charts || {}).flat()].join(' ').toLowerCase()
-    return words.every(word => haystack.includes(word))
-  })
-  const newest = (a, b) => {
-    const at = createdTime(a), bt = createdTime(b)
-    return (Number.isFinite(bt) ? bt : -Infinity) - (Number.isFinite(at) ? at : -Infinity)
-      || compareVersions(a, b) || a.reference.localeCompare(b.reference)
-  }
-  if (latest) {
-    const seen = new Set()
-    matches = matches.sort(newest).filter(record => {
-      const key = record.reference.slice(0, record.reference.lastIndexOf(':')) + ':' + versionParts(record).slice(0, 2).join('.')
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-  }
-  return matches.sort((a, b) => {
-    if (sort === 'version') return compareVersions(a, b) || newest(a, b)
-    if (sort === 'oldest') {
-      const at = createdTime(a), bt = createdTime(b)
-      return (Number.isFinite(at) ? at : Infinity) - (Number.isFinite(bt) ? bt : Infinity) || compareVersions(a, b) || a.reference.localeCompare(b.reference)
-    }
-    return newest(a, b)
-  })
-}
-
-export async function scanBuildSummaries(records, load, { signal, onProgress = () => {}, concurrency = 4 }) {
-  let next = 0, completed = 0
-  await Promise.all(Array.from({ length: Math.min(concurrency, records.length) }, async () => {
-    while (!signal.aborted && next < records.length) {
-      const record = records[next++]
-      try {
-        const summary = await load({ reference: record.reference, summary: '1' }, signal)
-        if (signal.aborted) return
-        record.summary = summary
-      } catch (error) {
-        if (signal.aborted) return
-        record.error = error.message
-      }
-      onProgress(++completed)
-    }
-  }))
+export async function loadBuildIndex(url, signal, refresh = false, fetcher = fetch) {
+  const key = String(url)
+  const cached = indexCache.get(key)
+  if (!refresh && cached && Date.now() - cached.at < indexCacheTTL) return cached.data
+  const target = new URL(url)
+  if (refresh) target.searchParams.set('refresh', '1')
+  const response = await fetcher(target, { signal, credentials: 'same-origin', cache: 'no-store' })
+  if (!response.ok) throw new Error((await response.text()).trim() || 'Could not load the build index.')
+  const data = await response.json()
+  if (signal.aborted) return null
+  if (indexCache.size >= 16) indexCache.delete(indexCache.keys().next().value)
+  indexCache.set(key, { data, at: Date.now() })
+  return data
 }
 
 function buildEvidence(build, escapeHtml) {
@@ -119,219 +65,171 @@ function buildEvidence(build, escapeHtml) {
 }
 
 export function pickRancherBuild(dialog, { endpoint, token, docker, label, version, escapeHtml }) {
-  const query = dialog.querySelector('#setupBuildQuery')
-  const status = dialog.querySelector('[data-status]')
-  const warnings = dialog.querySelector('[data-warnings]')
-  const cards = dialog.querySelector('[data-builds]')
-  const more = dialog.querySelector('[data-more]')
-  const events = new AbortController()
-  const filter = dialog.querySelector('[data-filter]')
-  const registry = dialog.querySelector('[data-registry]')
-  const sort = dialog.querySelector('[data-sort]')
-  const age = dialog.querySelector('[data-age]')
-  const from = dialog.querySelector('[data-from]')
-  const to = dialog.querySelector('[data-to]')
-  const latest = dialog.querySelector('[data-latest-only]')
-  const spinner = dialog.querySelector('[data-spinner]')
-  const stop = dialog.querySelector('[data-stop]')
-  const progress = dialog.querySelector('[data-progress]')
-  const empty = dialog.querySelector('[data-empty]')
-  let state
-  let renderTimer
-  let limit = 12
-  let selection = ''
+  const get = selector => dialog.querySelector(selector)
+  const search = get('[data-search]'), age = get('[data-age]'), list = get('[data-builds]')
+  const browse = get('[data-browse]'), review = get('[data-review]'), status = get('[data-status]')
+  const events = new AbortController(), options = { signal: events.signal }
+  let request, detailRequest, searchTimer, records = [], line = '', nextOffset = 0
+  let result, busy = false, error = '', selected = null, verified = null, selection = ''
+  let returnFocus = null
 
-  const load = async (params, signal) => {
+  const urlFor = params => {
     const url = new URL(endpoint, window.location.href)
     url.search = new URLSearchParams({ ...params, token })
-    const response = await fetch(url, { signal, credentials: 'same-origin', cache: 'no-store' })
-    if (!response.ok) throw new Error((await response.text()).trim() || 'Lookup failed.')
+    return url
+  }
+  const loadDetails = async (params, signal) => {
+    const response = await fetch(urlFor(params), { signal, credentials: 'same-origin', cache: 'no-store' })
+    if (!response.ok) throw new Error((await response.text()).trim() || 'Could not verify this image.')
     return response.json()
   }
-
-  const inspectCard = async (record, evidence, current) => {
-    const signal = current.details.signal
-    evidence.innerHTML = '<p class="setup-build-detail-loading"><span class="setup-build-spinner" aria-hidden="true"></span>Reading chart versions, hashes and catalog evidence…</p>'
-    evidence.setAttribute('aria-busy', 'true')
-    try {
-      const build = record.details || await load({ reference: record.reference }, signal)
-      if (signal.aborted) return
-      record.details = build
-      record.summary = build
-      record.card.querySelector('[data-built]').textContent = displayTime(build.created)
-      record.card.querySelector('[data-version]').textContent = build.version || ''
-      evidence.innerHTML = buildEvidence(build, escapeHtml)
-      const use = document.createElement('button')
-      use.type = 'button'
-      use.textContent = build.moving ? 'Use moving tag' : 'Use this build'
-      if (record.reference !== build.reference) {
-        const pin = document.createElement('p')
-        pin.textContent = 'Matching build tag · ' + build.reference.slice(build.reference.lastIndexOf(':') + 1)
-        evidence.append(pin)
-      }
-      use.addEventListener('click', () => { selection = build.reference; dialog.close() }, { signal })
-      evidence.append(use)
-    } catch (error) {
-      if (signal.aborted) return
-      evidence.textContent = `Could not inspect this build. ${error.message} `
-      const retry = document.createElement('button')
-      retry.type = 'button'
-      retry.textContent = 'Retry details'
-      retry.addEventListener('click', () => inspectCard(record, evidence, current), { signal })
-      evidence.append(retry)
-    } finally {
-      evidence.removeAttribute('aria-busy')
-    }
-  }
-
-  const cardFor = record => {
-    if (record.card) return record.card
-    const { reference, summary } = record
-    const current = state
-    const card = document.createElement('article')
-    const tag = reference.slice(reference.lastIndexOf(':') + 1)
-    const repository = reference.slice(0, reference.lastIndexOf(':'))
-    card.innerHTML = `<h3>${escapeHtml(tag)}</h3><code>${escapeHtml(repository)}</code>
-      <p data-built class="setup-build-date">${escapeHtml(displayTime(summary.created))}</p>
-      <p data-version>${escapeHtml(summary.version || '')}</p>
-      <details data-detail><summary>Chart versions, hashes &amp; select build</summary><div data-evidence></div></details>`
-    const details = card.querySelector('[data-detail]')
-    let started = false
-    details.addEventListener('toggle', () => {
-      if (!details.open || started) return
-      started = true
-      inspectCard(record, card.querySelector('[data-evidence]'), current)
-    }, { signal: current.details.signal })
-    record.card = card
-    return card
-  }
+  const ageText = () => age.value === '0' ? 'all dates' : `last ${age.value} days`
 
   const render = () => {
-    if (!state || events.signal.aborted) return
-    const invalidDates = age.value === 'custom' && from.value && to.value && from.value > to.value
-    const error = dialog.querySelector('[data-filter-error]')
-    error.hidden = !invalidDates
-    error.textContent = invalidDates ? 'The start date must be on or before the end date.' : ''
-    const matches = invalidDates ? [] : selectBuilds(state.records, {
-      text: filter.value, registry: registry.value, sort: sort.value, age: age.value,
-      from: from.value, to: to.value, latest: latest.checked, now: state.now
-    })
-    const active = cards.contains(document.activeElement) ? document.activeElement : null
-    cards.replaceChildren(...matches.slice(0, limit).map(cardFor))
-    if (active?.isConnected) active.focus({ preventScroll: true })
-    more.hidden = matches.length <= limit
-    more.textContent = `Show more builds (${Math.max(0, matches.length - limit)} remaining)`
-    const busy = state.busy
-    spinner.hidden = !busy
-    stop.hidden = !busy
-    cards.setAttribute('aria-busy', String(busy))
-    progress.hidden = !busy || !state.records.length
-    progress.max = Math.max(1, state.records.length)
-    progress.value = state.completed
-    const failures = state.records.filter(record => record.error)
-    const undated = state.records.filter(record => record.summary && !Number.isFinite(createdTime(record))).length
-    const counts = `${matches.length} matching build${matches.length === 1 ? '' : 's'} · ${state.completed}/${state.records.length} build dates checked.`
-    status.textContent = state.error || (state.discovering ? 'Searching Rancher registries for available tags…'
-      : `${busy ? 'Reading image build dates… ' : state.stopped ? 'Search stopped. Partial results. ' : ''}${counts}${busy ? ' Results sort as dates arrive.' : ''}${undated ? ` ${undated} dates unavailable; choose All dates to include them.` : ''}${failures.length ? ` ${failures.length} lookups failed; search again to retry.` : ''}`)
-    empty.hidden = matches.length > 0 || Boolean(state.error) || invalidDates
-    empty.textContent = busy ? 'Matching builds will appear as their dates are verified.'
-      : 'No builds match these filters. Try All dates, another registry, or a specific release line.'
-    const notes = [...state.notes, ...failures.slice(0, 10).map(record => record.reference + ' — ' + record.error)]
-    if (failures.length > 10) notes.push(`${failures.length - 10} more metadata lookups failed.`)
-    warnings.hidden = !notes.length
-    warnings.querySelector('ul').replaceChildren(...notes.map(note => {
-      const li = document.createElement('li'); li.textContent = note; return li
+    if (events.signal.aborted) return
+    const shown = filterIndexedBuilds(records, search.value)
+    get('[data-back]').hidden = !line
+    get('[data-view-title]').textContent = line ? `Rancher ${line} · build history` : 'Latest reported heads'
+    get('[data-view-hint]').textContent = line ? 'Newest builds first. Choose one to inspect its image and charts.' : 'One build per release line. Start with a line, then review its details.'
+    get('[data-spinner]').hidden = !busy
+    get('[data-skeleton]').hidden = !busy || records.length > 0
+    list.setAttribute('aria-busy', String(busy))
+    get('[data-error]').hidden = !error
+    get('[data-error-message]').textContent = error
+    get('[data-empty]').hidden = busy || Boolean(error) || shown.length > 0
+    get('[data-empty]').textContent = search.value.trim() ? 'No matching builds. Clear the filter or choose another date range.' : `No reported builds in the ${ageText()}. Try All dates or inspect an exact image below.`
+    const more = get('[data-more]')
+    more.hidden = !line || !result?.more
+    more.disabled = busy
+    more.textContent = busy && records.length ? 'Loading…' : 'Show older builds'
+    get('[data-refresh]').disabled = busy
+    status.textContent = busy ? (records.length ? 'Updating the build index…' : 'Loading recent builds…')
+      : `${shown.length}${line && result?.total > records.length ? ` of ${result.total}` : ''} ${line ? 'builds' : 'release lines'} · ${ageText()}`
+    get('[data-index-note]').textContent = result?.stale
+      ? 'Using a saved index because its source is unavailable. Refresh to try again.'
+      : 'From Webhook Ranch Hand, checked three times daily. The selected image is verified live.'
+    const warnings = get('[data-warnings]')
+    warnings.hidden = !result?.warnings?.length
+    warnings.querySelector('ul').replaceChildren(...(result?.warnings || []).map(message => {
+      const item = document.createElement('li'); item.textContent = message; return item
+    }))
+    list.replaceChildren(...shown.map(build => {
+      const row = document.createElement('article')
+      row.className = 'setup-build-row'
+      const hash = build.version.match(/-([a-f0-9]{7,40})-head$/i)?.[1]?.slice(0, 7) || ''
+      row.innerHTML = `<div class="setup-build-line"><span class="setup-build-kicker">${line ? 'BUILD' : 'RANCHER'}</span><h3>${escapeHtml(line ? hash : build.line)}</h3><span class="setup-build-source">SUSE staging</span></div>
+        <div class="setup-build-summary"><code title="${escapeHtml(build.version)}">${escapeHtml(build.version)}</code><div class="setup-build-meta"><span title="${escapeHtml(build.created)}">Built ${escapeHtml(buildDateLabel(build))}</span><span>Webhook <strong>${escapeHtml(build.webhook || 'Not reported')}</strong></span></div></div>
+        <div class="setup-build-row-actions"><button type="button" data-review-build>Review build <span aria-hidden="true">→</span></button>${line ? '' : '<button type="button" data-history>Build history</button>'}</div>`
+      const choose = row.querySelector('[data-review-build]')
+      choose.addEventListener('click', () => { returnFocus = choose; showReview(build) })
+      row.querySelector('[data-history]')?.addEventListener('click', () => { line = build.line; search.value = ''; loadIndex() })
+      return row
     }))
   }
 
-  const search = async () => {
-    clearTimeout(renderTimer)
-    renderTimer = undefined
-    state?.request.abort()
-    state?.details.abort()
-    state = { request: new AbortController(), details: new AbortController(), records: [], notes: [], completed: 0, busy: true, discovering: true, now: Date.now() }
-    const current = state
-    const signal = current.request.signal
-    limit = 12
-    warnings.open = false
-    dialog.querySelector('[data-heads]').replaceChildren()
-    dialog.querySelector('[data-latest]').setAttribute('aria-pressed', String(!query.value.trim()))
+  const loadIndex = async ({ refresh = false, more = false } = {}) => {
+    clearTimeout(searchTimer)
+    request?.abort()
+    request = new AbortController()
+    const current = request
+    busy = true; error = ''
+    if (!more) { records = []; result = null; nextOffset = 0 }
     render()
     try {
-      const groups = await load({ version: query.value.trim() || 'latest-heads', docker: docker ? '1' : '0' }, signal)
-      if (signal.aborted) return
-      for (const group of groups) {
-        const source = group.registry + '/' + group.repository
-        if (group.error) current.notes.push(source + ' — ' + group.error)
-      }
-      const references = buildReferences(groups)
-      current.records = references.map(reference => ({ reference }))
-      current.discovering = false
-      const selectedRegistry = registry.value
-      registry.replaceChildren(...['', ...new Set(groups.map(group => group.registry))].map(value => {
-        const option = document.createElement('option'); option.value = value; option.textContent = value || 'All registries'; return option
-      }))
-      registry.value = selectedRegistry
-      for (const selector of headSelectors(references).slice(0, 8)) {
-        const button = document.createElement('button')
-        button.type = 'button'; button.textContent = selector
-        button.addEventListener('click', () => { query.value = selector; search() }, { signal: current.details.signal })
-        dialog.querySelector('[data-heads]').append(button)
-      }
-      if (!references.length && groups.length && groups.every(group => group.error)) current.error = 'Registry lookup failed. Search again to retry.'
-      render()
-      await scanBuildSummaries(current.records, load, { signal, onProgress: completed => {
-        current.completed = completed
-        if (!renderTimer) renderTimer = setTimeout(() => { renderTimer = undefined; render() }, 100)
-      } })
-    } catch (error) {
-      if (!signal.aborted) current.error = error.message
+      const params = { catalog: '1', days: age.value, offset: String(more ? nextOffset : 0) }
+      if (line) { params.line = line; params.q = search.value.trim() }
+      const data = await loadBuildIndex(urlFor(params), current.signal, refresh)
+      if (current.signal.aborted || events.signal.aborted) return
+      records = more ? [...records, ...data.builds] : data.builds
+      result = data; nextOffset = data.nextOffset
+    } catch (cause) {
+      if (!current.signal.aborted) error = `${cause.message} You can retry or inspect an exact image below.`
     } finally {
-      if (state === current) {
-        clearTimeout(renderTimer); renderTimer = undefined
-        current.busy = false; current.discovering = false; render()
-      }
+      if (request === current && !events.signal.aborted) { busy = false; render() }
     }
   }
 
-  dialog.querySelector('[data-target]').textContent = docker
-    ? `Choose a tag for ${label}. Its image repository will apply to all Linode rows.`
-    : `Choose the server image for ${label}.`
-  const seed = String(version || '').trim()
-  const currentVersion = seed.includes('/') ? seed.slice(seed.lastIndexOf(':') + 1) : seed
-  const currentButton = dialog.querySelector('[data-current]')
-  currentButton.hidden = !currentVersion
-  currentButton.textContent = `Current row: ${currentVersion}`
-  query.value = ''; filter.value = ''; sort.value = 'newest'; age.value = '30'
-  registry.value = ''; from.value = ''; to.value = ''; latest.checked = true
-  dialog.querySelector('[data-dates]').hidden = true
-  const options = { signal: events.signal }
-  dialog.querySelector('form').addEventListener('submit', event => { event.preventDefault(); search() }, options)
-  dialog.querySelector('[data-close]').addEventListener('click', () => dialog.close(), options)
-  dialog.querySelector('[data-latest]').addEventListener('click', () => { query.value = ''; search() }, options)
-  currentButton.addEventListener('click', () => { query.value = currentVersion; search() }, options)
-  for (const control of [filter, registry, sort, age, from, to, latest]) {
-    control.addEventListener('input', () => {
-      dialog.querySelector('[data-dates]').hidden = age.value !== 'custom'
-      limit = 12; render()
-    }, options)
+  const verifySelected = async () => {
+    detailRequest?.abort()
+    detailRequest = new AbortController()
+    const current = detailRequest
+    verified = null
+    get('[data-use]').disabled = true
+    get('[data-detail-loading]').hidden = false
+    get('[data-detail-error]').hidden = true
+    get('[data-evidence]').replaceChildren()
+    try {
+      const params = selected.reportPath ? { report: selected.reportPath, docker: docker ? '1' : '0' } : { reference: selected.reference }
+      const build = await loadDetails(params, current.signal)
+      if (current.signal.aborted || events.signal.aborted) return
+      // Standalone Docker must never receive a split rancher-server image.
+      if (docker && !/\/rancher\/rancher:/.test(build.reference)) throw new Error('Choose a full rancher/rancher image for Linode Docker.')
+      verified = build
+      get('[data-evidence]').innerHTML = buildEvidence(build, escapeHtml)
+      get('[data-verified-reference]').textContent = build.reference
+      get('[data-use]').textContent = build.moving ? 'Use moving tag' : 'Use this build'
+      get('[data-use]').disabled = false
+    } catch (cause) {
+      if (!current.signal.aborted) {
+        get('[data-detail-error-message]').textContent = cause.message
+        get('[data-detail-error]').hidden = false
+      }
+    } finally {
+      if (detailRequest === current && !events.signal.aborted) get('[data-detail-loading]').hidden = true
+    }
   }
-  more.addEventListener('click', () => { limit += 12; render() }, options)
-  stop.addEventListener('click', () => {
-    state.stopped = true; state.busy = false; state.discovering = false
-    state.request.abort(); render()
+
+  const showReview = build => {
+    selected = build
+    browse.hidden = true; review.hidden = false
+    get('[data-review-title]').textContent = build.line ? `Rancher ${build.line}` : 'Inspect Rancher image'
+    get('[data-verified-reference]').textContent = build.reference || build.version
+    const report = get('[data-report-link]')
+    report.hidden = !build.reportURL
+    report.href = build.reportURL || '#'
+    get('[data-review-back]').focus()
+    verifySelected()
+  }
+  const backFromReview = () => {
+    detailRequest?.abort(); verified = null; selected = null
+    review.hidden = true; browse.hidden = false
+    if (returnFocus?.isConnected) returnFocus.focus()
+    else search.focus()
+  }
+
+  get('[data-target]').textContent = `Choose a build for ${label}.${docker ? ' Standalone Docker availability is verified when you review a build.' : ''}`
+  age.value = '30'; search.value = ''; browse.hidden = false; review.hidden = true
+  get('[data-direct-image]').value = String(version || '').includes('/') ? version : ''
+  get('[data-direct]').open = false
+  get('[data-close]').addEventListener('click', () => dialog.close(), options)
+  get('[data-back]').addEventListener('click', () => { line = ''; search.value = ''; loadIndex() }, options)
+  get('[data-refresh]').addEventListener('click', () => loadIndex({ refresh: true }), options)
+  get('[data-retry]').addEventListener('click', () => loadIndex({ refresh: true }), options)
+  get('[data-more]').addEventListener('click', () => loadIndex({ more: true }), options)
+  age.addEventListener('change', () => loadIndex(), options)
+  search.addEventListener('input', () => {
+    clearTimeout(searchTimer)
+    if (line) searchTimer = setTimeout(() => loadIndex(), 180)
+    else render()
+  }, options)
+  get('[data-direct-form]').addEventListener('submit', event => {
+    event.preventDefault()
+    const reference = get('[data-direct-image]').value.trim()
+    if (reference) showReview({ reference })
+  }, options)
+  get('[data-review-back]').addEventListener('click', backFromReview, options)
+  get('[data-detail-retry]').addEventListener('click', verifySelected, options)
+  get('[data-use]').addEventListener('click', () => {
+    if (!verified || get('[data-use]').disabled) return
+    selection = verified.reference; dialog.close()
   }, options)
   return new Promise(resolve => {
     dialog.addEventListener('close', () => {
-      events.abort()
-      clearTimeout(renderTimer)
-      state?.request.abort()
-      state?.details.abort()
-      cards.replaceChildren()
+      events.abort(); request?.abort(); detailRequest?.abort(); clearTimeout(searchTimer)
+      list.replaceChildren(); get('[data-evidence]').replaceChildren()
       resolve(selection)
     }, { once: true })
-    dialog.showModal()
-    query.focus()
-    search()
+    dialog.showModal(); search.focus(); loadIndex()
   })
 }
+

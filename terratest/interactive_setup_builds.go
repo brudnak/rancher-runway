@@ -264,6 +264,33 @@ func (s *interactiveServer) handleRancherBuilds(w http.ResponseWriter, r *http.R
 		return
 	}
 	query := r.URL.Query()
+	if query.Has("catalog") {
+		s.handleSetupBuildIndex(w, r)
+		return
+	}
+	if query.Has("report") {
+		ctx, cancel := context.WithTimeout(r.Context(), imagelookup.InspectTimeout)
+		defer cancel()
+		build, _, err := s.buildIndex.report(ctx, query.Get("report"), false)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		reference := build.Reference
+		if query.Get("docker") == "1" {
+			registry, _, tag, _ := imagelookup.ParseRegistryImage(reference)
+			reference = registry + "/rancher/rancher:" + tag
+		}
+		images := newPreferredRancherImageLookupService()
+		defer images.CloseIdleConnections()
+		result, err := inspectSetupBuild(ctx, reference, images, &helmLabCatalogService{})
+		if err != nil {
+			http.Error(w, imagelookup.SafeError(err), imagelookup.HTTPStatus(err))
+			return
+		}
+		writeJSON(w, result)
+		return
+	}
 	if query.Has("reference") {
 		ctx, cancel := context.WithTimeout(r.Context(), imagelookup.InspectTimeout)
 		defer cancel()
