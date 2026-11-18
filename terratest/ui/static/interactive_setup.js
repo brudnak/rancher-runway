@@ -142,6 +142,8 @@ const modeValueEl = byId('modeValue')
 const autoVersionsTitleEl = byId('autoVersionsTitle')
 const autoVersionsHelpEl = byId('autoVersionsHelp')
 const rowsEl = byId('rows')
+const chooseRancherVersionEl = byId('chooseRancherVersion')
+const setupBuildTargetEl = byId('setupBuildTarget')
 const manualRowsEl = byId('manualRows')
 const manualAddBtnEl = byId('manualAddBtn')
 const validateHelmBtnEl = byId('validateHelmBtn')
@@ -1519,21 +1521,31 @@ const renderDeploymentType = () => {
   setPanelLifecycleState(panelLifecycleDetail)
 }
 
-rowsEl.addEventListener('click', async event => {
-  const button = event.target.closest('button[data-find-build]')
-  if (!button || button.disabled) return
-  const index = Number(button.dataset.findBuild)
+const renderBuildPickerTargets = () => {
+  const selected = setupBuildTargetEl.value
+  setupBuildTargetEl.innerHTML = versions.map((_, index) => `<option value="${index}">${escapeHtml(autoRowLabel(index))}</option>`).join('')
+  setupBuildTargetEl.value = Number(selected) < versions.length ? selected || '0' : '0'
+  byId('setupBuildTargetLabel').hidden = versions.length < 2
+  byId('setupBuildPickerHint').textContent = setupMode === 'manual'
+    ? 'Selecting a build switches to From a version. Your Helm commands stay available.'
+    : 'Search a release or head selector, such as 2.17-head or 2.16.0-head.'
+}
+
+const openBuildPicker = async (index, button) => {
+  if (!button || button.disabled || !Number.isInteger(index) || index < 0 || index >= versions.length) return
   const dialog = byId('setupBuildPicker')
+  const deployment = deploymentType
   const docker = isLinodeDockerDeployment()
   const label = autoRowLabel(index)
   const params = new URLSearchParams({ token })
+  byId('setupBuildPickerError').textContent = ''
   try {
     const { pickRancherBuild } = await import(setupEndpoint(`/static/setup_build_picker.js?${params}`))
-    if (!button.isConnected || button.disabled || dialog.open) return
+    if (!button.isConnected || button.disabled || dialog.open || deploymentType !== deployment) return
     const reference = await pickRancherBuild(dialog, {
       endpoint: setupEndpoint('/api/rancher-builds'), token, docker, label, version: versions[index], escapeHtml
     })
-    if (!reference || !button.isConnected || button.disabled || setupRootEl.dataset.phase !== 'editor') return
+    if (!reference || !button.isConnected || button.disabled || setupRootEl.dataset.phase !== 'editor' || deploymentType !== deployment) return
     if (docker) {
       const separator = reference.lastIndexOf(':')
       versions[index] = reference.slice(separator + 1)
@@ -1546,14 +1558,22 @@ rowsEl.addEventListener('click', async event => {
     } else {
       versions[index] = reference
     }
+    setupMode = 'auto'
     saveDeploymentVersions()
     clearValidationError()
-    renderRows()
+    renderMode()
     renderSetupChecklist()
+    byId('setupSectionRelease').scrollIntoView({ behavior: 'smooth', block: 'start' })
     rowsEl.querySelector(`button[data-find-build="${index}"]`)?.focus()
   } catch (error) {
-    editorErrorBoxEl.textContent = `Could not open Rancher build lookup. ${error.message}`
+    byId('setupBuildPickerError').textContent = `Could not open Rancher build lookup. ${error.message}`
   }
+}
+
+chooseRancherVersionEl.addEventListener('click', () => openBuildPicker(Number(setupBuildTargetEl.value), chooseRancherVersionEl))
+rowsEl.addEventListener('click', event => {
+  const button = event.target.closest('button[data-find-build]')
+  if (button) openBuildPicker(Number(button.dataset.findBuild), button)
 })
 
 const renderRows = () => {
@@ -1562,6 +1582,7 @@ const renderRows = () => {
     versions = [versions[0] || '']
     saveDeploymentVersions()
   }
+  renderBuildPickerTargets()
 
 	while (agentImages.length < versions.length) agentImages.push('')
 	if (agentImages.length > versions.length) agentImages = agentImages.slice(0, versions.length)
@@ -1585,7 +1606,7 @@ const renderRows = () => {
 			`<div class="inline-flex w-fit rounded-md bg-zinc-100 px-2.5 py-1 text-sm font-medium text-zinc-600 dark:bg-white/[0.06] dark:text-zinc-300">${escapeHtml(label)}</div>`,
 			'<div class="grid gap-2">',
 			`<input class="${inputClass}" type="text" name="versions" aria-label="${escapeHtml(label)} version or image" autocapitalize="off" autocorrect="off" spellcheck="false" value="${escapeHtml(version)}" data-index="${index}" placeholder="${versionPlaceholder}" />`,
-			`<button class="setup-find-build" type="button" data-find-build="${index}" aria-haspopup="dialog" aria-label="Find builds for ${escapeHtml(label)}">Find builds</button>`,
+			`<button class="setup-find-build" type="button" data-find-build="${index}" aria-haspopup="dialog" aria-label="Find builds for ${escapeHtml(label)}">Find builds <span aria-hidden="true">→</span></button>`,
 			agentControls,
 			downstreamLinodeControls,
 			'</div>',
@@ -2019,6 +2040,7 @@ const renderMode = () => {
   if (setupMode === 'manual') {
     ensureManualRows()
     renderManualRows()
+    renderBuildPickerTargets()
   } else {
     renderRows()
   }
@@ -2905,6 +2927,8 @@ const resetEmbeddedSetupFlow = () => {
 const setSubmittingState = nextSubmitting => {
   submitting = nextSubmitting
   const actionDisabled = nextSubmitting || panelBooting || panelLifecycleBusy || configImportBusy || configImportSaved
+  chooseRancherVersionEl.disabled = actionDisabled
+  setupBuildTargetEl.disabled = actionDisabled
   rowsEl.querySelectorAll('button[data-find-build]').forEach(button => { button.disabled = actionDisabled })
   if (actionDisabled && byId('setupBuildPicker')?.open) byId('setupBuildPicker').close()
   for (const id of ['importConfigButton', 'applyConfigImport']) {

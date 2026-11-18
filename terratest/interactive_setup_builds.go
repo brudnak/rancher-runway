@@ -24,11 +24,15 @@ type setupBuildGroup struct {
 }
 
 var setupMinorLine = regexp.MustCompile(`^\d+\.\d+$`)
+var setupZeroPatchHead = regexp.MustCompile(`^v?2\.(\d+)\.0(?:-[a-fA-F0-9]{7,40})?-head$`)
 
 // A minor head includes Community commit tags and patch-qualified Prime builds.
 // Match full version components so, for example, 2.1 never includes 2.17.
 func setupBuildMatcher(query string) (func(string) bool, error) {
 	query = imagelookup.NormalizeVersionInput(query)
+	if query == "latest-heads" || query == "2.x.0-head" || query == "2.*.0-head" {
+		return setupZeroPatchHead.MatchString, nil
+	}
 	minor := setupMinorLine.MatchString(query)
 	if len(query) > 127 {
 		return nil, fmt.Errorf("Rancher version search is limited to 127 characters")
@@ -107,10 +111,30 @@ func findSetupBuilds(ctx context.Context, query string, docker bool, list ranche
 			})
 			group.Tags = slices.Compact(group.Tags)
 			group.Matched = len(group.Tags)
-			group.Tags = group.Tags[:min(group.Matched, 200)]
 		})
 	}
 	workers.Wait()
+	if query == "latest-heads" {
+		// Browse the newest three published minor lines and inspect every
+		// candidate's date, including immutable builds newer than stale aliases.
+		// A SHA's alphabetical order does not identify the newest build.
+		lines := []string{}
+		for _, group := range groups {
+			for _, tag := range group.Tags {
+				lines = append(lines, setupZeroPatchHead.FindStringSubmatch(tag)[1])
+			}
+		}
+		slices.SortFunc(lines, func(a, b string) int { return imagelookup.NaturalCompare(b, a) })
+		lines = slices.Compact(lines)
+		lines = lines[:min(3, len(lines))]
+		for i := range groups {
+			groups[i].Tags = slices.DeleteFunc(groups[i].Tags, func(tag string) bool {
+				line := setupZeroPatchHead.FindStringSubmatch(tag)[1]
+				return !slices.Contains(lines, line)
+			})
+			groups[i].Matched = len(groups[i].Tags)
+		}
+	}
 	return groups, nil
 }
 
@@ -131,6 +155,10 @@ type setupBuildDetails struct {
 }
 
 func inspectSetupBuild(ctx context.Context, ref string, images systemChartImageLookup, catalog *helmLabCatalogService) (setupBuildDetails, error) {
+	return inspectSetupBuildWithDetails(ctx, ref, images, catalog, true)
+}
+
+func inspectSetupBuildWithDetails(ctx context.Context, ref string, images systemChartImageLookup, catalog *helmLabCatalogService, details bool) (setupBuildDetails, error) {
 	registry, repository, tag, err := imagelookup.ParseRegistryImage(ref)
 	if err != nil || !slices.Contains(registrycatalog.Preferred, registry) || !imagelookup.IsRancherServerRepository(repository) {
 		return setupBuildDetails{}, &imagelookup.InputError{Message: "choose a tagged Rancher server image in a listed registry"}
@@ -149,7 +177,6 @@ func inspectSetupBuild(ctx context.Context, ref string, images systemChartImageL
 		Version:  cmp.Or(env["CATTLE_SERVER_VERSION"], labels[imagelookup.VersionLabel]),
 		Revision: labels[imagelookup.RevisionLabel], OSSRevision: labels[imagelookup.OSSRevisionLabel],
 		Moving: imagelookup.ReadinessHeadPattern.MatchString(tag),
-		Charts: rancherSystemChartPins(ctx, image, env, images, catalog),
 	}
 
 	if result.Created == "" {
@@ -157,6 +184,10 @@ func inspectSetupBuild(ctx context.Context, ref string, images systemChartImageL
 			result.Created = created.UTC().Format(time.RFC3339)
 		}
 	}
+	if !details {
+		return result, nil
+	}
+	result.Charts = rancherSystemChartPins(ctx, image, env, images, catalog)
 
 	// A moving alias may identify its immutable build in either the canonical
 	// OCI label or CATTLE_SERVER_VERSION. Use it only after checking that the
@@ -238,7 +269,7 @@ func (s *interactiveServer) handleRancherBuilds(w http.ResponseWriter, r *http.R
 		defer cancel()
 		images := newPreferredRancherImageLookupService()
 		defer images.CloseIdleConnections()
-		result, err := inspectSetupBuild(ctx, query.Get("reference"), images, &helmLabCatalogService{})
+		result, err := inspectSetupBuildWithDetails(ctx, query.Get("reference"), images, &helmLabCatalogService{}, query.Get("summary") != "1")
 		if err != nil {
 			http.Error(w, imagelookup.SafeError(err), imagelookup.HTTPStatus(err))
 			return

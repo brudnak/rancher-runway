@@ -97,9 +97,31 @@ Registry overrides and GPU options expand when needed; validation opens and
 focuses the relevant field. The progress rail follows configuration, resolution,
 and final approval. Setup and the labs share the same light/dark design tokens.
 
-In **From a version**, choose **Find builds** on a Rancher row. Search
-`2.17-head` for a minor line or `2.16.0-head` for a single patch. Each result
-shows the registry, build time in UTC, and system chart versions. Expand
+At the top of **Setup**, the **Rancher version wizard** has a
+**Choose Rancher version** button. If you have several Rancher rows, select
+the target instance beside it. A larger **Find builds** button is available on each row in
+**From a version**. Opening the wizard from **My Helm commands** keeps that
+mode until you select a build, then switches to **From a version** while
+preserving your Helm commands. Closing the wizard leaves your plan unchanged.
+The initial **Latest 2.x.0 heads** view searches the three newest published
+minor lines, shows the newest matching build per line and image repository,
+and defaults to **Last 30 days** and **Newest built first**. Dates come from
+image build metadata, including immutable builds newer than a moving alias.
+Search `2.17` for a release line, `2.17-head` for its heads, `2.16.0-head`
+for a single patch, or `2.x.0-head` for all .0 head lines. Quick-search buttons
+list the discovered head lines in descending version order.
+
+Filter by registry, tag, commit or digest; choose newest/oldest build dates
+or highest version; use 7/30/90 days, all dates, or an inclusive UTC date range.
+Turn off **Newest matching build** to compare history. Builds without dates
+are included only with **All dates** and sort after dated builds.
+A spinner, progress bar, and checked/total count show the search in progress;
+results reorder as dates arrive. **Stop search** keeps partial results, and a
+new search or closing the dialog cancels outstanding lookups.
+
+Each result shows its registry and build time. Open **Chart versions, hashes
+& select build** to load the system chart evidence with a separate loading
+indicator and retry action. Expand
 **Hashes and catalog evidence** for the image digest, source commits, and
 versions in the pinned chart index when available. **Use this build** fills
 that row with the selected image. **Use moving tag** identifies aliases that

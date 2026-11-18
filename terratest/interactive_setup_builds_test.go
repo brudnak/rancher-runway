@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +74,57 @@ func TestInteractiveSetupBuildRegistryIsolation(t *testing.T) {
 		if (docker && (matches != 1 || failures != 1)) || (!docker && (matches != 3 || failures != 2)) {
 			t.Errorf("docker=%t: got %d matches, %d errors", docker, matches, failures)
 		}
+	}
+}
+
+func TestInteractiveSetupBuildLatestHeads(t *testing.T) {
+	// Retain every immutable candidate: a current alias may be stale, and a
+	// lexically small hash may have the newest created timestamp.
+	tags := []string{"v2.9.0-head", "v2.15.0-head", "v2.16.0-head", "v2.17.0-head", "v2.17.1-head", "v2.17-head", "v3.0.0-head", "v2.17.0-abcdefg-head"}
+	for i := 0; i < 250; i++ {
+		tags = append(tags, fmt.Sprintf("v2.17.0-%07x-head", i))
+	}
+	list := func(_ context.Context, registry, repository string) ([]string, error) {
+		if registry == "stgregistry.suse.com" && repository == "rancher/rancher-server" {
+			return tags, nil
+		}
+		return nil, nil
+	}
+	groups, err := findSetupBuilds(t.Context(), "latest-heads", false, list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range groups {
+		if group.Matched == 0 {
+			continue
+		}
+		if group.Matched != 253 || len(group.Tags) != 253 {
+			t.Fatalf("lost immutable candidates or included older/invalid lines: %+v", group)
+		}
+		for _, tag := range []string{"v2.17.0-head", "v2.16.0-head", "v2.15.0-head", "v2.17.0-0000000-head"} {
+			if !slices.Contains(group.Tags, tag) {
+				t.Errorf("missing %s", tag)
+			}
+		}
+	}
+	for _, query := range []string{"2.x.0-head", "2.*.0-head"} {
+		match, err := setupBuildMatcher(query)
+		if err != nil || !match("v2.9.0-head") || !match("v2.17.0-123abcd-head") || match("v2.17.1-head") || match("v2.17.0-123abcd-head-amd64") {
+			t.Fatalf("incorrect wildcard head matching for %s", query)
+		}
+	}
+}
+
+func TestInteractiveSetupBuildSummarySkipsCatalog(t *testing.T) {
+	const ref = "stgregistry.suse.com/rancher/rancher-server:v2.17.0-head"
+	images := preflightImages{ref: {Labels: map[string]string{
+		"org.opencontainers.image.created": "2026-11-17T01:02:03+02:00",
+		imagelookup.VersionLabel:           "v2.17.0-123abcd-head",
+	}}}
+	// No catalog service or companion image is needed for date sorting.
+	got, err := inspectSetupBuildWithDetails(t.Context(), ref, images, nil, false)
+	if err != nil || got.Created != "2026-11-16T23:02:03Z" || got.Version != "v2.17.0-123abcd-head" || !got.Moving || got.Charts != nil || got.CatalogImage != "" {
+		t.Fatalf("unexpected summary: %+v, %v", got, err)
 	}
 }
 

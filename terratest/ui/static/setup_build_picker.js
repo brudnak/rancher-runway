@@ -1,5 +1,5 @@
 // Interleave repositories so the first page can compare the same line across registries.
-function buildReferences(groups) {
+export function buildReferences(groups) {
   const references = []
   const count = Math.max(0, ...groups.map(group => group.tags?.length || 0))
   for (let i = 0; i < count; i++) {
@@ -7,7 +7,88 @@ function buildReferences(groups) {
       if (group.tags?.[i]) references.push(`${group.registry}/${group.repository}:${group.tags[i]}`)
     }
   }
-  return references
+  return [...new Set(references)]
+}
+
+function versionParts(record) {
+  const tag = record.reference.slice(record.reference.lastIndexOf(':') + 1)
+  const match = String(record.summary?.version || tag).match(/^v?(\d+)\.(\d+)(?:\.(\d+))?/)
+    || tag.match(/^v?(\d+)\.(\d+)(?:\.(\d+))?/)
+  return match ? match.slice(1).map(value => Number(value || 0)) : [0, 0, 0]
+}
+
+function compareVersions(a, b) {
+  const av = versionParts(a), bv = versionParts(b)
+  return bv[0] - av[0] || bv[1] - av[1] || bv[2] - av[2]
+}
+
+const createdTime = record => Date.parse(record.summary?.created || '')
+const displayTime = value => Number.isFinite(Date.parse(value || ''))
+  ? new Date(value).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') : 'Build date unavailable'
+
+export function headSelectors(references) {
+  const selectors = [...new Set(references.flatMap(reference => {
+    const match = reference.match(/:v?(2\.\d+\.0)(?:-[a-f0-9]+)?-head$/i)
+    return match ? [match[1] + '-head'] : []
+  }))]
+  return selectors.sort((a, b) => compareVersions({ reference: ':' + a }, { reference: ':' + b }))
+}
+
+// Dates come from image configs, never tag lexicography or registry push times.
+export function selectBuilds(records, { text = '', registry = '', sort = 'newest', age = '30', from = '', to = '', latest = true, now = Date.now() } = {}) {
+  const start = age === 'custom' ? (from ? Date.parse(from + 'T00:00:00Z') : -Infinity)
+    : age === 'all' ? -Infinity : now - Number(age) * 86400000
+  const end = age === 'custom' && to ? Date.parse(to + 'T00:00:00Z') + 86400000 : Infinity
+  const dated = age !== 'all'
+  const words = text.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  let matches = records.filter(record => {
+    if (!record.summary || (registry && !record.reference.startsWith(registry + '/'))) return false
+    const timestamp = createdTime(record)
+    if (dated && (!Number.isFinite(timestamp) || timestamp < start || timestamp >= end)) return false
+    const haystack = [record.reference, record.summary.version, record.summary.revision, record.summary.ossRevision,
+      record.summary.digest, record.summary.created, ...Object.entries(record.details?.charts || {}).flat()].join(' ').toLowerCase()
+    return words.every(word => haystack.includes(word))
+  })
+  const newest = (a, b) => {
+    const at = createdTime(a), bt = createdTime(b)
+    return (Number.isFinite(bt) ? bt : -Infinity) - (Number.isFinite(at) ? at : -Infinity)
+      || compareVersions(a, b) || a.reference.localeCompare(b.reference)
+  }
+  if (latest) {
+    const seen = new Set()
+    matches = matches.sort(newest).filter(record => {
+      const key = record.reference.slice(0, record.reference.lastIndexOf(':')) + ':' + versionParts(record).slice(0, 2).join('.')
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+  return matches.sort((a, b) => {
+    if (sort === 'version') return compareVersions(a, b) || newest(a, b)
+    if (sort === 'oldest') {
+      const at = createdTime(a), bt = createdTime(b)
+      return (Number.isFinite(at) ? at : Infinity) - (Number.isFinite(bt) ? bt : Infinity) || compareVersions(a, b) || a.reference.localeCompare(b.reference)
+    }
+    return newest(a, b)
+  })
+}
+
+export async function scanBuildSummaries(records, load, { signal, onProgress = () => {}, concurrency = 4 }) {
+  let next = 0, completed = 0
+  await Promise.all(Array.from({ length: Math.min(concurrency, records.length) }, async () => {
+    while (!signal.aborted && next < records.length) {
+      const record = records[next++]
+      try {
+        const summary = await load({ reference: record.reference, summary: '1' }, signal)
+        if (signal.aborted) return
+        record.summary = summary
+      } catch (error) {
+        if (signal.aborted) return
+        record.error = error.message
+      }
+      onProgress(++completed)
+    }
+  }))
 }
 
 function buildEvidence(build, escapeHtml) {
@@ -38,15 +119,26 @@ function buildEvidence(build, escapeHtml) {
 }
 
 export function pickRancherBuild(dialog, { endpoint, token, docker, label, version, escapeHtml }) {
-  const query = dialog.querySelector('input')
+  const query = dialog.querySelector('#setupBuildQuery')
   const status = dialog.querySelector('[data-status]')
   const warnings = dialog.querySelector('[data-warnings]')
   const cards = dialog.querySelector('[data-builds]')
   const more = dialog.querySelector('[data-more]')
   const events = new AbortController()
-  let request
-  let references = []
-  let offset = 0
+  const filter = dialog.querySelector('[data-filter]')
+  const registry = dialog.querySelector('[data-registry]')
+  const sort = dialog.querySelector('[data-sort]')
+  const age = dialog.querySelector('[data-age]')
+  const from = dialog.querySelector('[data-from]')
+  const to = dialog.querySelector('[data-to]')
+  const latest = dialog.querySelector('[data-latest-only]')
+  const spinner = dialog.querySelector('[data-spinner]')
+  const stop = dialog.querySelector('[data-stop]')
+  const progress = dialog.querySelector('[data-progress]')
+  const empty = dialog.querySelector('[data-empty]')
+  let state
+  let renderTimer
+  let limit = 12
   let selection = ''
 
   const load = async (params, signal) => {
@@ -57,81 +149,148 @@ export function pickRancherBuild(dialog, { endpoint, token, docker, label, versi
     return response.json()
   }
 
-  const inspectCard = async (reference, signal) => {
-    const card = document.createElement('article')
-    const tag = reference.slice(reference.lastIndexOf(':') + 1)
-    const repository = reference.slice(0, reference.lastIndexOf(':'))
-    card.innerHTML = `<h3>${escapeHtml(tag)}</h3><code>${escapeHtml(repository)}</code>
-      <div data-evidence><p role="status">Reading build metadata…</p></div>`
-    cards.append(card)
-    const evidence = card.querySelector('[data-evidence]')
+  const inspectCard = async (record, evidence, current) => {
+    const signal = current.details.signal
+    evidence.innerHTML = '<p class="setup-build-detail-loading"><span class="setup-build-spinner" aria-hidden="true"></span>Reading chart versions, hashes and catalog evidence…</p>'
+    evidence.setAttribute('aria-busy', 'true')
     try {
-      const build = await load({ reference }, signal)
+      const build = record.details || await load({ reference: record.reference }, signal)
       if (signal.aborted) return
+      record.details = build
+      record.summary = build
+      record.card.querySelector('[data-built]').textContent = displayTime(build.created)
+      record.card.querySelector('[data-version]').textContent = build.version || ''
       evidence.innerHTML = buildEvidence(build, escapeHtml)
       const use = document.createElement('button')
       use.type = 'button'
       use.textContent = build.moving ? 'Use moving tag' : 'Use this build'
-      if (reference !== build.reference) {
+      if (record.reference !== build.reference) {
         const pin = document.createElement('p')
         pin.textContent = 'Matching build tag · ' + build.reference.slice(build.reference.lastIndexOf(':') + 1)
         evidence.append(pin)
       }
-      use.addEventListener('click', () => {
-        selection = build.reference
-        dialog.close()
-      }, { signal })
+      use.addEventListener('click', () => { selection = build.reference; dialog.close() }, { signal })
       evidence.append(use)
     } catch (error) {
-      if (!signal.aborted) evidence.textContent = `Could not inspect this build. ${error.message}`
+      if (signal.aborted) return
+      evidence.textContent = `Could not inspect this build. ${error.message} `
+      const retry = document.createElement('button')
+      retry.type = 'button'
+      retry.textContent = 'Retry details'
+      retry.addEventListener('click', () => inspectCard(record, evidence, current), { signal })
+      evidence.append(retry)
+    } finally {
+      evidence.removeAttribute('aria-busy')
     }
   }
 
-  const showMore = async () => {
-    const signal = request.signal
-    const next = references.slice(offset, offset + 4)
-    offset += next.length
-    more.hidden = offset >= references.length
-    more.disabled = true
-    await Promise.all(next.map(reference => inspectCard(reference, signal)))
-    if (!signal.aborted) more.disabled = false
+  const cardFor = record => {
+    if (record.card) return record.card
+    const { reference, summary } = record
+    const current = state
+    const card = document.createElement('article')
+    const tag = reference.slice(reference.lastIndexOf(':') + 1)
+    const repository = reference.slice(0, reference.lastIndexOf(':'))
+    card.innerHTML = `<h3>${escapeHtml(tag)}</h3><code>${escapeHtml(repository)}</code>
+      <p data-built class="setup-build-date">${escapeHtml(displayTime(summary.created))}</p>
+      <p data-version>${escapeHtml(summary.version || '')}</p>
+      <details data-detail><summary>Chart versions, hashes &amp; select build</summary><div data-evidence></div></details>`
+    const details = card.querySelector('[data-detail]')
+    let started = false
+    details.addEventListener('toggle', () => {
+      if (!details.open || started) return
+      started = true
+      inspectCard(record, card.querySelector('[data-evidence]'), current)
+    }, { signal: current.details.signal })
+    record.card = card
+    return card
+  }
+
+  const render = () => {
+    if (!state || events.signal.aborted) return
+    const invalidDates = age.value === 'custom' && from.value && to.value && from.value > to.value
+    const error = dialog.querySelector('[data-filter-error]')
+    error.hidden = !invalidDates
+    error.textContent = invalidDates ? 'The start date must be on or before the end date.' : ''
+    const matches = invalidDates ? [] : selectBuilds(state.records, {
+      text: filter.value, registry: registry.value, sort: sort.value, age: age.value,
+      from: from.value, to: to.value, latest: latest.checked, now: state.now
+    })
+    const active = cards.contains(document.activeElement) ? document.activeElement : null
+    cards.replaceChildren(...matches.slice(0, limit).map(cardFor))
+    if (active?.isConnected) active.focus({ preventScroll: true })
+    more.hidden = matches.length <= limit
+    more.textContent = `Show more builds (${Math.max(0, matches.length - limit)} remaining)`
+    const busy = state.busy
+    spinner.hidden = !busy
+    stop.hidden = !busy
+    cards.setAttribute('aria-busy', String(busy))
+    progress.hidden = !busy || !state.records.length
+    progress.max = Math.max(1, state.records.length)
+    progress.value = state.completed
+    const failures = state.records.filter(record => record.error)
+    const undated = state.records.filter(record => record.summary && !Number.isFinite(createdTime(record))).length
+    const counts = `${matches.length} matching build${matches.length === 1 ? '' : 's'} · ${state.completed}/${state.records.length} build dates checked.`
+    status.textContent = state.error || (state.discovering ? 'Searching Rancher registries for available tags…'
+      : `${busy ? 'Reading image build dates… ' : state.stopped ? 'Search stopped. Partial results. ' : ''}${counts}${busy ? ' Results sort as dates arrive.' : ''}${undated ? ` ${undated} dates unavailable; choose All dates to include them.` : ''}${failures.length ? ` ${failures.length} lookups failed; search again to retry.` : ''}`)
+    empty.hidden = matches.length > 0 || Boolean(state.error) || invalidDates
+    empty.textContent = busy ? 'Matching builds will appear as their dates are verified.'
+      : 'No builds match these filters. Try All dates, another registry, or a specific release line.'
+    const notes = [...state.notes, ...failures.slice(0, 10).map(record => record.reference + ' — ' + record.error)]
+    if (failures.length > 10) notes.push(`${failures.length - 10} more metadata lookups failed.`)
+    warnings.hidden = !notes.length
+    warnings.querySelector('ul').replaceChildren(...notes.map(note => {
+      const li = document.createElement('li'); li.textContent = note; return li
+    }))
   }
 
   const search = async () => {
-    request?.abort()
-    request = new AbortController()
-    const signal = request.signal
-    cards.replaceChildren()
-    more.hidden = true
-    warnings.hidden = true
+    clearTimeout(renderTimer)
+    renderTimer = undefined
+    state?.request.abort()
+    state?.details.abort()
+    state = { request: new AbortController(), details: new AbortController(), records: [], notes: [], completed: 0, busy: true, discovering: true, now: Date.now() }
+    const current = state
+    const signal = current.request.signal
+    limit = 12
     warnings.open = false
-    offset = 0
-    status.textContent = 'Checking Rancher registries…'
+    dialog.querySelector('[data-heads]').replaceChildren()
+    dialog.querySelector('[data-latest]').setAttribute('aria-pressed', String(!query.value.trim()))
+    render()
     try {
-      const groups = await load({ version: query.value.trim(), docker: docker ? '1' : '0' }, signal)
+      const groups = await load({ version: query.value.trim() || 'latest-heads', docker: docker ? '1' : '0' }, signal)
       if (signal.aborted) return
-      const notes = []
       for (const group of groups) {
         const source = group.registry + '/' + group.repository
-        if (group.error) notes.push(source + ' — ' + group.error)
-        if (group.matched > group.tags?.length) notes.push(`${source} — Showing ${group.tags.length} of ${group.matched} tags. Enter a narrower version or commit tag to see others.`)
+        if (group.error) current.notes.push(source + ' — ' + group.error)
       }
-      warnings.querySelector('ul').replaceChildren(...notes.map(note => {
-        const li = document.createElement('li')
-        li.textContent = note
-        return li
+      const references = buildReferences(groups)
+      current.records = references.map(reference => ({ reference }))
+      current.discovering = false
+      const selectedRegistry = registry.value
+      registry.replaceChildren(...['', ...new Set(groups.map(group => group.registry))].map(value => {
+        const option = document.createElement('option'); option.value = value; option.textContent = value || 'All registries'; return option
       }))
-      warnings.hidden = !notes.length
-      references = buildReferences(groups)
-      if (!references.length) {
-        status.textContent = groups.length && groups.every(group => group.error) ? 'Registry lookup failed. Search again to retry.'
-          : notes.length ? 'No matches in the repositories that responded.' : 'No matching Rancher builds.'
-        return
+      registry.value = selectedRegistry
+      for (const selector of headSelectors(references).slice(0, 8)) {
+        const button = document.createElement('button')
+        button.type = 'button'; button.textContent = selector
+        button.addEventListener('click', () => { query.value = selector; search() }, { signal: current.details.signal })
+        dialog.querySelector('[data-heads]').append(button)
       }
-      status.textContent = `${references.length} matching tag${references.length === 1 ? '' : 's'}. Chart versions are build defaults.${docker ? '' : ' Plan review checks the Helm-selected assets.'}`
-      await showMore()
+      if (!references.length && groups.length && groups.every(group => group.error)) current.error = 'Registry lookup failed. Search again to retry.'
+      render()
+      await scanBuildSummaries(current.records, load, { signal, onProgress: completed => {
+        current.completed = completed
+        if (!renderTimer) renderTimer = setTimeout(() => { renderTimer = undefined; render() }, 100)
+      } })
     } catch (error) {
-      if (!signal.aborted) status.textContent = error.message
+      if (!signal.aborted) current.error = error.message
+    } finally {
+      if (state === current) {
+        clearTimeout(renderTimer); renderTimer = undefined
+        current.busy = false; current.discovering = false; render()
+      }
     }
   }
 
@@ -139,15 +298,35 @@ export function pickRancherBuild(dialog, { endpoint, token, docker, label, versi
     ? `Choose a tag for ${label}. Its image repository will apply to all Linode rows.`
     : `Choose the server image for ${label}.`
   const seed = String(version || '').trim()
-  query.value = seed.includes('/') ? seed.slice(seed.lastIndexOf(':') + 1) : seed
+  const currentVersion = seed.includes('/') ? seed.slice(seed.lastIndexOf(':') + 1) : seed
+  const currentButton = dialog.querySelector('[data-current]')
+  currentButton.hidden = !currentVersion
+  currentButton.textContent = `Current row: ${currentVersion}`
+  query.value = ''; filter.value = ''; sort.value = 'newest'; age.value = '30'
+  registry.value = ''; from.value = ''; to.value = ''; latest.checked = true
+  dialog.querySelector('[data-dates]').hidden = true
   const options = { signal: events.signal }
   dialog.querySelector('form').addEventListener('submit', event => { event.preventDefault(); search() }, options)
   dialog.querySelector('[data-close]').addEventListener('click', () => dialog.close(), options)
-  more.addEventListener('click', showMore, options)
+  dialog.querySelector('[data-latest]').addEventListener('click', () => { query.value = ''; search() }, options)
+  currentButton.addEventListener('click', () => { query.value = currentVersion; search() }, options)
+  for (const control of [filter, registry, sort, age, from, to, latest]) {
+    control.addEventListener('input', () => {
+      dialog.querySelector('[data-dates]').hidden = age.value !== 'custom'
+      limit = 12; render()
+    }, options)
+  }
+  more.addEventListener('click', () => { limit += 12; render() }, options)
+  stop.addEventListener('click', () => {
+    state.stopped = true; state.busy = false; state.discovering = false
+    state.request.abort(); render()
+  }, options)
   return new Promise(resolve => {
     dialog.addEventListener('close', () => {
       events.abort()
-      request?.abort()
+      clearTimeout(renderTimer)
+      state?.request.abort()
+      state?.details.abort()
       cards.replaceChildren()
       resolve(selection)
     }, { once: true })

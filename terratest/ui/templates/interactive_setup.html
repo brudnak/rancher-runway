@@ -135,6 +135,18 @@
         <li data-setup-stage="review"><span>03</span><div><strong>Review &amp; launch</strong><small>Your approval starts provisioning</small></div></li>
       </ol>
       <section data-section="editor">
+        <div class="setup-build-launcher" role="group" aria-labelledby="setupBuildLauncherTitle">
+          <div>
+            <h2 id="setupBuildLauncherTitle">Rancher version wizard</h2>
+            <p>Compare available builds by registry, build date, webhook and other chart versions, and hashes.</p>
+            <p id="setupBuildPickerHint" class="setup-field-help"></p>
+            <p id="setupBuildPickerError" role="alert"></p>
+          </div>
+          <div class="setup-build-launcher-actions">
+            <label id="setupBuildTargetLabel" hidden>Rancher instance <select id="setupBuildTarget"></select></label>
+            <button id="chooseRancherVersion" type="button" aria-haspopup="dialog" aria-controls="setupBuildPicker">Choose Rancher version</button>
+          </div>
+        </div>
        <div class="setup-layout">
         <aside aria-labelledby="setupBriefTitle" class="setup-companion">
           <span class="setup-eyebrow">YOUR NEXT RUN</span>
@@ -729,15 +741,39 @@
     </header>
     <p data-target class="setup-field-help"></p>
     <form class="mt-4">
-      <label for="setupBuildQuery" class="text-sm font-semibold">Version or head selector</label>
+      <label for="setupBuildQuery" class="text-sm font-semibold">Search a release, head selector, or exact image tag</label>
       <div class="mt-1 flex gap-2">
-        <input id="setupBuildQuery" class="min-w-0 flex-1" type="search" placeholder="2.17-head or 2.16.0-head" maxlength="128" spellcheck="false" autocomplete="off" />
+        <input id="setupBuildQuery" class="min-w-0 flex-1" type="search" placeholder="Latest heads · or enter 2.17, 2.16.0-head…" maxlength="127" spellcheck="false" autocomplete="off" />
         <button type="submit">Search</button>
       </div>
     </form>
-    <p data-status class="setup-field-help" role="status"></p>
+    <div class="setup-build-shortcuts" aria-label="Quick searches">
+      <button type="button" data-latest>Latest 2.x.0 heads</button>
+      <button type="button" data-current hidden></button>
+      <span data-heads></span>
+    </div>
+    <p class="setup-field-help">Latest heads covers the three newest published 2.x.0 release lines. Search a version to include its build history, or <code>2.x.0-head</code> for every .0 head line.</p>
+    <div class="setup-build-filters">
+      <label>Filter results<input data-filter type="search" placeholder="Tag, commit, digest, registry…" /></label>
+      <label>Registry<select data-registry><option value="">All registries</option></select></label>
+      <label>Sort by<select data-sort><option value="newest">Newest built first</option><option value="version">Highest version first</option><option value="oldest">Oldest built first</option></select></label>
+      <label>Built within<select data-age><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="all">All dates (including unknown)</option><option value="custom">Custom dates (UTC)</option></select></label>
+    </div>
+    <div data-dates class="setup-build-dates" hidden>
+      <label>Built from (UTC)<input data-from type="date" /></label>
+      <label>Built through (UTC)<input data-to type="date" /></label>
+    </div>
+    <label class="setup-build-latest"><input data-latest-only type="checkbox" checked /> Newest matching build per release line and image repository</label>
+    <p data-filter-error role="alert" hidden></p>
+    <div class="setup-build-search-state">
+      <span data-spinner class="setup-build-spinner" aria-hidden="true" hidden></span>
+      <p data-status role="status" aria-live="polite"></p>
+      <button type="button" data-stop hidden>Stop search</button>
+      <progress data-progress hidden aria-label="Build dates checked"></progress>
+    </div>
     <details data-warnings hidden><summary>Registry lookup details</summary><ul></ul></details>
-    <div data-builds></div>
+    <p data-empty hidden></p>
+    <div data-builds aria-label="Matching Rancher builds"></div>
     <button type="button" data-more hidden>Show more builds</button>
   </dialog>
 
