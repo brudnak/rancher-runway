@@ -2,6 +2,7 @@ package test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -94,7 +95,7 @@ func TestInteractiveSetupBuildIndexHistoryDoesNotInspectImages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := filterSetupBuildIndex(got, 30, 0, time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC))
+	page := filterSetupBuildIndex(got, 30, 0, 20, time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC))
 	if calls != 1 || page.Total != 240 || len(page.Builds) != 20 || !page.More || page.NextOffset != 20 {
 		t.Fatalf("history should use one index request, exclude old builds, and page results: %+v, calls=%d", page, calls)
 	}
@@ -104,6 +105,40 @@ func TestInteractiveSetupBuildIndexHistoryDoesNotInspectImages(t *testing.T) {
 	_, err = index.history(t.Context(), "2.17", false)
 	if err != nil || calls != 1 {
 		t.Fatal("history pagination should reuse the downloaded index")
+	}
+}
+
+func TestInteractiveSetupBuildIndexOtherBuilds(t *testing.T) {
+	const head = "v2.17.0-0000002-head"
+	const source = "reports/v2.17/README.md"
+	// Mixed dates, equal-day builds, and a head in the middle of the source.
+	var body strings.Builder
+	for i, day := range []string{"15", "17", "18", "17", "16", "13", "14"} {
+		fmt.Fprintf(&body, "| `v2.17.0-%07x-head` | `prime-head` | 2026-11-%s | Image built | Clean | `v0.12.1` | - | 2026-11-18 | [open](tag.md) |\n", i, day)
+	}
+	s := &interactiveServer{buildIndex: setupBuildIndex{cache: map[string]setupIndexCacheEntry{
+		source: {data: []byte(body.String()), at: time.Now()},
+	}}}
+	for _, page := range []struct {
+		offset string
+		want   []int
+		more   bool
+	}{{"0", []int{1, 3, 4, 0, 6}, true}, {"5", []int{5}, false}} {
+		r := httptest.NewRequest("GET", "/?line=2.17&days=0&q=v0.12&limit=5&exclude="+head+"&offset="+page.offset, nil)
+		w := httptest.NewRecorder()
+		s.handleSetupBuildIndex(w, r)
+		var got setupBuildIndexResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != 200 {
+			t.Fatalf("history page %s: %s", page.offset, w.Body.String())
+		}
+		if got.More != page.more || got.Total != 6 || len(got.Builds) != len(page.want) {
+			t.Fatalf("unexpected page: %+v", got)
+		}
+		for i, n := range page.want {
+			if got.Builds[i].Version != fmt.Sprintf("v2.17.0-%07x-head", n) {
+				t.Fatalf("unexpected ordering: %+v", got.Builds)
+			}
+		}
 	}
 }
 
@@ -136,7 +171,7 @@ func TestInteractiveSetupBuildIndexReportValidation(t *testing.T) {
 func TestInteractiveSetupBuildIndexRouteValidatesBeforeNetwork(t *testing.T) {
 	mux := http.NewServeMux()
 	(&interactiveServer{token: "fixture"}).registerHandlersAt(mux, nil, "/setup-editor")
-	for _, query := range []string{"catalog=1&days=-1", "catalog=1&offset=-1", "catalog=1&line=../../README", "catalog=1&days=all", "report=../../README"} {
+	for _, query := range []string{"catalog=1&days=-1", "catalog=1&offset=-1", "catalog=1&line=../../README", "catalog=1&days=all", "catalog=1&limit=21", "catalog=1&limit=0", "report=../../README"} {
 		response := httptest.NewRecorder()
 		mux.ServeHTTP(response, httptest.NewRequest("GET", "/setup-editor/api/rancher-builds?token=fixture&"+query, nil))
 		if response.Code != http.StatusBadRequest {

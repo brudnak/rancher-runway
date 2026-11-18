@@ -1,181 +1,214 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReferences, headSelectors, selectBuilds, scanBuildSummaries, pickRancherBuild } from '../../static/setup_build_picker.js';
+import { readFileSync } from 'node:fs';
+import { setImmediate as tick } from 'node:timers/promises';
+import { parseHTML } from 'linkedom';
+import { buildDateLabel, filterIndexedBuilds, pickRancherBuild } from '../../static/setup_build_picker.js';
 
-const now = Date.parse('2026-11-18T12:00:00Z');
-const record = (tag, created, registry = 'stgregistry.suse.com', repository = 'rancher/rancher-server') => ({
-  reference: `${registry}/${repository}:${tag}`, summary: { created, version: tag },
-});
+const template = readFileSync(new URL('../../templates/interactive_setup.html', import.meta.url), 'utf8');
+const build = (line, sha, day) => {
+  const version = `v${line}.0-${sha}-head`;
+  return { line, version, webhook: 'v0.12.1', created: `2026-11-${day}`,
+    reportPath: `reports/v${line}/${version}.md`, reference: `stgregistry.suse.com/rancher/rancher-server:${version}` };
+};
+const head = build('2.17', 'aaaaaaa', '18');
+const otherLine = build('2.16', 'bbbbbbb', '17');
+const older = build('2.17', 'ccccccc', '16');
+const page = (builds, total = builds.length, nextOffset = builds.length) =>
+  ({ builds, total, nextOffset, more: nextOffset < total });
 
-test('newest uses image timestamps, not SHA order, and keeps registries distinct', () => {
-  const older = record('v2.17.0-fffffff-head', '2026-11-16T10:00:00Z');
-  const newer = record('v2.17.0-0000000-head', '2026-11-17T10:00:00Z');
-  const alias = record('v2.17.0-head', '2026-11-15T10:00:00Z');
-  const docker = record('v2.17.0-head', '2026-11-17T09:00:00Z', 'docker.io');
-  const legacy = record('v2.17.0-head', '2026-11-17T08:00:00Z', 'stgregistry.suse.com', 'rancher/rancher');
-  assert.deepEqual(selectBuilds([older, alias, newer, docker, legacy], { now }), [newer, docker, legacy]);
-  assert.deepEqual(selectBuilds([older, alias, newer], { now, latest: false }), [newer, older, alias]);
-});
-
-test('version sorting is numeric and date sorting still puts a fresher older line first', () => {
-  const v9 = record('v2.9.0-head', '2026-11-17T12:00:00Z');
-  const v17 = record('v2.17.0-head', '2026-11-16T12:00:00Z');
-  const v16 = record('v2.16.0-head', '2026-11-15T12:00:00Z');
-  assert.deepEqual(selectBuilds([v9, v16, v17], { sort: 'version', now }), [v17, v16, v9]);
-  assert.deepEqual(selectBuilds([v9, v16, v17], { now }), [v9, v17, v16]);
-  assert.deepEqual(selectBuilds([v9, v16, v17], { sort: 'oldest', now }), [v16, v17, v9]);
-  assert.deepEqual(headSelectors([v9.reference, v17.reference, v16.reference, v17.reference, 'x:v2.18.1-head']), ['2.17.0-head', '2.16.0-head', '2.9.0-head']);
-});
-
-test('default 30-day and inclusive UTC custom dates exclude unknown dates', () => {
-  const old = record('v2.15.0-head', '2026-10-18T12:00:00Z');
-  const start = record('v2.16.0-head', '2026-11-17T00:00:00Z');
-  const end = record('v2.17.0-head', '2026-11-18T01:59:59+02:00');
-  const outside = record('v2.18.0-head', '2026-11-18T00:00:00Z');
-  const unknown = record('v2.19.0-head', '');
-  const data = [old, start, end, outside, unknown];
-  assert.deepEqual(selectBuilds(data, { now }), [outside, end, start]);
-  assert.deepEqual(selectBuilds(data, { now, age: 'custom', from: '2026-11-17', to: '2026-11-17' }), [end, start]);
-  for (const sort of ['newest', 'oldest']) {
-    const all = selectBuilds(data, { now, age: 'all', sort });
-    assert.equal(all.length, 5);
-    assert.equal(all.at(-1), unknown);
-  }
-});
-
-test('filters combine registry and case-insensitive words across hashes and inspected charts', () => {
-  const build = record('v2.17.0-head', '2026-11-17T00:00:00Z');
-  build.summary.revision = 'abcd1234';
-  build.summary.digest = 'sha256:beefbeef';
-  build.details = { charts: { 'rancher-webhook': '105.0.1' } };
-  const data = [build, record('v2.16.0-head', '2026-11-17T00:00:00Z', 'docker.io')];
-  assert.deepEqual(selectBuilds(data, { now, registry: 'stgregistry.suse.com', text: 'ABCD 105.0.1 BEEF' }), [build]);
-  assert.deepEqual(selectBuilds(data, { now, registry: 'docker.io', text: 'ABCD' }), []);
-});
-
-test('registry interleaving deduplicates references without losing a source', () => {
-  assert.deepEqual(buildReferences([
-    { registry: 'stg', repository: 'rancher/rancher', tags: ['a', 'a', 'b'] },
-    { registry: 'docker.io', repository: 'rancher/rancher', tags: ['a', 'b'] },
-  ]), ['stg/rancher/rancher:a', 'docker.io/rancher/rancher:a', 'docker.io/rancher/rancher:b', 'stg/rancher/rancher:b']);
-});
-
-test('metadata scans bound concurrency and keep progress after a registry failure', async () => {
-  const records = Array.from({ length: 11 }, (_, i) => ({ reference: String(i) }));
-  let active = 0, maximum = 0;
-  const progress = [];
-  await scanBuildSummaries(records, async ({ reference, summary }) => {
-    assert.equal(summary, '1');
-    maximum = Math.max(maximum, ++active);
-    await new Promise(resolve => setImmediate(resolve));
-    active--;
-    if (reference === '3') throw new Error('Registry unavailable');
-    return { created: '2026-11-17T12:00:00Z' };
-  }, { signal: new AbortController().signal, onProgress: count => progress.push(count) });
-  assert.equal(maximum, 4);
-  assert.equal(progress.at(-1), 11);
-  assert.equal(records[3].error, 'Registry unavailable');
-  assert.equal(records.filter(record => record.summary).length, 10);
-});
-
-test('cancelled scans stop scheduling and cannot add late metadata to a new search', async () => {
-  const controller = new AbortController();
-  const records = Array.from({ length: 8 }, (_, i) => ({ reference: String(i) }));
-  const pending = [];
-  let count = 0;
-  const scan = scanBuildSummaries(records, () => new Promise(resolve => pending.push(resolve)), {
-    signal: controller.signal, onProgress: () => count++, concurrency: 2,
-  });
-  assert.equal(pending.length, 2);
-  controller.abort();
-  pending.forEach(resolve => resolve({ created: '2026-11-17T12:00:00Z' }));
-  await scan;
-  assert.equal(count, 0);
-  assert.equal(pending.length, 2);
-  assert.ok(records.every(record => !record.summary));
-});
-
-// Exercise async dialog state without a live registry or a browser process.
-function dialogFixture(t) {
-  class Element extends EventTarget {
-    value = ''; hidden = false; textContent = ''; children = []; fields = new Map(); attributes = new Map();
-    querySelector(selector) {
-      if (!this.fields.has(selector)) this.fields.set(selector, new Element());
-      return this.fields.get(selector);
-    }
-    replaceChildren(...children) { this.children = children; }
-    append(child) { this.children.push(child); }
-    contains() { return false; }
-    setAttribute(name, value) { this.attributes.set(name, value); }
-    removeAttribute(name) { this.attributes.delete(name); }
-    focus() {}
-    showModal() { this.open = true; }
-    close() { this.open = false; this.dispatchEvent(new Event('close')); }
-  }
-  const previous = { document: globalThis.document, window: globalThis.window, fetch: globalThis.fetch };
+function fixture(t, docker = false) {
+  const { document, Event } = parseHTML(template);
+  const dialog = document.querySelector('#setupBuildPicker');
+  const get = selector => dialog.querySelector(selector);
   const requests = [];
-  globalThis.document = { createElement: () => new Element() };
-  globalThis.window = { location: { href: 'http://localhost/setup' } };
-  globalThis.fetch = (url, options) => new Promise(resolve => requests.push({
-    url, signal: options.signal, reply: data => resolve({ ok: true, json: async () => data }),
+  // The lightweight DOM has no layout, modal lifecycle, or select-value setter.
+  Object.defineProperty(get('[data-age]'), 'value', { writable: true, value: '' });
+  t.mock.method(document.defaultView.HTMLElement.prototype, 'focus', function () { document.activeElement = this; });
+  document.defaultView.HTMLElement.prototype.scrollIntoView = () => {};
+  dialog.showModal = () => { dialog.open = true; };
+  dialog.close = () => { dialog.open = false; dialog.dispatchEvent(new Event('close')); };
+  const previous = { document: globalThis.document, window: globalThis.window, fetch: globalThis.fetch };
+  globalThis.document = document;
+  globalThis.window = { location: { href: 'http://localhost/setup-editor' } };
+  globalThis.fetch = (url, { signal }) => new Promise(resolve => requests.push({
+    q: url.searchParams, signal,
+    reply: data => resolve(Response.json(data)), fail: text => resolve(new Response(text, { status: 502 })),
   }));
   t.after(() => Object.assign(globalThis, previous));
-  const dialog = new Element();
   const open = () => pickRancherBuild(dialog, {
-    endpoint: '/setup-editor/api/rancher-builds', token: 'fixture', docker: false,
-    label: 'Rancher 1', version: '2.16.0-head', escapeHtml: value => value,
+    endpoint: '/setup-editor/api/rancher-builds', token: t.name, docker,
+    label: 'Rancher 1', version: '', escapeHtml: value => String(value).replaceAll('<', '&lt;'),
   });
-  return { dialog, requests, open };
+  return { dialog, get, open, requests, Event };
 }
-const tick = () => new Promise(resolve => setImmediate(resolve));
 
-test('dialog shows discovery and date progress, then loads chart details before selecting', async t => {
-  const { dialog, requests, open } = dialogFixture(t);
-  const picked = open();
-  assert.equal(requests[0].url.searchParams.get('version'), 'latest-heads');
-  assert.equal(requests[0].url.searchParams.get('token'), 'fixture');
-  assert.equal(dialog.querySelector('[data-age]').value, '30');
-  assert.equal(dialog.querySelector('[data-spinner]').hidden, false);
-  assert.match(dialog.querySelector('[data-status]').textContent, /Searching Rancher registries/);
-  requests[0].reply([{ registry: 'stgregistry.suse.com', repository: 'rancher/rancher-server', tags: ['v2.17.0-head'] }]);
-  await tick();
-  assert.equal(requests[1].url.searchParams.get('summary'), '1');
-  assert.equal(dialog.querySelector('[data-progress]').hidden, false);
-  requests[1].reply({ created: new Date().toISOString(), version: 'v2.17.0-abcdef0-head' });
-  await tick();
-  assert.equal(dialog.querySelector('[data-spinner]').hidden, true);
-  assert.match(dialog.querySelector('[data-status]').textContent, /1\/1 build dates checked/);
-  const card = dialog.querySelector('[data-builds]').children[0];
-  const details = card.querySelector('[data-detail]');
-  details.open = true; details.dispatchEvent(new Event('toggle'));
-  assert.equal(card.querySelector('[data-evidence]').attributes.get('aria-busy'), 'true');
-  assert.equal(requests[2].url.searchParams.has('summary'), false);
-  const reference = 'stgregistry.suse.com/rancher/rancher-server:v2.17.0-abcdef0-head';
-  requests[2].reply({ reference, created: new Date().toISOString(), version: 'v2.17.0-abcdef0-head', charts: { 'rancher-webhook': '105.0.1' } });
-  await tick();
-  const evidence = card.querySelector('[data-evidence]');
-  assert.match(evidence.innerHTML, /105.0.1/);
-  evidence.children.at(-1).dispatchEvent(new Event('click'));
-  assert.equal(await picked, reference);
+test('overview filtering combines words and uses UTC calendar dates', () => {
+  assert.deepEqual(filterIndexedBuilds([head, otherLine], 'SUSe aaa v0.12'), [head]);
+  assert.deepEqual(filterIndexedBuilds([head, otherLine], 'absent'), []);
+  assert.equal(buildDateLabel(head, Date.parse('2026-11-18T00:00:01Z')), 'Today');
+  assert.equal(buildDateLabel(otherLine, Date.parse('2026-11-18T23:59:59Z')), 'Yesterday');
 });
 
-test('closing and reopening aborts old requests and prevents stale loading state', async t => {
-  const { dialog, requests, open } = dialogFixture(t);
+test('only the opened line loads history and only the previewed build can be applied', async t => {
+  const { get, open, requests } = fixture(t);
+  const picked = open();
+  assert.equal(requests[0].q.get('days'), '30');
+  requests[0].reply(page([head, otherLine]));
+  await tick();
+  assert.equal(requests.length, 1);
+  const toggle = get('.setup-build-toggle');
+  const panel = get('#' + toggle.getAttribute('aria-controls'));
+  assert.equal(panel.hidden, true);
+  toggle.click();
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(panel.hidden, false);
+  assert.equal(panel.getAttribute('aria-labelledby'), toggle.id);
+  assert.equal(requests[1].q.get('line'), head.line);
+  assert.equal(requests[1].q.get('exclude'), head.version);
+  assert.equal(requests[1].q.get('limit'), '5');
+  assert.equal(requests[2].q.get('report'), head.reportPath);
+  assert.equal(get('[data-use]').disabled, true);
+  requests[1].reply(page([older]));
+  await tick();
+  assert.deepEqual([...panel.querySelectorAll('time')].map(time => time.textContent), [older.created]);
+  const row = panel.querySelector('li button');
+  row.click();
+  assert.equal(row.getAttribute('aria-current'), 'true');
+  assert.equal(document.activeElement, get('[data-review-title]'));
+  assert.equal(get('[data-review-title]').textContent, 'Selected build');
+  assert.equal(requests[2].signal.aborted, true);
+  assert.equal(requests[3].q.get('report'), older.reportPath);
+  requests[2].reply(head);
+  await tick();
+  assert.equal(get('[data-use]').disabled, true);
+  requests[3].reply({ ...older, charts: { fleet: '105+up1' }, catalogVersions: { fleet: ['older'] } });
+  await tick();
+  assert.match(get('[data-evidence]').textContent, /105\+up1Missing from/);
+  assert.equal(get('[data-reference]').textContent, older.reference);
+  get('[data-use]').click();
+  assert.equal(await picked, older.reference);
+});
+
+test('paging keeps focus and line history stays usable after a verification failure', async t => {
+  const { dialog, get, open, requests, Event } = fixture(t);
+  const picked = open();
+  requests[0].reply(page([head, otherLine]));
+  await tick();
+  get('.setup-build-toggle').click();
+  const dates = ['17', '16', '15', '14', '13', '12'];
+  const history = dates.map(day => build('2.17', 'abcde' + day, day));
+  requests[1].reply(page(history.slice(0, 5), 6));
+  requests[2].fail('Registry offline');
+  await tick();
+  assert.equal(get('[data-use]').disabled, true);
+  assert.match(get('[data-detail-error]').textContent, /Registry offline/);
+  const more = get('[data-more]');
+  more.focus();
+  more.click();
+  assert.equal(requests[3].q.get('offset'), '5');
+  requests[3].reply(page(history.slice(5), 6, 6));
+  await tick();
+  const rows = [...get('[data-history-list]').querySelectorAll('li button')];
+  assert.equal(rows.length, 6);
+  assert.equal(document.activeElement, rows.at(-1));
+  assert.equal(more.hidden, true);
+  rows.at(-1).click();
+  get('[data-latest]').click();
+  assert.equal(requests[4].signal.aborted, true);
+  assert.equal(requests[5].q.get('report'), head.reportPath);
+  assert.equal(get('[data-history-list]').querySelector('[aria-current]'), null);
+  const filter = get('[data-history-filter] input');
+  filter.value = 'old-webhook';
+  filter.dispatchEvent(new Event('input'));
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(requests[6].q.get('q'), 'old-webhook');
+  const toggles = dialog.querySelectorAll('.setup-build-toggle');
+  toggles[1].click();
+  assert.equal(toggles[0].getAttribute('aria-expanded'), 'false');
+  assert.equal(requests[5].signal.aborted, true);
+  assert.equal(requests[6].signal.aborted, true);
+  requests[6].reply(page(history));
+  requests[7].reply(page([]));
+  await tick();
+  assert.match(get('[data-history-status]').textContent, /No other builds/);
+  toggles[1].click();
+  assert.equal(requests[8].signal.aborted, true);
+  dialog.close();
+  assert.equal(await picked, '');
+});
+
+test('exact image verification supports moving tags and enforces Docker compatibility', async t => {
+  const { dialog, get, open, requests, Event } = fixture(t, true);
+  const picked = open();
+  requests[0].reply(page([]));
+  await tick();
+  get('[data-direct]').open = true;
+  get('[data-direct-image]').value = head.reference;
+  get('[data-direct-form]').dispatchEvent(new Event('submit'));
+  requests[1].reply(head);
+  await tick();
+  assert.equal(get('[data-use]').disabled, true);
+  assert.match(get('[data-detail-error-message]').textContent, /Linode Docker/);
+  const reference = 'docker.io/rancher/rancher:v2.17-head';
+  get('[data-direct-image]').value = reference;
+  get('[data-direct-form]').dispatchEvent(new Event('submit'));
+  assert.equal(requests[2].q.get('reference'), reference);
+  requests[2].reply({ reference, moving: true });
+  await tick();
+  assert.equal(get('[data-use]').textContent, 'Use moving tag');
+  get('[data-use]').click();
+  assert.equal(await picked, reference);
+  assert.equal(dialog.open, false);
+});
+
+test('closing cancels pending discovery and reopening ignores the late response', async t => {
+  const { dialog, get, open, requests } = fixture(t);
   const first = open();
   dialog.close();
   assert.equal(await first, '');
-  assert.equal(requests[0].signal.aborted, true);
   const second = open();
-  requests[0].reply([]);
+  assert.equal(requests[0].signal.aborted, true);
+  requests[0].reply(page([head]));
   await tick();
-  assert.equal(dialog.querySelector('[data-spinner]').hidden, false);
-  assert.match(dialog.querySelector('[data-status]').textContent, /Searching Rancher registries/);
-  dialog.querySelector('[data-stop]').dispatchEvent(new Event('click'));
-  assert.equal(requests[1].signal.aborted, true);
-  assert.equal(dialog.querySelector('[data-spinner]').hidden, true);
-  assert.match(dialog.querySelector('[data-status]').textContent, /Search stopped/);
-  requests[1].reply([]);
+  assert.equal(get('[data-builds]').children.length, 0);
+  requests[1].reply(page([otherLine]));
   await tick();
+  assert.equal(get('[data-line]').textContent, otherLine.line);
   dialog.close();
   assert.equal(await second, '');
+});
+
+test('returning to a verified head reuses it and refresh checks the open line again', async t => {
+  const { dialog, get, open, requests } = fixture(t);
+  const picked = open();
+  requests[0].reply(page([head]));
+  await tick();
+  get('.setup-build-toggle').click();
+  requests[1].reply(page([older]));
+  requests[2].reply(head);
+  await tick();
+  get('[data-history-list] button').click();
+  get('[data-latest]').click();
+  await tick();
+  assert.equal(requests.length, 4);
+  assert.equal(requests[3].signal.aborted, true);
+  assert.equal(get('[data-use]').disabled, false);
+  get('[data-refresh]').click();
+  requests[4].reply(page([head]));
+  await tick();
+  assert.equal(requests[5].q.get('refresh'), '1');
+  assert.equal(requests[6].q.get('report'), head.reportPath);
+  assert.equal(get('[data-use]').disabled, true);
+  requests[5].fail('History unavailable');
+  requests[6].reply(head);
+  await tick();
+  assert.equal(get('[data-use]').disabled, false);
+  assert.match(get('[data-history-error]').textContent, /History unavailable/);
+  get('[data-history-error] button').click();
+  requests[7].reply(page([]));
+  await tick();
+  assert.match(get('[data-history-status]').textContent, /No other builds/);
+  dialog.close();
+  assert.equal(await picked, '');
 });

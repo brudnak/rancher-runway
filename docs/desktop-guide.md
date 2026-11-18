@@ -103,30 +103,24 @@ the target instance beside it. A larger **Find builds** button is available on e
 **From a version**. Opening the wizard from **My Helm commands** keeps that
 mode until you select a build, then switches to **From a version** while
 preserving your Helm commands. Closing the wizard leaves your plan unchanged.
-The initial **Latest 2.x.0 heads** view searches the three newest published
-minor lines, shows the newest matching build per line and image repository,
-and defaults to **Last 30 days** and **Newest built first**. Dates come from
-image build metadata, including immutable builds newer than a moving alias.
-Search `2.17` for a release line, `2.17-head` for its heads, `2.16.0-head`
-for a single patch, or `2.x.0-head` for all .0 head lines. Quick-search buttons
-list the discovered head lines in descending version order.
 
-Filter by registry, tag, commit or digest; choose newest/oldest build dates
-or highest version; use 7/30/90 days, all dates, or an inclusive UTC date range.
-Turn off **Newest matching build** to compare history. Builds without dates
-are included only with **All dates** and sort after dated builds.
-A spinner, progress bar, and checked/total count show the search in progress;
-results reorder as dates arrive. **Stop search** keeps partial results, and a
-new search or closing the dialog cancels outstanding lookups.
+The finder shows the latest reported SUSE staging head for each release line
+in the **Last 30 days**, with the highest release line first. Filter the cards
+by line, head tag, or webhook version. Choose **Last 7 days**, **Last 90 days**,
+or **All dates** to change the window for both the cards and their histories.
 
-Each result shows its registry and build time. Open **Chart versions, hashes
-& select build** to load the system chart evidence with a separate loading
-indicator and retry action. Expand
-**Hashes and catalog evidence** for the image digest, source commits, and
-versions in the pinned chart index when available. **Use this build** fills
-that row with the selected image. **Use moving tag** identifies aliases that
-can change before plan resolution. Linode uses the selected repository for
-all Docker rows.
+Click a card or focus its header and press Enter or Space. The card opens with
+the build's image reference, build date, and system chart versions. Expand
+**Image and catalog details** for the digest, source commits, and pinned catalog
+versions. **Other builds** lists alternatives in the same line by build date,
+newest first. Choose a row to preview it, or **Back to latest build** to return
+to the head. Longer histories support filtering and load five builds at a time.
+
+**Use this build** fills the target row after image verification. For a Community
+image or a moving tag, open **Have an exact image or need another registry?**
+and enter the full reference. **Use moving tag** identifies an alias that can
+change before plan resolution. Linode uses the selected repository for all
+Docker rows.
 
 Import accepts a single `.yml` or `.yaml` file up to 1 MB, including partial
 Runway configs. Invalid YAML and unrelated files are rejected without changing

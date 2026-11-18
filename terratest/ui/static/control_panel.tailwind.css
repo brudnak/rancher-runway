@@ -2148,9 +2148,10 @@ body[data-workspace] #panelTabs{background:var(--runway-card);isolation:isolate}
 #interactiveSetupRoot .setup-find-build:disabled { opacity: .5; cursor: not-allowed; }
 #setupBuildPicker {
   width: min(68rem, calc(100% - 2rem)); max-height: 90vh; margin: auto; padding: 0;
-  overflow: auto; color: var(--runway-ink); background: var(--runway-card);
+  overflow: hidden; color: var(--runway-ink); background: var(--runway-card);
   border: 1px solid var(--runway-border); border-radius: 18px; box-shadow: 0 28px 100px rgb(0 0 0 / 25%);
 }
+#setupBuildPicker[open] { display: flex; flex-direction: column; }
 #setupBuildPicker::backdrop { background: rgb(10 16 22 / 65%); backdrop-filter: blur(3px); }
 #setupBuildPicker [hidden] { display: none !important; }
 #setupBuildPicker button, #setupBuildPicker select, #setupBuildPicker input {
@@ -2162,37 +2163,58 @@ body[data-workspace] #panelTabs{background:var(--runway-card);isolation:isolate}
 #setupBuildPicker button:disabled { opacity: .5; cursor: default; }
 #setupBuildPicker :is(button,input,select,a,summary):focus-visible { outline: 2px solid var(--runway-accent); outline-offset: 3px; }
 #setupBuildPicker a { color: var(--runway-accent); font-size: 12px; }
-#setupBuildPicker .setup-picker-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding: 26px 28px 22px; border-bottom: 1px solid var(--runway-border); }
+#setupBuildPicker .setup-picker-header { flex-shrink: 0; display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; padding: 26px 28px 22px; border-bottom: 1px solid var(--runway-border); }
 #setupBuildPicker .setup-picker-header h2 { font-size: 28px; font-weight: 650; letter-spacing: -.04em; line-height: 1.2; margin: 7px 0 9px; }
 #setupBuildPicker .setup-picker-header p { font-size: 13px; color: var(--runway-muted); }
 #setupBuildPicker .setup-build-kicker { font-size: 9px; font-weight: 650; letter-spacing: .13em; color: var(--runway-muted); }
-#setupBuildPicker [data-browse], #setupBuildPicker [data-review] { padding: 22px 28px 26px; }
+#setupBuildPicker [data-browse] { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scroll-padding: 12px; padding: 22px 28px 26px; }
 #setupBuildPicker .setup-picker-toolbar { display: flex; gap: 10px; align-items: center; }
 #setupBuildPicker .setup-picker-search { flex: 1; min-width: 0; }
 #setupBuildPicker .setup-picker-search input { width: 100%; background: var(--runway-soft); }
-#setupBuildPicker .setup-picker-view-heading { margin: 24px 0 0; }
+#setupBuildPicker .setup-picker-view-heading { margin: 20px 0 10px; display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 12px; }
 #setupBuildPicker .setup-picker-view-heading h3 { font-size: 17px; letter-spacing: -.02em; font-weight: 650; }
-#setupBuildPicker .setup-picker-view-heading p { margin-top: 5px; font-size: 12px; color: var(--runway-muted); }
-#setupBuildPicker [data-back], #setupBuildPicker [data-review-back] { padding-left: 0; background: transparent; border-color: transparent; color: var(--runway-accent); }
-#setupBuildPicker .setup-picker-status { display: flex; align-items: center; gap: 9px; min-height: 42px; font-size: 12px; color: var(--runway-muted); }
-#setupBuildPicker [data-builds] { display: grid; gap: 10px; }
-#setupBuildPicker .setup-build-row { display: grid; grid-template-columns: 100px minmax(0,1fr) auto; gap: 22px; align-items: center; padding: 19px 20px; border: 1px solid var(--runway-border); border-radius: 12px; background: var(--runway-card); }
-#setupBuildPicker .setup-build-row:hover { background: var(--runway-soft); }
-#setupBuildPicker .setup-build-line h3 { font-size: 26px; font-weight: 650; letter-spacing: -.04em; line-height: 1.3; margin: 3px 0 5px; }
-#setupBuildPicker .setup-build-source { color: var(--runway-muted); font-size: 11px; }
-#setupBuildPicker .setup-build-summary { min-width: 0; }
-#setupBuildPicker .setup-build-summary code { display: block; overflow-wrap: anywhere; font-size: 12px; color: var(--runway-ink); }
-#setupBuildPicker .setup-build-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; font-size: 12px; color: var(--runway-muted); }
+#setupBuildPicker .setup-picker-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--runway-muted); }
+#setupBuildPicker [data-builds] { display: grid; gap: 8px; }
+#setupBuildPicker .setup-build-row { min-width: 0; border: 1px solid var(--runway-border); border-radius: 12px; background: var(--runway-card); }
+#setupBuildPicker .setup-build-row:has([aria-expanded="true"]) { border-color: var(--runway-accent); }
+#setupBuildPicker .setup-build-toggle { width: 100%; display: grid; grid-template-columns: 6rem minmax(0,1fr) auto; align-items: center; gap: 18px; padding: 15px 20px; border: 0; border-radius: 11px; text-align: left; font-weight: 400; }
+#setupBuildPicker .setup-build-toggle[aria-expanded="true"] { border-radius: 11px 11px 0 0; background: var(--runway-accent-soft); }
+#setupBuildPicker .setup-build-line { display: grid; }
+#setupBuildPicker .setup-build-line .setup-build-kicker { text-transform: uppercase; }
+#setupBuildPicker .setup-build-line strong { font-size: 26px; font-weight: 650; letter-spacing: -.04em; line-height: 1.2; }
+#setupBuildPicker .setup-build-summary code, #setupBuildPicker [data-reference] { display: block; overflow-wrap: anywhere; font-size: 12px; }
+#setupBuildPicker .setup-build-meta { display: flex; flex-wrap: wrap; gap: 2px 16px; margin-top: 5px; font-size: 12px; color: var(--runway-muted); }
 #setupBuildPicker .setup-build-meta strong { color: var(--runway-ink); font-weight: 500; }
-#setupBuildPicker .setup-build-row-actions { display: grid; justify-items: stretch; gap: 3px; }
-#setupBuildPicker [data-review-build] { color: var(--runway-accent); border-color: transparent; background: var(--runway-accent-soft); display: flex; align-items: center; gap: 18px; }
-#setupBuildPicker [data-history] { border: 0; background: transparent; font-size: 11px; color: var(--runway-muted); min-height: 30px; padding: 5px; }
-#setupBuildPicker [data-more] { display: block; margin: 18px auto 0; }
+#setupBuildPicker .setup-build-chevron { width: 9px; height: 9px; border: solid var(--runway-accent); border-width: 0 2px 2px 0; transform: rotate(45deg); margin: -4px 4px 0 0; }
+#setupBuildPicker [aria-expanded="true"] .setup-build-chevron { transform: rotate(225deg); margin-top: 4px; }
+#setupBuildPicker .setup-build-review, #setupBuildPicker .setup-build-history { padding: 16px 20px; border-top: 1px solid var(--runway-border); }
+#setupBuildPicker .setup-review-top, #setupBuildPicker .setup-build-history header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px 16px; flex-wrap: wrap; }
+#setupBuildPicker .setup-review-top > div { flex: 1 1 240px; min-width: 0; }
+#setupBuildPicker h5 { font-size: 15px; font-weight: 650; letter-spacing: -.02em; }
+#setupBuildPicker [data-reference] { margin-top: 4px; }
+#setupBuildPicker [data-preview-meta], #setupBuildPicker [data-history-status] { margin-top: 4px; font-size: 12px; color: var(--runway-muted); }
+#setupBuildPicker .setup-detail-status { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--runway-muted); margin-top: 8px; }
+#setupBuildPicker .setup-detail-status:empty { display: none; }
+#setupBuildPicker .setup-detail-status[data-verified] { color: var(--runway-accent); }
+#setupBuildPicker .setup-detail-status[data-verified]::before { content: ''; width: 6px; height: 6px; background: currentColor; border-radius: 50%; }
+#setupBuildPicker .setup-review-links { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+#setupBuildPicker .setup-review-links :is(a,button):not([hidden]) { display: inline-flex; align-items: center; min-height: 32px; margin-top: 6px; }
+#setupBuildPicker [data-latest] { padding: 0; border: 0; color: var(--runway-accent); background: transparent; font-size: 12px; }
+#setupBuildPicker .setup-build-history { background: var(--runway-soft); border-radius: 0 0 11px 11px; }
+#setupBuildPicker [data-history-filter] input { width: 100%; min-height: 34px; font-size: 12px; }
+#setupBuildPicker [data-history-list]:not(:empty) { margin-top: 12px; }
+#setupBuildPicker .setup-history-row { width: 100%; display: grid; grid-template-columns: 6rem minmax(0,1.5fr) minmax(0,1fr) 3.5rem; align-items: baseline; gap: 4px 12px; text-align: left; border: 0; border-top: 1px solid var(--runway-border); border-radius: 0; padding: 10px 6px; min-height: 44px; background: transparent; font-size: 12px; font-weight: 400; }
+#setupBuildPicker .setup-history-row time { font-variant-numeric: tabular-nums; }
+#setupBuildPicker .setup-history-row code, #setupBuildPicker .setup-history-row [data-webhook] { overflow-wrap: anywhere; }
+#setupBuildPicker .setup-history-row [data-webhook] { color: var(--runway-muted); }
+#setupBuildPicker .setup-history-row [data-action] { color: var(--runway-accent); text-align: right; font-weight: 600; }
+#setupBuildPicker .setup-history-row[aria-current] { background: var(--runway-accent-soft); box-shadow: inset 2px 0 var(--runway-accent); }
+#setupBuildPicker [data-more] { margin-top: 8px; }
 #setupBuildPicker .setup-picker-provenance { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 20px; padding: 0 2px; font-size: 11px; line-height: 1.6; color: var(--runway-muted); }
 #setupBuildPicker .setup-picker-provenance p { max-width: 70ch; }
 #setupBuildPicker .setup-picker-direct { border-top: 1px solid var(--runway-border); margin-top: 20px; padding-top: 16px; }
 #setupBuildPicker summary { cursor: pointer; font-size: 12px; font-weight: 550; }
-#setupBuildPicker .setup-picker-direct p { font-size: 12px; color: var(--runway-muted); margin: 12px 0; }
+#setupBuildPicker .setup-picker-direct > p { font-size: 12px; color: var(--runway-muted); margin: 12px 0; }
 #setupBuildPicker .setup-picker-direct form { display: flex; gap: 10px; }
 #setupBuildPicker .setup-picker-direct input { flex: 1; min-width: 0; font-family: ui-monospace,monospace; font-size: 11px; }
 #setupBuildPicker .setup-picker-error { padding: 16px; margin: 8px 0; background: var(--runway-soft); border: 1px solid var(--runway-border); border-radius: 10px; font-size: 13px; overflow-wrap: anywhere; }
@@ -2200,35 +2222,39 @@ body[data-workspace] #panelTabs{background:var(--runway-card);isolation:isolate}
 #setupBuildPicker .setup-picker-empty { padding: 36px 20px; border: 1px dashed var(--runway-border); border-radius: 12px; text-align: center; font-size: 13px; color: var(--runway-muted); }
 #setupBuildPicker .setup-picker-warnings { margin-top: 14px; font-size: 12px; color: var(--runway-muted); overflow-wrap: anywhere; }
 #setupBuildPicker .setup-picker-warnings li { margin: 8px 0; }
-#setupBuildPicker .setup-picker-review-heading { margin: 20px 0; }
-#setupBuildPicker .setup-picker-review-heading h3 { font-size: 26px; letter-spacing: -.04em; font-weight: 650; margin: 6px 0 14px; }
-#setupBuildPicker .setup-picker-review-heading code { display: block; font-size: 12px; overflow-wrap: anywhere; line-height: 1.7; }
-#setupBuildPicker .setup-picker-review-heading a { display: inline-block; margin-top: 12px; }
-#setupBuildPicker .setup-picker-verifying { display: flex; align-items: center; gap: 14px; padding: 24px; background: var(--runway-soft); border-radius: 12px; margin: 20px 0; font-size: 13px; }
-#setupBuildPicker .setup-picker-verifying p { color: var(--runway-muted); font-size: 12px; margin-top: 5px; }
 #setupBuildPicker .setup-build-spinner { display: inline-block; flex-shrink: 0; width: 17px; height: 17px; border: 2px solid var(--runway-border); border-top-color: var(--runway-accent); border-radius: 50%; animation: setup-build-spin .8s linear infinite; }
 #setupBuildPicker .setup-picker-skeleton { display: grid; gap: 10px; }
-#setupBuildPicker .setup-picker-skeleton>div { height: 108px; border: 1px solid var(--runway-border); border-radius: 12px; background: linear-gradient(100deg,var(--runway-soft) 25%,var(--runway-card) 50%,var(--runway-soft) 75%); background-size: 200% 100%; animation: setup-build-shimmer 1.4s ease-in-out infinite; }
+#setupBuildPicker .setup-picker-skeleton>div { height: 82px; border: 1px solid var(--runway-border); border-radius: 12px; background: linear-gradient(100deg,var(--runway-soft) 25%,var(--runway-card) 50%,var(--runway-soft) 75%); background-size: 200% 100%; animation: setup-build-shimmer 1.4s ease-in-out infinite; }
 #setupBuildPicker .setup-build-facts { display: grid; gap: 0; margin: 8px 0 22px; font-size: 13px; }
 #setupBuildPicker .setup-build-facts>div { display: grid; grid-template-columns: minmax(8rem,1fr) minmax(0,2fr); gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--runway-border); }
 #setupBuildPicker .setup-build-facts dt { color: var(--runway-muted); }
 #setupBuildPicker .setup-build-facts dd { font-family: ui-monospace,monospace; font-size: 12px; overflow-wrap: anywhere; }
-#setupBuildPicker [data-evidence] h4 { font-size: 14px; font-weight: 650; }
-#setupBuildPicker [data-evidence]>p { margin: 14px 0; font-size: 12px; color: var(--runway-muted); }
-#setupBuildPicker .setup-picker-review-footer { position: sticky; bottom: -26px; display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 24px -28px -26px; padding: 20px 28px; background: var(--runway-card); border-top: 1px solid var(--runway-border); }
-#setupBuildPicker .setup-picker-review-footer p { max-width: 40ch; color: var(--runway-muted); font-size: 12px; }
+#setupBuildPicker [data-evidence] h6 { margin-top: 12px; font-size: 12px; font-weight: 650; }
+#setupBuildPicker .setup-chart-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem),1fr)); gap: 8px; margin: 5px 0 10px; }
+#setupBuildPicker .setup-chart-facts > div { min-width: 0; padding: 7px 10px; border: 1px solid var(--runway-border); border-radius: 7px; font-size: 12px; }
+#setupBuildPicker .setup-chart-facts dt, #setupBuildPicker .setup-chart-facts small { display: block; color: var(--runway-muted); overflow-wrap: anywhere; }
+#setupBuildPicker .setup-chart-facts code { overflow-wrap: anywhere; }
+#setupBuildPicker .setup-chart-facts .setup-chart-missing { color: var(--runway-error); }
+#setupBuildPicker [data-evidence]>p { margin: 8px 0; font-size: 12px; color: var(--runway-muted); }
+#setupBuildPicker [data-evidence] summary { padding: 4px 0; }
 #setupBuildPicker [data-use] { color: var(--runway-card); background: var(--runway-accent); border-color: var(--runway-accent); padding: 12px 22px; min-height: 44px; }
 #setupBuildPicker [data-use]:hover:enabled { color: var(--runway-accent); }
 @keyframes setup-build-spin { to { transform: rotate(360deg); } }
 @keyframes setup-build-shimmer { to { background-position: -200% 0; } }
 @media(max-width:680px) {
-  #setupBuildPicker .setup-picker-header, #setupBuildPicker [data-browse], #setupBuildPicker [data-review] { padding: 20px; }
+  #setupBuildPicker .setup-picker-header, #setupBuildPicker [data-browse] { padding: 16px; }
   #setupBuildPicker .setup-picker-toolbar { flex-wrap: wrap; }
   #setupBuildPicker .setup-picker-search { flex-basis: 100%; }
-  #setupBuildPicker .setup-build-row { grid-template-columns: 76px minmax(0,1fr); gap: 14px; padding: 16px; }
-  #setupBuildPicker .setup-build-row-actions { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  #setupBuildPicker .setup-build-toggle { grid-template-columns: 4rem minmax(0,1fr) auto; gap: 9px; padding: 13px 12px; }
+  #setupBuildPicker .setup-build-review, #setupBuildPicker .setup-build-history { padding: 14px 12px; }
+  #setupBuildPicker .setup-history-row { grid-template-columns: minmax(0,1fr) auto; gap: 2px 8px; }
+  #setupBuildPicker .setup-chart-facts { grid-template-columns: 1fr; gap: 0; }
+  #setupBuildPicker .setup-chart-facts > div { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1.4fr); gap: 8px; padding: 6px 0; border: 0; border-bottom: 1px solid var(--runway-border); border-radius: 0; }
+  #setupBuildPicker .setup-history-row code { grid-column: 1; grid-row: 1; }
+  #setupBuildPicker .setup-history-row time { grid-column: 2; grid-row: 1; text-align: right; }
+  #setupBuildPicker .setup-build-facts>div { grid-template-columns: minmax(4rem,1fr) minmax(0,2fr); }
+
   #setupBuildPicker .setup-picker-direct form { flex-wrap: wrap; }
   #setupBuildPicker .setup-picker-direct input { flex-basis: 100%; }
-  #setupBuildPicker .setup-picker-review-footer { bottom: -20px; margin: 20px -20px -20px; padding: 18px 20px; }
 }
 @media(prefers-reduced-motion:reduce) { #setupBuildPicker .setup-build-spinner, #setupBuildPicker .setup-picker-skeleton>div { animation: none; } }

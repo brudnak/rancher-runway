@@ -1528,7 +1528,7 @@ const renderBuildPickerTargets = () => {
   byId('setupBuildTargetLabel').hidden = versions.length < 2
   byId('setupBuildPickerHint').textContent = setupMode === 'manual'
     ? 'Selecting a build switches to From a version. Your Helm commands stay available.'
-    : 'Search a release or head selector, such as 2.17-head or 2.16.0-head.'
+    : 'Browse recent builds by release line, or inspect an exact image.'
 }
 
 const openBuildPicker = async (index, button) => {

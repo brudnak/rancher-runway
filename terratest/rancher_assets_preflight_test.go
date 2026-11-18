@@ -83,6 +83,8 @@ spec:
         - name: rancher
           image: ` + preflightServerImage + `
           env:
+            - name: CATTLE_SYSTEM_CATALOG
+              value: bundled
             - name: CATTLE_SYSTEM_UPGRADE_CONTROLLER_CHART_VERSION
               value: 111.0.0
 YAML
@@ -129,6 +131,84 @@ YAML
 						t.Errorf("missing %q in %q", want, summary)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestRancherAssetsPreflightUsesEffectiveCatalog(t *testing.T) {
+	const bundleSHA = "5d3ae9ecd269bb9ae1cbbe3b72506ad4b5fa618c"
+	const onlineSHA = "28a8008e7e80abcbfcdc64fd7b3d8494d8c109dc"
+	const server = "stgregistry.suse.com/rancher/rancher-server:v2.16.0-369d240-head"
+	const assets = "stgregistry.suse.com/rancher/rancher-assets:v2.16-20261113T2059Z-dev"
+	const defaults = "chartDefaultBranch: dev-v2.16\nfleetVersion: 111.0.0+up0.17.0-rc.5\nwebhookVersion: 111.0.1+up0.12.1-rc.20\nturtlesVersion: 111.0.0+up0.28.0-rc.7\n"
+	const current = `apiVersion: v1
+entries:
+  fleet: [{version: 111.0.0+up0.17.0-rc.5}]
+  fleet-crd: [{version: 111.0.0+up0.17.0-rc.5}]
+  rancher-turtles: [{version: 111.0.0+up0.28.0-rc.7}]
+  rancher-webhook: [{version: 111.0.1+up0.12.1-rc.20}]
+`
+	const stale = "apiVersion: v1\nentries:\n  fleet: [{version: 111.0.0+up0.17.0-rc.2}]"
+	for _, tc := range []struct {
+		name, imageMode       string
+		env                   []systemChartEnvVar
+		revision, index, want string
+		mismatch              bool
+	}{
+		{name: "online by default", revision: onlineSHA, index: current, want: "Verified"},
+		{name: "online index really is missing charts", revision: onlineSHA, index: stale, want: onlineSHA, mismatch: true},
+		{name: "deployment overrides image bundled mode", imageMode: "bundled", env: []systemChartEnvVar{{Name: "CATTLE_SYSTEM_CATALOG", Value: "external"}}, revision: onlineSHA, index: current, want: "Verified"},
+		{name: "bundled uses only packaged revision", env: []systemChartEnvVar{{Name: "CATTLE_SYSTEM_CATALOG", Value: "bundled"}}, revision: bundleSHA, index: stale, want: bundleSHA, mismatch: true},
+		{name: "configured mirror branch", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_BRANCH", Value: "alternate"}}, revision: bundleSHA, index: stale, want: "branch alternate", mismatch: true},
+		{name: "unreachable configured branch", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_BRANCH", Value: "missing"}}, want: "Inconclusive"},
+		{name: "custom external repository", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_URL", Value: "https://example.test/charts"}}, want: "Inconclusive"},
+		{name: "mode supplied by a secret", env: []systemChartEnvVar{{Name: "CATTLE_SYSTEM_CATALOG", ValueFrom: struct{}{}}}, want: "Inconclusive"},
+		{name: "branch supplied by a config map", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_BRANCH", ValueFrom: struct{}{}}}, want: "Inconclusive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			git := `#!/bin/sh
+case "$*" in
+ "ls-remote --exit-code --refs https://git.rancher.io/charts refs/heads/dev-v2.16") echo "` + onlineSHA + ` refs/heads/dev-v2.16" ;;
+ "ls-remote --exit-code --refs https://git.rancher.io/charts refs/heads/alternate") echo "` + bundleSHA + ` refs/heads/alternate" ;;
+ *) exit 1 ;;
+esac
+`
+			if err := os.WriteFile(filepath.Join(dir, "git"), []byte(git), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			var deployment rancherDeployment
+			deployment.Spec.Template.Spec.Containers = []systemChartContainer{{Name: "rancher", Image: server, Env: tc.env}}
+			deployment.Spec.Template.Spec.InitContainers = []systemChartContainer{{Name: "rancher-charts-copy", Image: assets}}
+			images := preflightImages{
+				server: {Env: []string{"CATTLE_SYSTEM_CATALOG=" + tc.imageMode, "CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT=false"}, Labels: map[string]string{imagelookup.SourceLabel: "https://github.com/rancher/rancher", imagelookup.RevisionLabel: preflightServerCommit}},
+				assets: {Env: []string{"CHART_COMMIT=" + bundleSHA}},
+			}
+			var readRevision bool
+			catalog := &helmLabCatalogService{client: &http.Client{Transport: rancherPlanRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				var body string
+				switch req.URL.Path {
+				case "/rancher/rancher/" + preflightServerCommit + "/build.yaml":
+					body = defaults
+				case "/rancher/charts/" + tc.revision + "/index.yaml":
+					body = tc.index
+					readRevision = true
+				default:
+					t.Fatalf("unexpected request %s", req.URL)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}}
+			summary, err := compareRancherAssets(t.Context(), deployment, images, catalog)
+			if (err != nil) != tc.mismatch || readRevision != (tc.revision != "") {
+				t.Fatalf("read index=%t, summary=%s, err=%v", readRevision, summary, err)
+			}
+			if err != nil {
+				summary = err.Error()
+			}
+			if !strings.Contains(summary, tc.want) {
+				t.Fatalf("want %q in %q", tc.want, summary)
 			}
 		})
 	}

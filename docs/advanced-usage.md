@@ -61,12 +61,18 @@ image's bundled K3s runtime.
 ## Rancher system chart preflight and readiness
 
 Use **Resolve & review plan** in Setup to check a Kubernetes install before provisioning.
-Runway renders the selected Helm chart, reads the server's chart versions, and
-compares them with the exact `rancher/charts` revision in the rendered
-`rancher-assets` image. A missing version stops the plan and identifies the
-server image, assets image, chart revision, and missing chart versions. The
-check includes Fleet's separate `fleet-crd` chart. If image metadata or the
-index is unavailable, the plan reports an inconclusive check and can proceed.
+Runway renders the Helm chart and checks the server and assets images. By
+default Rancher updates its `rancher-charts` repository online. Runway reads
+the branch configured by the rendered server environment or the server
+build's `chartDefaultBranch`, resolves that branch at the configured upstream,
+and checks the index at that commit. With `useBundledSystemChart=true`,
+Runway checks the chart revision packaged in the rendered assets image.
+
+A version missing from the selected catalog stops the plan. The message names
+the server, catalog, revision, and missing versions, including Fleet's separate
+`fleet-crd` chart. Custom external repositories, settings supplied by cluster
+resources, and unavailable metadata leave the check inconclusive. In those
+cases Runway proceeds to runtime verification.
 Older charts without a separate assets image use runtime verification.
 
 On HA RKE2 and hosted K3s, readiness checks the Rancher HTTP endpoints and the

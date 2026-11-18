@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -73,7 +74,7 @@ func imageEnvironment(entries []string) map[string]string {
 	return values
 }
 
-// A missing pin in a successfully read, revision-pinned index is a mismatch.
+// A missing pin in the deployment's effective catalog is a mismatch.
 // Unavailable metadata is inconclusive and leaves verification to the cluster.
 func compareRancherAssets(ctx context.Context, deployment rancherDeployment, images systemChartImageLookup, catalog *helmLabCatalogService) (string, error) {
 	server := deployment.server()
@@ -95,27 +96,46 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 	if err != nil {
 		return "Inconclusive: could not inspect " + assets, nil
 	}
-	revision := rancherChartsRevision(bundle.Config)
-	if !imagelookup.GitRevisionPattern.MatchString(revision) {
-		return "Inconclusive: " + assets + " has no pinned rancher/charts revision", nil
-	}
-
 	env := imageEnvironment(image.Config.Env)
 	if len(server.EnvFrom) > 0 {
 		return "Inconclusive: server environment comes from cluster resources", nil
 	}
 	for _, e := range server.Env {
-		if e.ValueFrom != nil && (strings.HasSuffix(e.Name, "_VERSION") || e.Name == "CATTLE_FEATURES" || e.Name == "CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT") {
+		if e.ValueFrom != nil && (strings.HasSuffix(e.Name, "_VERSION") || e.Name == "CATTLE_FEATURES" || e.Name == "CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT" || e.Name == "CATTLE_SYSTEM_CATALOG") {
 			return "Inconclusive: server chart settings come from cluster resources", nil
 		}
 		if e.ValueFrom == nil {
 			env[e.Name] = e.Value
 		}
 	}
-	pins := rancherSystemChartPins(ctx, image, env, images, catalog)
+	// The assets init container runs in both modes. Only bundled mode fixes
+	// the runtime catalog to the charts commit in that image.
+	bundled := env["CATTLE_SYSTEM_CATALOG"] == "bundled"
+	if !bundled {
+		for _, e := range server.Env {
+			if e.ValueFrom != nil && (e.Name == "CATTLE_CHART_DEFAULT_URL" || e.Name == "CATTLE_CHART_DEFAULT_BRANCH") {
+				return "Inconclusive: the external chart catalog is configured by a cluster resource", nil
+			}
+		}
+	}
+	pins, branch := rancherSystemChartRequirements(ctx, image, env, images, catalog, !bundled)
+	var revision, source string
+	if bundled {
+		revision = rancherChartsRevision(bundle.Config)
+		source = assets
+		if !imagelookup.GitRevisionPattern.MatchString(revision) {
+			return "Inconclusive: " + assets + " has no pinned rancher/charts revision", nil
+		}
+	} else {
+		revision, err = externalSystemChartRevision(ctx, env["CATTLE_CHART_DEFAULT_URL"], branch)
+		if err != nil {
+			return "Inconclusive: " + err.Error(), nil
+		}
+		source = "external rancher-charts catalog on branch " + branch
+	}
 	index, err := readSystemChartIndex(ctx, revision, catalog)
 	if err != nil {
-		return fmt.Sprintf("Inconclusive: %s for %s", err, assets), nil
+		return fmt.Sprintf("Inconclusive: %s for %s", err, source), nil
 	}
 	var missing, unknown, verified []string
 	for chart, version := range pins {
@@ -134,15 +154,43 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 	slices.Sort(unknown)
 	slices.Sort(verified)
 	if len(missing) > 0 {
-		return "", fmt.Errorf("%s requires %s, missing from %s (rancher/charts %s). Select a Rancher build or assets image containing these chart versions", server.Image, strings.Join(missing, ", "), assets, revision)
+		return "", fmt.Errorf("%s requires %s, missing from %s (rancher/charts %s). Select a Rancher build and chart catalog containing these versions", server.Image, strings.Join(missing, ", "), source, revision)
 	}
 	if len(unknown) > 0 {
 		return fmt.Sprintf("Inconclusive for %s: version pins unavailable for %s", server.Image, strings.Join(unknown, ", ")), nil
 	}
-	return fmt.Sprintf("Verified %s in %s (rancher/charts %s)", strings.Join(verified, ", "), assets, revision), nil
+	return fmt.Sprintf("Verified %s in %s (rancher/charts %s)", strings.Join(verified, ", "), source, revision), nil
 }
 
-func rancherSystemChartPins(ctx context.Context, image imagelookup.InspectResponse, env map[string]string, images systemChartImageLookup, catalog *helmLabCatalogService) map[string]string {
+// Pin the branch advertised by the same repository Rancher will contact. A
+// mirror may lag behind GitHub. Read the public index by that exact commit.
+func externalSystemChartRevision(ctx context.Context, repository, branch string) (string, error) {
+	switch repository {
+	case "", "https://git.rancher.io/":
+		repository = "https://git.rancher.io/charts"
+	case "https://git.rancher.io/charts", "https://github.com/rancher/charts", "https://github.com/rancher/charts.git":
+	default:
+		return "", fmt.Errorf("custom external chart repository must be verified by the cluster")
+	}
+	if branch == "" {
+		return "", fmt.Errorf("server image does not identify the external rancher-charts branch")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	ref := "refs/heads/" + branch
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--exit-code", "--refs", repository, ref)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.WaitDelay = time.Second
+	out, err := cmd.Output()
+	fields := strings.Fields(string(out))
+	if err != nil || len(fields) != 2 || fields[1] != ref || !imagelookup.GitRevisionPattern.MatchString(fields[0]) {
+		return "", fmt.Errorf("could not resolve branch %s in the external rancher-charts repository", branch)
+	}
+	return fields[0], nil
+}
+
+func rancherSystemChartRequirements(ctx context.Context, image imagelookup.InspectResponse, env map[string]string, images systemChartImageLookup, catalog *helmLabCatalogService, needBranch bool) (map[string]string, string) {
+	branch := env["CATTLE_CHART_DEFAULT_BRANCH"]
 	pins := map[string]string{
 		"rancher-webhook": env["CATTLE_RANCHER_WEBHOOK_VERSION"],
 	}
@@ -155,8 +203,11 @@ func rancherSystemChartPins(ctx context.Context, image imagelookup.InspectRespon
 	}
 	// Newer images compile these defaults into the server. Resolve build.yaml
 	// through the source revision on the inspected image, never a moving branch.
-	if slices.Contains(slices.Collect(maps.Values(pins)), "") {
+	if (needBranch && branch == "") || slices.Contains(slices.Collect(maps.Values(pins)), "") {
 		defaults := systemChartBuildDefaults(ctx, image, images, catalog)
+		if branch == "" {
+			branch, _ = defaults["chartDefaultBranch"].(string)
+		}
 		for chart, key := range map[string]string{"fleet": "fleetVersion", "rancher-webhook": "webhookVersion", "rancher-turtles": "turtlesVersion"} {
 			if value, required := pins[chart]; required && value == "" {
 				pins[chart], _ = defaults[key].(string)
@@ -169,7 +220,7 @@ func rancherSystemChartPins(ctx context.Context, image imagelookup.InspectRespon
 	if env["CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT"] != "false" {
 		pins["system-upgrade-controller"] = env["CATTLE_SYSTEM_UPGRADE_CONTROLLER_CHART_VERSION"]
 	}
-	return pins
+	return pins, branch
 }
 
 func rancherChartsRevision(config imagelookup.ImageConfig) string {

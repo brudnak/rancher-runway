@@ -187,7 +187,7 @@ func inspectSetupBuildWithDetails(ctx context.Context, ref string, images system
 	if !details {
 		return result, nil
 	}
-	result.Charts = rancherSystemChartPins(ctx, image, env, images, catalog)
+	result.Charts, _ = rancherSystemChartRequirements(ctx, image, env, images, catalog, false)
 
 	// A moving alias may identify its immutable build in either the canonical
 	// OCI label or CATTLE_SERVER_VERSION. Use it only after checking that the

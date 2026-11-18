@@ -244,14 +244,14 @@ func (s *setupBuildIndex) history(ctx context.Context, line string, refresh bool
 	return result, nil
 }
 
-func filterSetupBuildIndex(result setupBuildIndexResponse, days, offset int, now time.Time) setupBuildIndexResponse {
+func filterSetupBuildIndex(result setupBuildIndexResponse, days, offset, limit int, now time.Time) setupBuildIndexResponse {
 	if days > 0 {
 		cutoff := now.UTC().AddDate(0, 0, -days).Format("2006-01-02")
 		result.Builds = slices.DeleteFunc(result.Builds, func(build setupIndexedBuild) bool { return build.Created[:10] < cutoff })
 	}
 	result.Total = len(result.Builds)
 	offset = min(offset, result.Total)
-	end := min(offset+20, result.Total)
+	end := min(offset+limit, result.Total)
 	result.More, result.NextOffset = end < result.Total, end
 	result.Builds = result.Builds[offset:end]
 	return result
@@ -267,9 +267,14 @@ func (s *interactiveServer) handleSetupBuildIndex(w http.ResponseWriter, r *http
 	if query.Get("offset") == "" {
 		offset, offsetErr = 0, nil
 	}
+	limit, limitErr := strconv.Atoi(query.Get("limit"))
+	if query.Get("limit") == "" {
+		limit, limitErr = 20, nil
+	}
 	line := query.Get("line")
+	exclude := query.Get("exclude")
 	text := strings.ToLower(strings.TrimSpace(query.Get("q")))
-	if err != nil || offsetErr != nil || days < 0 || days > 3650 || offset < 0 || len(text) > 127 || (line != "" && !setupIndexLine.MatchString(line)) {
+	if err != nil || offsetErr != nil || limitErr != nil || days < 0 || days > 3650 || offset < 0 || limit < 1 || limit > 20 || len(text) > 127 || len(exclude) > 127 || (line != "" && !setupIndexLine.MatchString(line)) {
 		http.Error(w, "invalid build date range or release line", http.StatusBadRequest)
 		return
 	}
@@ -285,12 +290,15 @@ func (s *interactiveServer) handleSetupBuildIndex(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if text != "" {
+	if exclude != "" || text != "" {
 		words := strings.Fields(text)
 		result.Builds = slices.DeleteFunc(result.Builds, func(build setupIndexedBuild) bool {
+			if build.Version == exclude {
+				return true
+			}
 			haystack := strings.ToLower(build.Line + " " + build.Version + " " + build.Webhook + " " + build.Reference + " SUSE staging")
 			return slices.ContainsFunc(words, func(word string) bool { return !strings.Contains(haystack, word) })
 		})
 	}
-	writeJSON(w, filterSetupBuildIndex(result, days, offset, time.Now()))
+	writeJSON(w, filterSetupBuildIndex(result, days, offset, limit, time.Now()))
 }

@@ -196,7 +196,7 @@ func rancherSystemDeploymentsReady(kubeconfig string) (bool, string, error) {
 		logs, err := runKubectl(kubeconfig, "logs", "-n", "cattle-system", "-l", "app=rancher", "-c", "rancher", "--since=90s", "--tail=300")
 		if err == nil {
 			if missing := missingSystemChartVersions(logs, pending); len(missing) > 0 {
-				return false, "", fmt.Errorf("Rancher %s cannot install system charts missing from its index: %s. Check %s and retry with matching charts", server.Image, strings.Join(missing, ", "), cmp.Or(rancher.assetsImage(), "the rancher-assets image or bundled chart catalog"))
+				return false, "", fmt.Errorf("Rancher %s cannot install system charts missing from its index: %s. Check the rancher-charts ClusterRepo and its active revision. For bundled catalogs, check %s", server.Image, strings.Join(missing, ", "), cmp.Or(rancher.assetsImage(), "the rancher-assets image or bundled chart catalog"))
 			}
 		}
 	}

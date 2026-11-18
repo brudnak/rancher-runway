@@ -741,36 +741,62 @@
     </header>
     <div data-browse>
       <div class="setup-picker-toolbar">
-        <label class="setup-picker-search"><span class="sr-only">Filter builds</span><input data-search type="search" placeholder="Find a line, version, or webhook…" maxlength="127" autocomplete="off" /></label>
+        <label class="setup-picker-search"><span class="sr-only">Filter release lines by version or webhook</span><input data-search type="search" placeholder="Filter release lines by version or webhook…" maxlength="127" autocomplete="off" /></label>
         <label><span class="sr-only">Build dates</span><select data-age><option value="30">Last 30 days</option><option value="7">Last 7 days</option><option value="90">Last 90 days</option><option value="0">All dates</option></select></label>
         <button type="button" data-refresh>Refresh</button>
       </div>
       <div class="setup-picker-view-heading">
-        <button type="button" data-back hidden>← All release lines</button>
-        <h3 data-view-title>Latest reported heads</h3><p data-view-hint></p>
+        <h3>Latest heads by release line</h3>
+        <div class="setup-picker-status"><span data-spinner class="setup-build-spinner" aria-hidden="true" hidden></span><p data-status role="status"></p></div>
       </div>
-      <div class="setup-picker-status"><span data-spinner class="setup-build-spinner" aria-hidden="true" hidden></span><p data-status role="status" aria-live="polite"></p></div>
       <div data-error class="setup-picker-error" role="alert" hidden><p data-error-message></p><button type="button" data-retry>Try again</button></div>
       <div data-skeleton class="setup-picker-skeleton" aria-hidden="true" hidden><div></div><div></div><div></div></div>
       <div data-builds aria-label="Rancher builds"></div>
       <p data-empty class="setup-picker-empty" hidden></p>
-      <button type="button" data-more hidden>Show older builds</button>
       <details data-warnings class="setup-picker-warnings" hidden><summary>Some release lines could not be loaded</summary><ul></ul></details>
       <div class="setup-picker-provenance"><p data-index-note></p><a href="https://github.com/brudnak/webhook-ranch-hand" target="_blank" rel="noopener noreferrer">View source ↗</a></div>
       <details data-direct class="setup-picker-direct">
         <summary>Have an exact image or need another registry?</summary>
         <p>Inspect one image directly, including Community builds and moving head tags.</p>
         <form data-direct-form><label class="sr-only" for="setupDirectImage">Full Rancher image reference</label><input id="setupDirectImage" data-direct-image type="text" required placeholder="stgregistry.suse.com/rancher/rancher-server:v2.17.0-head" spellcheck="false" autocomplete="off" /><button type="submit">Inspect image</button></form>
+        <div data-direct-preview></div>
       </details>
     </div>
-    <div data-review hidden>
-      <button type="button" data-review-back>← Back to builds</button>
-      <div class="setup-picker-review-heading"><span class="setup-build-kicker">REVIEW YOUR BUILD</span><h3 data-review-title></h3><code data-verified-reference></code><a data-report-link target="_blank" rel="noopener noreferrer" hidden>Ranch Hand report ↗</a></div>
-      <div data-detail-loading class="setup-picker-verifying" role="status"><span class="setup-build-spinner" aria-hidden="true"></span><div><strong>Verifying this image</strong><p>Checking its registry, chart versions, and hashes.</p></div></div>
-      <div data-detail-error class="setup-picker-error" role="alert" hidden><p data-detail-error-message></p><button type="button" data-detail-retry>Retry verification</button></div>
-      <div data-evidence></div>
-      <footer class="setup-picker-review-footer"><p>Applies this image to your setup. Plan review comes next.</p><button type="button" data-use disabled>Use this build</button></footer>
-    </div>
+    <template data-line-template>
+      <article class="setup-build-row">
+        <h4><button type="button" class="setup-build-toggle" aria-expanded="false">
+          <span class="setup-build-line"><span class="setup-build-kicker">Rancher</span><strong data-line></strong></span>
+          <span class="setup-build-summary"><code data-version></code><span class="setup-build-meta"><span data-built></span><span>Webhook <strong data-webhook></strong></span></span></span>
+          <span class="setup-build-chevron" aria-hidden="true"></span>
+        </button></h4>
+        <div data-panel role="region" hidden></div>
+      </article>
+    </template>
+    <template data-review-template>
+      <section class="setup-build-review">
+        <div class="setup-review-top">
+          <div><h5 data-review-title tabindex="-1"></h5><code data-reference></code><p data-preview-meta></p></div>
+          <button type="button" data-use disabled>Use this build</button>
+        </div>
+        <div data-detail-status class="setup-detail-status" role="status"></div>
+        <div data-detail-error class="setup-picker-error" role="alert" hidden><p data-detail-error-message></p><button type="button" data-detail-retry>Retry verification</button></div>
+        <div data-evidence></div>
+        <div class="setup-review-links">
+          <a data-report-link target="_blank" rel="noopener noreferrer" hidden>Ranch Hand report ↗</a>
+          <button type="button" data-latest hidden>Back to latest build</button>
+        </div>
+      </section>
+    </template>
+    <template data-history-template>
+      <section class="setup-build-history">
+        <header><div><h5 data-history-title></h5><p data-history-status role="status"></p></div>
+          <label data-history-filter hidden><span class="sr-only">Filter other builds in this line</span><input type="search" placeholder="Filter by tag or webhook…" maxlength="127" autocomplete="off"></label>
+        </header>
+        <ol data-history-list></ol>
+        <div data-history-error class="setup-picker-error" role="alert" hidden><p></p><button type="button">Retry history</button></div>
+        <button type="button" data-more hidden>Show older builds</button>
+      </section>
+    </template>
   </dialog>
 
   <div id="confirmModal" class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto bg-zinc-950/45 p-4 py-10 backdrop-blur-sm dark:bg-zinc-950/80" role="dialog" aria-modal="true" aria-labelledby="confirmModalTitle" aria-describedby="confirmModalBody">
