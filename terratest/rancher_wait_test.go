@@ -120,8 +120,10 @@ func TestRancherLocalUpgradeControllerReadiness(t *testing.T) {
 		{"imported Harvester local", "imported", "harvester", "v1.35.1", "", "true", "multi-cluster-management=false", false, "version management=true"},
 		{"imported other provider", "imported", "other", "v1.35.1", "", "true", "", true, `driver="imported"`},
 		{"driver not yet reported", "", "", "", "", "true", "", false, `driver=""`},
-		{"local before RKE2 detection", "local", "", "v1.36.6+rke2r1", "", "true", "", false, "driver detection pending"},
-		{"version not yet reported", "local", "", "", "", "true", "", false, `kubernetes=""`},
+		{"local before RKE2 detection", "local", "", "v1.36.6+rke2r1", "", "true", "", true, "controller enabled=false for current driver"},
+		{"version not yet reported", "local", "", "", "", "true", "", true, `kubernetes=""`},
+		{"imported without version", "imported", "", "", "", "true", "", true, "controller enabled=false for current driver"},
+		{"imported RKE2 awaiting driver update", "imported", "", "v1.36.6+rke2r1", "", "true", "", true, "controller enabled=false for current driver"},
 		{"setting not yet available", "rke2", "", "", "", "", "", false, "waiting for version-management policy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -156,6 +158,63 @@ func TestRancherLocalUpgradeControllerReadiness(t *testing.T) {
 			t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
 		}
 	})
+}
+
+func TestRancherLocalUpgradeControllerDriverTransition(t *testing.T) {
+	for _, image := range []string{
+		"registry.rancher.com/rancher/rancher:v2.15.3",
+		"stgregistry.suse.com/rancher/rancher:v2.15.4-a0ebc0e-head",
+	} {
+		t.Run(image, func(t *testing.T) {
+			deployments := readyDeploymentsFixture()
+			deployments[0].Spec.Template.Spec.Containers[0].Image = image
+			kc := installSystemKubectlFixture(t, deployments[:4], "")
+			for _, observation := range []struct {
+				name, cluster string
+				deployments   []rancherDeployment
+				ready         bool
+			}{
+				// Both failed runs stayed in this state with all other system deployments ready.
+				{"imported", `{"status":{"driver":"imported"}}`, deployments[:4], true},
+				{"detected RKE2", `{"status":{"driver":"rke2","version":{"gitVersion":"v1.36.6+rke2r1"}}}`, deployments[:4], false},
+				{"controller ready", `{"status":{"driver":"rke2"}}`, deployments, true},
+			} {
+				t.Run(observation.name, func(t *testing.T) {
+					data, err := json.Marshal(map[string]any{"items": observation.deployments})
+					if err != nil {
+						t.Fatal(err)
+					}
+					for name, value := range map[string]string{"cluster": observation.cluster, "deployments": string(data)} {
+						if err := os.WriteFile(filepath.Join(filepath.Dir(kc), name), []byte(value), 0600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					ready, summary, err := rancherSystemDeploymentsReady(kc)
+					if err != nil || ready != observation.ready {
+						t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestRancherLocalUpgradeControllerExistingRollout(t *testing.T) {
+	deployments := readyDeploymentsFixture()
+	deployments[4].Status.UpdatedReplicas = 0
+	kc := installSystemKubectlFixture(t, deployments, "")
+	// Even when the current driver would not cause a new install, an existing
+	// controller's incomplete rollout must hold up readiness.
+	if err := os.WriteFile(filepath.Join(filepath.Dir(kc), "cluster"), []byte(`{"status":{"driver":"imported"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(kc), "setting"), []byte(`{"value":"false"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ready, summary, err := rancherSystemDeploymentsReady(kc)
+	if err != nil || ready || !strings.Contains(summary, upgradeDeployment+" ready=1/1 updated=0") {
+		t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
+	}
 }
 
 func TestRancherSystemReadinessStaleAssets(t *testing.T) {

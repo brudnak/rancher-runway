@@ -388,6 +388,8 @@ func logRancherReadinessDiagnostics(kubeconfigPath string, instanceNum int) {
 	}
 
 	log.Printf("[ready][ha-%d][diagnostics] collecting bounded cattle-system diagnostics", instanceNum)
+	logKubectlDiagnostic(kubeconfigPath, instanceNum, "local cluster status", 10, "get", "clusters.management.cattle.io", "local", "-o",
+		"custom-columns=DRIVER:.status.driver,PROVIDER:.status.provider,KUBERNETES:.status.version.gitVersion,CONDITIONS:.status.conditions[*].type,STATUS:.status.conditions[*].status,REASONS:.status.conditions[*].reason")
 	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system pods", 120, "get", "pods", "-n", "cattle-system", "-o", "wide")
 	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system deployments", 120, "get", "deployments", "-n", "cattle-system", "-o", "wide")
 	logKubectlDiagnostic(kubeconfigPath, instanceNum, "cattle-system chart releases", 40, "get", "apps.catalog.cattle.io", "-n", "cattle-system", "-o",

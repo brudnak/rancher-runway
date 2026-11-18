@@ -161,10 +161,10 @@ func rancherSystemDeploymentsReady(kubeconfig string) (bool, string, error) {
 	if !versionKnown || compareVersionStrings(version, "2.10") >= 0 {
 		requireUpgrade := !featureDisabled(flags, "managed-system-upgrade-controller")
 		if server.Image != "" && versionKnown && compareVersionStrings(version, "2.11") >= 0 {
-			// Only query policy when it would hold up readiness. A local cluster
-			// override takes precedence over the global Rancher setting.
-			requireUpgrade = true
-			if !deployments[upgradeDeployment].fullyReady() {
+			// Always check an existing controller's rollout. For an absent
+			// controller, use Rancher's current installation policy.
+			_, requireUpgrade = deployments[upgradeDeployment]
+			if !requireUpgrade {
 				requireUpgrade, upgradePolicy = localUpgradeControllerPolicy(kubeconfig, server, version)
 			}
 		}
@@ -229,17 +229,17 @@ func localUpgradeControllerPolicy(kubeconfig string, server systemChartContainer
 	}
 	driver, kubeVersion := cluster.Status.Driver, cluster.Status.Version.GitVersion
 	detail := fmt.Sprintf("local driver=%q kubernetes=%q", driver, kubeVersion)
-	// Rancher can initially publish "local" or "imported" before it detects
-	// RKE2/K3s from the Kubernetes version and nodes. Keep polling in that state.
-	pendingDriver := driver == "" || ((driver == "local" || driver == "imported") &&
-		(kubeVersion == "" || strings.Contains(kubeVersion, "rke2") || strings.Contains(kubeVersion, "k3s")))
+	if driver == "" {
+		return true, detail + ", waiting for local cluster driver"
+	}
+	// Match Rancher's dashboard/systemcharts controller. The global setting
+	// applies only after the driver is RKE2/K3s (or Harvester in its local mode).
+	// An imported/local driver can persist with no status.version. Predicting
+	// a future driver here makes readiness wait for a chart Rancher has not enabled.
 	managedLocal := mcm && (driver == "rke2" || driver == "k3s")
 	managedHarvester := harvester && driver == "imported" && cluster.Status.Provider == "harvester"
 	if !managedLocal && !managedHarvester {
-		if !pendingDriver || agentRequiresUpgrade {
-			return agentRequiresUpgrade, detail
-		}
-		detail += ", driver detection pending"
+		return agentRequiresUpgrade, fmt.Sprintf("%s, controller enabled=%t for current driver", detail, agentRequiresUpgrade)
 	}
 	value := cluster.Metadata.Annotations["rancher.io/imported-cluster-version-management"]
 	source := "annotation"
