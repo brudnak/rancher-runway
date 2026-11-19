@@ -2,6 +2,8 @@ package test
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +54,8 @@ case "$*" in
   *"logs "*"-l app=rancher -c rancher --since=90s --tail=300"*) cat "$CHART_FIXTURE/logs";;
   *"get clusters.management.cattle.io local -o json") cat "$CHART_FIXTURE/cluster";;
   *"get settings.management.cattle.io imported-cluster-version-management -o json") cat "$CHART_FIXTURE/setting";;
+  *"get settings.management.cattle.io system-catalog -o json") cat "$CHART_FIXTURE/catalog";;
+  *"get clusterrepos.catalog.cattle.io rancher-charts -o json") cat "$CHART_FIXTURE/repo";;
   *) exit 1;;
 esac
 `}
@@ -97,7 +101,7 @@ func TestRancherSystemReadiness(t *testing.T) {
 			d := readyDeploymentsFixture()
 			tc.change(d)
 			kc := installSystemKubectlFixture(t, d, "WARN unable to find exact version requested: falling back to closest available version chart=rancher-turtles")
-			ready, summary, err := rancherSystemDeploymentsReady(kc)
+			ready, summary, err := new(rancherSystemReadiness).deploymentsReady(kc)
 			if err != nil || ready != tc.ready || !strings.Contains(summary, tc.detail) {
 				t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
 			}
@@ -143,7 +147,7 @@ func TestRancherLocalUpgradeControllerReadiness(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			ready, summary, err := rancherSystemDeploymentsReady(kc)
+			ready, summary, err := new(rancherSystemReadiness).deploymentsReady(kc)
 			if err != nil || ready != tc.ready || !strings.Contains(summary, tc.detail) || strings.Contains(summary, upgradeDeployment+" missing") == tc.ready {
 				t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
 			}
@@ -154,7 +158,7 @@ func TestRancherLocalUpgradeControllerReadiness(t *testing.T) {
 		if err := os.Remove(filepath.Join(filepath.Dir(kc), "cluster")); err != nil {
 			t.Fatal(err)
 		}
-		if ready, summary, err := rancherSystemDeploymentsReady(kc); ready || err != nil || !strings.Contains(summary, "waiting for local cluster status") {
+		if ready, summary, err := new(rancherSystemReadiness).deploymentsReady(kc); ready || err != nil || !strings.Contains(summary, "waiting for local cluster status") {
 			t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
 		}
 	})
@@ -189,7 +193,7 @@ func TestRancherLocalUpgradeControllerDriverTransition(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					ready, summary, err := rancherSystemDeploymentsReady(kc)
+					ready, summary, err := new(rancherSystemReadiness).deploymentsReady(kc)
 					if err != nil || ready != observation.ready {
 						t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
 					}
@@ -211,7 +215,7 @@ func TestRancherLocalUpgradeControllerExistingRollout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(kc), "setting"), []byte(`{"value":"false"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	ready, summary, err := rancherSystemDeploymentsReady(kc)
+	ready, summary, err := new(rancherSystemReadiness).deploymentsReady(kc)
 	if err != nil || ready || !strings.Contains(summary, upgradeDeployment+" ready=1/1 updated=0") {
 		t.Fatalf("got ready=%t summary=%q err=%v", ready, summary, err)
 	}
@@ -224,6 +228,8 @@ func TestRancherSystemReadinessStaleAssets(t *testing.T) {
 2026/11/12 20:36:58 [ERROR] Failed to install system chart rancher-webhook (release name: rancher-webhook), will retry: specified version 111.0.0+up0.12.1-rc.17 doesn't exist in the index
 unrelated password=must-never-appear`
 	kc := installSystemKubectlFixture(t, d, logs)
+	writeChartFixture(t, kc, "catalog", `{"default":"external","value":"bundled"}`)
+	writeChartFixture(t, kc, "repo", runtimeChartRepoFixture)
 	t.Setenv(haOutputRootEnv, filepath.Dir(kc))
 	ha := haInstanceDir(1)
 	if err := os.Mkdir(ha, 0700); err != nil {
@@ -243,5 +249,101 @@ unrelated password=must-never-appear`
 	}
 	if strings.Contains(err.Error(), "must-never-appear") || strings.Contains(err.Error(), "rancher-webhook") {
 		t.Fatalf("unexpected details: %v", err)
+	}
+}
+
+const runtimeChartRepoFixture = `{
+	"metadata":{"generation":1},
+	"spec":{"gitRepo":"https://git.rancher.io/charts","gitBranch":"dev-v2.16"},
+	"status":{"observedGeneration":1,"branch":"dev-v2.16","url":"https://git.rancher.io/charts",
+		"commit":"5d3ae9ecd269bb9ae1cbbe3b72506ad4b5fa618c","conditions":[{"type":"Downloaded","status":"True"}]}
+}`
+
+const fleetCRDRetryLog = "Failed to install system chart fleet-crd (release name: fleet-crd), will retry: specified version 111.0.0+up0.17.0-rc.5 doesn't exist in the index"
+
+func writeChartFixture(t *testing.T, kc, name, data string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(filepath.Dir(kc), name), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRancherSystemReadinessCatalogRefresh(t *testing.T) {
+	const pin = "fleet-crd@111.0.0+up0.17.0-rc.5"
+	for _, tc := range []struct{ name, mode, repo, diagnostic string }{
+		{"online bootstrap", `{"default":"external"}`, runtimeChartRepoFixture, `rancher-charts branch="dev-v2.16" commit="5d3ae9ecd269bb9ae1cbbe3b72506ad4b5fa618c"`},
+		{"unknown mode", "", runtimeChartRepoFixture, "catalog mode=unknown"},
+		{"repo unavailable", `{"value":"bundled"}`, "", "rancher-charts status unavailable"},
+		{"custom repo", `{"value":"bundled"}`, strings.ReplaceAll(runtimeChartRepoFixture, "git.rancher.io", "mirror.example.test"), "catalog mode=bundled"},
+		{"bundle still reconciling", `{"value":"bundled"}`, strings.Replace(runtimeChartRepoFixture, `"observedGeneration":1`, `"observedGeneration":0`, 1), "catalog mode=bundled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			all := readyDeploymentsFixture()
+			kc := installSystemKubectlFixture(t, all[:2], fleetCRDRetryLog)
+			writeChartFixture(t, kc, "catalog", tc.mode)
+			writeChartFixture(t, kc, "repo", tc.repo)
+			var charts rancherSystemReadiness
+			ready, summary, err := charts.deploymentsReady(kc)
+			if ready || err != nil || !strings.Contains(summary, pin) || !strings.Contains(summary, tc.diagnostic) {
+				t.Fatalf("initial index: ready=%t summary=%q err=%v", ready, summary, err)
+			}
+			writeChartFixture(t, kc, "logs", "")
+			// The repo can advance between the log observation and the deadline.
+			const newRevision = "28a8008e7e80abcbfcdc64fd7b3d8494d8c109dc"
+			writeChartFixture(t, kc, "repo", strings.Replace(runtimeChartRepoFixture, "5d3ae9ecd269bb9ae1cbbe3b72506ad4b5fa618c", newRevision, 1))
+			ready, summary, err = charts.deploymentsReady(kc)
+			timeout := charts.timeoutSummary(kc, summary)
+			if ready || err != nil || !strings.Contains(timeout, pin) || !strings.Contains(timeout, newRevision) {
+				t.Fatalf("no recent logs: ready=%t summary=%q err=%v", ready, timeout, err)
+			}
+			raw, err := json.Marshal(map[string]any{"items": all})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeChartFixture(t, kc, "deployments", string(raw))
+			writeChartFixture(t, kc, "logs", fleetCRDRetryLog)
+			ready, summary, err = charts.deploymentsReady(kc)
+			if !ready || err != nil || strings.Contains(charts.timeoutSummary(kc, summary), pin) {
+				t.Fatalf("after rollout: ready=%t summary=%q err=%v", ready, summary, err)
+			}
+		})
+	}
+}
+
+func TestRancherSystemReadinessPersistentMissBlocksProvisioning(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3" {
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer server.Close()
+	kc := installSystemKubectlFixture(t, readyDeploymentsFixture()[:2], fleetCRDRetryLog)
+	writeChartFixture(t, kc, "catalog", `{"default":"external"}`)
+	writeChartFixture(t, kc, "repo", strings.Replace(runtimeChartRepoFixture, `"status":"True"`, `"status":"False","reason":"DownloadFailed","message":"private diagnostic"`, 1))
+	t.Setenv(haOutputRootEnv, filepath.Dir(kc))
+	if err := os.Mkdir(haInstanceDir(1), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(kc, filepath.Join(haInstanceDir(1), "kube_config.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	for _, wait := range []func() error{
+		func() error {
+			return waitForHAReady(1, map[string]string{"ha_1_rancher_url": server.URL}, 250*time.Millisecond, 0, 0)
+		},
+		func() error { return waitForHostedTenantRancherStable(server.URL, kc, 250*time.Millisecond) },
+	} {
+		err := wait()
+		if err == nil {
+			t.Fatal("healthy HTTP allowed a missing fleet controller through readiness")
+		}
+		for _, want := range []string{"timed out", "root=200 api=401", "fleet-crd@111.0.0+up0.17.0-rc.5", `reason="DownloadFailed"`} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("missing %q in %v", want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "private diagnostic") {
+			t.Fatalf("unexpected raw catalog condition message in %v", err)
+		}
 	}
 }

@@ -458,8 +458,10 @@ func executeHostedTenantScript(scriptDir, scriptName string) error {
 func waitForHostedTenantRancherStable(rancherURL, kubeconfig string, timeout time.Duration) error {
 	client := rancherReadyHTTPClient()
 	deadline := time.Now().Add(timeout)
+	var charts rancherSystemReadiness
+	lastSummary := "no readiness observations"
 	for time.Now().Before(deadline) {
-		deploymentsReady, deployments, err := rancherSystemDeploymentsReady(kubeconfig)
+		deploymentsReady, deployments, err := charts.deploymentsReady(kubeconfig)
 		if err != nil {
 			return err
 		}
@@ -467,10 +469,11 @@ func waitForHostedTenantRancherStable(rancherURL, kubeconfig string, timeout tim
 		if ready && deploymentsReady {
 			return nil
 		}
-		log.Printf("[hosted-tenant] Waiting for Rancher %s: http=%s deployments=%s", rancherURL, summary, deployments)
-		time.Sleep(15 * time.Second)
+		lastSummary = fmt.Sprintf("http=%s deployments=%s", summary, deployments)
+		log.Printf("[hosted-tenant] Waiting for Rancher %s: %s", rancherURL, lastSummary)
+		time.Sleep(min(15*time.Second, time.Until(deadline)))
 	}
-	return fmt.Errorf("timed out after %s waiting for Rancher %s to become stable", timeout, rancherURL)
+	return fmt.Errorf("timed out after %s waiting for Rancher %s to become stable: %s", timeout, rancherURL, charts.timeoutSummary(kubeconfig, lastSummary))
 }
 
 func importHostedTenantCluster(hostURL, adminToken string, tenantNumber int, tenantConfig hostedTenantK3SConfig) error {

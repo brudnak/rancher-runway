@@ -215,9 +215,10 @@ func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initial
 	log.Printf("[ready][ha-%d] Kubeconfig: %s", instanceNum, kubeconfigPath)
 	log.Printf("[ready][ha-%d] Initial delay: %s, timeout: %s", instanceNum, initialDelay, timeout)
 
+	var charts rancherSystemReadiness
 	if initialDelay > 0 {
-		// Rechecking a known broken install should fail before the initial delay.
-		if _, _, err := rancherSystemDeploymentsReady(kubeconfigPath); err != nil {
+		// Rechecking a known broken bundled install should fail before the initial delay.
+		if _, _, err := charts.deploymentsReady(kubeconfigPath); err != nil {
 			return fmt.Errorf("[ha-%d] %w", instanceNum, err)
 		}
 		time.Sleep(initialDelay)
@@ -232,7 +233,7 @@ func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initial
 	for time.Now().Before(deadline) {
 		attempt++
 
-		deploymentsReady, deploymentsSummary, err := rancherSystemDeploymentsReady(kubeconfigPath)
+		deploymentsReady, deploymentsSummary, err := charts.deploymentsReady(kubeconfigPath)
 		if err != nil {
 			return fmt.Errorf("[ha-%d] %w", instanceNum, err)
 		}
@@ -256,11 +257,11 @@ func waitForHAReady(instanceNum int, outputs map[string]string, timeout, initial
 				instanceNum, attempt, lastSummary)
 		}
 
-		time.Sleep(20 * time.Second)
+		time.Sleep(min(20*time.Second, time.Until(deadline)))
 	}
 
 	logRancherReadinessDiagnostics(kubeconfigPath, instanceNum)
-	return fmt.Errorf("[ha-%d] timed out after %s waiting for Rancher readiness: %s", instanceNum, timeout, lastSummary)
+	return fmt.Errorf("[ha-%d] timed out after %s waiting for Rancher readiness: %s", instanceNum, timeout, charts.timeoutSummary(kubeconfigPath, lastSummary))
 }
 
 func TestRancherHTTPReadyRejectsAPIAggregationPlaceholder(t *testing.T) {
@@ -420,9 +421,9 @@ func logRancherReadinessDiagnostics(kubeconfigPath string, instanceNum int) {
 }
 
 func logKubectlDiagnostic(kubeconfigPath string, instanceNum int, title string, maxLines int, args ...string) {
-	output, err := runKubectlOutput(kubeconfigPath, args...)
+	output, err := runKubectl(kubeconfigPath, args...)
 	if err != nil {
-		log.Printf("[ready][ha-%d][diagnostics] %s failed: %v", instanceNum, title, err)
+		log.Printf("[ready][ha-%d][diagnostics] %s failed: %s", instanceNum, title, sanitizeKubeDiagnosticOutput(err.Error()))
 		return
 	}
 	output = sanitizeKubeDiagnosticOutput(output)

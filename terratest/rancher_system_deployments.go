@@ -94,11 +94,12 @@ func featureDisabled(flags, feature string) bool {
 }
 
 const (
-	serverDeployment  = "cattle-system/rancher"
-	webhookDeployment = "cattle-system/rancher-webhook"
-	fleetDeployment   = "cattle-fleet-system/fleet-controller"
-	turtlesDeployment = "cattle-turtles-system/rancher-turtles-controller-manager"
-	upgradeDeployment = "cattle-system/system-upgrade-controller"
+	packagedRancherChartsURL = "https://git.rancher.io/charts"
+	serverDeployment         = "cattle-system/rancher"
+	webhookDeployment        = "cattle-system/rancher-webhook"
+	fleetDeployment          = "cattle-fleet-system/fleet-controller"
+	turtlesDeployment        = "cattle-turtles-system/rancher-turtles-controller-manager"
+	upgradeDeployment        = "cattle-system/system-upgrade-controller"
 )
 
 var systemChartMissingVersion = regexp.MustCompile(`Failed to install system chart ([a-z0-9-]+) \(release name: [a-z0-9-]+\)(?:, will retry)?: specified version ([0-9][0-9A-Za-z.+-]*) doesn't exist in the index`)
@@ -120,8 +121,77 @@ func missingSystemChartVersions(logs string, pending map[string]bool) []string {
 	return slices.Compact(missing)
 }
 
-// Observation failures are retryable. Only an explicit chart installation failure is terminal.
-func rancherSystemDeploymentsReady(kubeconfig string) (bool, string, error) {
+// Keep the last observed chart error for the timeout even if it ages out of
+// the 90-second log window. Each management cluster has its own wait.
+type rancherSystemReadiness struct {
+	lastChartMiss, catalogAtMiss string
+}
+
+func (w *rancherSystemReadiness) timeoutSummary(kubeconfig, summary string) string {
+	if w.lastChartMiss == "" {
+		return summary
+	}
+	if !strings.Contains(summary, w.lastChartMiss) {
+		summary += ". Last observed chart install error: " + w.lastChartMiss
+	}
+	catalog, _ := runtimeChartCatalog(kubeconfig)
+	if catalog != w.catalogAtMiss {
+		summary += ". At timeout: " + catalog
+	}
+	return summary
+}
+
+// Rancher initially builds the index from the local checkout even in external
+// mode. The next reconcile refreshes from upstream and requeues chart installs.
+func runtimeChartCatalog(kubeconfig string) (summary string, bundled bool) {
+	mode := "unknown"
+	if raw, err := runKubectl(kubeconfig, "get", "settings.management.cattle.io", "system-catalog", "-o", "json"); err == nil {
+		if value, _ := parseRancherSettingValue([]byte(raw)); value == "bundled" || value == "external" {
+			mode = value
+		}
+	}
+	var repo struct {
+		Metadata struct{ Generation int64 }
+		Spec     struct{ GitRepo, GitBranch string }
+		Status   struct {
+			URL, Branch, Commit string
+			ObservedGeneration  int64
+			ShouldNotSkip       bool
+			Conditions          []struct{ Type, Status, Reason string }
+		}
+	}
+	summary = "catalog mode=" + mode
+	raw, err := runKubectl(kubeconfig, "get", "clusterrepos.catalog.cattle.io", "rancher-charts", "-o", "json")
+	if err != nil || json.Unmarshal([]byte(raw), &repo) != nil {
+		return summary + ", rancher-charts status unavailable", false
+	}
+	summary += fmt.Sprintf(", rancher-charts branch=%q commit=%q", repo.Spec.GitBranch, cmp.Or(repo.Status.Commit, "unreported"))
+	if repo.Status.Branch != repo.Spec.GitBranch {
+		summary += fmt.Sprintf(" activeBranch=%q", repo.Status.Branch)
+	}
+	if repo.Status.ShouldNotSkip {
+		summary += " refresh pending"
+	}
+	downloaded := false
+	for _, condition := range repo.Status.Conditions {
+		if condition.Type == "Downloaded" {
+			summary += fmt.Sprintf(" Downloaded=%q", condition.Status)
+			if condition.Reason != "" {
+				summary += fmt.Sprintf(" reason=%q", condition.Reason)
+			}
+			downloaded = condition.Status == "True"
+			break
+		}
+	}
+	// A custom ClusterRepo can still fetch remotely in bundled mode. Only
+	// fail early for Rancher's packaged repo after it has reported a revision.
+	bundled = mode == "bundled" && repo.Spec.GitRepo == packagedRancherChartsURL && repo.Status.URL == repo.Spec.GitRepo &&
+		repo.Status.Branch == repo.Spec.GitBranch && repo.Status.Commit != "" && downloaded && !repo.Status.ShouldNotSkip &&
+		repo.Metadata.Generation > 0 && repo.Status.ObservedGeneration == repo.Metadata.Generation
+	return summary, bundled
+}
+
+func (w *rancherSystemReadiness) deploymentsReady(kubeconfig string) (bool, string, error) {
 	if _, err := os.Stat(kubeconfig); err != nil {
 		return false, fmt.Sprintf("kubeconfig unavailable: %v", err), nil
 	}
@@ -189,6 +259,7 @@ func rancherSystemDeploymentsReady(kubeconfig string) (bool, string, error) {
 		}
 	}
 	if len(pending) == 0 {
+		w.lastChartMiss = ""
 		details = append(details, strings.Join(required, ", ")+" ready")
 	} else if server.Image != "" {
 		// The chart controller may be on any HA replica. Ignore historical failures on
@@ -196,7 +267,13 @@ func rancherSystemDeploymentsReady(kubeconfig string) (bool, string, error) {
 		logs, err := runKubectl(kubeconfig, "logs", "-n", "cattle-system", "-l", "app=rancher", "-c", "rancher", "--since=90s", "--tail=300")
 		if err == nil {
 			if missing := missingSystemChartVersions(logs, pending); len(missing) > 0 {
-				return false, "", fmt.Errorf("Rancher %s cannot install system charts missing from its index: %s. Check the rancher-charts ClusterRepo and its active revision. For bundled catalogs, check %s", server.Image, strings.Join(missing, ", "), cmp.Or(rancher.assetsImage(), "the rancher-assets image or bundled chart catalog"))
+				catalog, bundled := runtimeChartCatalog(kubeconfig)
+				w.catalogAtMiss = catalog
+				w.lastChartMiss = fmt.Sprintf("Rancher %s reported %s missing from its index (%s)", server.Image, strings.Join(missing, ", "), catalog)
+				if bundled && rancher.fullyReady() {
+					return false, "", fmt.Errorf("%s. Check %s", w.lastChartMiss, cmp.Or(rancher.assetsImage(), "the rancher-assets image or bundled chart catalog"))
+				}
+				details = append(details, w.lastChartMiss)
 			}
 		}
 	}

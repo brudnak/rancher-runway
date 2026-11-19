@@ -65,8 +65,9 @@ Runway renders the Helm chart and checks the server and assets images. By
 default Rancher updates its `rancher-charts` repository online. Runway reads
 the branch configured by the rendered server environment or the server
 build's `chartDefaultBranch`, resolves that branch at the configured upstream,
-and checks the index at that commit. With `useBundledSystemChart=true`,
-Runway checks the chart revision packaged in the rendered assets image.
+and checks the index at that commit. With `useBundledSystemChart=true` and
+the default chart repository, Runway checks the chart revision packaged in
+the rendered assets image.
 
 A version missing from the selected catalog stops the plan. The message names
 the server, catalog, revision, and missing versions, including Fleet's separate
@@ -78,10 +79,14 @@ Older charts without a separate assets image use runtime verification.
 On HA RKE2 and hosted K3s, readiness checks the Rancher HTTP endpoints and the
 rollout of each required deployment. Runway checks Rancher, the webhook, the
 Fleet controller, managed Turtles (2.13 and later), and the system upgrade
-controller when Rancher manages local cluster upgrades. While a deployment is
-pending, a recent Rancher install error identifying a version missing from the
-index ends the wait and names the chart. An ordinary startup delay or a
-closest-version warning alone keeps the check pending.
+controller when Rancher manages local cluster upgrades. An online catalog can
+start with the packaged index while Rancher fetches the configured branch.
+If Rancher reports a missing version during startup, Runway logs the chart,
+catalog mode, branch, reported commit, and download status when available.
+Runway waits for the required rollouts until the readiness deadline. The
+timeout includes the last observed chart error and any change in catalog status.
+In bundled mode, a missing version from the active packaged repository fails
+early once the Rancher rollout is ready.
 
 ## Configured Linode Downstreams
 

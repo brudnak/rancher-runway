@@ -145,8 +145,9 @@ func runHARKE2Setup(t *testing.T) {
 
 	logHASummary(totalHAs, outputs, resolvedPlans)
 	if len(downstreamPlans) > 0 && !t.Failed() {
-		log.Printf("[downstream] Waiting for management readiness before provisioning configured Linode downstreams")
+		log.Print("[ready] Checking management Rancher readiness. Configured Linode downstreams are queued.")
 		waitForConfiguredHAsReady(t, totalHAs, outputs)
+		log.Print("[downstream] Management Rancher is ready. Starting configured Linode downstreams.")
 		provisionConfiguredLinodeDownstreamPlans(t, downstreamPlans, linodeAccessToken())
 	}
 }

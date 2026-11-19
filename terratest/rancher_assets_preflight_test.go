@@ -160,6 +160,8 @@ entries:
 		{name: "online index really is missing charts", revision: onlineSHA, index: stale, want: onlineSHA, mismatch: true},
 		{name: "deployment overrides image bundled mode", imageMode: "bundled", env: []systemChartEnvVar{{Name: "CATTLE_SYSTEM_CATALOG", Value: "external"}}, revision: onlineSHA, index: current, want: "Verified"},
 		{name: "bundled uses only packaged revision", env: []systemChartEnvVar{{Name: "CATTLE_SYSTEM_CATALOG", Value: "bundled"}}, revision: bundleSHA, index: stale, want: bundleSHA, mismatch: true},
+		{name: "bundled mode with custom chart URL", imageMode: "bundled", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_URL", Value: "https://mirror.example.test/charts"}}, want: "Inconclusive"},
+		{name: "bundled mode with chart URL from a secret", imageMode: "bundled", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_URL", ValueFrom: struct{}{}}}, want: "Inconclusive"},
 		{name: "configured mirror branch", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_BRANCH", Value: "alternate"}}, revision: bundleSHA, index: stale, want: "branch alternate", mismatch: true},
 		{name: "unreachable configured branch", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_BRANCH", Value: "missing"}}, want: "Inconclusive"},
 		{name: "custom external repository", env: []systemChartEnvVar{{Name: "CATTLE_CHART_DEFAULT_URL", Value: "https://example.test/charts"}}, want: "Inconclusive"},

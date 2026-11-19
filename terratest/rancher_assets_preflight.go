@@ -101,7 +101,7 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 		return "Inconclusive: server environment comes from cluster resources", nil
 	}
 	for _, e := range server.Env {
-		if e.ValueFrom != nil && (strings.HasSuffix(e.Name, "_VERSION") || e.Name == "CATTLE_FEATURES" || e.Name == "CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT" || e.Name == "CATTLE_SYSTEM_CATALOG") {
+		if e.ValueFrom != nil && (strings.HasSuffix(e.Name, "_VERSION") || e.Name == "CATTLE_FEATURES" || e.Name == "CATTLE_IMPORTED_CLUSTER_VERSION_MANAGEMENT" || e.Name == "CATTLE_SYSTEM_CATALOG" || e.Name == "CATTLE_CHART_DEFAULT_URL") {
 			return "Inconclusive: server chart settings come from cluster resources", nil
 		}
 		if e.ValueFrom == nil {
@@ -111,9 +111,16 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 	// The assets init container runs in both modes. Only bundled mode fixes
 	// the runtime catalog to the charts commit in that image.
 	bundled := env["CATTLE_SYSTEM_CATALOG"] == "bundled"
+	repository := env["CATTLE_CHART_DEFAULT_URL"]
+	if repository == "" || repository == "https://git.rancher.io/" {
+		repository = packagedRancherChartsURL
+	}
+	if bundled && repository != packagedRancherChartsURL {
+		return "Inconclusive: the configured chart repository may differ from the packaged catalog", nil
+	}
 	if !bundled {
 		for _, e := range server.Env {
-			if e.ValueFrom != nil && (e.Name == "CATTLE_CHART_DEFAULT_URL" || e.Name == "CATTLE_CHART_DEFAULT_BRANCH") {
+			if e.ValueFrom != nil && e.Name == "CATTLE_CHART_DEFAULT_BRANCH" {
 				return "Inconclusive: the external chart catalog is configured by a cluster resource", nil
 			}
 		}
@@ -127,7 +134,7 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 			return "Inconclusive: " + assets + " has no pinned rancher/charts revision", nil
 		}
 	} else {
-		revision, err = externalSystemChartRevision(ctx, env["CATTLE_CHART_DEFAULT_URL"], branch)
+		revision, err = externalSystemChartRevision(ctx, repository, branch)
 		if err != nil {
 			return "Inconclusive: " + err.Error(), nil
 		}
@@ -166,9 +173,7 @@ func compareRancherAssets(ctx context.Context, deployment rancherDeployment, ima
 // mirror may lag behind GitHub. Read the public index by that exact commit.
 func externalSystemChartRevision(ctx context.Context, repository, branch string) (string, error) {
 	switch repository {
-	case "", "https://git.rancher.io/":
-		repository = "https://git.rancher.io/charts"
-	case "https://git.rancher.io/charts", "https://github.com/rancher/charts", "https://github.com/rancher/charts.git":
+	case packagedRancherChartsURL, "https://github.com/rancher/charts", "https://github.com/rancher/charts.git":
 	default:
 		return "", fmt.Errorf("custom external chart repository must be verified by the cluster")
 	}
