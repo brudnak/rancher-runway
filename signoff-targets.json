@@ -1,6 +1,9 @@
 {
   "targets": [
     {
+      "rancher_version": "v2.16.0-6800cab-head"
+    },
+    {
       "rancher_version": "v2.15.4-0a802dd-head"
     },
     {
