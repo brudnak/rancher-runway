@@ -1,12 +1,14 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/linodeinventory"
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 )
 
@@ -52,7 +54,7 @@ func configuredLinodeDownstreamPlans(totalHAs int) ([]settings.LinodeDownstreamP
 	return normalized, nil
 }
 
-func setupLinodeDownstreamPlans(totalHAs int) ([]settings.LinodeDownstreamPlan, error) {
+func setupLinodeDownstreamPlans(ctx context.Context, totalHAs int, client linodeinventory.Client) ([]settings.LinodeDownstreamPlan, error) {
 	plans, err := configuredLinodeDownstreamPlans(totalHAs)
 	if err != nil {
 		return nil, err
@@ -60,8 +62,8 @@ func setupLinodeDownstreamPlans(totalHAs int) ([]settings.LinodeDownstreamPlan, 
 	if !settings.AnyLinodeDownstreamPlanEnabled(plans) {
 		return nil, nil
 	}
-	if strings.TrimSpace(linodeAccessToken()) == "" {
-		return nil, fmt.Errorf("enabled downstream Linode plans require LINODE_TOKEN, LINODE_ACCESS_TOKEN, or linode.access_token")
+	if err := client.CheckInstanceAccess(ctx, linodeAccessToken()); err != nil {
+		return nil, fmt.Errorf("downstream Linode credential check failed: %w", err)
 	}
 	if os.Getenv(deferSetupDownstreamsEnv) == "1" {
 		return nil, nil

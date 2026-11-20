@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "support_ranges": {
+    "rke2|https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/rancher-v2-15-3/": {
+      "product": "RKE2",
+      "source_url": "https://www.suse.com/suse-rancher/support-matrix/all-supported-versions/rancher-v2-15-3/",
+      "range": "Support matrix certifies RKE2 from v1.34 through v1.36",
+      "min_minor": 34,
+      "max_minor": 36,
+      "updated_at": "2026-11-20T19:19:44Z"
+    }
+  }
+}

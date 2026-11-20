@@ -2,37 +2,52 @@ package test
 
 import (
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/linodeinventory"
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/spf13/viper"
 )
 
 func TestSetupLinodeDownstreamPlansRequiresTokenAndDefersToPanel(t *testing.T) {
+	client := linodeinventory.Client{HTTP: linodeTestClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v4/linode/instances" {
+			t.Errorf("unexpected credential check: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))}
 	viper.Reset()
 	t.Cleanup(viper.Reset)
 	t.Setenv("LINODE_TOKEN", "")
 	t.Setenv("LINODE_ACCESS_TOKEN", "")
 	t.Setenv(deferSetupDownstreamsEnv, "")
 	t.Setenv(configuredDownstreamLinodePlansEnv, `[{"enabled":false}]`)
-	if plans, err := setupLinodeDownstreamPlans(1); err != nil || len(plans) != 0 {
+	if plans, err := setupLinodeDownstreamPlans(t.Context(), 1, client); err != nil || len(plans) != 0 {
 		t.Fatalf("disabled plans must not require credentials: %+v %v", plans, err)
 	}
 	t.Setenv(configuredDownstreamLinodePlansEnv, `[{"enabled":true,"distribution":"rke2"}]`)
-	if _, err := setupLinodeDownstreamPlans(1); err == nil {
+	if _, err := setupLinodeDownstreamPlans(t.Context(), 1, client); err == nil {
 		t.Fatal("enabled plans must fail before AWS provisioning without a token")
 	}
 	viper.Set("linode.access_token", "test-token")
-	if plans, err := setupLinodeDownstreamPlans(1); err != nil || len(plans) != 1 || plans[0].Distribution != "rke2" {
+	if plans, err := setupLinodeDownstreamPlans(t.Context(), 1, client); err != nil || len(plans) != 1 || plans[0].Distribution != "rke2" {
 		t.Fatalf("enabled plan should run during direct setup: %+v %v", plans, err)
 	}
 	t.Setenv(deferSetupDownstreamsEnv, "1")
-	if plans, err := setupLinodeDownstreamPlans(1); err != nil || len(plans) != 0 {
+	if plans, err := setupLinodeDownstreamPlans(t.Context(), 1, client); err != nil || len(plans) != 0 {
 		t.Fatalf("panel must schedule downstreams separately: %+v %v", plans, err)
 	}
+	t.Setenv("LINODE_TOKEN", "expired-token")
+	if _, err := setupLinodeDownstreamPlans(t.Context(), 1, client); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("deferred setup must reject an invalid Linode token before AWS provisioning: %v", err)
+	}
+	t.Setenv("LINODE_TOKEN", "")
 	t.Setenv(configuredDownstreamLinodePlansEnv, `[{"enabled":true},{"enabled":false}]`)
-	if _, err := setupLinodeDownstreamPlans(1); err == nil {
+	if _, err := setupLinodeDownstreamPlans(t.Context(), 1, client); err == nil {
 		t.Fatal("panel deferral must not bypass plan validation")
 	}
 }

@@ -46,6 +46,8 @@ func TestDeployedLinodeCatalogProxy(t *testing.T) {
 		}
 		var data any
 		switch r.URL.Path {
+		case "/meta/proxy/api.linode.com/v4/linode/instances":
+			data = []any{}
 		case "/meta/proxy/api.linode.com/v4/regions":
 			data = []map[string]any{{"id": "us-west", "label": "Fremont", "status": "ok"}}
 		case "/meta/proxy/api.linode.com/v4/linode/types":

@@ -410,6 +410,10 @@ jobs:
 
           rm -rf "$module_dir"
           mkdir -p "$module_dir" "$run_root/ha" "$run_root/terraform"
+          # The resolver tries SUSE first. Seed its fallback for a cold runner.
+          if [[ ! -e "$run_root/release-lookup-cache.json" ]]; then
+            cp .github/signoff-support-matrix.json "$run_root/release-lookup-cache.json"
+          fi
           cp -R modules/aws/. "$module_dir/"
           rm -rf \
             "$module_dir/.terraform" \
@@ -422,6 +426,7 @@ jobs:
 
           {
             echo "HA_RANCHER_RUN_ID=$safe_run_id"
+            echo "HA_RANCHER_RELEASE_LOOKUP_CACHE=$run_root/release-lookup-cache.json"
             echo "HA_RANCHER_HA_OUTPUT_ROOT=$run_root/ha"
             echo "HA_RANCHER_TF_MODULE_DIR=$module_dir"
             echo "HA_RANCHER_TF_DATA_DIR=$run_root/terraform/.terraform"

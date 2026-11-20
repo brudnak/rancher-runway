@@ -10,7 +10,12 @@ import (
 
 func TestCollectLinodeCatalogUsesAuthenticatedProviderData(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/regions", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v4/linode/instances", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer catalog-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	})
+	mux.HandleFunc("/v4/regions", func(w http.ResponseWriter, r *http.Request) {
 		assertLinodeCatalogRequest(t, r)
 		writeJSON(w, map[string]any{
 			"page": 1, "pages": 1,
@@ -20,7 +25,7 @@ func TestCollectLinodeCatalogUsesAuthenticatedProviderData(t *testing.T) {
 			},
 		})
 	})
-	mux.HandleFunc("/linode/types", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v4/linode/types", func(w http.ResponseWriter, r *http.Request) {
 		assertLinodeCatalogRequest(t, r)
 		writeJSON(w, map[string]any{
 			"page": 1, "pages": 1,
@@ -30,7 +35,7 @@ func TestCollectLinodeCatalogUsesAuthenticatedProviderData(t *testing.T) {
 			}},
 		})
 	})
-	mux.HandleFunc("/images", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v4/images", func(w http.ResponseWriter, r *http.Request) {
 		assertLinodeCatalogRequest(t, r)
 		writeJSON(w, map[string]any{
 			"page": 1, "pages": 1,
@@ -41,10 +46,11 @@ func TestCollectLinodeCatalogUsesAuthenticatedProviderData(t *testing.T) {
 			},
 		})
 	})
-	server := httptest.NewServer(mux)
-	defer server.Close()
-
-	catalog, err := collectLinodeCatalog(context.Background(), server.Client(), server.URL, "catalog-token")
+	client := linodeTestClient(mux)
+	if _, err := collectLinodeCatalog(t.Context(), client, linodeCatalogDefaultAPIBaseURL, "expired-token"); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("catalog should return the credential error: %v", err)
+	}
+	catalog, err := collectLinodeCatalog(t.Context(), client, linodeCatalogDefaultAPIBaseURL, "catalog-token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +72,14 @@ func TestCollectLinodeCatalogUsesAuthenticatedProviderData(t *testing.T) {
 	if catalog.Defaults.Distribution != "k3s" || catalog.Defaults.Region != "us-ord" {
 		t.Fatalf("unexpected defaults: %#v", catalog.Defaults)
 	}
+}
+
+func linodeTestClient(handler http.Handler) *http.Client {
+	return &http.Client{Transport: testLabRoundTrip(func(r *http.Request) (*http.Response, error) {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w.Result(), nil
+	})}
 }
 
 func TestCollectLinodeCatalogRequiresToken(t *testing.T) {

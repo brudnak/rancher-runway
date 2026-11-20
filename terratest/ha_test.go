@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/linodeinventory"
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 	"github.com/gruntwork-io/terratest/modules/terraform"
 	"github.com/spf13/viper"
@@ -41,7 +42,7 @@ func runHARKE2Setup(t *testing.T) {
 	if totalHAs < 1 {
 		t.Fatal("total_has must be at least 1")
 	}
-	downstreamPlans, err := setupLinodeDownstreamPlans(totalHAs)
+	downstreamPlans, err := setupLinodeDownstreamPlans(t.Context(), totalHAs, linodeinventory.Client{})
 	if err != nil {
 		t.Fatalf("Downstream config preflight failed before provisioning infrastructure: %v", err)
 	}

@@ -64,6 +64,9 @@ func (c Client) request(ctx context.Context, token, method, path string, out any
 		return fmt.Errorf("Linode request failed; check connectivity and token access")
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("Linode rejected the configured token (HTTP 401). Update the Linode token and retry")
+	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return fmt.Errorf("Linode returned HTTP %d for %s; verify token permissions and resource state", response.StatusCode, method)
 	}
@@ -74,6 +77,11 @@ func (c Client) request(ctx context.Context, token, method, path string, out any
 		return fmt.Errorf("Linode returned an unreadable response")
 	}
 	return nil
+}
+
+// CheckInstanceAccess checks the credential without creating an instance.
+func (c Client) CheckInstanceAccess(ctx context.Context, token string) error {
+	return c.request(ctx, token, http.MethodGet, "/linode/instances?page_size=25", nil)
 }
 
 type apiResource struct {

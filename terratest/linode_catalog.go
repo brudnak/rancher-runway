@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brudnak/ha-rancher-rke2/internal/linodeinventory"
 	"github.com/brudnak/ha-rancher-rke2/terratest/settings"
 )
 
@@ -95,6 +96,10 @@ func collectLinodeCatalog(ctx context.Context, client *http.Client, baseURL, tok
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		baseURL = linodeCatalogDefaultAPIBaseURL
+	}
+	provider := linodeinventory.Client{HTTP: client, BaseURL: baseURL}
+	if err := provider.CheckInstanceAccess(ctx, token); err != nil {
+		return linodeCatalogResponse{}, err
 	}
 
 	var regions []linodeAPIRegion

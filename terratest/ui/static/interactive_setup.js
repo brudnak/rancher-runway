@@ -833,6 +833,7 @@ const loadDownstreamLinodeCatalog = () => {
     })
     .catch(error => {
       const message = error instanceof Error ? error.message : 'Linode catalog lookup failed.'
+      downstreamLinodeCatalogPromise = null
       downstreamLinodeCatalog = {
         ...downstreamLinodeCatalog,
         status: 'error',
